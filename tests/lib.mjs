@@ -69,3 +69,24 @@ export function extractDdgUrl(href) {
 	} catch {}
 	return href;
 }
+
+const BOT_PROTECTION_MARKERS = [
+	"making sure you're not a bot",
+	"protected by anubis",
+	"anubis uses a proof-of-work",
+	"checking your browser",
+	"just a moment",
+	"cf-browser-verification",
+	"enable javascript and cookies to continue",
+	"attention required",
+	"verify you are human",
+	"unusual traffic",
+	"before you continue",
+];
+
+export function isLikelyBotProtection(text) {
+	const t = String(text || "")
+		.slice(0, 6000)
+		.toLowerCase();
+	return BOT_PROTECTION_MARKERS.some((m) => t.includes(m));
+}

@@ -67,10 +67,31 @@ const DEFAULT_BROWSER = "chrome_145";
 const DEFAULT_OS = "windows";
 
 const BASE_TEMP = join(tmpdir(), "pi-webpull");
+const SEARCH_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const SEARCH_CACHE_FILE = join(BASE_TEMP, "search-cache.json");
+
+// Bot protection markers (from pi-web-browse)
+const BOT_PROTECTION_MARKERS = [
+	"making sure you're not a bot",
+	"protected by anubis",
+	"anubis uses a proof-of-work",
+	"checking your browser",
+	"just a moment",
+	"cf-browser-verification",
+	"enable javascript and cookies to continue",
+	"attention required",
+	"verify you are human",
+	"unusual traffic",
+	"before you continue",
+];
 
 // ─── Session store ───────────────────────────────────────────────────
 
 const sessionStore = new Map<string, StoredContent>();
+const searchCache = new Map<
+	string,
+	{ query: string; results: SearchResult[]; timestamp: number }
+>();
 
 function storeContent(url: string, title: string | undefined, content: string) {
 	sessionStore.set(url, {
@@ -79,6 +100,49 @@ function storeContent(url: string, title: string | undefined, content: string) {
 		content,
 		timestamp: Date.now(),
 	});
+}
+
+function storeSearchResults(query: string, results: SearchResult[]) {
+	const entry = { query, results, timestamp: Date.now() };
+	searchCache.set(query, entry);
+	// Also save to disk for persistence across sessions
+	saveSearchCacheToDisk().catch(() => {});
+}
+
+async function saveSearchCacheToDisk(): Promise<void> {
+	try {
+		const data = Object.fromEntries(searchCache.entries());
+		await mkdir(BASE_TEMP, { recursive: true });
+		await writeFile(SEARCH_CACHE_FILE, JSON.stringify(data, null, 2), "utf8");
+	} catch {
+		// ignore
+	}
+}
+
+async function loadSearchCacheFromDisk(): Promise<void> {
+	try {
+		const text = await readFile(SEARCH_CACHE_FILE, "utf8");
+		const data = JSON.parse(text);
+		const now = Date.now();
+		for (const [query, entry] of Object.entries(data)) {
+			const e = entry as any;
+			if (now - e.timestamp < SEARCH_CACHE_TTL_MS) {
+				searchCache.set(query, e);
+			}
+		}
+	} catch {
+		// ignore
+	}
+}
+
+function getCachedSearch(query: string): SearchResult[] | null {
+	const cached = searchCache.get(query);
+	if (!cached) return null;
+	if (Date.now() - cached.timestamp > SEARCH_CACHE_TTL_MS) {
+		searchCache.delete(query);
+		return null;
+	}
+	return cached.results;
 }
 
 // ─── Local / private URL detection ─────────────────────────────────
@@ -117,6 +181,15 @@ function buildHeaders(): Record<string, string> {
 	};
 }
 
+// ─── Bot protection detection ──────────────────────────────────────
+
+function isLikelyBotProtection(text: string): boolean {
+	const t = String(text || "")
+		.slice(0, 6000)
+		.toLowerCase();
+	return BOT_PROTECTION_MARKERS.some((m) => t.includes(m));
+}
+
 async function smartFetch(
 	url: string,
 	options: FetchOpts = {},
@@ -145,6 +218,33 @@ async function smartFetch(
 				});
 			}
 			const text = await res.text();
+
+			// Detect bot protection and retry with different browser profile
+			if (isLikelyBotProtection(text) && attempt < maxRetries) {
+				const fallbackBrowsers = ["firefox_147", "safari_26", "edge_145"];
+				const fb = fallbackBrowsers[attempt % fallbackBrowsers.length];
+				console.error(
+					`Bot protection detected for ${url}, retrying with ${fb}...`,
+				);
+				const fbRes = await wreqFetch(url, {
+					redirect: "follow",
+					headers,
+					browser: fb as any,
+					os: (options.os as any) ?? DEFAULT_OS,
+				});
+				if (fbRes) {
+					const fbText = await fbRes.text();
+					if (!isLikelyBotProtection(fbText)) {
+						return {
+							text: fbText,
+							url: fbRes.url,
+							status: fbRes.status,
+							headers: fbRes.headers,
+						};
+					}
+				}
+			}
+
 			return {
 				text,
 				url: res.url,
@@ -473,6 +573,10 @@ function parseBraveResults(html: string): SearchResult[] {
 }
 
 async function searchWeb(query: string): Promise<SearchResult[]> {
+	// Check in-memory cache first
+	const cached = getCachedSearch(query);
+	if (cached) return cached;
+
 	const encoded = encodeURIComponent(query);
 
 	const ddg = await smartFetch(
@@ -487,7 +591,10 @@ async function searchWeb(query: string): Promise<SearchResult[]> {
 	);
 	if (ddg && ddg.status < 400) {
 		const results = parseDuckDuckGoResults(ddg.text);
-		if (results.length > 0) return results;
+		if (results.length > 0) {
+			storeSearchResults(query, results);
+			return results;
+		}
 	}
 
 	const brave = await smartFetch(
@@ -502,7 +609,10 @@ async function searchWeb(query: string): Promise<SearchResult[]> {
 	);
 	if (brave && brave.status < 400) {
 		const results = parseBraveResults(brave.text);
-		if (results.length > 0) return results;
+		if (results.length > 0) {
+			storeSearchResults(query, results);
+			return results;
+		}
 	}
 
 	return [];
@@ -1022,6 +1132,9 @@ async function runInBatches<T, R>(
 // ─── Extension ──────────────────────────────────────────────────────
 
 export default function (pi: ExtensionAPI) {
+	// Load persisted search cache on startup
+	loadSearchCacheFromDisk().catch(() => {});
+
 	// ─── webfetch tool ──────────────────────────────────────────────
 	pi.registerTool({
 		name: "webfetch",

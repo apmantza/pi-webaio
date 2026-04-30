@@ -4,6 +4,7 @@ import {
 	extractDdgUrl,
 	extractRSC,
 	frontmatter,
+	isLikelyBotProtection,
 	isLocalOrPrivateUrl,
 	parseGitHubUrl,
 } from "./lib.mjs";
@@ -126,4 +127,39 @@ test("extractDdgUrl passes through plain URLs", () => {
 		extractDdgUrl("https://example.com"),
 		"https://example.com",
 	);
+});
+
+// ─── isLikelyBotProtection ───────────────────────────────────────
+
+test("isLikelyBotProtection detects Cloudflare", () => {
+	assert.strictEqual(
+		isLikelyBotProtection("Just a moment... Checking your browser"),
+		true,
+	);
+});
+
+test("isLikelyBotProtection detects Anubis", () => {
+	assert.strictEqual(
+		isLikelyBotProtection("Protected by Anubis. Making sure you're not a bot."),
+		true,
+	);
+});
+
+test("isLikelyBotProtection detects unusual traffic", () => {
+	assert.strictEqual(
+		isLikelyBotProtection(
+			"Our systems have detected unusual traffic from your computer network.",
+		),
+		true,
+	);
+});
+
+test("isLikelyBotProtection passes through normal content", () => {
+	assert.strictEqual(
+		isLikelyBotProtection(
+			"This is a normal article about TypeScript best practices.",
+		),
+		false,
+	);
+	assert.strictEqual(isLikelyBotProtection(""), false);
 });
