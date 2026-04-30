@@ -1658,8 +1658,7 @@ export default function (pi: ExtensionAPI) {
 		label: "Webpull",
 		description:
 			"Pull any public website or docs site into local markdown files with anti-bot TLS fingerprinting. Discovers pages via sitemap, navigation links, or crawling. Writes files preserving URL structure with YAML frontmatter.",
-		promptSnippet:
-			"Search the web, fetch a single URL, or pull an entire site into markdown",
+		promptSnippet: "Pull an entire website into local markdown files",
 		promptGuidelines: [
 			"Use aio-websearch when the user wants to find information online. Returns compact search results.",
 			"Use aio-webfetch when the user wants to download a specific URL or batch of URLs.",

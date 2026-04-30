@@ -2,8 +2,12 @@
   "name": "pi-webaio",
   "version": "0.1.0",
   "description": "All-in-one web access tools for pi with search, fetch, crawl, extraction, and anti-bot TLS fingerprinting",
+  "keywords": ["pi-package"],
   "type": "module",
   "main": "index.ts",
+  "pi": {
+    "extensions": ["./index.ts"]
+  },
   "files": [
     "index.ts",
     "package.json",
@@ -22,7 +26,13 @@
     "pdf-parse": "^2.4.5",
     "wreq-js": "^2.3.0"
   },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*",
+    "typebox": "*"
+  },
   "devDependencies": {
-    "typebox": "^1.1.34"
+    "@types/node": "^25.6.0",
+    "typebox": "^1.1.34",
+    "typescript": "^6.0.3"
   }
 }
