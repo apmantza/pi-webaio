@@ -1,6 +1,6 @@
 {
   "name": "pi-webaio",
-  "version": "0.2.0",
+  "version": "0.1.0",
   "description": "All-in-one web access tools for pi with search, fetch, crawl, extraction, and anti-bot TLS fingerprinting",
   "type": "module",
   "scripts": {
