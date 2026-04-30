@@ -1,7 +1,7 @@
 {
-  "name": "pi-webpull",
+  "name": "pi-webaio",
   "version": "0.2.0",
-  "description": "Pull any public website into local markdown files with anti-bot TLS fingerprinting",
+  "description": "All-in-one web access tools for pi with search, fetch, crawl, extraction, and anti-bot TLS fingerprinting",
   "type": "module",
   "scripts": {
     "test": "node tests/unit.test.mjs",

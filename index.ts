@@ -66,11 +66,11 @@ const MAX_CONTEXT_CHARS = 28000;
 const DEFAULT_BROWSER = "chrome_145";
 const DEFAULT_OS = "windows";
 
-const BASE_TEMP = join(tmpdir(), "pi-webpull");
+const BASE_TEMP = join(tmpdir(), "pi-webaio");
 const SEARCH_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const SEARCH_CACHE_FILE = join(BASE_TEMP, "search-cache.json");
 
-// Bot protection markers (from pi-web-browse)
+// Bot protection markers
 const BOT_PROTECTION_MARKERS = [
 	"making sure you're not a bot",
 	"protected by anubis",
@@ -190,7 +190,7 @@ function isLikelyBotProtection(text: string): boolean {
 	return BOT_PROTECTION_MARKERS.some((m) => t.includes(m));
 }
 
-// ─── Secret scanning (from pi-scurl / scurl) ───────────────────────
+// ─── Secret scanning ───────────────────────────────────────────────
 
 interface SecretMatch {
 	type: string;
@@ -245,7 +245,7 @@ function scanForSecrets(text: string): { found: boolean; matches: string[] } {
 	return { found: matches.length > 0, matches };
 }
 
-// ─── Prompt injection detection (from pi-scurl / scurl) ────────────
+// ─── Prompt injection detection ────────────────────────────────────
 
 const INJECTION_PATTERNS = [
 	// Instruction override
@@ -876,7 +876,7 @@ async function githubApiFetch(path: string): Promise<unknown | null> {
 		headers: {
 			Accept: "application/vnd.github+json",
 			"X-GitHub-Api-Version": "2022-11-28",
-			"User-Agent": "pi-webpull",
+			"User-Agent": "pi-webaio",
 		},
 	});
 	if (!res || res.status >= 400) return null;
