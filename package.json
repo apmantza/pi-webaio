@@ -1,0 +1,21 @@
+{
+  "name": "pi-webpull",
+  "version": "0.2.0",
+  "description": "Pull any public website into local markdown files with anti-bot TLS fingerprinting",
+  "type": "module",
+  "scripts": {
+    "test": "node tests/unit.test.mjs",
+    "test:integration": "node tests/integration.test.mjs",
+    "test:all": "node tests/unit.test.mjs && node tests/integration.test.mjs"
+  },
+  "dependencies": {
+    "@mozilla/readability": "^0.6.0",
+    "defuddle": "^0.18.1",
+    "linkedom": "^0.18.12",
+    "pdf-parse": "^2.4.5",
+    "wreq-js": "^2.3.0"
+  },
+  "devDependencies": {
+    "typebox": "^1.1.34"
+  }
+}

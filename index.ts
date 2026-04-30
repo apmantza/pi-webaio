@@ -1,0 +1,1457 @@
+import { spawn } from "node:child_process";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { cpus, tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { Readability } from "@mozilla/readability";
+import { Defuddle } from "defuddle/node";
+import { parseHTML } from "linkedom";
+import { Type } from "typebox";
+import { fetch as wreqFetch } from "wreq-js";
+
+// ─── pdf-parse loose typing (CJS, no bundled .d.ts) ────────────────
+
+const pdfParse: (buf: Buffer) => Promise<{ text: string; numpages: number }> =
+	require("pdf-parse");
+
+// ─── Types ───────────────────────────────────────────────────────────
+
+interface Page {
+	url: string;
+	title: string;
+	markdown: string;
+}
+
+interface PullResult {
+	ok: boolean;
+	url: string;
+	title?: string;
+	content?: string;
+	error?: string;
+}
+
+interface FetchOpts {
+	browser?: string;
+	os?: string;
+	headers?: Record<string, string>;
+}
+
+interface StoredContent {
+	url: string;
+	title?: string;
+	content: string;
+	timestamp: number;
+}
+
+// ─── Constants ───────────────────────────────────────────────────────
+
+const IGNORED =
+	/\.(png|jpg|jpeg|gif|svg|webp|ico|pdf|zip|tar|gz|mp4|mp3|woff2?|ttf|eot|css|js|json|xml|rss|atom)$/i;
+
+const NAV_SELECTORS = [
+	"nav a[href]",
+	"aside a[href]",
+	'[class*="sidebar"] a[href]',
+	'[class*="Sidebar"] a[href]',
+	'[class*="navigation"] a[href]',
+	'[class*="toc"] a[href]',
+	'[class*="menu"] a[href]',
+	'[role="navigation"] a[href]',
+];
+
+const MARKDOWN_SIGNAL = /^(#{1,6}\s|[-*]\s|\d+\.\s|```|>\s|\[.+\]\(.+\))/m;
+const DEFUDDLE_TIMEOUT = 8000;
+const MAX_CONTEXT_CHARS = 28000;
+
+const DEFAULT_BROWSER = "chrome_145";
+const DEFAULT_OS = "windows";
+
+const BASE_TEMP = join(tmpdir(), "pi-webpull");
+
+// ─── Session store ───────────────────────────────────────────────────
+
+const sessionStore = new Map<string, StoredContent>();
+
+function storeContent(url: string, title: string | undefined, content: string) {
+	sessionStore.set(url, {
+		url,
+		title,
+		content,
+		timestamp: Date.now(),
+	});
+}
+
+// ─── Local / private URL detection ─────────────────────────────────
+
+function isLocalOrPrivateUrl(url: string): boolean {
+	try {
+		const u = new URL(url);
+		const h = u.hostname;
+		if (h === "localhost" || h === "127.0.0.1" || h === "::1" || h === "[::1]")
+			return true;
+		if (h.endsWith(".local")) return true;
+		if (h.startsWith("192.168.") || h.startsWith("10.")) return true;
+		if (h.startsWith("172.")) {
+			const octet = Number.parseInt(h.split(".")[1] ?? "0", 10);
+			if (octet >= 16 && octet <= 31) return true;
+		}
+		return false;
+	} catch {
+		return false;
+	}
+}
+
+// ─── Smart fetch wrappers ────────────────────────────────────────────
+
+function buildHeaders(): Record<string, string> {
+	return {
+		Accept:
+			"text/html,application/xhtml+xml,application/xml;q=0.9,text/markdown,*/*;q=0.8",
+		"Accept-Language": "en-US,en;q=0.9",
+		"Accept-Encoding": "gzip, deflate, br",
+		"Sec-Fetch-Dest": "document",
+		"Sec-Fetch-Mode": "navigate",
+		"Sec-Fetch-Site": "none",
+		"Sec-Fetch-User": "?1",
+		"Upgrade-Insecure-Requests": "1",
+	};
+}
+
+async function smartFetch(
+	url: string,
+	options: FetchOpts = {},
+): Promise<{
+	text: string;
+	url: string;
+	status: number;
+	headers: { get(name: string): string | null };
+} | null> {
+	const headers = { ...buildHeaders(), ...options.headers };
+
+	const maxRetries = 2;
+	for (let attempt = 0; attempt <= maxRetries; attempt++) {
+		try {
+			let res: any;
+			if (isLocalOrPrivateUrl(url)) {
+				res = await fetch(url, { redirect: "follow", headers });
+			} else {
+				const browser = (options.browser as any) ?? DEFAULT_BROWSER;
+				const os = (options.os as any) ?? DEFAULT_OS;
+				res = await wreqFetch(url, {
+					redirect: "follow",
+					headers,
+					browser,
+					os,
+				});
+			}
+			const text = await res.text();
+			return {
+				text,
+				url: res.url,
+				status: res.status,
+				headers: res.headers,
+			};
+		} catch (err: any) {
+			if (attempt === maxRetries) return null;
+			const delay = 500 * 2 ** attempt;
+			await new Promise((r) => setTimeout(r, delay));
+		}
+	}
+	return null;
+}
+
+async function fetchBuffer(
+	url: string,
+	options: FetchOpts = {},
+): Promise<{ buffer: Buffer; url: string; status: number } | null> {
+	const headers = { ...buildHeaders(), ...options.headers };
+	const maxRetries = 2;
+	for (let attempt = 0; attempt <= maxRetries; attempt++) {
+		try {
+			let res: any;
+			if (isLocalOrPrivateUrl(url)) {
+				res = await fetch(url, { redirect: "follow", headers });
+			} else {
+				const browser = (options.browser as any) ?? DEFAULT_BROWSER;
+				const os = (options.os as any) ?? DEFAULT_OS;
+				res = await wreqFetch(url, {
+					redirect: "follow",
+					headers,
+					browser,
+					os,
+				});
+			}
+			const arrayBuf = await res.arrayBuffer();
+			return {
+				buffer: Buffer.from(arrayBuf),
+				url: res.url,
+				status: res.status,
+			};
+		} catch (err: any) {
+			if (attempt === maxRetries) return null;
+			const delay = 500 * 2 ** attempt;
+			await new Promise((r) => setTimeout(r, delay));
+		}
+	}
+	return null;
+}
+
+// ─── Discovery ───────────────────────────────────────────────────────
+
+async function tryFetch(
+	url: string,
+	opts?: FetchOpts,
+): Promise<{ text: string; url: string } | null> {
+	const r = await smartFetch(url, opts);
+	return r && r.status < 400 ? { text: r.text, url: r.url } : null;
+}
+
+function parseLocs(xml: string): string[] {
+	return [...xml.matchAll(/<loc>\s*(.*?)\s*<\/loc>/gi)].map((m) =>
+		m[1]!.trim(),
+	);
+}
+
+async function fetchSitemap(url: string, depth = 0): Promise<string[]> {
+	if (depth > 3) return [];
+	const r = await tryFetch(url);
+	if (!r?.text.includes("<")) return [];
+	const locs = parseLocs(r.text);
+	const isIndex =
+		r.text.includes("<sitemapindex") ||
+		(r.text.includes("<sitemap>") && !r.text.includes("<urlset"));
+	if (isIndex) {
+		const nested = await Promise.all(
+			locs.map((u) => fetchSitemap(u, depth + 1)),
+		);
+		return nested.flat();
+	}
+	return locs;
+}
+
+async function sitemapFromRobots(origin: string): Promise<string[]> {
+	const r = await tryFetch(`${origin}/robots.txt`);
+	if (!r) return [];
+	const urls = (r.text.match(/^Sitemap:\s*(.+)$/gim) ?? []).map((l) =>
+		l.replace(/^Sitemap:\s*/i, "").trim(),
+	);
+	if (!urls.length) return [];
+	const results = await Promise.all(urls.map((u) => fetchSitemap(u)));
+	return results.flat();
+}
+
+function extractNav(base: URL, html: string): string[] {
+	const { document } = parseHTML(html);
+	const urls = new Set<string>();
+	for (const sel of NAV_SELECTORS) {
+		for (const link of document.querySelectorAll(sel)) {
+			const href = link.getAttribute("href");
+			if (
+				!href ||
+				href.startsWith("#") ||
+				href.startsWith("javascript:") ||
+				href.startsWith("mailto:")
+			)
+				continue;
+			try {
+				const r = new URL(href, base);
+				r.hash = r.search = "";
+				if (!IGNORED.test(r.pathname)) urls.add(r.href);
+			} catch {}
+		}
+	}
+	urls.add(base.href);
+	return [...urls];
+}
+
+function extractLinks(
+	html: string,
+	base: URL,
+	visited: Set<string>,
+	scope: string,
+): string[] {
+	const out: string[] = [];
+	for (const m of html.matchAll(/href=["'](.*?)["']/gi)) {
+		try {
+			const r = new URL(m[1]!, base);
+			r.hash = r.search = "";
+			if (
+				r.hostname === base.hostname &&
+				r.pathname.startsWith(scope) &&
+				!IGNORED.test(r.pathname) &&
+				!visited.has(r.href)
+			)
+				out.push(r.href);
+		} catch {}
+	}
+	return [...new Set(out)];
+}
+
+async function crawl(
+	base: URL,
+	max: number,
+	scope: string,
+	opts?: FetchOpts,
+): Promise<string[]> {
+	const visited = new Set<string>();
+	const queue = [base.href];
+	const found: string[] = [];
+
+	while (queue.length > 0 && found.length < max) {
+		const batch = queue
+			.splice(0, Math.min(20, max - found.length))
+			.filter((u) => !visited.has(u));
+		for (const u of batch) visited.add(u);
+
+		const results = await Promise.all(
+			batch.map(async (url) => {
+				const r = await tryFetch(url, opts);
+				if (!r?.text.includes("</html")) return [];
+				found.push(r.url);
+				return extractLinks(r.text, base, visited, scope);
+			}),
+		);
+
+		for (const links of results) {
+			for (const link of links) {
+				if (!visited.has(link) && found.length + queue.length < max)
+					queue.push(link);
+			}
+		}
+	}
+	return found;
+}
+
+function getScopePath(pathname: string): string {
+	if (pathname === "/") return "/";
+	if (/\.\w+$/.test(pathname)) return pathname.replace(/\/[^/]*$/, "/");
+	if (pathname.endsWith("/")) return pathname;
+	const segs = pathname.split("/").filter(Boolean);
+	return segs.length <= 1 ? pathname : `/${segs.slice(0, -1).join("/")}/`;
+}
+
+function filterAndDedupe(
+	urls: string[],
+	hosts: Set<string>,
+	scope: string,
+	max: number,
+): string[] {
+	const seen = new Set<string>();
+	const out: string[] = [];
+	for (const raw of urls) {
+		try {
+			const u = new URL(raw);
+			if (
+				!hosts.has(u.hostname) ||
+				!u.pathname.startsWith(scope) ||
+				IGNORED.test(u.pathname)
+			)
+				continue;
+			u.hash = u.search = "";
+			if (!seen.has(u.pathname)) {
+				seen.add(u.pathname);
+				out.push(u.href);
+			}
+		} catch {}
+	}
+	return out.slice(0, max);
+}
+
+async function discover(
+	baseUrl: string,
+	max: number,
+	opts?: FetchOpts,
+): Promise<string[]> {
+	const r = await smartFetch(baseUrl, opts);
+	if (!r || r.status >= 400)
+		throw new Error(`HTTP ${r?.status ?? "unknown"}: ${baseUrl}`);
+
+	const actual = new URL(r.url);
+	const original = new URL(baseUrl);
+	const html = r.text;
+
+	const hosts = new Set([original.hostname, actual.hostname]);
+	const scope = getScopePath(actual.pathname);
+
+	const origins = [...new Set([original.origin, actual.origin])];
+	const basePaths = [
+		...new Set([actual.pathname.replace(/\/[^/]*$/, "/"), "/"]),
+	];
+
+	const strategies: Promise<string[]>[] = [];
+	for (const o of origins) {
+		strategies.push(sitemapFromRobots(o));
+		for (const bp of basePaths) {
+			for (const name of [
+				"sitemap.xml",
+				"sitemap_index.xml",
+				"sitemap-0.xml",
+			]) {
+				strategies.push(fetchSitemap(`${o}${bp}${name}`));
+			}
+		}
+	}
+
+	const results = await Promise.all(strategies);
+
+	let best: string[] = [];
+	for (const urls of results) {
+		if (!urls.length) continue;
+		for (const u of urls) {
+			try {
+				hosts.add(new URL(u).hostname);
+			} catch {}
+		}
+		const filtered = filterAndDedupe(urls, hosts, scope, max);
+		if (filtered.length > best.length) best = filtered;
+	}
+
+	if (best.length > 0) return best;
+
+	const nav = extractNav(actual, html);
+	if (nav.length > 5) {
+		const filtered = filterAndDedupe(nav, hosts, scope, max);
+		if (filtered.length > 0) return filtered;
+	}
+
+	return crawl(actual, max, scope, opts);
+}
+
+// ─── Web Search ────────────────────────────────────────────────────
+
+interface SearchResult {
+	title: string;
+	url: string;
+	snippet: string;
+}
+
+function extractDdgUrl(href: string): string {
+	try {
+		const u = new URL(href, "https://duckduckgo.com");
+		const real = u.searchParams.get("uddg");
+		if (real) return decodeURIComponent(real);
+	} catch {}
+	return href;
+}
+
+function parseDuckDuckGoResults(html: string): SearchResult[] {
+	const { document } = parseHTML(html);
+	const results: SearchResult[] = [];
+
+	for (const el of document.querySelectorAll(".result")) {
+		const a = el.querySelector(".result__a");
+		const snippet = el.querySelector(".result__snippet");
+		if (!a) continue;
+		const rawUrl = a.getAttribute("href") || "";
+		const url = extractDdgUrl(rawUrl);
+		const title = a.textContent?.trim() || "";
+		const text = snippet?.textContent?.trim() || "";
+		if (url && title) {
+			results.push({ title, url, snippet: text });
+		}
+	}
+	return results;
+}
+
+function parseBraveResults(html: string): SearchResult[] {
+	const { document } = parseHTML(html);
+	const results: SearchResult[] = [];
+
+	for (const el of document.querySelectorAll(".snippet")) {
+		const a = el.querySelector("a[href]");
+		const titleEl = el.querySelector(".title");
+		const descEl = el.querySelector(".description");
+		if (!a) continue;
+		const url = a.getAttribute("href") || "";
+		const title = titleEl?.textContent?.trim() || a.textContent?.trim() || "";
+		const text = descEl?.textContent?.trim() || "";
+		if (url && title) {
+			results.push({ title, url, snippet: text });
+		}
+	}
+	return results;
+}
+
+async function searchWeb(query: string): Promise<SearchResult[]> {
+	const encoded = encodeURIComponent(query);
+
+	const ddg = await smartFetch(
+		`https://html.duckduckgo.com/html/?q=${encoded}`,
+		{
+			headers: {
+				Accept: "text/html",
+				"User-Agent":
+					"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+			},
+		},
+	);
+	if (ddg && ddg.status < 400) {
+		const results = parseDuckDuckGoResults(ddg.text);
+		if (results.length > 0) return results;
+	}
+
+	const brave = await smartFetch(
+		`https://search.brave.com/search?q=${encoded}`,
+		{
+			headers: {
+				Accept: "text/html",
+				"User-Agent":
+					"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+			},
+		},
+	);
+	if (brave && brave.status < 400) {
+		const results = parseBraveResults(brave.text);
+		if (results.length > 0) return results;
+	}
+
+	return [];
+}
+
+// ─── GitHub-aware fetch ─────────────────────────────────────────────
+
+interface GitHubRef {
+	owner: string;
+	repo: string;
+	ref?: string;
+	path?: string;
+	type: "repo" | "tree" | "blob";
+}
+
+function parseGitHubUrl(url: string): GitHubRef | null {
+	const m = url.match(
+		/^https?:\/\/github\.com\/([^/]+)\/([^/]+)(?:\/(tree|blob)\/([^/]+)(?:\/(.*))?)?/i,
+	);
+	if (!m) return null;
+	const [, owner, repo, ghType, ref, path] = m;
+	if (ghType === "blob") return { owner, repo, ref, path, type: "blob" };
+	if (ghType === "tree") return { owner, repo, ref, path, type: "tree" };
+	return { owner, repo, type: "repo" };
+}
+
+async function githubApiFetch(path: string): Promise<unknown | null> {
+	const res = await smartFetch(`https://api.github.com${path}`, {
+		headers: {
+			Accept: "application/vnd.github+json",
+			"X-GitHub-Api-Version": "2022-11-28",
+			"User-Agent": "pi-webpull",
+		},
+	});
+	if (!res || res.status >= 400) return null;
+	try {
+		return JSON.parse(res.text);
+	} catch {
+		return null;
+	}
+}
+
+async function fetchGitHubRaw(
+	owner: string,
+	repo: string,
+	ref: string,
+	path: string,
+): Promise<PullResult> {
+	const branches = [ref, "main", "master"];
+	for (const b of branches) {
+		const res = await smartFetch(
+			`https://raw.githubusercontent.com/${owner}/${repo}/${b}/${path}`,
+		);
+		if (res && res.status < 400) {
+			return {
+				ok: true,
+				url: `https://github.com/${owner}/${repo}/blob/${b}/${path}`,
+				title: path.split("/").pop() || path,
+				content: res.text,
+			};
+		}
+	}
+	return {
+		ok: false,
+		url: `https://github.com/${owner}/${repo}`,
+		error: `Raw file not found: ${path}`,
+	};
+}
+
+async function fetchGitHubTree(ref: GitHubRef): Promise<PullResult> {
+	const { owner, repo, ref: branch, path = "" } = ref;
+	const apiPath = path
+		? `/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}?ref=${branch || "main"}`
+		: `/repos/${owner}/${repo}/contents`;
+
+	const data = await githubApiFetch(apiPath);
+	if (!data)
+		return { ok: false, url: ref.toString(), error: "GitHub API failed" };
+
+	if (!Array.isArray(data)) {
+		return fetchGitHubRaw(owner, repo, branch || "main", path);
+	}
+
+	let md = `# ${owner}/${repo}${path ? `/${path}` : ""}\n\n`;
+	md += `## Directory Contents\n\n`;
+
+	for (const item of data as any[]) {
+		const icon = item.type === "dir" ? "📁" : "📄";
+		md += `- ${icon} [${item.name}](${item.html_url})\n`;
+	}
+
+	const readmeItem = (data as any[]).find(
+		(i: any) => i.type === "file" && /^readme\.md$/i.test(i.name),
+	);
+	if (readmeItem?.download_url) {
+		const r = await smartFetch(readmeItem.download_url);
+		if (r && r.status < 400) {
+			md += `\n---\n\n## README\n\n${r.text}\n`;
+		}
+	}
+
+	return {
+		ok: true,
+		url: `https://github.com/${owner}/${repo}${path ? `/tree/${branch}/${path}` : ""}`,
+		title: `${owner}/${repo}`,
+		content: md,
+	};
+}
+
+async function cloneGitHubRepo(
+	owner: string,
+	repo: string,
+	outDir: string,
+): Promise<{ ok: boolean; path: string; error?: string }> {
+	const cloneUrl = `https://github.com/${owner}/${repo}.git`;
+	try {
+		await mkdir(outDir, { recursive: true });
+		await new Promise<void>((resolve, reject) => {
+			const proc = spawn("git", ["clone", "--depth", "1", cloneUrl, outDir], {
+				stdio: "pipe",
+			});
+			let stderr = "";
+			proc.stderr.on("data", (d) => {
+				stderr += d;
+			});
+			proc.on("close", (code) => {
+				if (code === 0) resolve();
+				else reject(new Error(stderr || `git clone exited with ${code}`));
+			});
+			proc.on("error", reject);
+		});
+		return { ok: true, path: outDir };
+	} catch (err: any) {
+		return { ok: false, path: outDir, error: err?.message ?? "Clone failed" };
+	}
+}
+
+async function buildRepoMarkdown(outDir: string): Promise<string> {
+	// Build a file tree and include README
+	const { readdir } = await import("node:fs/promises");
+
+	async function tree(dir: string, prefix = ""): Promise<string> {
+		const entries = await readdir(dir, { withFileTypes: true });
+		const lines: string[] = [];
+		const sorted = entries
+			.filter((e) => !e.name.startsWith("."))
+			.sort((a, b) => {
+				if (a.isDirectory() && !b.isDirectory()) return -1;
+				if (!a.isDirectory() && b.isDirectory()) return 1;
+				return a.name.localeCompare(b.name);
+			});
+		for (let i = 0; i < sorted.length; i++) {
+			const e = sorted[i]!;
+			const isLast = i === sorted.length - 1;
+			const branch = isLast ? "└── " : "├── ";
+			lines.push(`${prefix}${branch}${e.name}`);
+			if (e.isDirectory()) {
+				const ext = isLast ? "    " : "│   ";
+				lines.push(await tree(join(dir, e.name), prefix + ext));
+			}
+		}
+		return lines.join("\n");
+	}
+
+	let md = "## File Tree\n\n```\n";
+	try {
+		md += await tree(outDir);
+	} catch {
+		md += "(empty)";
+	}
+	md += "\n```\n\n";
+
+	// Try to include README
+	for (const name of ["README.md", "readme.md", "Readme.md"]) {
+		try {
+			const readme = await readFile(join(outDir, name), "utf8");
+			md += `---\n\n## README\n\n${readme}\n`;
+			break;
+		} catch {}
+	}
+
+	return md;
+}
+
+async function fetchGitHubRepo(ref: GitHubRef): Promise<PullResult> {
+	const { owner, repo } = ref;
+
+	// Try cloning first (much better for agent exploration)
+	const cloneDir = join(BASE_TEMP, "github", `${owner}--${repo}`);
+	const cloned = await cloneGitHubRepo(owner, repo, cloneDir);
+
+	if (cloned.ok) {
+		const treeMd = await buildRepoMarkdown(cloneDir);
+		return {
+			ok: true,
+			url: `https://github.com/${owner}/${repo}`,
+			title: `${owner}/${repo}`,
+			content: `# ${owner}/${repo}\n\n> Cloned to: ${cloneDir}\n\n${treeMd}`,
+		};
+	}
+
+	// Fallback to API
+	const repoInfo = await githubApiFetch(`/repos/${owner}/${repo}`);
+	let md = "";
+	if (repoInfo && typeof repoInfo === "object" && !(repoInfo as any).message) {
+		const info = repoInfo as any;
+		md = `# ${info.full_name || `${owner}/${repo}`}\n\n`;
+		if (info.description) md += `> ${info.description}\n\n`;
+		if (info.topics?.length) md += `**Topics:** ${info.topics.join(", ")}\n\n`;
+		md += `- **Language:** ${info.language || "N/A"}\n`;
+		md += `- **Stars:** ${info.stargazers_count ?? 0}\n`;
+		md += `- **Forks:** ${info.forks_count ?? 0}\n`;
+		md += `- **License:** ${info.license?.spdx_id || "N/A"}\n\n`;
+	} else {
+		md = `# ${owner}/${repo}\n\n`;
+	}
+
+	const treeResult = await fetchGitHubTree(ref);
+	if (treeResult.ok && treeResult.content) {
+		const treeContent = treeResult.content.replace(/^#[^\n]+\n\n/, "");
+		md += treeContent;
+	}
+
+	return {
+		ok: true,
+		url: `https://github.com/${owner}/${repo}`,
+		title: `${owner}/${repo}`,
+		content: md,
+	};
+}
+
+async function pullGitHub(url: string): Promise<PullResult | null> {
+	const ref = parseGitHubUrl(url);
+	if (!ref) return null;
+
+	switch (ref.type) {
+		case "blob":
+			return fetchGitHubRaw(
+				ref.owner,
+				ref.repo,
+				ref.ref || "main",
+				ref.path || "",
+			);
+		case "tree":
+			return fetchGitHubTree(ref);
+		case "repo":
+			return fetchGitHubRepo(ref);
+	}
+}
+
+// ─── Jina AI reader ────────────────────────────────────────────────
+
+async function fetchJina(url: string): Promise<PullResult | null> {
+	try {
+		const res = await smartFetch(
+			`https://r.jina.ai/${encodeURIComponent(url)}`,
+		);
+		if (!res || res.status >= 400) return null;
+		const text = res.text.trim();
+		if (!text) return null;
+		const titleMatch = text.match(/^Title:\s*(.+)(?:\r?\n){2}/);
+		if (titleMatch) {
+			return {
+				ok: true,
+				url,
+				title: titleMatch[1].trim(),
+				content: text.slice(titleMatch[0].length),
+			};
+		}
+		return { ok: true, url, title: new URL(url).hostname, content: text };
+	} catch {
+		return null;
+	}
+}
+
+// ─── Readability extraction ────────────────────────────────────────
+
+function extractReadability(
+	html: string,
+	_url: string,
+): { title: string; content: string } | null {
+	try {
+		const { document } = parseHTML(html);
+		const reader = new Readability(document as any);
+		const article = reader.parse();
+		if (!article || (article.textContent?.length ?? 0) < 200) return null;
+		return {
+			title: article.title || "",
+			content: article.textContent || "",
+		};
+	} catch {
+		return null;
+	}
+}
+
+// ─── RSC (React Server Components) extraction ──────────────────────
+
+function extractRSC(html: string): string | null {
+	// Look for Next.js flight data in inline scripts
+	const matches = [...html.matchAll(/self\.__next_f\.push\((\[.*?\])\)/gs)];
+	if (!matches.length) return null;
+
+	const chunks: string[] = [];
+	for (const m of matches) {
+		try {
+			const data = JSON.parse(m[1]!);
+			if (Array.isArray(data) && data.length >= 2) {
+				const payload =
+					typeof data[1] === "string" ? data[1] : JSON.stringify(data[1]);
+				// Extract human-readable strings (heuristic)
+				const readable = payload
+					.split(/["\n]/)
+					.filter(
+						(s) =>
+							s.length > 30 &&
+							/[a-z]{3,}/.test(s) &&
+							!s.startsWith("$") &&
+							!s.startsWith("@"),
+					)
+					.join("\n\n");
+				if (readable) chunks.push(readable);
+			}
+		} catch {}
+	}
+	return chunks.length ? chunks.join("\n\n").slice(0, 20000) : null;
+}
+
+// ─── PDF extraction ────────────────────────────────────────────────
+
+async function extractPDF(
+	buffer: Buffer,
+	url: string,
+): Promise<PullResult | null> {
+	try {
+		const PDFParse = (pdfParse as any).PDFParse || pdfParse;
+		const parser = new PDFParse({ data: new Uint8Array(buffer) });
+		await parser.load();
+		const data = await parser.getText();
+		if (!data.text?.trim()) return null;
+		return {
+			ok: true,
+			url,
+			title: new URL(url).pathname.split("/").pop() || "Document",
+			content: `## PDF Content (${data.total} pages)\n\n${data.text}`,
+		};
+	} catch {
+		return null;
+	}
+}
+
+// ─── Fetch + Convert ────────────────────────────────────────────────
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+	return Promise.race([
+		promise,
+		new Promise<never>((_, reject) =>
+			setTimeout(() => reject(new Error("timeout")), ms),
+		),
+	]);
+}
+
+function fallbackExtract(html: string): { title: string; content: string } {
+	const { document } = parseHTML(html);
+	const t = document.querySelector("title")?.textContent || "";
+	const el =
+		document.querySelector("main") ??
+		document.querySelector("article") ??
+		document.querySelector("body");
+	return {
+		title: t,
+		content: el?.textContent?.replace(/\n{3,}/g, "\n\n").trim() ?? "",
+	};
+}
+
+async function pullPage(url: string, opts?: FetchOpts): Promise<PullResult> {
+	// GitHub special-case
+	const gh = await pullGitHub(url);
+	if (gh) return gh;
+
+	// Try binary fetch first (PDF detection)
+	const isPdfUrl = url.toLowerCase().endsWith(".pdf");
+	if (isPdfUrl) {
+		const bin = await fetchBuffer(url, opts);
+		if (bin && bin.status < 400) {
+			const pdf = await extractPDF(bin.buffer, url);
+			if (pdf) return pdf;
+		}
+	}
+
+	// Standard text fetch
+	const res = await smartFetch(url, {
+		...opts,
+		headers: {
+			Accept: "text/markdown,text/html,*/*;q=0.8",
+			...opts?.headers,
+		},
+	});
+	if (!res) return { ok: false, url, error: "Request failed" };
+	if (res.status >= 400) return { ok: false, url, error: `HTTP ${res.status}` };
+
+	const text = res.text;
+	const finalUrl = res.url;
+	const ct = res.headers.get("content-type") ?? "";
+
+	// PDF by content-type
+	if (ct.includes("application/pdf")) {
+		const bin = await fetchBuffer(url, opts);
+		if (bin) {
+			const pdf = await extractPDF(bin.buffer, url);
+			if (pdf) return pdf;
+		}
+	}
+
+	// Markdown or already readable
+	if (
+		ct.includes("text/markdown") ||
+		(!ct.includes("text/html") && MARKDOWN_SIGNAL.test(text))
+	) {
+		const title =
+			text.match(/^#\s+(.+)$/m)?.[1]?.trim() || new URL(finalUrl).pathname;
+		return { ok: true, url: finalUrl, title, content: text };
+	}
+
+	const cleaned = text
+		.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+		.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "");
+
+	// Try Jina AI for public URLs
+	if (!isLocalOrPrivateUrl(url)) {
+		const jina = await fetchJina(url);
+		if (jina) return jina;
+	}
+
+	// Try Readability
+	const readability = extractReadability(cleaned, finalUrl);
+	if (readability) {
+		return {
+			ok: true,
+			url: finalUrl,
+			title: readability.title,
+			content: readability.content,
+		};
+	}
+
+	// Try RSC (Next.js flight data)
+	const rsc = extractRSC(text);
+	if (rsc) {
+		return {
+			ok: true,
+			url: finalUrl,
+			title: new URL(finalUrl).hostname,
+			content: rsc,
+		};
+	}
+
+	// Defuddle
+	try {
+		const result = await withTimeout(
+			Defuddle(cleaned, finalUrl, { markdown: true }),
+			DEFUDDLE_TIMEOUT,
+		);
+		return {
+			ok: true,
+			url: finalUrl,
+			title: result.title || "",
+			content: result.content || "",
+		};
+	} catch {
+		const { title, content } = fallbackExtract(cleaned);
+		return { ok: true, url: finalUrl, title, content };
+	}
+}
+
+// ─── Write ──────────────────────────────────────────────────────────
+
+function frontmatter(title: string, url: string): string {
+	return `---\ntitle: "${title.replace(/"/g, '\\"')}"\nurl: "${url}"\n---\n\n`;
+}
+
+function pageToPath(page: Page): string {
+	let p = new URL(page.url).pathname;
+	if (p.endsWith("/")) p += "index";
+	p = p.replace(/\.html?$/, "").replace(/^\//, "");
+	if (!p.endsWith(".md")) p += ".md";
+	return p;
+}
+
+async function writePage(page: Page, outDir: string): Promise<string> {
+	const rel = pageToPath(page);
+	const full = join(outDir, rel);
+	await mkdir(dirname(full), { recursive: true });
+	await writeFile(full, page.markdown, "utf8");
+	return rel;
+}
+
+// ─── Concurrency limiter ────────────────────────────────────────────
+
+async function runInBatches<T, R>(
+	items: T[],
+	concurrency: number,
+	fn: (item: T, i: number) => Promise<R>,
+): Promise<R[]> {
+	const results: R[] = new Array(items.length);
+	let index = 0;
+
+	async function worker(): Promise<void> {
+		while (index < items.length) {
+			const i = index++;
+			results[i] = await fn(items[i]!, i);
+		}
+	}
+
+	await Promise.all(Array.from({ length: concurrency }, () => worker()));
+	return results;
+}
+
+// ─── Extension ──────────────────────────────────────────────────────
+
+export default function (pi: ExtensionAPI) {
+	// ─── webfetch tool ──────────────────────────────────────────────
+	pi.registerTool({
+		name: "webfetch",
+		label: "Web Fetch",
+		description:
+			"Fetch a single URL (or batch of URLs) and convert to markdown with anti-bot TLS fingerprinting. Detects PDFs, GitHub repos, and Next.js RSC. Saves to temp directory. Large results are truncated in context; full content is always saved to the file.",
+		promptSnippet: "Fetch a URL and convert to markdown",
+		promptGuidelines: [
+			"Use webfetch when the user wants to retrieve specific webpage(s), article(s), or file(s).",
+			"Use webpull when the user wants to download an entire site or docs collection.",
+			"After webfetch completes, use the built-in read tool to inspect the generated markdown file(s).",
+		],
+		parameters: Type.Object({
+			url: Type.Optional(
+				Type.String({
+					description:
+						"Single URL to fetch. Use either 'url' or 'urls', not both.",
+				}),
+			),
+			urls: Type.Optional(
+				Type.Array(Type.String(), {
+					description: "Multiple URLs to fetch in parallel.",
+				}),
+			),
+			out: Type.Optional(
+				Type.String({
+					description:
+						"Output file path under temp for single url (default: auto-derived from URL)",
+				}),
+			),
+			browser: Type.Optional(
+				Type.String({
+					description: `Browser profile for TLS fingerprinting. Default: "${DEFAULT_BROWSER}"`,
+				}),
+			),
+			os: Type.Optional(
+				Type.String({
+					description: `OS profile for fingerprinting. Default: "${DEFAULT_OS}"`,
+				}),
+			),
+		}) as any,
+
+		async execute(_toolCallId: string, params: any): Promise<any> {
+			const targets: string[] = params.urls ?? (params.url ? [params.url] : []);
+			if (!targets.length) {
+				throw new Error("Provide either 'url' or 'urls'");
+			}
+
+			const browser = (params.browser as string) ?? DEFAULT_BROWSER;
+			const os = (params.os as string) ?? DEFAULT_OS;
+
+			const results = await runInBatches(
+				targets,
+				Math.min(4, targets.length),
+				async (raw, _idx) => {
+					let urlStr = raw;
+					if (!/^https?:\/\//i.test(urlStr)) urlStr = `https://${urlStr}`;
+
+					let url: URL;
+					try {
+						url = new URL(urlStr);
+					} catch {
+						return {
+							ok: false,
+							error: `Bad URL: ${raw}`,
+							url: raw,
+						};
+					}
+
+					let outFile: string;
+					if (targets.length === 1 && params.out) {
+						outFile = resolve(BASE_TEMP, params.out);
+					} else {
+						const name =
+							url.pathname.replace(/^\//, "").replace(/\//g, "-") || "index";
+						outFile = join(BASE_TEMP, url.hostname, `${name}.md`);
+					}
+					const outPath = resolve(outFile);
+
+					const result = await pullPage(url.href, { browser, os });
+					if (!result.ok) {
+						return {
+							ok: false,
+							error: result.error ?? "Fetch failed",
+							url: url.href,
+						};
+					}
+
+					const markdown =
+						frontmatter(result.title || url.pathname, result.url!) +
+						(result.content ?? "");
+
+					await mkdir(dirname(outPath), { recursive: true });
+					await writeFile(outPath, markdown, "utf8");
+
+					storeContent(result.url!, result.title, markdown);
+
+					return {
+						ok: true,
+						url: result.url!,
+						title: result.title || url.pathname,
+						outPath,
+						length: markdown.length,
+					};
+				},
+			);
+
+			const okResults = results.filter((r) => r.ok);
+			const errResults = results.filter((r) => !r.ok);
+
+			if (targets.length === 1) {
+				const r = results[0]!;
+				if (!r.ok) throw new Error(r.error ?? "Fetch failed");
+				const truncated =
+					r.length! > MAX_CONTEXT_CHARS
+						? `\n[Content truncated: ${r.length} chars total, ${MAX_CONTEXT_CHARS} chars shown. Full file: ${r.outPath}]`
+						: "";
+				const text = [
+					`✓ Fetched and saved to ${r.outPath}${truncated}`,
+					`\nTitle: ${r.title}`,
+					`URL: ${r.url}`,
+					"\n---\n",
+					await readFile(r.outPath!, "utf8").then((t) =>
+						t.slice(0, MAX_CONTEXT_CHARS),
+					),
+				].join("\n");
+				return {
+					content: [{ type: "text", text }],
+					details: {
+						outPath: r.outPath,
+						title: r.title,
+						url: r.url,
+						browser,
+						os,
+						truncated: (r.length ?? 0) > MAX_CONTEXT_CHARS,
+						fullLength: r.length,
+					},
+				};
+			}
+
+			// Batch result
+			const lines = [
+				`Fetched ${okResults.length}/${targets.length} URLs:`,
+				"",
+				...okResults.map(
+					(r) =>
+						`✓ ${r.title} — ${r.url}\n  → ${r.outPath} (${r.length} chars)`,
+				),
+				...(errResults.length
+					? ["", "Errors:", ...errResults.map((r) => `✗ ${r.url}: ${r.error}`)]
+					: []),
+			];
+			return {
+				content: [{ type: "text", text: lines.join("\n") }],
+				details: { results, browser, os },
+			};
+		},
+	});
+
+	// ─── webcontent tool ────────────────────────────────────────────
+	pi.registerTool({
+		name: "webcontent",
+		label: "Web Content",
+		description:
+			"Retrieve previously fetched content from session storage by URL. Content is stored automatically after every successful webfetch or webpull.",
+		promptSnippet: "Get stored content from a previous fetch",
+		promptGuidelines: [
+			"Use webcontent when you need the full content of a previously fetched URL without re-downloading.",
+		],
+		parameters: Type.Object({
+			url: Type.String({
+				description: "URL of previously fetched content",
+			}),
+		}) as any,
+
+		async execute(_toolCallId: string, params: any): Promise<any> {
+			const stored = sessionStore.get(params.url);
+			if (!stored) {
+				return {
+					content: [
+						{
+							type: "text",
+							text: `No stored content found for ${params.url}`,
+						},
+					],
+					details: { found: false },
+				};
+			}
+			const truncated =
+				stored.content.length > MAX_CONTEXT_CHARS
+					? `\n[Content truncated: ${stored.content.length} chars total, ${MAX_CONTEXT_CHARS} chars shown]`
+					: "";
+			const text = [
+				`Retrieved content for ${stored.url}${truncated}`,
+				stored.title ? `Title: ${stored.title}` : "",
+				"\n---\n",
+				stored.content.slice(0, MAX_CONTEXT_CHARS),
+			]
+				.filter(Boolean)
+				.join("\n");
+			return {
+				content: [{ type: "text", text }],
+				details: {
+					found: true,
+					title: stored.title,
+					url: stored.url,
+					timestamp: stored.timestamp,
+					length: stored.content.length,
+					truncated: stored.content.length > MAX_CONTEXT_CHARS,
+				},
+			};
+		},
+	});
+
+	// ─── websearch tool ──────────────────────────────────────────────
+	pi.registerTool({
+		name: "websearch",
+		label: "Web Search",
+		description:
+			"Search the web using DuckDuckGo or Brave (no API key required). Returns a compact list of results with title, URL, and snippet.",
+		promptSnippet: "Search the web for current information or references",
+		promptGuidelines: [
+			"Use websearch when the user asks a question that requires current or external information not in your training data.",
+			"After getting search results, use webfetch or webpull to retrieve the full content of the most relevant result.",
+		],
+		parameters: Type.Object({
+			query: Type.String({
+				description: "Search query (e.g. 'React Server Components RFC')",
+			}),
+			max: Type.Optional(
+				Type.Number({
+					description: "Max results to return (default: 10)",
+					default: 10,
+				}),
+			),
+		}) as any,
+
+		async execute(_toolCallId, params) {
+			const query = params.query;
+			const max = params.max ?? 10;
+
+			const results = await searchWeb(query);
+			if (!results.length) {
+				return {
+					content: [
+						{
+							type: "text",
+							text: `No search results found for "${query}".`,
+						},
+					],
+					details: { query, results: [] },
+				};
+			}
+
+			const limited = results.slice(0, max);
+			const text = [
+				`Search results for "${query}":`,
+				"",
+				...limited.map(
+					(r, i) => `${i + 1}. **${r.title}**\n   ${r.url}\n   ${r.snippet}`,
+				),
+			].join("\n");
+
+			return {
+				content: [{ type: "text", text }],
+				details: { query, results: limited },
+			};
+		},
+	});
+
+	// ─── webpull tool ────────────────────────────────────────────────
+	pi.registerTool({
+		name: "webpull",
+		label: "Webpull",
+		description:
+			"Pull any public website or docs site into local markdown files with anti-bot TLS fingerprinting. Discovers pages via sitemap, navigation links, or crawling. Writes files preserving URL structure with YAML frontmatter.",
+		promptSnippet:
+			"Search the web, fetch a single URL, or pull an entire site into markdown",
+		promptGuidelines: [
+			"Use websearch when the user wants to find information online. Returns compact search results.",
+			"Use webfetch when the user wants to download a specific URL or batch of URLs.",
+			"After webpull completes, use the built-in read tool to inspect the generated markdown files.",
+		],
+		parameters: Type.Object({
+			url: Type.String({
+				description: "URL to pull (e.g. https://docs.example.com)",
+			}),
+			out: Type.Optional(
+				Type.String({
+					description: "Output directory under temp (default: <hostname>)",
+				}),
+			),
+			max: Type.Optional(
+				Type.Number({
+					description: "Max pages to pull (default: 100)",
+					default: 100,
+				}),
+			),
+			browser: Type.Optional(
+				Type.String({
+					description: `Browser profile for TLS fingerprinting. Default: "${DEFAULT_BROWSER}". Examples: chrome_145, firefox_147, safari_26, edge_145`,
+				}),
+			),
+			os: Type.Optional(
+				Type.String({
+					description: `OS profile for fingerprinting. Default: "${DEFAULT_OS}". Options: windows, macos, linux, android, ios`,
+				}),
+			),
+		}) as any,
+
+		async execute(_toolCallId, params, signal, onUpdate) {
+			let raw = params.url;
+			if (!/^https?:\/\//i.test(raw)) raw = `https://${raw}`;
+
+			let url: URL;
+			try {
+				url = new URL(raw);
+			} catch {
+				throw new Error(`Bad URL: ${params.url}`);
+			}
+
+			const outDir = params.out
+				? resolve(BASE_TEMP, params.out)
+				: join(BASE_TEMP, url.hostname);
+			const max = params.max ?? 100;
+			const concurrency = Math.max(4, cpus().length * 2);
+			const browser = (params.browser as string) ?? DEFAULT_BROWSER;
+			const os = (params.os as string) ?? DEFAULT_OS;
+			const fetchOpts: FetchOpts = { browser, os };
+
+			onUpdate?.({
+				content: [
+					{
+						type: "text",
+						text: `🔍 Discovering pages for ${url.href} (${browser}/${os})...`,
+					},
+				],
+				details: { stage: "discover", browser, os },
+			});
+
+			const urls = await discover(url.href, max, fetchOpts);
+			if (!urls.length) throw new Error("No pages found.");
+
+			onUpdate?.({
+				content: [
+					{
+						type: "text",
+						text: `📄 Found ${urls.length} pages. Pulling with ${concurrency} workers...`,
+					},
+				],
+				details: { stage: "pull", total: urls.length, browser, os },
+			});
+
+			let ok = 0;
+			let err = 0;
+			const files: string[] = [];
+			const errors: string[] = [];
+
+			await runInBatches(urls, concurrency, async (pageUrl, i) => {
+				if (signal?.aborted) return;
+
+				const result = await pullPage(pageUrl, fetchOpts);
+				if (!result.ok) {
+					err++;
+					errors.push(`${pageUrl}: ${result.error}`);
+					return;
+				}
+
+				const page: Page = {
+					url: result.url!,
+					title: result.title || new URL(result.url!).pathname,
+					markdown:
+						frontmatter(result.title || "", result.url!) +
+						(result.content ?? ""),
+				};
+
+				const rel = await writePage(page, outDir);
+				files.push(rel);
+				ok++;
+
+				storeContent(result.url!, result.title, page.markdown);
+
+				if ((i + 1) % 10 === 0 || i === urls.length - 1) {
+					onUpdate?.({
+						content: [
+							{
+								type: "text",
+								text: `⏳ ${ok + err}/${urls.length} pages processed (${ok} ok, ${err} err)...`,
+							},
+						],
+						details: {
+							stage: "progress",
+							ok,
+							err,
+							total: urls.length,
+						},
+					});
+				}
+			});
+
+			const summary = [
+				`✅ Pulled ${ok} pages to ${outDir}`,
+				err > 0 ? `⚠️ ${err} pages failed` : "",
+				``,
+				`Files:`,
+				...files.slice(0, 30).map((f) => `  - ${f}`),
+				files.length > 30 ? `  ... and ${files.length - 30} more` : "",
+				errors.length > 0
+					? `\nErrors:\n${errors
+							.slice(0, 10)
+							.map((e) => `  - ${e}`)
+							.join("\n")}`
+					: "",
+			]
+				.filter(Boolean)
+				.join("\n");
+
+			return {
+				content: [{ type: "text", text: summary }],
+				details: {
+					outDir,
+					total: urls.length,
+					ok,
+					err,
+					files,
+					errors,
+					browser,
+					os,
+				},
+			};
+		},
+	});
+}
