@@ -61,7 +61,7 @@ const NAV_SELECTORS = [
 
 const MARKDOWN_SIGNAL = /^(#{1,6}\s|[-*]\s|\d+\.\s|```|>\s|\[.+\]\(.+\))/m;
 const DEFUDDLE_TIMEOUT = 8000;
-const MAX_CONTEXT_CHARS = 28000;
+const MAX_PREVIEW_CHARS = 1800; // ~500 tokens for tool result preview
 
 const DEFAULT_BROWSER = "chrome_145";
 const DEFAULT_OS = "windows";
@@ -85,6 +85,25 @@ const BOT_PROTECTION_MARKERS = [
 	"before you continue",
 ];
 
+// ─── Retry configuration ─────────────────────────────────────────────
+
+const RETRYABLE_STATUS_CODES = new Set([429, 500, 502, 503, 504]);
+const NON_RETRYABLE_STATUS_CODES = new Set([400, 401, 403, 404]);
+const RETRY_INITIAL_DELAY_MS = 1000;
+const MAX_RETRIES = 2;
+
+function isRetryableNetworkError(err: unknown): boolean {
+	if (!(err instanceof Error || err instanceof TypeError)) return false;
+	const msg = (err as Error).message || "";
+	return (
+		msg.includes("fetch failed") ||
+		msg.includes("ECONNRESET") ||
+		msg.includes("ETIMEDOUT") ||
+		msg.includes("ECONNREFUSED") ||
+		msg.includes("timeout")
+	);
+}
+
 // ─── Session store ───────────────────────────────────────────────────
 
 const sessionStore = new Map<string, StoredContent>();
@@ -93,8 +112,52 @@ const searchCache = new Map<
 	{ query: string; results: SearchResult[]; timestamp: number }
 >();
 
+const SESSION_CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
+const MAX_SESSION_CACHE_ENTRIES = 100;
+const SESSION_CACHE_CLEANUP_MS = 5 * 60 * 1000; // 5 minutes
+
+function normalizeCacheKey(url: string): string {
+	if (url.startsWith("http://")) {
+		url = url.replace(/^http:/i, "https:");
+	}
+	// Normalize root path trailing slash for consistent cache keys
+	try {
+		const u = new URL(url);
+		if (u.pathname === "/" && url.endsWith("/")) {
+			return url.slice(0, -1);
+		}
+	} catch {}
+	return url;
+}
+
+function getStoredContent(url: string): StoredContent | null {
+	const key = normalizeCacheKey(url);
+	const entry = sessionStore.get(key);
+	if (!entry) return null;
+	if (Date.now() - entry.timestamp > SESSION_CACHE_TTL_MS) {
+		sessionStore.delete(key);
+		return null;
+	}
+	return entry;
+}
+
+function cleanupSessionCache(): void {
+	const now = Date.now();
+	for (const [url, entry] of sessionStore) {
+		if (now - entry.timestamp > SESSION_CACHE_TTL_MS) {
+			sessionStore.delete(url);
+		}
+	}
+}
+
 function storeContent(url: string, title: string | undefined, content: string) {
-	sessionStore.set(url, {
+	const key = normalizeCacheKey(url);
+	// Enforce max size with simple LRU (delete oldest)
+	while (sessionStore.size >= MAX_SESSION_CACHE_ENTRIES) {
+		const first = sessionStore.keys().next().value;
+		if (first !== undefined) sessionStore.delete(first);
+	}
+	sessionStore.set(key, {
 		url,
 		title,
 		content,
@@ -332,10 +395,13 @@ function detectPromptInjection(
 				if (!categories.includes("instruction_override"))
 					categories.push("instruction_override");
 			} else if (
-				patStr.includes("you are") ||
-				patStr.includes("act as") ||
+				patStr.includes("you\\s+are") ||
+				patStr.includes("from\\s+now") ||
+				patStr.includes("act\\s+as") ||
 				patStr.includes("pretend") ||
-				patStr.includes("roleplay")
+				patStr.includes("roleplay") ||
+				patStr.includes("behave") ||
+				patStr.includes("assume")
 			) {
 				if (!categories.includes("role_injection"))
 					categories.push("role_injection");
@@ -345,6 +411,19 @@ function detectPromptInjection(
 				patStr.includes("prompt")
 			) {
 				if (!categories.includes("prompt_leak")) categories.push("prompt_leak");
+			} else if (
+				patStr.includes("base64") ||
+				patStr.includes("encoded") ||
+				patStr.includes("\\x")
+			) {
+				if (!categories.includes("encoding")) categories.push("encoding");
+			} else if (
+				patStr.includes("\\[") ||
+				patStr.includes("###") ||
+				patStr.includes("<\\|")
+			) {
+				if (!categories.includes("suspicious_delimiters"))
+					categories.push("suspicious_delimiters");
 			} else if (
 				patStr.includes("admin") ||
 				patStr.includes("system") ||
@@ -362,15 +441,6 @@ function detectPromptInjection(
 				patStr.includes("censorship")
 			) {
 				if (!categories.includes("jailbreak")) categories.push("jailbreak");
-			} else if (
-				patStr.includes("base64") ||
-				patStr.includes("encoded") ||
-				patStr.includes("\\x")
-			) {
-				if (!categories.includes("encoding")) categories.push("encoding");
-			} else if (patStr.includes("[system]") || patStr.includes("###")) {
-				if (!categories.includes("suspicious_delimiters"))
-					categories.push("suspicious_delimiters");
 			}
 		}
 	}
@@ -404,6 +474,62 @@ function applyInjectionAction(text: string, result: InjectionResult): string {
 	}
 }
 
+async function fetchWithRetry(
+	url: string,
+	options: FetchOpts = {},
+): Promise<any | null> {
+	const headers = { ...buildHeaders(), ...options.headers };
+
+	for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+		try {
+			let res: any;
+			if (isLocalOrPrivateUrl(url)) {
+				res = await fetch(url, { redirect: "follow", headers });
+			} else {
+				const browser = (options.browser as any) ?? DEFAULT_BROWSER;
+				const os = (options.os as any) ?? DEFAULT_OS;
+				res = await wreqFetch(url, {
+					redirect: "follow",
+					headers,
+					browser,
+					os,
+				});
+			}
+
+			// Non-retryable status: fail immediately
+			if (NON_RETRYABLE_STATUS_CODES.has(res.status)) {
+				return null;
+			}
+
+			// Retryable status: wait and retry
+			if (RETRYABLE_STATUS_CODES.has(res.status) && attempt < MAX_RETRIES) {
+				const delayMs = RETRY_INITIAL_DELAY_MS * 2 ** attempt;
+				await new Promise((r) => setTimeout(r, delayMs));
+				continue;
+			}
+
+			// Other non-ok status after retries: fail
+			if (!res.ok) {
+				return null;
+			}
+
+			return res;
+		} catch (err: any) {
+			if (isRetryableNetworkError(err) && attempt < MAX_RETRIES) {
+				const delayMs = RETRY_INITIAL_DELAY_MS * 2 ** attempt;
+				await new Promise((r) => setTimeout(r, delayMs));
+				continue;
+			}
+			return null;
+		}
+	}
+	return null;
+}
+
+function normalizeFetchedUrl(url: string): string {
+	return url.startsWith("http://") ? url.replace(/^http:/i, "https:") : url;
+}
+
 async function smartFetch(
 	url: string,
 	options: FetchOpts = {},
@@ -413,6 +539,11 @@ async function smartFetch(
 	status: number;
 	headers: { get(name: string): string | null };
 } | null> {
+	// HTTP→HTTPS auto-upgrade
+	if (url.startsWith("http://")) {
+		url = url.replace(/^http:/i, "https:");
+	}
+
 	// Secret scanning — block requests containing API keys/tokens in URL
 	const secretScan = scanForSecrets(url);
 	if (secretScan.found) {
@@ -422,71 +553,53 @@ async function smartFetch(
 		return null;
 	}
 
-	const headers = { ...buildHeaders(), ...options.headers };
+	const res = await fetchWithRetry(url, options);
+	if (!res) return null;
 
-	const maxRetries = 2;
-	for (let attempt = 0; attempt <= maxRetries; attempt++) {
-		try {
-			let res: any;
-			if (isLocalOrPrivateUrl(url)) {
-				res = await fetch(url, { redirect: "follow", headers });
-			} else {
-				const browser = (options.browser as any) ?? DEFAULT_BROWSER;
-				const os = (options.os as any) ?? DEFAULT_OS;
-				res = await wreqFetch(url, {
-					redirect: "follow",
-					headers,
-					browser,
-					os,
-				});
-			}
-			const text = await res.text();
+	const text = await res.text();
 
-			// Detect bot protection and retry with different browser profile
-			if (isLikelyBotProtection(text) && attempt < maxRetries) {
-				const fallbackBrowsers = ["firefox_147", "safari_26", "edge_145"];
-				const fb = fallbackBrowsers[attempt % fallbackBrowsers.length];
-				console.error(
-					`Bot protection detected for ${url}, retrying with ${fb}...`,
-				);
-				const fbRes = await wreqFetch(url, {
-					redirect: "follow",
-					headers,
-					browser: fb as any,
-					os: (options.os as any) ?? DEFAULT_OS,
-				});
-				if (fbRes) {
-					const fbText = await fbRes.text();
-					if (!isLikelyBotProtection(fbText)) {
-						return {
-							text: fbText,
-							url: fbRes.url,
-							status: fbRes.status,
-							headers: fbRes.headers,
-						};
-					}
+	// Bot protection fallback: try alternate browser profiles
+	if (isLikelyBotProtection(text)) {
+		const fallbackBrowsers = ["firefox_147", "safari_26", "edge_145"];
+		const headers = { ...buildHeaders(), ...options.headers };
+		for (const fb of fallbackBrowsers) {
+			const fbRes = await wreqFetch(url, {
+				redirect: "follow",
+				headers,
+				browser: fb as any,
+				os: (options.os as any) ?? DEFAULT_OS,
+			});
+			if (fbRes && fbRes.ok) {
+				const fbText = await fbRes.text();
+				if (!isLikelyBotProtection(fbText)) {
+					return {
+						text: fbText,
+						url: normalizeFetchedUrl(fbRes.url),
+						status: fbRes.status,
+						headers: fbRes.headers,
+					};
 				}
 			}
-
-			return {
-				text,
-				url: res.url,
-				status: res.status,
-				headers: res.headers,
-			};
-		} catch (err: any) {
-			if (attempt === maxRetries) return null;
-			const delay = 500 * 2 ** attempt;
-			await new Promise((r) => setTimeout(r, delay));
 		}
 	}
-	return null;
+
+	return {
+		text,
+		url: normalizeFetchedUrl(res.url),
+		status: res.status,
+		headers: res.headers,
+	};
 }
 
 async function fetchBuffer(
 	url: string,
 	options: FetchOpts = {},
 ): Promise<{ buffer: Buffer; url: string; status: number } | null> {
+	// HTTP→HTTPS auto-upgrade
+	if (url.startsWith("http://")) {
+		url = url.replace(/^http:/i, "https:");
+	}
+
 	// Secret scanning — block requests containing API keys/tokens in URL
 	const secretScan = scanForSecrets(url);
 	if (secretScan.found) {
@@ -496,36 +609,15 @@ async function fetchBuffer(
 		return null;
 	}
 
-	const headers = { ...buildHeaders(), ...options.headers };
-	const maxRetries = 2;
-	for (let attempt = 0; attempt <= maxRetries; attempt++) {
-		try {
-			let res: any;
-			if (isLocalOrPrivateUrl(url)) {
-				res = await fetch(url, { redirect: "follow", headers });
-			} else {
-				const browser = (options.browser as any) ?? DEFAULT_BROWSER;
-				const os = (options.os as any) ?? DEFAULT_OS;
-				res = await wreqFetch(url, {
-					redirect: "follow",
-					headers,
-					browser,
-					os,
-				});
-			}
-			const arrayBuf = await res.arrayBuffer();
-			return {
-				buffer: Buffer.from(arrayBuf),
-				url: res.url,
-				status: res.status,
-			};
-		} catch (err: any) {
-			if (attempt === maxRetries) return null;
-			const delay = 500 * 2 ** attempt;
-			await new Promise((r) => setTimeout(r, delay));
-		}
-	}
-	return null;
+	const res = await fetchWithRetry(url, options);
+	if (!res) return null;
+
+	const arrayBuf = await res.arrayBuffer();
+	return {
+		buffer: Buffer.from(arrayBuf),
+		url: normalizeFetchedUrl(res.url),
+		status: res.status,
+	};
 }
 
 // ─── Discovery ───────────────────────────────────────────────────────
@@ -1219,20 +1311,30 @@ function fallbackExtract(html: string): { title: string; content: string } {
 	};
 }
 
-function finalizePullResult(result: PullResult): PullResult {
+function finalizePullResult(
+	result: PullResult,
+	redirectNotice?: string,
+): PullResult {
 	if (!result.ok || !result.content) return result;
 
-	const injection = detectPromptInjection(result.content, "warn");
+	let content = result.content;
+	if (redirectNotice) {
+		content = redirectNotice + "\n\n" + content;
+	}
+
+	const injection = detectPromptInjection(content, "warn");
 	return {
 		...result,
-		content: applyInjectionAction(result.content, injection),
+		content: applyInjectionAction(content, injection),
 	};
 }
 
 async function pullPage(url: string, opts?: FetchOpts): Promise<PullResult> {
+	let redirectNotice: string | undefined;
+
 	// GitHub special-case
 	const gh = await pullGitHub(url);
-	if (gh) return finalizePullResult(gh);
+	if (gh) return finalizePullResult(gh, redirectNotice);
 
 	// Try binary fetch first (PDF detection)
 	const isPdfUrl = url.toLowerCase().endsWith(".pdf");
@@ -1240,7 +1342,7 @@ async function pullPage(url: string, opts?: FetchOpts): Promise<PullResult> {
 		const bin = await fetchBuffer(url, opts);
 		if (bin && bin.status < 400) {
 			const pdf = await extractPDF(bin.buffer, url);
-			if (pdf) return finalizePullResult(pdf);
+			if (pdf) return finalizePullResult(pdf, redirectNotice);
 		}
 	}
 
@@ -1259,6 +1361,15 @@ async function pullPage(url: string, opts?: FetchOpts): Promise<PullResult> {
 	const finalUrl = res.url;
 	const ct = res.headers.get("content-type") ?? "";
 
+	// Detect cross-host redirects
+	try {
+		const origHost = new URL(url).hostname;
+		const finalHost = new URL(finalUrl).hostname;
+		if (origHost !== finalHost) {
+			redirectNotice = `> ⚠️ Cross-host redirect detected: \`${url}\` → \`${finalUrl}\``;
+		}
+	} catch {}
+
 	// PDF by content-type
 	if (ct.includes("application/pdf")) {
 		const bin = await fetchBuffer(url, opts);
@@ -1275,12 +1386,15 @@ async function pullPage(url: string, opts?: FetchOpts): Promise<PullResult> {
 	) {
 		const title =
 			text.match(/^#\s+(.+)$/m)?.[1]?.trim() || new URL(finalUrl).pathname;
-		return finalizePullResult({
-			ok: true,
-			url: finalUrl,
-			title,
-			content: text,
-		});
+		return finalizePullResult(
+			{
+				ok: true,
+				url: finalUrl,
+				title,
+				content: text,
+			},
+			redirectNotice,
+		);
 	}
 
 	const cleaned = text
@@ -1290,29 +1404,35 @@ async function pullPage(url: string, opts?: FetchOpts): Promise<PullResult> {
 	// Try Jina AI for public URLs
 	if (!isLocalOrPrivateUrl(url)) {
 		const jina = await fetchJina(url);
-		if (jina) return finalizePullResult(jina);
+		if (jina) return finalizePullResult(jina, redirectNotice);
 	}
 
 	// Try Readability
 	const readability = extractReadability(cleaned, finalUrl);
 	if (readability) {
-		return finalizePullResult({
-			ok: true,
-			url: finalUrl,
-			title: readability.title,
-			content: readability.content,
-		});
+		return finalizePullResult(
+			{
+				ok: true,
+				url: finalUrl,
+				title: readability.title,
+				content: readability.content,
+			},
+			redirectNotice,
+		);
 	}
 
 	// Try RSC (Next.js flight data)
 	const rsc = extractRSC(text);
 	if (rsc) {
-		return finalizePullResult({
-			ok: true,
-			url: finalUrl,
-			title: new URL(finalUrl).hostname,
-			content: rsc,
-		});
+		return finalizePullResult(
+			{
+				ok: true,
+				url: finalUrl,
+				title: new URL(finalUrl).hostname,
+				content: rsc,
+			},
+			redirectNotice,
+		);
 	}
 
 	// Defuddle
@@ -1321,15 +1441,21 @@ async function pullPage(url: string, opts?: FetchOpts): Promise<PullResult> {
 			Defuddle(cleaned, finalUrl, { markdown: true }),
 			DEFUDDLE_TIMEOUT,
 		);
-		return finalizePullResult({
-			ok: true,
-			url: finalUrl,
-			title: result.title || "",
-			content: result.content || "",
-		});
+		return finalizePullResult(
+			{
+				ok: true,
+				url: finalUrl,
+				title: result.title || "",
+				content: result.content || "",
+			},
+			redirectNotice,
+		);
 	} catch {
 		const { title, content } = fallbackExtract(cleaned);
-		return finalizePullResult({ ok: true, url: finalUrl, title, content });
+		return finalizePullResult(
+			{ ok: true, url: finalUrl, title, content },
+			redirectNotice,
+		);
 	}
 }
 
@@ -1381,6 +1507,9 @@ async function runInBatches<T, R>(
 export default function (pi: ExtensionAPI) {
 	// Load persisted search cache on startup
 	loadSearchCacheFromDisk().catch(() => {});
+
+	// Start session cache cleanup
+	setInterval(cleanupSessionCache, SESSION_CACHE_CLEANUP_MS);
 
 	// ─── webfetch tool ──────────────────────────────────────────────
 	pi.registerTool({
@@ -1495,18 +1624,17 @@ export default function (pi: ExtensionAPI) {
 			if (targets.length === 1) {
 				const r = results[0]!;
 				if (!r.ok) throw new Error(r.error ?? "Fetch failed");
+				const preview = await readFile(r.outPath!, "utf8");
 				const truncated =
-					r.length! > MAX_CONTEXT_CHARS
-						? `\n[Content truncated: ${r.length} chars total, ${MAX_CONTEXT_CHARS} chars shown. Full file: ${r.outPath}]`
+					preview.length > MAX_PREVIEW_CHARS
+						? `\n[Preview truncated: ${preview.length} chars total, ${MAX_PREVIEW_CHARS} chars shown (~500 tokens). Use the read tool on the file below for full content]`
 						: "";
 				const text = [
 					`✓ Fetched and saved to ${r.outPath}${truncated}`,
 					`\nTitle: ${r.title}`,
 					`URL: ${r.url}`,
 					"\n---\n",
-					await readFile(r.outPath!, "utf8").then((t) =>
-						t.slice(0, MAX_CONTEXT_CHARS),
-					),
+					preview.slice(0, MAX_PREVIEW_CHARS),
 				].join("\n");
 				return {
 					content: [{ type: "text", text }],
@@ -1516,8 +1644,8 @@ export default function (pi: ExtensionAPI) {
 						url: r.url,
 						browser,
 						os,
-						truncated: (r.length ?? 0) > MAX_CONTEXT_CHARS,
-						fullLength: r.length,
+						truncated: preview.length > MAX_PREVIEW_CHARS,
+						fullLength: preview.length,
 					},
 				};
 			}
@@ -1558,7 +1686,7 @@ export default function (pi: ExtensionAPI) {
 		}) as any,
 
 		async execute(_toolCallId: string, params: any): Promise<any> {
-			const stored = sessionStore.get(params.url);
+			const stored = getStoredContent(params.url);
 			if (!stored) {
 				return {
 					content: [
@@ -1570,15 +1698,12 @@ export default function (pi: ExtensionAPI) {
 					details: { found: false },
 				};
 			}
-			const truncated =
-				stored.content.length > MAX_CONTEXT_CHARS
-					? `\n[Content truncated: ${stored.content.length} chars total, ${MAX_CONTEXT_CHARS} chars shown]`
-					: "";
 			const text = [
-				`Retrieved content for ${stored.url}${truncated}`,
+				`Retrieved content for ${stored.url}`,
 				stored.title ? `Title: ${stored.title}` : "",
+				`Length: ${stored.content.length} chars`,
 				"\n---\n",
-				stored.content.slice(0, MAX_CONTEXT_CHARS),
+				stored.content,
 			]
 				.filter(Boolean)
 				.join("\n");
@@ -1590,7 +1715,6 @@ export default function (pi: ExtensionAPI) {
 					url: stored.url,
 					timestamp: stored.timestamp,
 					length: stored.content.length,
-					truncated: stored.content.length > MAX_CONTEXT_CHARS,
 				},
 			};
 		},
