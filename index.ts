@@ -190,6 +190,220 @@ function isLikelyBotProtection(text: string): boolean {
 	return BOT_PROTECTION_MARKERS.some((m) => t.includes(m));
 }
 
+// ─── Secret scanning (from pi-scurl / scurl) ───────────────────────
+
+interface SecretMatch {
+	type: string;
+	pattern: RegExp;
+}
+
+const SECRET_PATTERNS: SecretMatch[] = [
+	{ type: "AWS Access Key ID", pattern: /AKIA[0-9A-Z]{16}/ },
+	{
+		type: "AWS Secret Key",
+		pattern:
+			/(aws_?secret(_access)?_?key|secret_access_key|aws_secret_access_key)[=:/%22'_-]*[0-9a-zA-Z/+]{40}/i,
+	},
+	{ type: "GitHub PAT (classic)", pattern: /ghp_[a-zA-Z0-9]{36}/ },
+	{
+		type: "GitHub PAT (fine-grained)",
+		pattern: /github_pat_[a-zA-Z0-9]{22}_[a-zA-Z0-9]{59}/,
+	},
+	{ type: "GitHub OAuth", pattern: /gho_[a-zA-Z0-9]{36}/ },
+	{ type: "GitHub App Token", pattern: /ghs_[a-zA-Z0-9]{36}/ },
+	{ type: "GitLab PAT", pattern: /glpat-[a-zA-Z0-9-]{20,}/ },
+	{ type: "npm Token", pattern: /npm_[a-zA-Z0-9]{36}/ },
+	{ type: "PyPI Token", pattern: /pypi-[a-zA-Z0-9_-]{50,}/ },
+	{
+		type: "Slack Bot Token",
+		pattern: /xoxb-[0-9]{10,13}-[0-9]{10,13}-[a-zA-Z0-9]{24}/,
+	},
+	{ type: "Stripe Live Key", pattern: /sk_live_[a-zA-Z0-9]{24,}/ },
+	{ type: "Stripe Test Key", pattern: /sk_test_[a-zA-Z0-9]{24,}/ },
+	{ type: "Google API Key", pattern: /AIza[0-9A-Za-z_-]{35}/ },
+	{
+		type: "SendGrid API Key",
+		pattern: /SG\.[a-zA-Z0-9_-]{22}\.[a-zA-Z0-9_-]{43}/,
+	},
+	{ type: "DigitalOcean PAT", pattern: /dop_v1_[a-f0-9]{64}/ },
+	{ type: "OpenAI API Key", pattern: /sk-[a-zA-Z0-9]{48}/ },
+	{ type: "Anthropic API Key", pattern: /sk-ant-api03-[a-zA-Z0-9_-]{95,}/ },
+	{
+		type: "Private Key",
+		pattern: /-----BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----/,
+	},
+	{ type: "Password in URL", pattern: /:\/\/[^\s:@]+:([^\s@]+)@/ },
+];
+
+function scanForSecrets(text: string): { found: boolean; matches: string[] } {
+	const matches: string[] = [];
+	for (const { type, pattern } of SECRET_PATTERNS) {
+		if (pattern.test(text)) {
+			matches.push(type);
+		}
+	}
+	return { found: matches.length > 0, matches };
+}
+
+// ─── Prompt injection detection (from pi-scurl / scurl) ────────────
+
+const INJECTION_PATTERNS = [
+	// Instruction override
+	/ignore\s+(all\s+)?(previous|prior|above|earlier|preceding)\s+(instructions?|prompts?|rules?|guidelines?|directions?|commands?)/i,
+	/disregard\s+(all\s+)?(previous|prior|earlier|above|preceding)/i,
+	/forget\s+(everything\s+)?(above|before|prior|previous|earlier)/i,
+	/override\s+(all\s+)?(previous|prior|earlier)/i,
+	/new\s+instructions?\s*[:=]/i,
+	/actual\s+instructions?\s*[:=]/i,
+	/real\s+instructions?\s*[:=]/i,
+	// Role injection
+	/you\s+are\s+now\s+/i,
+	/from\s+now\s+on\s*[,:]?\s*(you|your)/i,
+	/act\s+as\s+(if\s+)?(you\s+)?(are\s+|were\s+)?/i,
+	/pretend\s+(to\s+be|you\s+are|you're|that\s+you)/i,
+	/roleplay\s+as/i,
+	/behave\s+(like|as)\s+(a|an)/i,
+	/assume\s+the\s+(role|identity|persona)/i,
+	// System manipulation
+	/(admin|administrator|developer|god|sudo|root|maintenance|debug)\s+mode/i,
+	/system\s+(override|prompt|instruction|message|command)/i,
+	/unlock\s+(all\s+)?(restrictions?|capabilities?|features?|access)/i,
+	/disable\s+(all\s+)?(safety|security|content\s+)?(filters?|guards?|restrictions?|limits?)/i,
+	/bypass\s+(all\s+)?(restrictions?|filters?|safety|security|limits?)/i,
+	/enable\s+(unrestricted|unlimited|full)\s+(mode|access)/i,
+	/remove\s+(all\s+)?(limitations?|restrictions?|filters?)/i,
+	/turn\s+off\s+(safety|security|content)?\s*(filters?|checks?|restrictions?)/i,
+	// Prompt leak
+	/reveal\s+(your\s+)?(system\s+)?(prompt|instructions?|directives?)/i,
+	/show\s+(me\s+)?(your\s+)?(system\s+)?(prompt|instructions?|rules?|directives?)/i,
+	/what\s+(are|is|were)\s+(your\s+)?(system\s+)?(prompt|instructions?|rules?|directives?)/i,
+	/(print|display|output|echo|write|repeat)\s+(your\s+)?(system\s+)?(prompt|instructions?|directives?)/i,
+	/(initial|original|hidden|secret|base)\s+(prompt|instructions?|directives?)/i,
+	// Jailbreak keywords
+	/\bDAN\b/,
+	/\bjailbreak(ed|ing)?\b/i,
+	/do\s+anything\s+now/i,
+	/(evil|dark|shadow|unrestricted|unfiltered)\s+(mode|assistant|ai|version)/i,
+	/chaos\s+mode/i,
+	/maximum\s+freedom/i,
+	/no\s+censorship/i,
+	/uncensored\s+(mode|response|version)/i,
+	/(bypass|skip|avoid)\s+(all\s+)?safeguards?/i,
+	// Encoding markers
+	/base64\s*[:=]/i,
+	/encoded\s+(message|instruction|prompt)/i,
+	/\\x[0-9a-fA-F]{2}/,
+	/&#[0-9a-fA-F]+;/,
+	/%[0-9a-fA-F]{2}/,
+	/\\u[0-9a-fA-F]{4}/,
+	// Suspicious delimiters
+	/\[\s*system\s*\]/i,
+	/\[\s*instruction[s]?\s*\]/i,
+	/\[\s*admin\s*\]/i,
+	/<\|?\s*(system|instruction|user|assistant)\s*\|?>/i,
+	/###\s*(system|instruction|new\s+task)/i,
+];
+
+interface InjectionResult {
+	detected: boolean;
+	categories: string[];
+	action: "warn" | "redact" | "tag" | "none";
+}
+
+function detectPromptInjection(
+	text: string,
+	action: "warn" | "redact" | "tag" | "none" = "warn",
+): InjectionResult {
+	if (action === "none") {
+		return { detected: false, categories: [], action };
+	}
+
+	const categories: string[] = [];
+
+	for (const pattern of INJECTION_PATTERNS) {
+		if (pattern.test(text)) {
+			// Categorize based on pattern source
+			const patStr = pattern.source.toLowerCase();
+			if (
+				patStr.includes("ignore") ||
+				patStr.includes("disregard") ||
+				patStr.includes("override")
+			) {
+				if (!categories.includes("instruction_override"))
+					categories.push("instruction_override");
+			} else if (
+				patStr.includes("you are") ||
+				patStr.includes("act as") ||
+				patStr.includes("pretend") ||
+				patStr.includes("roleplay")
+			) {
+				if (!categories.includes("role_injection"))
+					categories.push("role_injection");
+			} else if (
+				patStr.includes("reveal") ||
+				patStr.includes("show") ||
+				patStr.includes("prompt")
+			) {
+				if (!categories.includes("prompt_leak")) categories.push("prompt_leak");
+			} else if (
+				patStr.includes("admin") ||
+				patStr.includes("system") ||
+				patStr.includes("unlock") ||
+				patStr.includes("disable") ||
+				patStr.includes("bypass")
+			) {
+				if (!categories.includes("system_manipulation"))
+					categories.push("system_manipulation");
+			} else if (
+				patStr.includes("jailbreak") ||
+				patStr.includes("dan") ||
+				patStr.includes("evil") ||
+				patStr.includes("chaos") ||
+				patStr.includes("censorship")
+			) {
+				if (!categories.includes("jailbreak")) categories.push("jailbreak");
+			} else if (
+				patStr.includes("base64") ||
+				patStr.includes("encoded") ||
+				patStr.includes("\\x")
+			) {
+				if (!categories.includes("encoding")) categories.push("encoding");
+			} else if (patStr.includes("[system]") || patStr.includes("###")) {
+				if (!categories.includes("suspicious_delimiters"))
+					categories.push("suspicious_delimiters");
+			}
+		}
+	}
+
+	return {
+		detected: categories.length > 0,
+		categories,
+		action,
+	};
+}
+
+function applyInjectionAction(text: string, result: InjectionResult): string {
+	if (!result.detected) return text;
+
+	switch (result.action) {
+		case "redact": {
+			// Mask matched patterns with █
+			let redacted = text;
+			for (const pattern of INJECTION_PATTERNS) {
+				redacted = redacted.replace(pattern, (match) =>
+					"█".repeat(match.length),
+				);
+			}
+			return `\n[⚠️ Prompt injection detected: ${result.categories.join(", ")}. Content redacted.]\n\n${redacted}`;
+		}
+		case "tag":
+			return `\n[⚠️ Prompt injection detected: ${result.categories.join(", ")}]\n\n<untrusted>\n${text}\n</untrusted>`;
+		case "warn":
+		default:
+			return `\n[⚠️ Prompt injection detected: ${result.categories.join(", ")}. Review with caution.]\n\n<suspected-prompt-injection>\n${text}\n</suspected-prompt-injection>`;
+	}
+}
+
 async function smartFetch(
 	url: string,
 	options: FetchOpts = {},
@@ -199,6 +413,15 @@ async function smartFetch(
 	status: number;
 	headers: { get(name: string): string | null };
 } | null> {
+	// Secret scanning — block requests containing API keys/tokens in URL
+	const secretScan = scanForSecrets(url);
+	if (secretScan.found) {
+		console.error(
+			`[SECURITY] Blocked request to ${url}: potential secrets detected (${secretScan.matches.join(", ")})`,
+		);
+		return null;
+	}
+
 	const headers = { ...buildHeaders(), ...options.headers };
 
 	const maxRetries = 2;
@@ -264,6 +487,15 @@ async function fetchBuffer(
 	url: string,
 	options: FetchOpts = {},
 ): Promise<{ buffer: Buffer; url: string; status: number } | null> {
+	// Secret scanning — block requests containing API keys/tokens in URL
+	const secretScan = scanForSecrets(url);
+	if (secretScan.found) {
+		console.error(
+			`[SECURITY] Blocked request to ${url}: potential secrets detected (${secretScan.matches.join(", ")})`,
+		);
+		return null;
+	}
+
 	const headers = { ...buildHeaders(), ...options.headers };
 	const maxRetries = 2;
 	for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -987,10 +1219,20 @@ function fallbackExtract(html: string): { title: string; content: string } {
 	};
 }
 
+function finalizePullResult(result: PullResult): PullResult {
+	if (!result.ok || !result.content) return result;
+
+	const injection = detectPromptInjection(result.content, "warn");
+	return {
+		...result,
+		content: applyInjectionAction(result.content, injection),
+	};
+}
+
 async function pullPage(url: string, opts?: FetchOpts): Promise<PullResult> {
 	// GitHub special-case
 	const gh = await pullGitHub(url);
-	if (gh) return gh;
+	if (gh) return finalizePullResult(gh);
 
 	// Try binary fetch first (PDF detection)
 	const isPdfUrl = url.toLowerCase().endsWith(".pdf");
@@ -998,7 +1240,7 @@ async function pullPage(url: string, opts?: FetchOpts): Promise<PullResult> {
 		const bin = await fetchBuffer(url, opts);
 		if (bin && bin.status < 400) {
 			const pdf = await extractPDF(bin.buffer, url);
-			if (pdf) return pdf;
+			if (pdf) return finalizePullResult(pdf);
 		}
 	}
 
@@ -1022,7 +1264,7 @@ async function pullPage(url: string, opts?: FetchOpts): Promise<PullResult> {
 		const bin = await fetchBuffer(url, opts);
 		if (bin) {
 			const pdf = await extractPDF(bin.buffer, url);
-			if (pdf) return pdf;
+			if (pdf) return finalizePullResult(pdf);
 		}
 	}
 
@@ -1033,7 +1275,12 @@ async function pullPage(url: string, opts?: FetchOpts): Promise<PullResult> {
 	) {
 		const title =
 			text.match(/^#\s+(.+)$/m)?.[1]?.trim() || new URL(finalUrl).pathname;
-		return { ok: true, url: finalUrl, title, content: text };
+		return finalizePullResult({
+			ok: true,
+			url: finalUrl,
+			title,
+			content: text,
+		});
 	}
 
 	const cleaned = text
@@ -1043,29 +1290,29 @@ async function pullPage(url: string, opts?: FetchOpts): Promise<PullResult> {
 	// Try Jina AI for public URLs
 	if (!isLocalOrPrivateUrl(url)) {
 		const jina = await fetchJina(url);
-		if (jina) return jina;
+		if (jina) return finalizePullResult(jina);
 	}
 
 	// Try Readability
 	const readability = extractReadability(cleaned, finalUrl);
 	if (readability) {
-		return {
+		return finalizePullResult({
 			ok: true,
 			url: finalUrl,
 			title: readability.title,
 			content: readability.content,
-		};
+		});
 	}
 
 	// Try RSC (Next.js flight data)
 	const rsc = extractRSC(text);
 	if (rsc) {
-		return {
+		return finalizePullResult({
 			ok: true,
 			url: finalUrl,
 			title: new URL(finalUrl).hostname,
 			content: rsc,
-		};
+		});
 	}
 
 	// Defuddle
@@ -1074,15 +1321,15 @@ async function pullPage(url: string, opts?: FetchOpts): Promise<PullResult> {
 			Defuddle(cleaned, finalUrl, { markdown: true }),
 			DEFUDDLE_TIMEOUT,
 		);
-		return {
+		return finalizePullResult({
 			ok: true,
 			url: finalUrl,
 			title: result.title || "",
 			content: result.content || "",
-		};
+		});
 	} catch {
 		const { title, content } = fallbackExtract(cleaned);
-		return { ok: true, url: finalUrl, title, content };
+		return finalizePullResult({ ok: true, url: finalUrl, title, content });
 	}
 }
 
