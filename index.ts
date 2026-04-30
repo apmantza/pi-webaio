@@ -1384,15 +1384,15 @@ export default function (pi: ExtensionAPI) {
 
 	// ─── webfetch tool ──────────────────────────────────────────────
 	pi.registerTool({
-		name: "webfetch",
+		name: "aio-webfetch",
 		label: "Web Fetch",
 		description:
 			"Fetch a single URL (or batch of URLs) and convert to markdown with anti-bot TLS fingerprinting. Detects PDFs, GitHub repos, and Next.js RSC. Saves to temp directory. Large results are truncated in context; full content is always saved to the file.",
 		promptSnippet: "Fetch a URL and convert to markdown",
 		promptGuidelines: [
-			"Use webfetch when the user wants to retrieve specific webpage(s), article(s), or file(s).",
-			"Use webpull when the user wants to download an entire site or docs collection.",
-			"After webfetch completes, use the built-in read tool to inspect the generated markdown file(s).",
+			"Use aio-webfetch when the user wants to retrieve specific webpage(s), article(s), or file(s).",
+			"Use aio-webpull when the user wants to download an entire site or docs collection.",
+			"After aio-webfetch completes, use the built-in read tool to inspect the generated markdown file(s).",
 		],
 		parameters: Type.Object({
 			url: Type.Optional(
@@ -1543,13 +1543,13 @@ export default function (pi: ExtensionAPI) {
 
 	// ─── webcontent tool ────────────────────────────────────────────
 	pi.registerTool({
-		name: "webcontent",
+		name: "aio-webcontent",
 		label: "Web Content",
 		description:
-			"Retrieve previously fetched content from session storage by URL. Content is stored automatically after every successful webfetch or webpull.",
+			"Retrieve previously fetched content from session storage by URL. Content is stored automatically after every successful aio-webfetch or aio-webpull.",
 		promptSnippet: "Get stored content from a previous fetch",
 		promptGuidelines: [
-			"Use webcontent when you need the full content of a previously fetched URL without re-downloading.",
+			"Use aio-webcontent when you need the full content of a previously fetched URL without re-downloading.",
 		],
 		parameters: Type.Object({
 			url: Type.String({
@@ -1598,14 +1598,14 @@ export default function (pi: ExtensionAPI) {
 
 	// ─── websearch tool ──────────────────────────────────────────────
 	pi.registerTool({
-		name: "websearch",
+		name: "aio-websearch",
 		label: "Web Search",
 		description:
 			"Search the web using DuckDuckGo or Brave (no API key required). Returns a compact list of results with title, URL, and snippet.",
 		promptSnippet: "Search the web for current information or references",
 		promptGuidelines: [
-			"Use websearch when the user asks a question that requires current or external information not in your training data.",
-			"After getting search results, use webfetch or webpull to retrieve the full content of the most relevant result.",
+			"Use aio-websearch when the user asks a question that requires current or external information not in your training data.",
+			"After getting search results, use aio-webfetch or aio-webpull to retrieve the full content of the most relevant result.",
 		],
 		parameters: Type.Object({
 			query: Type.String({
@@ -1654,16 +1654,16 @@ export default function (pi: ExtensionAPI) {
 
 	// ─── webpull tool ────────────────────────────────────────────────
 	pi.registerTool({
-		name: "webpull",
+		name: "aio-webpull",
 		label: "Webpull",
 		description:
 			"Pull any public website or docs site into local markdown files with anti-bot TLS fingerprinting. Discovers pages via sitemap, navigation links, or crawling. Writes files preserving URL structure with YAML frontmatter.",
 		promptSnippet:
 			"Search the web, fetch a single URL, or pull an entire site into markdown",
 		promptGuidelines: [
-			"Use websearch when the user wants to find information online. Returns compact search results.",
-			"Use webfetch when the user wants to download a specific URL or batch of URLs.",
-			"After webpull completes, use the built-in read tool to inspect the generated markdown files.",
+			"Use aio-websearch when the user wants to find information online. Returns compact search results.",
+			"Use aio-webfetch when the user wants to download a specific URL or batch of URLs.",
+			"After aio-webpull completes, use the built-in read tool to inspect the generated markdown files.",
 		],
 		parameters: Type.Object({
 			url: Type.String({

@@ -3,6 +3,13 @@
   "version": "0.1.0",
   "description": "All-in-one web access tools for pi with search, fetch, crawl, extraction, and anti-bot TLS fingerprinting",
   "type": "module",
+  "main": "index.ts",
+  "files": [
+    "index.ts",
+    "package.json",
+    "README.md",
+    "CHANGELOG.md"
+  ],
   "scripts": {
     "test": "node tests/unit.test.mjs",
     "test:integration": "node tests/integration.test.mjs",

@@ -1,0 +1,123 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  lint-and-typecheck:
+    name: Lint & type-check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript type-check
+        run: npx tsc --noEmit
+
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+  install-test:
+    name: Install test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    needs: [lint-and-typecheck, test]
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Pack tarball
+        run: npm pack
+
+      - name: Verify required files in tarball
+        shell: bash
+        run: |
+          TARBALL=$(ls pi-webaio-*.tgz)
+          echo "Checking tarball: $TARBALL"
+          tar -tzf "$TARBALL" | grep -E "index\.ts|package\.json" | sort
+          tar -tzf "$TARBALL" | grep "index.ts" || \
+            (echo "ERROR: index.ts missing from tarball" && exit 1)
+
+      - name: Verify package.json entry points exist in tarball
+        shell: bash
+        run: |
+          TARBALL=$(ls pi-webaio-*.tgz)
+          TMPDIR=$(mktemp -d)
+          tar -xzf "$TARBALL" -C "$TMPDIR"
+
+          check_field() {
+            local field="$1" value="$2"
+            if [ ! -f "$TMPDIR/package/$value" ]; then
+              echo "ERROR: package.json '$field' points to '$value' which is missing from the tarball"
+              exit 1
+            fi
+            echo "OK: $field -> $value"
+          }
+
+          export PKG_DIR="$TMPDIR/package"
+          MAIN=$(node -p "require(process.env.PKG_DIR + '/package.json').main || ''" 2>/dev/null)
+          [ -n "$MAIN" ] && check_field "main" "$MAIN"
+
+          rm -rf "$TMPDIR"
+
+      - name: Install from tarball (simulates pi install npm:pi-webaio)
+        shell: bash
+        run: |
+          TARBALL=$(ls pi-webaio-*.tgz)
+          npm install -g "$TARBALL"
+
+      - name: Verify extension loads via tsx (catches missing node_modules deps)
+        shell: bash
+        run: |
+          INSTALL_DIR=$(npm root -g)/pi-webaio
+          cd "$INSTALL_DIR"
+          npx tsx index.ts 2>&1 | tee /tmp/tsx-output.txt || true
+          if grep -q "ERR_MODULE_NOT_FOUND\|Cannot find module" /tmp/tsx-output.txt; then
+            echo "FAILED: missing module dependency detected"
+            cat /tmp/tsx-output.txt
+            exit 1
+          fi
+          echo "Extension import check passed"
