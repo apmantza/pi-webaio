@@ -148,6 +148,6 @@ jobs:
         run: npx c8 --reporter=lcov --reporter=text npm test
 
       - name: SonarQube Cloud Scan
-        uses: sonarsource/sonarqube-scan-action@8c71dc039c2dd71d3821e89a2b58ecc7fee6ced9 # v5.3.0
+        uses: sonarsource/sonarqube-scan-action@59db25f34e16620e48ab4bb9e4a5dce155cb5432 # v8.0.0
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
