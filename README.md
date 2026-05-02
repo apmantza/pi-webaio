@@ -1,3 +1,5 @@
+![pi-webaio](banner.svg)
+
 # pi-webaio
 
 All-in-one web access tools for [pi](https://pi.dev) with search, fetch, crawl, extraction, anti-bot TLS fingerprinting, and intelligent resilience.

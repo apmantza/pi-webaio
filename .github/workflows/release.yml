@@ -17,7 +17,7 @@ jobs:
       should_release: ${{ steps.meta.outputs.should_release }}
       has_npm_token: ${{ steps.meta.outputs.has_npm_token }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -30,12 +30,14 @@ jobs:
           VERSION=$(node -p "require('./package.json').version")
           TAG="v$VERSION"
 
+          # Release if the version tag doesn't exist yet.
           if git rev-parse "$TAG" >/dev/null 2>&1; then
             SHOULD_RELEASE=false
           else
             SHOULD_RELEASE=true
           fi
 
+          # Check if NPM_TOKEN secret is configured
           if [ -n "$NPM_TOKEN" ]; then
             HAS_NPM_TOKEN=true
           else
@@ -52,14 +54,12 @@ jobs:
         shell: bash
         run: |
           VERSION="${{ steps.meta.outputs.version }}"
-          if ! grep -q "^## \[$VERSION\]" CHANGELOG.md 2>/dev/null; then
-            if ! grep -q "^## $VERSION" CHANGELOG.md 2>/dev/null; then
-              echo "Missing CHANGELOG entry for version $VERSION"
-              exit 1
-            fi
+          if ! grep -q "^## \[$VERSION\]" CHANGELOG.md; then
+            echo "Missing CHANGELOG entry for version $VERSION"
+            exit 1
           fi
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         if: steps.meta.outputs.should_release == 'true' && steps.meta.outputs.has_npm_token == 'true'
         with:
           node-version: 22
@@ -80,7 +80,7 @@ jobs:
     needs: prepare
     if: needs.prepare.outputs.should_release == 'true'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -104,9 +104,9 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org

@@ -1,7 +1,9 @@
 {
   "name": "pi-webaio",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "All-in-one web access tools for pi with search, fetch, crawl, extraction, and anti-bot TLS fingerprinting",
+  "license": "MIT",
+  "repository": "github:apmantza/pi-webaio",
   "keywords": ["pi-package"],
   "type": "module",
   "main": "index.ts",
@@ -12,7 +14,8 @@
     "index.ts",
     "package.json",
     "README.md",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "banner.svg"
   ],
   "scripts": {
     "test": "node tests/unit.test.mjs",
