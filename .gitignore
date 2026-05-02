@@ -6,3 +6,4 @@ temp/
 dist/
 .env
 .pi-lens/
+grep-test.json
