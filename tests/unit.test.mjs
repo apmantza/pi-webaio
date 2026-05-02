@@ -7,6 +7,7 @@ import {
 	extractDdgUrl,
 	extractLinks,
 	extractRSC,
+	fetchWithPlaywright,
 	filterAndDedupe,
 	finalizePullResult,
 	frontmatter,
@@ -645,4 +646,15 @@ test("extractLinks deduplicates", () => {
 		"/",
 	);
 	assert.strictEqual(links.length, 1);
+});
+
+// ─── fetchWithPlaywright (graceful degradation) ────────────────────
+
+test("fetchWithPlaywright returns null when Playwright not installed", {
+	timeout: 5000,
+}, async () => {
+	// In CI and most dev envs, Playwright browser isn't installed.
+	// This validates graceful degradation — the try/catch works.
+	const result = await fetchWithPlaywright("https://example.com");
+	assert.strictEqual(result, null);
 });

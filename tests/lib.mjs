@@ -459,3 +459,30 @@ export function extractLinks(html, base, visited, scope) {
 	}
 	return [...new Set(out)];
 }
+
+// ─── Playwright fallback (graceful, returns null if not installed) ──
+
+export async function fetchWithPlaywright(url) {
+	try {
+		const { chromium } = await import("playwright");
+		for (const opts of [{ channel: "chrome" }, {}]) {
+			try {
+				const browser = await chromium.launch({
+					...opts,
+					headless: true,
+				});
+				const page = await browser.newPage();
+				await page.goto(url, {
+					waitUntil: "domcontentloaded",
+					timeout: 15000,
+				});
+				const content = await page.content();
+				await browser.close();
+				return content;
+			} catch {}
+		}
+	} catch {
+		// Playwright not installed — skip gracefully
+	}
+	return null;
+}
