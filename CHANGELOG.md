@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tarball verification now checks for `banner.svg`
 - README updated with banner image
 
+### Fixed
+
+- CodeQL: Added `data:` and `vbscript:` to URL scheme checks
+- CodeQL: HTML regex now handles whitespace in closing script/style tags
+- CodeQL: `frontmatter()` now escapes backslashes in titles and URLs
+
 ## [0.1.1] - 2026-04-30
 
 ### Added
