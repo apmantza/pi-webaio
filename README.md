@@ -1,4 +1,4 @@
-![pi-webaio](banner.svg)
+![pi-webaio](banner.png)
 
 # pi-webaio
 
