@@ -15,7 +15,8 @@
     "package.json",
     "README.md",
     "CHANGELOG.md",
-    "banner.svg"
+    "banner.svg",
+    "types/playwright.d.ts"
   ],
   "scripts": {
     "test": "node tests/unit.test.mjs",
@@ -32,6 +33,9 @@
   "peerDependencies": {
     "@mariozechner/pi-coding-agent": "*",
     "typebox": "*"
+  },
+  "optionalDependencies": {
+    "playwright": "^1.55.0"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",

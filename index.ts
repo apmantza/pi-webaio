@@ -530,6 +530,34 @@ function normalizeFetchedUrl(url: string): string {
 	return url.startsWith("http://") ? url.replace(/^http:/i, "https:") : url;
 }
 
+// ─── Playwright fallback (JS-rendered pages) ───────────────────────
+
+async function fetchWithPlaywright(url: string): Promise<string | null> {
+	try {
+		const { chromium } = await import("playwright");
+		// Try system Chrome first (zero setup), then Playwright's bundled Chromium
+		for (const opts of [{ channel: "chrome" as const }, {}]) {
+			try {
+				const browser = await chromium.launch({
+					...opts,
+					headless: true,
+				});
+				const page = await browser.newPage();
+				await page.goto(url, {
+					waitUntil: "domcontentloaded",
+					timeout: 15000,
+				});
+				const content = await page.content();
+				await browser.close();
+				return content;
+			} catch {}
+		}
+	} catch {
+		// Playwright not installed — skip gracefully
+	}
+	return null;
+}
+
 async function smartFetch(
 	url: string,
 	options: FetchOpts = {},
@@ -554,7 +582,19 @@ async function smartFetch(
 	}
 
 	const res = await fetchWithRetry(url, options);
-	if (!res) return null;
+	if (!res) {
+		// Last resort: try Playwright for JS-rendered pages
+		const pwHtml = await fetchWithPlaywright(url);
+		if (pwHtml) {
+			return {
+				text: pwHtml,
+				url,
+				status: 200,
+				headers: { get: () => "text/html" } as any,
+			};
+		}
+		return null;
+	}
 
 	const text = await res.text();
 
