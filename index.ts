@@ -674,6 +674,8 @@ function extractNav(base: URL, html: string): string[] {
 				!href ||
 				href.startsWith("#") ||
 				href.startsWith("javascript:") ||
+				href.startsWith("data:") ||
+				href.startsWith("vbscript:") ||
 				href.startsWith("mailto:")
 			)
 				continue;
@@ -1398,8 +1400,8 @@ async function pullPage(url: string, opts?: FetchOpts): Promise<PullResult> {
 	}
 
 	const cleaned = text
-		.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
-		.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "");
+		.replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, "")
+		.replace(/<style\b[^>]*>[\s\S]*?<\/style\s*>/gi, "");
 
 	// Try Jina AI for public URLs
 	if (!isLocalOrPrivateUrl(url)) {
@@ -1462,7 +1464,7 @@ async function pullPage(url: string, opts?: FetchOpts): Promise<PullResult> {
 // ─── Write ──────────────────────────────────────────────────────────
 
 function frontmatter(title: string, url: string): string {
-	return `---\ntitle: "${title.replace(/"/g, '\\"')}"\nurl: "${url}"\n---\n\n`;
+	return `---\ntitle: "${title.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"\nurl: "${url}"\n---\n\n`;
 }
 
 function pageToPath(page: Page): string {

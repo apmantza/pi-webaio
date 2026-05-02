@@ -30,7 +30,7 @@ export function parseGitHubUrl(url) {
 }
 
 export function frontmatter(title, url) {
-	return `---\ntitle: "${title.replace(/"/g, '\\"')}"\nurl: "${url}"\n---\n\n`;
+	return `---\ntitle: "${title.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"\nurl: "${url}"\n---\n\n`;
 }
 
 export function extractRSC(html) {
