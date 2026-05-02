@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.4] - 2026-05-02
+
+### Added
+
+- 21 new unit tests covering search result parsers, sitemap parsing, and URL discovery (76 total)
+- SonarQube Cloud integration with `sonar-project.properties`
+
+### Changed
+
+- Banner: removed version tag and bottom accent line
+
+### Fixed
+
+- GitHub Actions pinned to full commit SHAs
+- SonarQube scan action bumped to v8.0.0
+
 ## [0.1.3] - 2026-05-02
 
 ### Changed
