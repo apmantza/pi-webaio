@@ -1400,8 +1400,8 @@ async function pullPage(url: string, opts?: FetchOpts): Promise<PullResult> {
 	}
 
 	const cleaned = text
-		.replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, "")
-		.replace(/<style\b[^>]*>[\s\S]*?<\/style\s*>/gi, "");
+		.replace(/<script\b[^>]*>[\s\S]*?<\/script[^>]*>/gi, "")
+		.replace(/<style\b[^>]*>[\s\S]*?<\/style[^>]*>/gi, "");
 
 	// Try Jina AI for public URLs
 	if (!isLocalOrPrivateUrl(url)) {
