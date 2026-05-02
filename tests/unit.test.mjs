@@ -650,11 +650,17 @@ test("extractLinks deduplicates", () => {
 
 // ─── fetchWithPlaywright (graceful degradation) ────────────────────
 
-test("fetchWithPlaywright returns null when Playwright not installed", {
+test("fetchWithPlaywright gracefully degrades when Playwright not installed", {
 	timeout: 5000,
 }, async () => {
-	// In CI and most dev envs, Playwright browser isn't installed.
-	// This validates graceful degradation — the try/catch works.
+	// When Playwright browsers aren't installed, this returns null.
+	// When they ARE installed, it returns the page HTML.
+	// Either is valid — the try/catch must not throw unhandled errors.
 	const result = await fetchWithPlaywright("https://example.com");
-	assert.strictEqual(result, null);
+	if (result === null) {
+		assert.strictEqual(result, null);
+	} else {
+		assert.ok(typeof result === "string");
+		assert.ok(result.includes("Example Domain"));
+	}
 });
