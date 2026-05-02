@@ -10,6 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - README.md expanded with full tool parameter tables, extraction pipeline documentation, batch/Playwright/Jina usage examples
+- Banner converted from SVG to PNG for broader compatibility
+- CI tarball verification now checks for banner.png
+- package.json `files` includes banner.png
+
+### Removed
+
+- SonarQube Cloud CI job and stale sonar-project.properties
 
 ## [0.1.5] - 2026-05-02
 

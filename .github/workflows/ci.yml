@@ -77,11 +77,11 @@ jobs:
         run: |
           TARBALL=$(ls pi-webaio-*.tgz)
           echo "Checking tarball: $TARBALL"
-          tar -tzf "$TARBALL" | grep -E "index\.ts|package\.json|banner\.svg" | sort
+          tar -tzf "$TARBALL" | grep -E "index\.ts|package\.json|banner\.(svg|png)" | sort
           tar -tzf "$TARBALL" | grep "index.ts" || \
             (echo "ERROR: index.ts missing from tarball" && exit 1)
-          tar -tzf "$TARBALL" | grep "banner.svg" || \
-            (echo "ERROR: banner.svg missing from tarball" && exit 1)
+          tar -tzf "$TARBALL" | grep "banner.png" || \
+            (echo "ERROR: banner.png missing from tarball" && exit 1)
 
       - name: Verify package.json entry points exist in tarball
         shell: bash

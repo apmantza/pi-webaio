@@ -20,6 +20,7 @@
     "README.md",
     "CHANGELOG.md",
     "banner.svg",
+    "banner.png",
     "types/playwright.d.ts"
   ],
   "scripts": {
