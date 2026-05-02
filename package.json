@@ -3,7 +3,10 @@
   "version": "0.1.6",
   "description": "All-in-one web access tools for pi with search, fetch, crawl, extraction, and anti-bot TLS fingerprinting",
   "license": "MIT",
-  "repository": "github:apmantza/pi-webaio",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/apmantza/pi-webaio.git"
+  },
   "keywords": [
     "pi-package"
   ],
