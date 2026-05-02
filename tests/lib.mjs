@@ -1,5 +1,7 @@
 // Pure helper functions extracted from index.ts for unit testing
 
+import { parseHTML } from "linkedom";
+
 export function isLocalOrPrivateUrl(url) {
 	try {
 		const u = new URL(url);
@@ -367,4 +369,93 @@ export function createSessionCache({
 	}
 
 	return { store, getStoredContent, storeContent, cleanupSessionCache };
+}
+
+// ─── Search result parsers ─────────────────────────────────────────
+
+const IGNORED =
+	/\.(png|jpg|jpeg|gif|svg|webp|ico|pdf|zip|tar|gz|mp4|mp3|woff2?|ttf|eot|css|js|json|xml|rss|atom)$/i;
+
+export function parseDuckDuckGoResults(html) {
+	const { document } = parseHTML(html);
+	const results = [];
+	for (const el of document.querySelectorAll(".result")) {
+		const a = el.querySelector(".result__a");
+		const snippet = el.querySelector(".result__snippet");
+		if (!a) continue;
+		const rawUrl = a.getAttribute("href") || "";
+		const url = extractDdgUrl(rawUrl);
+		const title = a.textContent?.trim() || "";
+		const text = snippet?.textContent?.trim() || "";
+		if (url && title) results.push({ title, url, snippet: text });
+	}
+	return results;
+}
+
+export function parseBraveResults(html) {
+	const { document } = parseHTML(html);
+	const results = [];
+	for (const el of document.querySelectorAll(".snippet")) {
+		const a = el.querySelector("a[href]");
+		const titleEl = el.querySelector(".title");
+		const descEl = el.querySelector(".description");
+		if (!a) continue;
+		const url = a.getAttribute("href") || "";
+		const title = titleEl?.textContent?.trim() || a.textContent?.trim() || "";
+		const text = descEl?.textContent?.trim() || "";
+		if (url && title) results.push({ title, url, snippet: text });
+	}
+	return results;
+}
+
+export function parseLocs(xml) {
+	return [...xml.matchAll(/<loc>\s*(.*?)\s*<\/loc>/gi)].map((m) => m[1].trim());
+}
+
+export function getScopePath(pathname) {
+	if (pathname === "/") return "/";
+	if (/\.\w+$/.test(pathname)) return pathname.replace(/\/[^/]*$/, "/");
+	if (pathname.endsWith("/")) return pathname;
+	const segs = pathname.split("/").filter(Boolean);
+	return segs.length <= 1 ? pathname : `/${segs.slice(0, -1).join("/")}/`;
+}
+
+export function filterAndDedupe(urls, hosts, scope, max) {
+	const seen = new Set();
+	const out = [];
+	for (const raw of urls) {
+		try {
+			const u = new URL(raw);
+			if (
+				!hosts.has(u.hostname) ||
+				!u.pathname.startsWith(scope) ||
+				IGNORED.test(u.pathname)
+			)
+				continue;
+			u.hash = u.search = "";
+			if (!seen.has(u.pathname)) {
+				seen.add(u.pathname);
+				out.push(u.href);
+			}
+		} catch {}
+	}
+	return out.slice(0, max);
+}
+
+export function extractLinks(html, base, visited, scope) {
+	const out = [];
+	for (const m of html.matchAll(/href=["'](.*?)["']/gi)) {
+		try {
+			const r = new URL(m[1], base);
+			r.hash = r.search = "";
+			if (
+				r.hostname === base.hostname &&
+				r.pathname.startsWith(scope) &&
+				!IGNORED.test(r.pathname) &&
+				!visited.has(r.href)
+			)
+				out.push(r.href);
+		} catch {}
+	}
+	return [...new Set(out)];
 }

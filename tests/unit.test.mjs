@@ -5,14 +5,20 @@ import {
 	createSessionCache,
 	detectPromptInjection,
 	extractDdgUrl,
+	extractLinks,
 	extractRSC,
+	filterAndDedupe,
 	finalizePullResult,
 	frontmatter,
+	getScopePath,
 	isLikelyBotProtection,
 	isLocalOrPrivateUrl,
 	isRetryableNetworkError,
 	normalizeCacheKey,
+	parseBraveResults,
+	parseDuckDuckGoResults,
 	parseGitHubUrl,
+	parseLocs,
 	scanForSecrets,
 } from "./lib.mjs";
 
@@ -417,4 +423,226 @@ test("session cache enforces max size with LRU eviction", () => {
 	assert.strictEqual(cache.store.has("https://a.com"), false);
 	assert.strictEqual(cache.store.has("https://b.com"), true);
 	assert.strictEqual(cache.store.has("https://c.com"), true);
+});
+
+// ─── parseDuckDuckGoResults ───────────────────────────────────────
+
+test("parseDuckDuckGoResults extracts results from DDG HTML", () => {
+	const html = `
+		<div class="result">
+			<a class="result__a" href="//duckduckgo.com/l/?uddg=${encodeURIComponent("https://example.com")}">Example Domain</a>
+			<div class="result__snippet">This domain is for use in illustrative examples.</div>
+		</div>
+		<div class="result">
+			<a class="result__a" href="//duckduckgo.com/l/?uddg=${encodeURIComponent("https://typescriptlang.org")}">TypeScript</a>
+			<div class="result__snippet">TypeScript is a strongly typed programming language.</div>
+		</div>
+	`;
+	const results = parseDuckDuckGoResults(html);
+	assert.strictEqual(results.length, 2);
+	assert.strictEqual(results[0].title, "Example Domain");
+	assert.strictEqual(results[0].url, "https://example.com");
+	assert.ok(results[0].snippet.includes("illustrative examples"));
+	assert.strictEqual(results[1].url, "https://typescriptlang.org");
+});
+
+test("parseDuckDuckGoResults skips results without links", () => {
+	const html = `<div class="result"><div class="result__snippet">No link</div></div>`;
+	const results = parseDuckDuckGoResults(html);
+	assert.strictEqual(results.length, 0);
+});
+
+test("parseDuckDuckGoResults handles empty HTML", () => {
+	const results = parseDuckDuckGoResults("");
+	assert.strictEqual(results.length, 0);
+});
+
+// ─── parseBraveResults ────────────────────────────────────────────
+
+test("parseBraveResults extracts results from Brave HTML", () => {
+	const html = `
+		<div class="snippet">
+			<a class="title" href="https://nodejs.org">Node.js</a>
+			<div class="description">Node.js is a JavaScript runtime built on Chrome's V8 engine.</div>
+		</div>
+		<div class="snippet">
+			<a href="https://deno.land"><span class="title">Deno</span></a>
+			<div class="description">A modern runtime for JavaScript and TypeScript.</div>
+		</div>
+	`;
+	const results = parseBraveResults(html);
+	assert.strictEqual(results.length, 2);
+	assert.strictEqual(results[0].title, "Node.js");
+	assert.strictEqual(results[0].url, "https://nodejs.org");
+	assert.strictEqual(results[1].title, "Deno");
+	assert.strictEqual(results[1].url, "https://deno.land");
+});
+
+test("parseBraveResults skips snippets without links", () => {
+	const html = `<div class="snippet"><div class="title">No link</div></div>`;
+	const results = parseBraveResults(html);
+	assert.strictEqual(results.length, 0);
+});
+
+// ─── parseLocs ─────────────────────────────────────────────────────
+
+test("parseLocs extracts URLs from sitemap XML", () => {
+	const xml = `
+		<urlset>
+			<url><loc>https://example.com/</loc></url>
+			<url><loc>https://example.com/about</loc></url>
+			<url><loc>https://example.com/contact</loc></url>
+		</urlset>
+	`;
+	const locs = parseLocs(xml);
+	assert.deepStrictEqual(locs, [
+		"https://example.com/",
+		"https://example.com/about",
+		"https://example.com/contact",
+	]);
+});
+
+test("parseLocs handles whitespace in loc tags", () => {
+	const xml = "<loc>  https://example.com/path  </loc>";
+	const locs = parseLocs(xml);
+	assert.strictEqual(locs[0], "https://example.com/path");
+});
+
+test("parseLocs returns empty for no loc tags", () => {
+	const locs = parseLocs("<urlset></urlset>");
+	assert.strictEqual(locs.length, 0);
+});
+
+// ─── getScopePath ─────────────────────────────────────────────────
+
+test("getScopePath returns / for root", () => {
+	assert.strictEqual(getScopePath("/"), "/");
+});
+
+test("getScopePath returns directory for file", () => {
+	assert.strictEqual(getScopePath("/docs/index.html"), "/docs/");
+	assert.strictEqual(getScopePath("/api/v1/users"), "/api/v1/");
+});
+
+test("getScopePath returns self for directory", () => {
+	assert.strictEqual(getScopePath("/docs/"), "/docs/");
+});
+
+test("getScopePath returns full path for shallow paths", () => {
+	assert.strictEqual(getScopePath("/docs"), "/docs");
+});
+
+// ─── filterAndDedupe ──────────────────────────────────────────────
+
+test("filterAndDedupe filters by host and scope", () => {
+	const hosts = new Set(["example.com"]);
+	const urls = [
+		"https://example.com/docs/page1",
+		"https://other.com/docs/page2",
+		"https://example.com/blog/post",
+	];
+	const result = filterAndDedupe(urls, hosts, "/docs/", 10);
+	assert.strictEqual(result.length, 1);
+	assert.strictEqual(result[0], "https://example.com/docs/page1");
+});
+
+test("filterAndDedupe deduplicates by pathname", () => {
+	const hosts = new Set(["example.com"]);
+	const urls = [
+		"https://example.com/docs?q=1",
+		"https://example.com/docs?q=2",
+		"https://example.com/docs#section",
+	];
+	const result = filterAndDedupe(urls, hosts, "/", 10);
+	assert.strictEqual(result.length, 1);
+});
+
+test("filterAndDedupe ignores file extensions in IGNORED", () => {
+	const hosts = new Set(["example.com"]);
+	const urls = [
+		"https://example.com/style.css",
+		"https://example.com/image.png",
+		"https://example.com/script.js",
+		"https://example.com/page",
+	];
+	const result = filterAndDedupe(urls, hosts, "/", 10);
+	assert.strictEqual(result.length, 1);
+	assert.strictEqual(result[0], "https://example.com/page");
+});
+
+test("filterAndDedupe respects max limit", () => {
+	const hosts = new Set(["example.com"]);
+	const urls = [
+		"https://example.com/a",
+		"https://example.com/b",
+		"https://example.com/c",
+	];
+	const result = filterAndDedupe(urls, hosts, "/", 2);
+	assert.strictEqual(result.length, 2);
+});
+
+test("filterAndDedupe handles invalid URLs", () => {
+	const hosts = new Set(["example.com"]);
+	const result = filterAndDedupe(
+		["not-a-url", "https://example.com/ok"],
+		hosts,
+		"/",
+		10,
+	);
+	assert.strictEqual(result.length, 1);
+});
+
+// ─── extractLinks ─────────────────────────────────────────────────
+
+test("extractLinks finds same-host links within scope", () => {
+	const html = `
+		<a href="/docs/page1">Page 1</a>
+		<a href="/docs/page2">Page 2</a>
+		<a href="https://other.com/page">Other</a>
+	`;
+	const links = extractLinks(
+		html,
+		new URL("https://example.com"),
+		new Set(),
+		"/docs/",
+	);
+	assert.strictEqual(links.length, 2);
+	assert.ok(links.includes("https://example.com/docs/page1"));
+	assert.ok(links.includes("https://example.com/docs/page2"));
+});
+
+test("extractLinks skips already visited URLs", () => {
+	const html = `<a href="/docs/page1"><a href="/docs/page2">`;
+	const visited = new Set(["https://example.com/docs/page1"]);
+	const links = extractLinks(
+		html,
+		new URL("https://example.com"),
+		visited,
+		"/docs/",
+	);
+	assert.strictEqual(links.length, 1);
+	assert.strictEqual(links[0], "https://example.com/docs/page2");
+});
+
+test("extractLinks ignores non-HTML file extensions", () => {
+	const html = `<a href="/style.css"><a href="/script.js"><a href="/page">`;
+	const links = extractLinks(
+		html,
+		new URL("https://example.com"),
+		new Set(),
+		"/",
+	);
+	assert.strictEqual(links.length, 1);
+	assert.strictEqual(links[0], "https://example.com/page");
+});
+
+test("extractLinks deduplicates", () => {
+	const html = `<a href="/page"><a href="/page"><a href="/page">`;
+	const links = extractLinks(
+		html,
+		new URL("https://example.com"),
+		new Set(),
+		"/",
+	);
+	assert.strictEqual(links.length, 1);
 });
