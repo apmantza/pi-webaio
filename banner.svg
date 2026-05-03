@@ -101,7 +101,7 @@
   <text x="430" y="222" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="17" font-weight="700" fill="#e6edf3">aio-webfetch</text>
   <text x="375" y="250" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="13" fill="#8b949e">
     <tspan x="375" dy="0">Fetch URLs → Markdown</tspan>
-    <tspan x="375" dy="20" font-weight="600" fill="#bc8cff">Anti-bot TLS profiles</tspan>
+    <tspan x="375" dy="20" font-weight="600" fill="#bc8cff">TLS fingerprinting</tspan>
     <tspan x="375" dy="20">PDF · RSC · GitHub · Readability</tspan>
     <tspan x="375" dy="20" font-weight="600" fill="#a371f7">AI-summarized previews</tspan>
   </text>

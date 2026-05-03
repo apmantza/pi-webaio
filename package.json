@@ -1,7 +1,7 @@
 {
   "name": "pi-webaio",
   "version": "0.1.8",
-  "description": "All-in-one web access tools for pi with search (DDG, Brave, Google), fetch, crawl, AI summarization, extraction, and anti-bot TLS fingerprinting",
+  "description": "All-in-one web access tools for pi with search (DDG, Brave, Google), fetch, crawl, AI summarization, and extraction",
   "license": "MIT",
   "repository": {
     "type": "git",
