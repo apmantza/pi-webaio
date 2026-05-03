@@ -13,6 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **AI-powered webfetch summarization** — `aio-webfetch` auto-summarizes long fetched content via Google AI Mode (udm=50). Passes the URL directly — Google AI reads the page and returns a concise bullet-point summary. Falls back to 1800-char truncation if AI is unavailable. 10s timeout cap.
 - **CDP infrastructure** — ported from GreedySearch-Pi: `bin/cdp.mjs`, `bin/launch.mjs`, `extractors/common.mjs`, `extractors/consent.mjs`, `extractors/selectors.mjs`, `extractors/google-ai.mjs`, `extractors/google-search.mjs`, `src/search/chrome.mjs`, `src/search/constants.mjs`, `src/search/engines.mjs`, `src/google-ai.ts`
 - **Auto-sync from GreedySearch-Pi** — CDP shared files are kept in sync via automated PRs from GreedySearch-Pi's CI (`.github/workflows/sync-to-webaio.yml`). No manual copying needed.
+- **gh CLI as default for GitHub URLs** — detection cached on first call, falls back to unauthenticated API only when `gh` not installed.
+  - **Repo clone:** `gh repo clone` → `git clone`
+  - **API calls:** `gh api` / native subcommands (`gh issue list`, `gh pr list`, `gh run list`, `gh release list`) → unauthenticated REST API
+  - **Feature pages:** maps `/security/code-scanning`, `/secret-scanning`, `/dependabot`, `/branches`, `/commits`, `/forks`, `/stargazers`, `/watchers`, `/labels`, `/milestones`, `/projects`, `/deployments`, `/contributors`, `/tags`, plus single-item views (`/issues/123`, `/pull/123`, `/commit/SHA`, `/releases/tag/v1`) to `gh api` endpoints
+  - **Non-repo pages** (settings, wiki, discussions, community): fall through to web fetch pipeline (Jina, Readability)
 
 ## [0.1.8] - 2026-05-02
 
