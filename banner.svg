@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 500" width="1280" height="500">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 390" width="1280" height="390">
   <defs>
     <!-- Background gradient -->
     <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
@@ -148,25 +148,9 @@
   <!-- DIVIDER -->
   <line x1="60" y1="380" x2="1220" y2="380" stroke="#30363d" stroke-width="1"/>
 
-  <!-- BOTTOM: Installation & values -->
-  <!-- Zero-config box -->
-  <rect x="60" y="410" width="380" height="55" rx="10" fill="#0d1117" stroke="#30363d" stroke-width="1"/>
-  <text x="80" y="435" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="14" font-weight="700" fill="#e6edf3">Install</text>
-  <text x="80" y="455" font-family="'Consolas', 'Cascadia Code', 'JetBrains Mono', monospace" font-size="13" fill="#58a6ff">pi install npm:pi-webaio</text>
-
-  <!-- Zero cost box -->
-  <rect x="460" y="410" width="380" height="55" rx="10" fill="#0d1117" stroke="#30363d" stroke-width="1"/>
-  <text x="480" y="435" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="14" font-weight="700" fill="#3fb950">🔑 No API keys needed</text>
-  <text x="480" y="455" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="13" fill="#8b949e">Zero cost · No accounts · No rate limits</text>
-
-  <!-- MIT box -->
-  <rect x="860" y="410" width="360" height="55" rx="10" fill="#0d1117" stroke="#30363d" stroke-width="1"/>
-  <text x="880" y="435" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="14" font-weight="700" fill="#a371f7">📋 MIT Licensed</text>
-  <text x="880" y="455" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="13" fill="#8b949e">Open source · github.com/apmantza/pi-webaio</text>
-
   <!-- Bottom decor line -->
-  <rect x="0" y="496" width="1280" height="4" fill="url(#accent)" opacity="0.5"/>
+  <rect x="0" y="386" width="1280" height="4" fill="url(#accent)" opacity="0.5"/>
 
   <!-- Version tag -->
-  <text x="1220" y="490" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="11" fill="#484f58" text-anchor="end">v0.1.8</text>
+  <text x="1220" y="382" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="11" fill="#484f58" text-anchor="end">v0.1.8</text>
 </svg>
