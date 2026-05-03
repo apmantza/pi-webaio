@@ -20,8 +20,8 @@ pi install git:github.com/apmantza/pi-webaio
 
 | Tool             | Description                                                                                                                                                           |
 | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `aio-websearch`  | Search the web using DuckDuckGo or Brave (no API key required). Returns compact results with title, URL, and snippet. 10-minute in-memory + disk cache.               |
-| `aio-webfetch`   | Fetch a single URL (or batch of URLs) and convert to markdown with anti-bot TLS fingerprinting. Detects PDFs, GitHub repos, and Next.js RSC. Saves to temp directory. |
+| `aio-websearch`  | Search the web using DuckDuckGo, Brave, and Google in parallel (no API keys required). Returns compact results with title, URL, and snippet. 7s cap — returns whatever is ready. Google runs via headless Chrome CDP (auto-launched). 10-minute cache.               |
+| `aio-webfetch`   | Fetch a single URL (or batch of URLs) and convert to markdown with anti-bot TLS fingerprinting. Long content is **AI-summarized** via Google AI Mode; full file always saved. Detects PDFs, GitHub repos, and Next.js RSC. |
 | `aio-webcontent` | Retrieve previously fetched content from session storage by URL. Returns **full untruncated content** — no data loss.                                                 |
 | `aio-webpull`    | Pull any public website or docs site into local markdown files with anti-bot TLS fingerprinting. Discovers pages via sitemap, navigation links, or crawling.          |
 
@@ -32,7 +32,8 @@ pi install git:github.com/apmantza/pi-webaio
 | Parameter | Type     | Default | Description                                       |
 | --------- | -------- | ------- | ------------------------------------------------- |
 | `query`   | `string` | —       | Search query (e.g. 'React Server Components RFC') |
-| `max`     | `number` | `10`    | Max results to return                             |
+| `max`     | `number` | `10`    | Max results to return per engine                  |
+| `google`  | `boolean`| `true`  | Also search Google via headless Chrome CDP. Set to `false` to use only DDG/Brave. |
 
 #### `aio-webfetch`
 
@@ -98,12 +99,29 @@ When fetching a page, pi-webaio tries the following backends **in order**, falli
 - **Search cache** — 10-minute TTL, persisted to disk for cross-session reuse
 - **Preview truncation** — `aio-webfetch` tool results show ~500 tokens in-context; **full file is always written to disk** for inspection via the `read` tool
 
+### AI-Powered Summarization
+
+- **Google AI Mode (udm=50)** — Long fetched content is auto-summarized by Google AI via headless Chrome CDP (10s timeout cap). The AI reads the URL directly and returns a concise bullet-point summary.
+- **Graceful fallback** — If Google AI is unavailable (Chrome not installed, CDP files missing), falls back to the 1800-char truncation.
+
+### Google CDP Search
+
+- **Parallel search** — `aio-websearch` runs DuckDuckGo, Brave, and Google in parallel. Google uses a headless Chrome instance (auto-launched) with locale-agnostic `textarea[name="q"]` selectors.
+- **7-second cap** — Returns whatever results are ready by the deadline. No waiting for slow engines.
+- **Result deduplication** — Merges and deduplicates results across all engines by URL.
+
 ## Usage Examples
 
 ### Search the web
 
 ```
 Use aio-websearch to find the latest React documentation
+```
+
+Google search is on by default (via headless Chrome). To skip it:
+
+```
+Use aio-websearch to search for "Rust serde" (google: false)
 ```
 
 ### Fetch a single URL
