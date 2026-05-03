@@ -169,5 +169,5 @@
   <rect x="0" y="496" width="1280" height="4" fill="url(#accent)" opacity="0.5"/>
 
   <!-- Version tag -->
-  <text x="1220" y="490" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="11" fill="#484f58" text-anchor="end">v0.1.9</text>
+  <text x="1220" y="490" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="11" fill="#484f58" text-anchor="end">v0.1.8</text>
 </svg>
