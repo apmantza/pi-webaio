@@ -37,7 +37,12 @@
     "CHANGELOG.md",
     "banner.svg",
     "banner.png",
-    "types/playwright.d.ts"
+    "bin/",
+    "extractors/",
+    "src/",
+    "types/",
+    "tests/",
+    "tsconfig.json"
   ],
   "scripts": {
     "test": "node tests/unit.test.mjs",
