@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Google CDP search** — `aio-websearch` now runs Google alongside DDG/Brave in parallel (on by default, 7s cap). Uses headless Chrome via CDP with locale-agnostic result extraction. Set `google: false` to skip.
 - **AI-powered webfetch summarization** — `aio-webfetch` auto-summarizes long fetched content via Google AI Mode (udm=50). Passes the URL directly — Google AI reads the page and returns a concise bullet-point summary. Falls back to 1800-char truncation if AI is unavailable. 10s timeout cap.
 - **CDP infrastructure** — ported from GreedySearch-Pi: `bin/cdp.mjs`, `bin/launch.mjs`, `extractors/common.mjs`, `extractors/consent.mjs`, `extractors/selectors.mjs`, `extractors/google-ai.mjs`, `extractors/google-search.mjs`, `src/search/chrome.mjs`, `src/search/constants.mjs`, `src/search/engines.mjs`, `src/google-ai.ts`
+- **Auto-sync from GreedySearch-Pi** — CDP shared files are kept in sync via automated PRs from GreedySearch-Pi's CI (`.github/workflows/sync-to-webaio.yml`). No manual copying needed.
 
 ## [0.1.8] - 2026-05-02
 
