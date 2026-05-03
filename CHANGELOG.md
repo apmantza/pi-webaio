@@ -7,17 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Critical: `gh` CLI completely broken** — `ghAvailable()` used `require("node:child_process")` which fails in ESM (`require is not defined`). Silently cached `false` forever, disabling all GitHub CLI features (clone, api, issue/pr listing). Fixed by importing `execSync` directly.
+- **`require("node:os")` in `src/google-ai.ts`** — 3 calls replaced with proper ESM `import { tmpdir }`.
+- **`require("pdf-parse")` in `index.ts`** — replaced with `createRequire(import.meta.url)` for CJS interop.
+- Webfetch summarization label corrected from "Gemini" to "Google AI".
+
+### Changed
+
+- **AI summarization is now the default for ALL responses** — not just long content (>1800 chars). Short content also gets summarized when CDP is available. Falls back to raw display (short) or truncation (long) when summarization fails.
+- **Summarization timeout: 10s → 15s** — empirically tested at 3.5–5s for real pages.
+
 ### Added
 
-- **Google CDP search** — `aio-websearch` now runs Google alongside DDG/Brave in parallel (on by default, 7s cap). Uses headless Chrome via CDP with locale-agnostic result extraction. Set `google: false` to skip.
-- **AI-powered webfetch summarization** — `aio-webfetch` auto-summarizes long fetched content via Google AI Mode (udm=50). Passes the URL directly — Google AI reads the page and returns a concise bullet-point summary. Falls back to 1800-char truncation if AI is unavailable. 10s timeout cap.
-- **CDP infrastructure** — ported from GreedySearch-Pi: `bin/cdp.mjs`, `bin/launch.mjs`, `extractors/common.mjs`, `extractors/consent.mjs`, `extractors/selectors.mjs`, `extractors/google-ai.mjs`, `extractors/google-search.mjs`, `src/search/chrome.mjs`, `src/search/constants.mjs`, `src/search/engines.mjs`, `src/google-ai.ts`
-- **Auto-sync from GreedySearch-Pi** — CDP shared files are kept in sync via automated PRs from GreedySearch-Pi's CI (`.github/workflows/sync-to-webaio.yml`). No manual copying needed.
-- **gh CLI as default for GitHub URLs** — detection cached on first call, falls back to unauthenticated API only when `gh` not installed.
-  - **Repo clone:** `gh repo clone` → `git clone`
-  - **API calls:** `gh api` / native subcommands (`gh issue list`, `gh pr list`, `gh run list`, `gh release list`) → unauthenticated REST API
-  - **Feature pages:** maps `/security/code-scanning`, `/secret-scanning`, `/dependabot`, `/branches`, `/commits`, `/forks`, `/stargazers`, `/watchers`, `/labels`, `/milestones`, `/projects`, `/deployments`, `/contributors`, `/tags`, plus single-item views (`/issues/123`, `/pull/123`, `/commit/SHA`, `/releases/tag/v1`) to `gh api` endpoints
-  - **Non-repo pages** (settings, wiki, discussions, community): fall through to web fetch pipeline (Jina, Readability)
+- **Search context bridging** — when `aio-webfetch` follows a recent `aio-websearch` (within 5 min), the original search query is injected into the summarization prompt: `"The user searched for: X. Give a concise summary of this page focusing on the user's search topic"` → summaries become context-aware and more focused.
 
 ## [0.1.8] - 2026-05-02
 

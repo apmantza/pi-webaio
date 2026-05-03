@@ -1,4 +1,5 @@
-import { spawn } from "node:child_process";
+import { execSync, spawn } from "node:child_process";
+import { createRequire } from "node:module";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { cpus, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -17,8 +18,9 @@ import {
 
 // ─── pdf-parse loose typing (CJS, no bundled .d.ts) ────────────────
 
+const nodeRequire = createRequire(import.meta.url);
 const pdfParse: (buf: Buffer) => Promise<{ text: string; numpages: number }> =
-	require("pdf-parse");
+	nodeRequire("pdf-parse");
 
 // ─── Types ───────────────────────────────────────────────────────────
 
@@ -75,6 +77,11 @@ const DEFAULT_OS = "windows";
 const BASE_TEMP = join(tmpdir(), "pi-webaio");
 const SEARCH_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const SEARCH_CACHE_FILE = join(BASE_TEMP, "search-cache.json");
+
+// Search context bridging: when webfetch follows a websearch, include the original query
+// in the AI summarization prompt for more focused summaries
+const SEARCH_CONTEXT_TTL_MS = 5 * 60 * 1000; // 5 minutes
+let lastSearchContext: { query: string; timestamp: number } | null = null;
 
 // Bot protection markers
 const BOT_PROTECTION_MARKERS = [
@@ -1053,7 +1060,10 @@ const GH_FEATURE_API_MAP: Record<string, string> = {
 };
 
 // Feature pages where gh has a dedicated subcommand (better than raw API)
-const GH_NATIVE_COMMANDS: Record<string, { cmd: string; args: string[]; formatter: string }> = {
+const GH_NATIVE_COMMANDS: Record<
+	string,
+	{ cmd: string; args: string[]; formatter: string }
+> = {
 	issues: {
 		cmd: "issue",
 		args: ["list", "--state", "all", "--limit", "20"],
@@ -1095,7 +1105,12 @@ async function pullGitHub(url: string): Promise<PullResult | null> {
 async function pullGitHubRef(ref: GitHubRef): Promise<PullResult | null> {
 	switch (ref.type) {
 		case "blob":
-			return fetchGitHubRaw(ref.owner, ref.repo, ref.ref || "main", ref.path || "");
+			return fetchGitHubRaw(
+				ref.owner,
+				ref.repo,
+				ref.ref || "main",
+				ref.path || "",
+			);
 		case "tree":
 			return fetchGitHubTree(ref);
 		case "repo":
@@ -1114,7 +1129,7 @@ async function pullGitHubFeature(url: string): Promise<PullResult | null> {
 		const fullRepo = `${owner}/${repo}`;
 
 		let apiPath: string | null = null;
-		let useNativeCommand: typeof GH_NATIVE_COMMANDS[string] | null = null;
+		let useNativeCommand: (typeof GH_NATIVE_COMMANDS)[string] | null = null;
 		let featureLabel = feature;
 
 		// ── Handle /security sub-pages ──
@@ -1169,11 +1184,13 @@ async function pullGitHubFeature(url: string): Promise<PullResult | null> {
 		try {
 			if (useNativeCommand) {
 				// Use gh subcommand (e.g. gh issue list --repo owner/repo)
-				raw = await ghCommand(
-					useNativeCommand.cmd,
-					[...useNativeCommand.args, "--repo", fullRepo,
-						useNativeCommand.formatter, "number,title,state,url"],
-				);
+				raw = await ghCommand(useNativeCommand.cmd, [
+					...useNativeCommand.args,
+					"--repo",
+					fullRepo,
+					useNativeCommand.formatter,
+					"number,title,state,url",
+				]);
 			} else {
 				raw = await ghApi(apiPath);
 			}
@@ -1193,7 +1210,12 @@ async function pullGitHubFeature(url: string): Promise<PullResult | null> {
 				md += "_(no items found)_\n";
 			} else {
 				for (const item of items) {
-					const title = item.title || item.name || item.display_title || item.headline || "";
+					const title =
+						item.title ||
+						item.name ||
+						item.display_title ||
+						item.headline ||
+						"";
 					const state = item.state ? ` _${item.state}_` : "";
 					const number = item.number ? `#${item.number}` : "";
 					const link = item.html_url || "";
@@ -1248,8 +1270,10 @@ function ghCommand(cmd: string, args: string[]): Promise<string> {
 /** Spawn gh api (generic REST API call) */
 function ghApi(path: string): Promise<string> {
 	return ghCommand("api", [
-		"-H", "Accept: application/vnd.github+json",
-		"-H", "X-GitHub-Api-Version: 2022-11-28",
+		"-H",
+		"Accept: application/vnd.github+json",
+		"-H",
+		"X-GitHub-Api-Version: 2022-11-28",
 		path,
 	]);
 }
@@ -1284,7 +1308,6 @@ let _ghAvailable: boolean | null = null;
 function ghAvailable(): boolean {
 	if (_ghAvailable !== null) return _ghAvailable;
 	try {
-		const { execSync } = require("node:child_process");
 		execSync("gh --version", { stdio: "ignore" });
 		_ghAvailable = true;
 	} catch {
@@ -1371,9 +1394,13 @@ async function cloneGitHubRepo(
 		// Prefer gh CLI (handles auth, private repos)
 		if (ghAvailable()) {
 			await new Promise<void>((resolve, reject) => {
-				const proc = spawn("gh", ["repo", "clone", `${owner}/${repo}`, outDir, "--", "--depth", "1"], {
-					stdio: "pipe",
-				});
+				const proc = spawn(
+					"gh",
+					["repo", "clone", `${owner}/${repo}`, outDir, "--", "--depth", "1"],
+					{
+						stdio: "pipe",
+					},
+				);
 				let stderr = "";
 				proc.stderr.on("data", (d: Buffer) => (stderr += d));
 				proc.on("close", (code: number) => {
@@ -1938,52 +1965,43 @@ export default function (pi: ExtensionAPI) {
 				if (!r.ok) throw new Error(r.error ?? "Fetch failed");
 				const preview = await readFile(r.outPath!, "utf8");
 
-				// ── Short content: show directly ──
-				if (preview.length <= MAX_PREVIEW_CHARS) {
-					const text = [
-						`✓ Fetched and saved to ${r.outPath}`,
-						`\nTitle: ${r.title}`,
-						`URL: ${r.url}`,
-						"\n---\n",
-						preview,
-					].join("\n");
-					return {
-						content: [{ type: "text", text }],
-						details: {
-							outPath: r.outPath,
-							title: r.title,
-							url: r.url,
-							browser,
-							os,
-							truncated: false,
-							fullLength: preview.length,
-						},
-					};
-				}
-
-				// ── Long content: try Google AI summarization (10s cap), fallback to truncation ──
+				// ── Always try Google AI summarization first ──
 				let summary: string | null = null;
 				let summarized = false;
+				const searchCtx =
+					lastSearchContext &&
+					Date.now() - lastSearchContext.timestamp < SEARCH_CONTEXT_TTL_MS
+						? lastSearchContext.query
+						: undefined;
+
 				if (cdpAvailableGA()) {
 					try {
 						await ensureChrome(true);
 						summary = await summarizeUrl(r.url as string, {
 							headless: true,
-							timeoutMs: 10000,
+							timeoutMs: 15000,
+							context: searchCtx,
 						});
 						if (summary) summarized = true;
 					} catch {
-						// Google AI failed — fall through to truncation
+						// Google AI failed — fall through to direct/truncated display
 					}
 				}
 
-				const summaryNotice = summarized
-					? `\n[AI-summarized by Gemini. Full content (${preview.length} chars) saved to ${r.outPath}. Use the read tool for full text.]`
-					: `\n[Preview truncated: ${preview.length} chars total, ${MAX_PREVIEW_CHARS} chars shown. Use the read tool for full content.]`;
+				const isShort = preview.length <= MAX_PREVIEW_CHARS;
+				let summaryNotice: string;
+				let displayContent: string;
 
-				const displayContent = summarized && summary
-					? summary
-					: preview.slice(0, MAX_PREVIEW_CHARS);
+				if (summarized && summary) {
+					summaryNotice = `\n[AI-summarized by Google AI. Full content (${preview.length} chars) saved to ${r.outPath}. Use the read tool for full text.]`;
+					displayContent = summary;
+				} else if (isShort) {
+					summaryNotice = "";
+					displayContent = preview;
+				} else {
+					summaryNotice = `\n[Preview truncated: ${preview.length} chars total, ${MAX_PREVIEW_CHARS} chars shown. Use the read tool for full content.]`;
+					displayContent = preview.slice(0, MAX_PREVIEW_CHARS);
+				}
 
 				const text = [
 					`✓ Fetched and saved to ${r.outPath}${summaryNotice}`,
@@ -2001,7 +2019,7 @@ export default function (pi: ExtensionAPI) {
 						url: r.url,
 						browser,
 						os,
-						truncated: !summarized && preview.length > MAX_PREVIEW_CHARS,
+						truncated: !summarized && !isShort,
 						summarized,
 						fullLength: preview.length,
 						summaryLength: summary?.length,
@@ -2103,7 +2121,8 @@ export default function (pi: ExtensionAPI) {
 			),
 			google: Type.Optional(
 				Type.Boolean({
-					description: "Also search Google via headless Chrome CDP. Default: true.",
+					description:
+						"Also search Google via headless Chrome CDP. Default: true.",
 					default: true,
 				}),
 			),
@@ -2111,6 +2130,7 @@ export default function (pi: ExtensionAPI) {
 
 		async execute(_toolCallId, params) {
 			const query = params.query;
+			lastSearchContext = { query, timestamp: Date.now() };
 			const max = params.max ?? 10;
 			const useGoogle = params.google ?? true;
 

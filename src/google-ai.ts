@@ -8,6 +8,7 @@
 
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 // ─── Paths ───────────────────────────────────────────────────────────
@@ -107,7 +108,8 @@ export function ensureChrome(headless = true): Promise<ChromeStatus> {
 
 			if (code === 0) {
 				// Parse status from output
-				const running = output.includes("already running") || output.includes("Ready");
+				const running =
+					output.includes("already running") || output.includes("Ready");
 				const ready = output.includes("Ready");
 				resolve({ running: true, ready });
 			} else if (output.includes("already running")) {
@@ -198,7 +200,6 @@ export function googleAISearch(
 		const profileDir = resolvePath("..", "greedysearch-chrome-profile");
 		// Actually, constants.mjs uses tmpdir(), so we need to set it to match
 		// what launch.mjs uses
-		const { tmpdir } = require("node:os");
 		const greedyProfileDir = `${tmpdir().replace(/\\/g, "/")}/greedysearch-chrome-profile`;
 
 		const env: Record<string, string> = {
@@ -224,7 +225,9 @@ export function googleAISearch(
 
 		const timer = setTimeout(() => {
 			proc.kill();
-			reject(new Error(`Google AI search timed out after ${timeoutMs / 1000}s`));
+			reject(
+				new Error(`Google AI search timed out after ${timeoutMs / 1000}s`),
+			);
 		}, timeoutMs);
 
 		proc.on("close", (code: number) => {
@@ -242,9 +245,7 @@ export function googleAISearch(
 				resolve(result);
 			} catch {
 				reject(
-					new Error(
-						`Invalid JSON from google-ai.mjs: ${stdout.slice(0, 200)}`,
-					),
+					new Error(`Invalid JSON from google-ai.mjs: ${stdout.slice(0, 200)}`),
 				);
 			}
 		});
@@ -283,7 +284,6 @@ export function googleSearch(
 			return;
 		}
 
-		const { tmpdir } = require("node:os");
 		const greedyProfileDir = `${tmpdir().replace(/\\/g, "/")}/greedysearch-chrome-profile`;
 
 		const args: string[] = [extractorBin, query, "--max", String(maxResults)];
@@ -353,9 +353,11 @@ export function summarizeUrl(
 	options: {
 		headless?: boolean;
 		timeoutMs?: number;
+		/** The original search query that led to this URL — included for focused summarization */
+		context?: string;
 	} = {},
 ): Promise<string> {
-	const { headless = true, timeoutMs = 10000 } = options;
+	const { headless = true, timeoutMs = 15000, context } = options;
 
 	return new Promise((resolve, reject) => {
 		const extractorBin = resolvePath("extractors", "google-ai.mjs");
@@ -365,10 +367,13 @@ export function summarizeUrl(
 			return;
 		}
 
-		const query = `Give a concise summary (~500 tokens max, use bullet points) of this page: ${url}`;
+		const prompt = context
+			? `The user searched for: "${context}". Give a concise summary of this page focusing on the user's search topic (use bullet points, ~500 tokens max): ${url}`
+			: `Give a concise summary (~500 tokens max, use bullet points) of this page: ${url}`;
 
-		const { tmpdir: ostmp } = require("node:os");
-		const greedyProfileDir = `${ostmp().replace(/\\/g, "/")}/greedysearch-chrome-profile`;
+		const query = prompt;
+
+		const greedyProfileDir = `${tmpdir().replace(/\\/g, "/")}/greedysearch-chrome-profile`;
 
 		const env: Record<string, string> = {
 			...process.env,
@@ -411,9 +416,7 @@ export function summarizeUrl(
 				resolve(result.answer || "");
 			} catch {
 				reject(
-					new Error(
-						`Invalid JSON from google-ai.mjs: ${stdout.slice(0, 200)}`,
-					),
+					new Error(`Invalid JSON from google-ai.mjs: ${stdout.slice(0, 200)}`),
 				);
 			}
 		});
