@@ -17,6 +17,7 @@ import {
 	handleError,
 	outputJson,
 	parseArgs,
+	prepareArgs,
 	TIMING,
 	validateQuery,
 } from "./common.mjs";
@@ -29,10 +30,10 @@ const SEARCH_BOX = 'textarea[name="q"], input[name="q"]';
 // Submit: form button or keyboard Enter (we'll use Enter which is universal)
 // Result containers: try multiple selectors that work across Google layouts
 const RESULT_SELECTORS = [
-	'.g',                    // classic result container
-	'[data-sokoban-container]', // newer layout
-	'.MjjYud',               // mobile-first layout
-	'div:has(> a > h3)',     // catch-all: div containing a link with heading
+	".g", // classic result container
+	"[data-sokoban-container]", // newer layout
+	".MjjYud", // mobile-first layout
+	"div:has(> a > h3)", // catch-all: div containing a link with heading
 ];
 
 // ─── Type into search box (locale-agnostic) ─────────────────────────
@@ -43,7 +44,7 @@ async function typeIntoSearchBox(tab, text) {
 		tab,
 		`
     (function(t) {
-      var el = document.querySelector('${SEARCH_BOX.replace(/'/g, "\\'")}');
+      var el = document.querySelector('${SEARCH_BOX.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}');
       if (!el) return false;
       el.focus();
       el.value = '';
@@ -63,7 +64,7 @@ async function submitSearch(tab) {
 		tab,
 		`
     (function() {
-      var el = document.querySelector('${SEARCH_BOX.replace(/'/g, "\\'")}');
+      var el = document.querySelector('${SEARCH_BOX.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}');
       if (!el) return false;
       el.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter', code:'Enter', keyCode:13, which:13, bubbles:true}));
       // Also try form submission as fallback
@@ -147,7 +148,7 @@ async function waitForResults(tab, timeoutMs = 15000) {
 		const found = await cdp([
 			"eval",
 			tab,
-			'document.querySelectorAll(\'a[href^="http"] h3\').length',
+			"document.querySelectorAll('a[href^=\"http\"] h3').length",
 		]).catch(() => "0");
 		const count = parseInt(found, 10) || 0;
 		if (count >= 3) return count;
@@ -155,7 +156,7 @@ async function waitForResults(tab, timeoutMs = 15000) {
 	const found = await cdp([
 		"eval",
 		tab,
-		'document.querySelectorAll(\'a[href^="http"] h3\').length',
+		"document.querySelectorAll('a[href^=\"http\"] h3').length",
 	]).catch(() => "0");
 	return parseInt(found, 10) || 0;
 }
@@ -168,7 +169,7 @@ const USAGE =
 	'Usage: node extractors/google-search.mjs "<query>" [--tab <prefix>] [--max <n>]\n';
 
 async function main() {
-	const args = process.argv.slice(2);
+	const args = await prepareArgs(process.argv.slice(2));
 	validateQuery(args, USAGE);
 
 	// Parse --max flag BEFORE parseArgs so it doesn't leak into query
@@ -197,7 +198,7 @@ async function main() {
 			const ready = await cdp([
 				"eval",
 				tab,
-				`!!document.querySelector('${SEARCH_BOX.replace(/'/g, "\\'")}')`,
+				`!!document.querySelector('${SEARCH_BOX.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}')`,
 			]).catch(() => "false");
 			if (ready === "true") break;
 			await new Promise((r) => setTimeout(r, TIMING.inputPoll));
