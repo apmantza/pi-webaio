@@ -1,7 +1,7 @@
 {
   "name": "pi-webaio",
   "version": "0.1.8",
-  "description": "All-in-one web access tools for pi with search, fetch, crawl, extraction, and anti-bot TLS fingerprinting",
+  "description": "All-in-one web access tools for pi with search (DDG, Brave, Google), fetch, crawl, AI summarization, extraction, and anti-bot TLS fingerprinting",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -20,6 +20,11 @@
     "pdf-extraction",
     "duckduckgo",
     "brave",
+    "google",
+    "google-search",
+    "ai-summarization",
+    "headless-chrome",
+    "cdp",
     "llm",
     "typescript"
   ],
