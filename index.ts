@@ -8,6 +8,12 @@ import { Defuddle } from "defuddle/node";
 import { parseHTML } from "linkedom";
 import { Type } from "typebox";
 import { fetch as wreqFetch } from "wreq-js";
+import {
+	ensureChrome,
+	googleSearch,
+	summarizeUrl,
+	cdpAvailable as cdpAvailableGA,
+} from "./src/google-ai.js";
 
 // ─── pdf-parse loose typing (CJS, no bundled .d.ts) ────────────────
 
@@ -1558,7 +1564,7 @@ export default function (pi: ExtensionAPI) {
 		name: "aio-webfetch",
 		label: "Web Fetch",
 		description:
-			"Fetch a single URL (or batch of URLs) and convert to markdown with anti-bot TLS fingerprinting. Detects PDFs, GitHub repos, and Next.js RSC. Saves to temp directory. Large results are truncated in context; full content is always saved to the file.",
+			"Fetch a single URL (or batch of URLs) and convert to markdown with anti-bot TLS fingerprinting. Detects PDFs, GitHub repos, and Next.js RSC. Long content is automatically summarized via Gemini AI; full content always saved to file.",
 		promptSnippet: "Fetch a URL and convert to markdown",
 		promptGuidelines: [
 			"Use aio-webfetch when the user wants to retrieve specific webpage(s), article(s), or file(s).",
@@ -1667,17 +1673,62 @@ export default function (pi: ExtensionAPI) {
 				const r = results[0]!;
 				if (!r.ok) throw new Error(r.error ?? "Fetch failed");
 				const preview = await readFile(r.outPath!, "utf8");
-				const truncated =
-					preview.length > MAX_PREVIEW_CHARS
-						? `\n[Preview truncated: ${preview.length} chars total, ${MAX_PREVIEW_CHARS} chars shown (~500 tokens). Use the read tool on the file below for full content]`
-						: "";
+
+				// ── Short content: show directly ──
+				if (preview.length <= MAX_PREVIEW_CHARS) {
+					const text = [
+						`✓ Fetched and saved to ${r.outPath}`,
+						`\nTitle: ${r.title}`,
+						`URL: ${r.url}`,
+						"\n---\n",
+						preview,
+					].join("\n");
+					return {
+						content: [{ type: "text", text }],
+						details: {
+							outPath: r.outPath,
+							title: r.title,
+							url: r.url,
+							browser,
+							os,
+							truncated: false,
+							fullLength: preview.length,
+						},
+					};
+				}
+
+				// ── Long content: try Google AI summarization (10s cap), fallback to truncation ──
+				let summary: string | null = null;
+				let summarized = false;
+				if (cdpAvailableGA()) {
+					try {
+						await ensureChrome(true);
+						summary = await summarizeUrl(r.url as string, {
+							headless: true,
+							timeoutMs: 10000,
+						});
+						if (summary) summarized = true;
+					} catch {
+						// Google AI failed — fall through to truncation
+					}
+				}
+
+				const summaryNotice = summarized
+					? `\n[AI-summarized by Gemini. Full content (${preview.length} chars) saved to ${r.outPath}. Use the read tool for full text.]`
+					: `\n[Preview truncated: ${preview.length} chars total, ${MAX_PREVIEW_CHARS} chars shown. Use the read tool for full content.]`;
+
+				const displayContent = summarized && summary
+					? summary
+					: preview.slice(0, MAX_PREVIEW_CHARS);
+
 				const text = [
-					`✓ Fetched and saved to ${r.outPath}${truncated}`,
+					`✓ Fetched and saved to ${r.outPath}${summaryNotice}`,
 					`\nTitle: ${r.title}`,
 					`URL: ${r.url}`,
 					"\n---\n",
-					preview.slice(0, MAX_PREVIEW_CHARS),
+					displayContent,
 				].join("\n");
+
 				return {
 					content: [{ type: "text", text }],
 					details: {
@@ -1686,8 +1737,10 @@ export default function (pi: ExtensionAPI) {
 						url: r.url,
 						browser,
 						os,
-						truncated: preview.length > MAX_PREVIEW_CHARS,
+						truncated: !summarized && preview.length > MAX_PREVIEW_CHARS,
+						summarized,
 						fullLength: preview.length,
+						summaryLength: summary?.length,
 					},
 				};
 			}
@@ -1767,11 +1820,12 @@ export default function (pi: ExtensionAPI) {
 		name: "aio-websearch",
 		label: "Web Search",
 		description:
-			"Search the web using DuckDuckGo or Brave (no API key required). Returns a compact list of results with title, URL, and snippet.",
+			"Search the web using DuckDuckGo, Brave, and Google in parallel (no API keys required). Returns a compact list of results with title, URL, and snippet. Capped at ~7s — returns whatever is available by then.",
 		promptSnippet: "Search the web for current information or references",
 		promptGuidelines: [
 			"Use aio-websearch when the user asks a question that requires current or external information not in your training data.",
 			"After getting search results, use aio-webfetch or aio-webpull to retrieve the full content of the most relevant result.",
+			"Runs DDG/Brave + Google in parallel. Google requires headless Chrome (auto-launched). Set google: false to skip.",
 		],
 		parameters: Type.Object({
 			query: Type.String({
@@ -1779,8 +1833,14 @@ export default function (pi: ExtensionAPI) {
 			}),
 			max: Type.Optional(
 				Type.Number({
-					description: "Max results to return (default: 10)",
+					description: "Max results to return per engine (default: 10)",
 					default: 10,
+				}),
+			),
+			google: Type.Optional(
+				Type.Boolean({
+					description: "Also search Google via headless Chrome CDP. Default: true.",
+					default: true,
 				}),
 			),
 		}) as any,
@@ -1788,9 +1848,81 @@ export default function (pi: ExtensionAPI) {
 		async execute(_toolCallId, params) {
 			const query = params.query;
 			const max = params.max ?? 10;
+			const useGoogle = params.google ?? true;
 
-			const results = await searchWeb(query);
-			if (!results.length) {
+			// ── Run DDG/Brave + Google in parallel with 7s cap ──
+			const SEARCH_TIMEOUT = 7000;
+
+			const ddgPromise = searchWeb(query).then(
+				(r) => ({ source: "ddg" as const, results: r.slice(0, max) }),
+				() => ({ source: "ddg" as const, results: [] as SearchResult[] }),
+			);
+
+			let googlePromise: Promise<{
+				source: "google";
+				results: SearchResult[];
+			}>;
+			if (useGoogle && cdpAvailableGA()) {
+				googlePromise = (async () => {
+					try {
+						await ensureChrome(true);
+						const g = await googleSearch(query, {
+							headless: true,
+							timeoutMs: SEARCH_TIMEOUT,
+							maxResults: max,
+						});
+						return {
+							source: "google" as const,
+							results: g.results.map((r) => ({
+								title: r.title,
+								url: r.url,
+								snippet: r.snippet,
+							})),
+						};
+					} catch {
+						return { source: "google" as const, results: [] };
+					}
+				})();
+			} else {
+				googlePromise = Promise.resolve({
+					source: "google" as const,
+					results: [],
+				});
+			}
+
+			const timeoutPromise = new Promise<null>((r) =>
+				setTimeout(() => r(null), SEARCH_TIMEOUT),
+			);
+
+			// Race all against the timeout — take whatever's ready
+			const allPromise = Promise.all([ddgPromise, googlePromise]);
+			const result = await Promise.race([allPromise, timeoutPromise]);
+
+			let ddgResults: SearchResult[] = [];
+			let googleResults: SearchResult[] = [];
+
+			if (result) {
+				ddgResults = result[0].results;
+				googleResults = result[1].results;
+			} else {
+				// Timeout hit — grab whatever settled already
+				const settled = await Promise.allSettled([ddgPromise, googlePromise]);
+				if (settled[0].status === "fulfilled")
+					ddgResults = settled[0].value.results;
+				if (settled[1].status === "fulfilled")
+					googleResults = settled[1].value.results;
+			}
+
+			// ── Merge & deduplicate by URL ──
+			const seen = new Set<string>();
+			const merged: SearchResult[] = [];
+			for (const r of [...ddgResults, ...googleResults]) {
+				if (seen.has(r.url)) continue;
+				seen.add(r.url);
+				merged.push(r);
+			}
+
+			if (!merged.length) {
 				return {
 					content: [
 						{
@@ -1802,9 +1934,9 @@ export default function (pi: ExtensionAPI) {
 				};
 			}
 
-			const limited = results.slice(0, max);
+			const limited = merged.slice(0, max);
 			const text = [
-				`Search results for "${query}":`,
+				`Search results for "${query}" (DDG${googleResults.length ? " + Google" : ""}):`,
 				"",
 				...limited.map(
 					(r, i) => `${i + 1}. **${r.title}**\n   ${r.url}\n   ${r.snippet}`,
@@ -1813,7 +1945,12 @@ export default function (pi: ExtensionAPI) {
 
 			return {
 				content: [{ type: "text", text }],
-				details: { query, results: limited },
+				details: {
+					query,
+					results: limited,
+					ddgCount: ddgResults.length,
+					googleCount: googleResults.length,
+				},
 			};
 		},
 	});
