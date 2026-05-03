@@ -1002,16 +1002,269 @@ interface GitHubRef {
 
 function parseGitHubUrl(url: string): GitHubRef | null {
 	const m = url.match(
-		/^https?:\/\/github\.com\/([^/]+)\/([^/]+)(?:\/(tree|blob)\/([^/]+)(?:\/(.*))?)?/i,
+		/^https?:\/\/github\.com\/([^/]+)\/([^/]+)(?:\/(tree|blob)\/([^/]+)(?:\/(.*))?)?(?:\/(?!tree\/|blob\/)(.*))?/i,
 	);
 	if (!m) return null;
-	const [, owner, repo, ghType, ref, path] = m;
+	const [, owner, repo, ghType, ref, path, extra] = m;
+
+	// Non-tree/non-blob path after repo (e.g. /issues, /security/code-scanning)
+	// → don't treat as a repo; let the regular web fetch pipeline handle it
+	if (!ghType && extra) return null;
+
 	if (ghType === "blob") return { owner, repo, ref, path, type: "blob" };
 	if (ghType === "tree") return { owner, repo, ref, path, type: "tree" };
 	return { owner, repo, type: "repo" };
 }
 
+// Map GitHub URL paths → REST API endpoints (gh api format with {owner}/{repo} placeholders)
+// gh api expands {owner}/{repo}/{branch} from the current repo context.
+// We use explicit /repos/:owner/:repo paths since we're not in a git repo.
+const GH_FEATURE_API_MAP: Record<string, string> = {
+	// Issues & PRs
+	issues: "/issues?state=all&per_page=20",
+	pulls: "/pulls?state=all&per_page=20",
+
+	// Actions
+	actions: "/actions/runs?per_page=20",
+
+	// Security
+	"code-scanning": "/code-scanning/alerts?state=open&per_page=30",
+	"secret-scanning": "/secret-scanning/alerts?state=open&per_page=30",
+	dependabot: "/dependabot/alerts?state=open&per_page=30",
+
+	// Releases & tags
+	releases: "/releases?per_page=20",
+	tags: "/tags?per_page=30",
+
+	// Repo info
+	branches: "/branches?per_page=30",
+	commits: "/commits?per_page=20",
+	forks: "/forks?per_page=20",
+	stargazers: "/stargazers?per_page=20",
+	watchers: "/subscribers?per_page=20",
+	contributors: "/contributors?per_page=20",
+	labels: "/labels?per_page=30",
+	milestones: "/milestones?per_page=20",
+	projects: "/projects?per_page=20",
+	deployments: "/deployments?per_page=20",
+
+	// Not available via REST API (GraphQL or no API)
+	// discussions, wiki, settings, network, community, graphs
+};
+
+// Feature pages where gh has a dedicated subcommand (better than raw API)
+const GH_NATIVE_COMMANDS: Record<string, { cmd: string; args: string[]; formatter: string }> = {
+	issues: {
+		cmd: "issue",
+		args: ["list", "--state", "all", "--limit", "20"],
+		formatter: "--json",
+	},
+	pulls: {
+		cmd: "pr",
+		args: ["list", "--state", "all", "--limit", "20"],
+		formatter: "--json",
+	},
+	actions: {
+		cmd: "run",
+		args: ["list", "--limit", "20"],
+		formatter: "--json",
+	},
+	releases: {
+		cmd: "release",
+		args: ["list", "--limit", "20"],
+		formatter: "--json",
+	},
+};
+
+async function pullGitHub(url: string): Promise<PullResult | null> {
+	// Try standard GitHub pipeline (tree/blob/repo)
+	const ref = parseGitHubUrl(url);
+	if (ref) {
+		return pullGitHubRef(ref);
+	}
+
+	// Feature page? Try gh api if available
+	if (ghAvailable()) {
+		const featureResult = await pullGitHubFeature(url);
+		if (featureResult) return featureResult;
+	}
+
+	return null;
+}
+
+async function pullGitHubRef(ref: GitHubRef): Promise<PullResult | null> {
+	switch (ref.type) {
+		case "blob":
+			return fetchGitHubRaw(ref.owner, ref.repo, ref.ref || "main", ref.path || "");
+		case "tree":
+			return fetchGitHubTree(ref);
+		case "repo":
+			return fetchGitHubRepo(ref);
+	}
+}
+
+async function pullGitHubFeature(url: string): Promise<PullResult | null> {
+	try {
+		const u = new URL(url);
+		const parts = u.pathname.split("/").filter(Boolean);
+		if (parts.length < 3) return null;
+
+		const [owner, repo, feature, ...rest] = parts;
+		const baseRepoPath = `/repos/${owner}/${repo}`;
+		const fullRepo = `${owner}/${repo}`;
+
+		let apiPath: string | null = null;
+		let useNativeCommand: typeof GH_NATIVE_COMMANDS[string] | null = null;
+		let featureLabel = feature;
+
+		// ── Handle /security sub-pages ──
+		if (feature === "security" && rest[0]) {
+			const sub = rest[0];
+			featureLabel = `security/${sub}`;
+			const mapped = GH_FEATURE_API_MAP[sub];
+			if (mapped) apiPath = `${baseRepoPath}${mapped}`;
+		}
+		// ── Handle /pull/123 or /issues/123 (single item) ──
+		else if ((feature === "pull" || feature === "issues") && rest[0]) {
+			const id = rest[0];
+			featureLabel = `${feature}/${id}`;
+			const endpoint = feature === "pull" ? "pulls" : "issues";
+			apiPath = `${baseRepoPath}/${endpoint}/${id}`;
+		}
+		// ── Handle /commit/SHA ──
+		else if (feature === "commit" && rest[0]) {
+			featureLabel = `commit/${rest[0].slice(0, 7)}`;
+			apiPath = `${baseRepoPath}/commits/${rest[0]}`;
+		}
+		// ── Handle /releases/tag/v1.0 ──
+		else if (feature === "releases" && rest[0] === "tag" && rest[1]) {
+			featureLabel = `release/${rest[1]}`;
+			apiPath = `${baseRepoPath}/releases/tags/${rest[1]}`;
+		}
+		// ── Handle /actions/runs/123 ──
+		else if (feature === "actions" && rest[0] === "runs" && rest[1]) {
+			featureLabel = `actions/run/${rest[1]}`;
+			apiPath = `${baseRepoPath}/actions/runs/${rest[1]}`;
+		}
+		// ── Handle /commits/branch ──
+		else if (feature === "commits" && rest[0]) {
+			featureLabel = `commits/${rest[0]}`;
+			apiPath = `${baseRepoPath}/commits?sha=${rest[0]}&per_page=20`;
+		}
+		// ── Standard feature pages ──
+		else {
+			const mapped = GH_FEATURE_API_MAP[feature];
+			if (mapped !== undefined) {
+				apiPath = `${baseRepoPath}${mapped}`;
+				// Check for native gh command
+				if (GH_NATIVE_COMMANDS[feature]) {
+					useNativeCommand = GH_NATIVE_COMMANDS[feature];
+				}
+			}
+		}
+
+		if (!apiPath) return null;
+
+		let raw: string;
+		try {
+			if (useNativeCommand) {
+				// Use gh subcommand (e.g. gh issue list --repo owner/repo)
+				raw = await ghCommand(
+					useNativeCommand.cmd,
+					[...useNativeCommand.args, "--repo", fullRepo,
+						useNativeCommand.formatter, "number,title,state,url"],
+				);
+			} else {
+				raw = await ghApi(apiPath);
+			}
+		} catch (err: any) {
+			// gh failed (not logged in, rate limited, etc.) → web fetch
+			return null;
+		}
+
+		const data = JSON.parse(raw);
+
+		let md = `# ${owner}/${repo} — ${featureLabel}\n\n`;
+		md += `> via gh api\n\n`;
+
+		if (Array.isArray(data)) {
+			const items = data.slice(0, 20);
+			if (!items.length) {
+				md += "_(no items found)_\n";
+			} else {
+				for (const item of items) {
+					const title = item.title || item.name || item.display_title || item.headline || "";
+					const state = item.state ? ` _${item.state}_` : "";
+					const number = item.number ? `#${item.number}` : "";
+					const link = item.html_url || "";
+					const label = item.rule?.description || item.severity || "";
+					const extra = label ? ` (${label})` : "";
+					md += `- ${number}${state} ${title}${extra}${link ? ` — [view](${link})` : ""}\n`;
+				}
+			}
+		} else if (typeof data === "object" && data !== null) {
+			// Single item (e.g. single issue, single commit)
+			const title = data.title || data.commit?.message?.split("\n")[0] || "";
+			const state = data.state ? ` _${data.state}_` : "";
+			const link = data.html_url || "";
+			if (title) md += `${state} ${title}\n`;
+			if (link) md += `\n[View on GitHub](${link})\n`;
+			// Include body/description for single items
+			const body = data.body || data.description || "";
+			if (body) md += `\n${body.slice(0, 2000)}\n`;
+		} else {
+			md += `\`\`\`json\n${JSON.stringify(data, null, 2)}\n\`\`\`\n`;
+		}
+
+		return {
+			ok: true,
+			url,
+			title: `${owner}/${repo} — ${featureLabel}`,
+			content: md,
+		};
+	} catch {
+		return null;
+	}
+}
+
+/** Spawn gh with a subcommand (e.g. gh issue list --repo owner/repo --json ...) */
+function ghCommand(cmd: string, args: string[]): Promise<string> {
+	return new Promise((resolve, reject) => {
+		const proc = spawn("gh", [cmd, ...args], {
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+		let out = "";
+		let err = "";
+		proc.stdout.on("data", (d: Buffer) => (out += d));
+		proc.stderr.on("data", (d: Buffer) => (err += d));
+		proc.on("close", (code: number) => {
+			if (code === 0) resolve(out.trim());
+			else reject(new Error(err.trim() || `gh ${cmd} exit ${code}`));
+		});
+		proc.on("error", reject);
+	});
+}
+
+/** Spawn gh api (generic REST API call) */
+function ghApi(path: string): Promise<string> {
+	return ghCommand("api", [
+		"-H", "Accept: application/vnd.github+json",
+		"-H", "X-GitHub-Api-Version: 2022-11-28",
+		path,
+	]);
+}
+
 async function githubApiFetch(path: string): Promise<unknown | null> {
+	// Try gh CLI first (authenticated: 5000 req/hr, private repos)
+	if (ghAvailable()) {
+		try {
+			const out = await ghApi(path);
+			return JSON.parse(out);
+		} catch {
+			// Fall through to unauthenticated API
+		}
+	}
+
 	const res = await smartFetch(`https://api.github.com${path}`, {
 		headers: {
 			Accept: "application/vnd.github+json",
@@ -1025,6 +1278,19 @@ async function githubApiFetch(path: string): Promise<unknown | null> {
 	} catch {
 		return null;
 	}
+}
+
+let _ghAvailable: boolean | null = null;
+function ghAvailable(): boolean {
+	if (_ghAvailable !== null) return _ghAvailable;
+	try {
+		const { execSync } = require("node:child_process");
+		execSync("gh --version", { stdio: "ignore" });
+		_ghAvailable = true;
+	} catch {
+		_ghAvailable = false;
+	}
+	return _ghAvailable;
 }
 
 async function fetchGitHubRaw(
@@ -1099,18 +1365,35 @@ async function cloneGitHubRepo(
 	repo: string,
 	outDir: string,
 ): Promise<{ ok: boolean; path: string; error?: string }> {
-	const cloneUrl = `https://github.com/${owner}/${repo}.git`;
 	try {
 		await mkdir(outDir, { recursive: true });
+
+		// Prefer gh CLI (handles auth, private repos)
+		if (ghAvailable()) {
+			await new Promise<void>((resolve, reject) => {
+				const proc = spawn("gh", ["repo", "clone", `${owner}/${repo}`, outDir, "--", "--depth", "1"], {
+					stdio: "pipe",
+				});
+				let stderr = "";
+				proc.stderr.on("data", (d: Buffer) => (stderr += d));
+				proc.on("close", (code: number) => {
+					if (code === 0) resolve();
+					else reject(new Error(stderr || `gh repo clone exit ${code}`));
+				});
+				proc.on("error", reject);
+			});
+			return { ok: true, path: outDir };
+		}
+
+		// Fallback: git clone
+		const cloneUrl = `https://github.com/${owner}/${repo}.git`;
 		await new Promise<void>((resolve, reject) => {
 			const proc = spawn("git", ["clone", "--depth", "1", cloneUrl, outDir], {
 				stdio: "pipe",
 			});
 			let stderr = "";
-			proc.stderr.on("data", (d) => {
-				stderr += d;
-			});
-			proc.on("close", (code) => {
+			proc.stderr.on("data", (d: Buffer) => (stderr += d));
+			proc.on("close", (code: number) => {
 				if (code === 0) resolve();
 				else reject(new Error(stderr || `git clone exited with ${code}`));
 			});
@@ -1214,25 +1497,6 @@ async function fetchGitHubRepo(ref: GitHubRef): Promise<PullResult> {
 		title: `${owner}/${repo}`,
 		content: md,
 	};
-}
-
-async function pullGitHub(url: string): Promise<PullResult | null> {
-	const ref = parseGitHubUrl(url);
-	if (!ref) return null;
-
-	switch (ref.type) {
-		case "blob":
-			return fetchGitHubRaw(
-				ref.owner,
-				ref.repo,
-				ref.ref || "main",
-				ref.path || "",
-			);
-		case "tree":
-			return fetchGitHubTree(ref);
-		case "repo":
-			return fetchGitHubRepo(ref);
-	}
 }
 
 // ─── Jina AI reader ────────────────────────────────────────────────
