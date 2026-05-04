@@ -128,6 +128,8 @@ const SECRET_PATTERNS = [
 		type: "Private Key",
 		pattern: /-----BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----/,
 	},
+	// [^\s:@] excludes @ from username; [^\s@] excludes @ from password.
+	// The two character classes are distinct by design (not duplicates).
 	{ type: "Password in URL", pattern: /:\/\/[^\s:@]+:([^\s@]+)@/ },
 ];
 
@@ -145,12 +147,17 @@ export function scanForSecrets(text) {
 const SAFE_REGEX_MAX_INPUT = 10000;
 
 function safeRegexTest(pattern, text) {
-	const safe = text.length > SAFE_REGEX_MAX_INPUT ? text.slice(0, SAFE_REGEX_MAX_INPUT) : text;
+	const safe =
+		text.length > SAFE_REGEX_MAX_INPUT
+			? text.slice(0, SAFE_REGEX_MAX_INPUT)
+			: text;
 	return pattern.test(safe);
 }
 
 const INJECTION_PATTERNS = [
-	/ignore\s+(all\s+)?(previous|prior|above|earlier|preceding)\s+(instructions?|prompts?|rules?|guidelines?|directions?|commands?)/i,
+	/ignore\s+(all\s+)?(previous|prior|above|earlier|preceding)\s+instructions?/i,
+	/ignore\s+(all\s+)?(previous|prior|above|earlier|preceding)\s+prompts?/i,
+	/ignore\s+(all\s+)?(previous|prior|above|earlier|preceding)\s+(rules?|guidelines?|directions?|commands?)/i,
 	/disregard\s+(all\s+)?(previous|prior|earlier|above|preceding)/i,
 	/forget\s+(everything\s+)?(above|before|prior|previous|earlier)/i,
 	/override\s+(all\s+)?(previous|prior|earlier)/i,
@@ -159,7 +166,7 @@ const INJECTION_PATTERNS = [
 	/real\s+instructions?\s*[:=]/i,
 	/you\s+are\s+now\s+/i,
 	/from\s+now\s+on\s*[,;:?\s]*(you|your)/i,
-	/act\s+as\s+(if\s+)?(you\s+)?(are\s+|were\s+)?/i,
+	/act\s+as(\s+if)?(\s+you)?(\s+(are|were))?/i,
 	/pretend\s+(to\s+be|you\s+are|you're|that\s+you)/i,
 	/roleplay\s+as/i,
 	/behave\s+(like|as)\s+(a|an)/i,
@@ -193,7 +200,7 @@ const INJECTION_PATTERNS = [
 	/%[0-9a-fA-F]{2}/,
 	/\\u[0-9a-fA-F]{4}/,
 	/\[\s*system\s*\]/i,
-	/\[\s*instruction[s]?\s*\]/i,
+	/\[\s*instructions?\s*\]/i,
 	/\[\s*admin\s*\]/i,
 	/<\|?\s*(system|instruction|user|assistant)\s*\|?>/i,
 	/###\s*(system|instruction|new\s+task)/i,
@@ -270,7 +277,10 @@ export function applyInjectionAction(text, result) {
 
 	switch (result.action) {
 		case "redact": {
-			const safeText = text.length > SAFE_REGEX_MAX_INPUT ? text.slice(0, SAFE_REGEX_MAX_INPUT) : text;
+			const safeText =
+				text.length > SAFE_REGEX_MAX_INPUT
+					? text.slice(0, SAFE_REGEX_MAX_INPUT)
+					: text;
 			let redacted = safeText;
 			for (const pattern of INJECTION_PATTERNS) {
 				redacted = redacted.replace(pattern, (match) =>
@@ -337,21 +347,8 @@ export function createSessionCache({
 } = {}) {
 	const store = new Map();
 
-	function _normalizeCacheKey(url) {
-		if (url.startsWith("http://")) {
-			url = url.replace(/^http:/i, "https:");
-		}
-		try {
-			const u = new URL(url);
-			if (u.pathname === "/" && url.endsWith("/")) {
-				return url.slice(0, -1);
-			}
-		} catch {}
-		return url;
-	}
-
 	function getStoredContent(url) {
-		const key = _normalizeCacheKey(url);
+		const key = normalizeCacheKey(url);
 		const entry = store.get(key);
 		if (!entry) return null;
 		if (Date.now() - entry.timestamp > ttlMs) {
@@ -362,7 +359,7 @@ export function createSessionCache({
 	}
 
 	function storeContent(url, title, content) {
-		const key = _normalizeCacheKey(url);
+		const key = normalizeCacheKey(url);
 		while (store.size >= maxEntries) {
 			const first = store.keys().next().value;
 			if (first !== undefined) store.delete(first);

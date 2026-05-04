@@ -54,7 +54,7 @@ interface StoredContent {
 // ─── Constants ───────────────────────────────────────────────────────
 
 const IGNORED =
-	/\.(png|jpg|jpeg|gif|svg|webp|ico|pdf|zip|tar|gz|mp4|mp3|woff2?|ttf|eot|css|js|json|xml|rss|atom)$/i;
+	/\.(png|jpe?g|gif|svg|webp|ico|pdf|zip|tar|gz|mp[34]|woff2?|ttf|eot|css|js|json|xml|rss|atom)$/i;
 
 const NAV_SELECTORS = [
 	"nav a[href]",
@@ -308,6 +308,8 @@ const SECRET_PATTERNS: SecretMatch[] = [
 		type: "Private Key",
 		pattern: /-----BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----/,
 	},
+	// [^\s:@] excludes @ from username; [^\s@] excludes @ from password.
+	// The two character classes are distinct by design (not duplicates).
 	{ type: "Password in URL", pattern: /:\/\/[^\s:@]+:([^\s@]+)@/ },
 ];
 
@@ -330,13 +332,18 @@ const SAFE_REGEX_MAX_INPUT = 10000;
 
 function safeRegexTest(pattern: RegExp, text: string): boolean {
 	// Truncate to bound worst-case backtracking
-	const safe = text.length > SAFE_REGEX_MAX_INPUT ? text.slice(0, SAFE_REGEX_MAX_INPUT) : text;
+	const safe =
+		text.length > SAFE_REGEX_MAX_INPUT
+			? text.slice(0, SAFE_REGEX_MAX_INPUT)
+			: text;
 	return pattern.test(safe);
 }
 
 const INJECTION_PATTERNS = [
-	// Instruction override
-	/ignore\s+(all\s+)?(previous|prior|above|earlier|preceding)\s+(instructions?|prompts?|rules?|guidelines?|directions?|commands?)/i,
+	// Instruction override (split to reduce regex complexity below 20)
+	/ignore\s+(all\s+)?(previous|prior|above|earlier|preceding)\s+instructions?/i,
+	/ignore\s+(all\s+)?(previous|prior|above|earlier|preceding)\s+prompts?/i,
+	/ignore\s+(all\s+)?(previous|prior|above|earlier|preceding)\s+(rules?|guidelines?|directions?|commands?)/i,
 	/disregard\s+(all\s+)?(previous|prior|earlier|above|preceding)/i,
 	/forget\s+(everything\s+)?(above|before|prior|previous|earlier)/i,
 	/override\s+(all\s+)?(previous|prior|earlier)/i,
@@ -346,7 +353,7 @@ const INJECTION_PATTERNS = [
 	// Role injection
 	/you\s+are\s+now\s+/i,
 	/from\s+now\s+on\s*[,:]?\s*(you|your)/i,
-	/act\s+as\s+(if\s+)?(you\s+)?(are\s+|were\s+)?/i,
+	/act\s+as(\s+if)?(\s+you)?(\s+(are|were))?/i,
 	/pretend\s+(to\s+be|you\s+are|you're|that\s+you)/i,
 	/roleplay\s+as/i,
 	/behave\s+(like|as)\s+(a|an)/i,
@@ -385,7 +392,7 @@ const INJECTION_PATTERNS = [
 	/\\u[0-9a-fA-F]{4}/,
 	// Suspicious delimiters
 	/\[\s*system\s*\]/i,
-	/\[\s*instruction[s]?\s*\]/i,
+	/\[\s*instructions?\s*\]/i,
 	/\[\s*admin\s*\]/i,
 	/<\|?\s*(system|instruction|user|assistant)\s*\|?>/i,
 	/###\s*(system|instruction|new\s+task)/i,
@@ -482,7 +489,10 @@ function applyInjectionAction(text: string, result: InjectionResult): string {
 	switch (result.action) {
 		case "redact": {
 			// Mask matched patterns with █. Truncate input to bound regex runtime.
-			const safeText = text.length > SAFE_REGEX_MAX_INPUT ? text.slice(0, SAFE_REGEX_MAX_INPUT) : text;
+			const safeText =
+				text.length > SAFE_REGEX_MAX_INPUT
+					? text.slice(0, SAFE_REGEX_MAX_INPUT)
+					: text;
 			let redacted = safeText;
 			for (const pattern of INJECTION_PATTERNS) {
 				redacted = redacted.replace(pattern, (match) =>
@@ -634,7 +644,7 @@ async function smartFetch(
 				browser: fb as any,
 				os: (options.os as any) ?? DEFAULT_OS,
 			});
-			if (fbRes && fbRes.ok) {
+			if (fbRes?.ok) {
 				const fbText = await fbRes.text();
 				if (!isLikelyBotProtection(fbText)) {
 					return {
@@ -692,7 +702,7 @@ async function tryFetch(
 	opts?: FetchOpts,
 ): Promise<{ text: string; url: string } | null> {
 	const r = await smartFetch(url, opts);
-	return r && r.status < 400 ? { text: r.text, url: r.url } : null;
+	return r?.status && r.status < 400 ? { text: r.text, url: r.url } : null;
 }
 
 function parseLocs(xml: string): string[] {
@@ -1311,7 +1321,8 @@ async function pullGitHubFeature(url: string): Promise<PullResult | null> {
 					const link = item.html_url || "";
 					const label = item.rule?.description || item.severity || "";
 					const extra = label ? ` (${label})` : "";
-					md += `- ${number}${state} ${title}${extra}${link ? ` — [view](${link})` : ""}\n`;
+					const linkLabel = link ? ` — [view](${link})` : "";
+				md += `- ${number}${state} ${title}${extra}${linkLabel}\n`;
 				}
 			}
 		} else if (typeof data === "object" && data !== null) {
@@ -1419,7 +1430,7 @@ async function fetchGitHubRaw(
 		const res = await smartFetch(
 			`https://raw.githubusercontent.com/${owner}/${repo}/${b}/${path}`,
 		);
-		if (res && res.status < 400) {
+		if (res?.status && res.status < 400) {
 			return {
 				ok: true,
 				url: `https://github.com/${owner}/${repo}/blob/${b}/${path}`,
@@ -1449,7 +1460,8 @@ async function fetchGitHubTree(ref: GitHubRef): Promise<PullResult> {
 		return fetchGitHubRaw(owner, repo, branch || "main", path);
 	}
 
-	let md = `# ${owner}/${repo}${path ? `/${path}` : ""}\n\n`;
+	const pathSuffix = path ? `/${path}` : "";
+	let md = `# ${owner}/${repo}${pathSuffix}\n\n`;
 	md += `## Directory Contents\n\n`;
 
 	for (const item of data as any[]) {
@@ -1462,14 +1474,15 @@ async function fetchGitHubTree(ref: GitHubRef): Promise<PullResult> {
 	);
 	if (readmeItem?.download_url) {
 		const r = await smartFetch(readmeItem.download_url);
-		if (r && r.status < 400) {
+		if (r?.status && r.status < 400) {
 			md += `\n---\n\n## README\n\n${r.text}\n`;
 		}
 	}
 
+	const treeUrl = path ? `/tree/${branch}/${path}` : "";
 	return {
 		ok: true,
-		url: `https://github.com/${owner}/${repo}${path ? `/tree/${branch}/${path}` : ""}`,
+		url: `https://github.com/${owner}/${repo}${treeUrl}`,
 		title: `${owner}/${repo}`,
 		content: md,
 	};
@@ -1593,7 +1606,8 @@ async function fetchGitHubRepo(ref: GitHubRef): Promise<PullResult> {
 	let md = "";
 	if (repoInfo && typeof repoInfo === "object" && !(repoInfo as any).message) {
 		const info = repoInfo as any;
-		md = `# ${info.full_name || `${owner}/${repo}`}\n\n`;
+		const repoName = info.full_name || `${owner}/${repo}`;
+		md = `# ${repoName}\n\n`;
 		if (info.description) md += `> ${info.description}\n\n`;
 		if (info.topics?.length) md += `**Topics:** ${info.topics.join(", ")}\n\n`;
 		md += `- **Language:** ${info.language || "N/A"}\n`;
