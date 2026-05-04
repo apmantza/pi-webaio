@@ -5,6 +5,10 @@ on:
     branches: [main, master]
   workflow_dispatch:
 
+# Restrict token to read-only by default; individual jobs opt into write access as needed.
+permissions:
+  contents: read
+
 jobs:
   prepare:
     runs-on: ubuntu-latest
