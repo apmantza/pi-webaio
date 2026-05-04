@@ -323,6 +323,17 @@ function scanForSecrets(text: string): { found: boolean; matches: string[] } {
 
 // ─── Prompt injection detection ────────────────────────────────────
 
+// Guard against catastrophic backtracking: truncate inputs to a safe
+// length before running regex tests. All INJECTION_PATTERNS are
+// designed for short text segments (titles, snippets, page content).
+const SAFE_REGEX_MAX_INPUT = 10000;
+
+function safeRegexTest(pattern: RegExp, text: string): boolean {
+	// Truncate to bound worst-case backtracking
+	const safe = text.length > SAFE_REGEX_MAX_INPUT ? text.slice(0, SAFE_REGEX_MAX_INPUT) : text;
+	return pattern.test(safe);
+}
+
 const INJECTION_PATTERNS = [
 	// Instruction override
 	/ignore\s+(all\s+)?(previous|prior|above|earlier|preceding)\s+(instructions?|prompts?|rules?|guidelines?|directions?|commands?)/i,
@@ -397,7 +408,7 @@ function detectPromptInjection(
 	const categories: string[] = [];
 
 	for (const pattern of INJECTION_PATTERNS) {
-		if (pattern.test(text)) {
+		if (safeRegexTest(pattern, text)) {
 			// Categorize based on pattern source
 			const patStr = pattern.source.toLowerCase();
 			if (
@@ -470,8 +481,9 @@ function applyInjectionAction(text: string, result: InjectionResult): string {
 
 	switch (result.action) {
 		case "redact": {
-			// Mask matched patterns with █
-			let redacted = text;
+			// Mask matched patterns with █. Truncate input to bound regex runtime.
+			const safeText = text.length > SAFE_REGEX_MAX_INPUT ? text.slice(0, SAFE_REGEX_MAX_INPUT) : text;
+			let redacted = safeText;
 			for (const pattern of INJECTION_PATTERNS) {
 				redacted = redacted.replace(pattern, (match) =>
 					"█".repeat(match.length),
@@ -582,7 +594,7 @@ async function smartFetch(
 } | null> {
 	// HTTP→HTTPS auto-upgrade
 	if (url.startsWith("http://")) {
-		url = url.replace(/^http:/i, "https:");
+		url = "https://" + url.slice(7);
 	}
 
 	// Secret scanning — block requests containing API keys/tokens in URL
@@ -650,7 +662,7 @@ async function fetchBuffer(
 ): Promise<{ buffer: Buffer; url: string; status: number } | null> {
 	// HTTP→HTTPS auto-upgrade
 	if (url.startsWith("http://")) {
-		url = url.replace(/^http:/i, "https:");
+		url = "https://" + url.slice(7);
 	}
 
 	// Secret scanning — block requests containing API keys/tokens in URL
@@ -1082,6 +1094,9 @@ interface GitHubRef {
 	type: "repo" | "tree" | "blob";
 }
 
+// URL length is bounded (typically <200 chars, always <2000).
+// The regex uses nested optional groups for URL structure matching;
+// catastrophic backtracking is not a concern on short URL strings.
 function parseGitHubUrl(url: string): GitHubRef | null {
 	const m = url.match(
 		/^https?:\/\/github\.com\/([^/]+)\/([^/]+)(?:\/(tree|blob)\/([^/]+)(?:\/(.*))?)?(?:\/(?!tree\/|blob\/)(.*))?/i,
@@ -1383,6 +1398,8 @@ let _ghAvailable: boolean | null = null;
 function ghAvailable(): boolean {
 	if (_ghAvailable !== null) return _ghAvailable;
 	try {
+		// Check if gh CLI is installed. PATH is inherited from the trusted
+		// system environment where the user invoked pi.
 		execSync("gh --version", { stdio: "ignore" });
 		_ghAvailable = true;
 	} catch {

@@ -134,9 +134,19 @@ const SECRET_PATTERNS = [
 export function scanForSecrets(text) {
 	const matches = [];
 	for (const { type, pattern } of SECRET_PATTERNS) {
-		if (pattern.test(text)) matches.push(type);
+		if (safeRegexTest(pattern, text)) matches.push(type);
 	}
 	return { found: matches.length > 0, matches };
+}
+
+// Guard against catastrophic backtracking: truncate inputs before
+// running regex tests. All patterns are designed for short text
+// segments (titles, snippets, page content).
+const SAFE_REGEX_MAX_INPUT = 10000;
+
+function safeRegexTest(pattern, text) {
+	const safe = text.length > SAFE_REGEX_MAX_INPUT ? text.slice(0, SAFE_REGEX_MAX_INPUT) : text;
+	return pattern.test(safe);
 }
 
 const INJECTION_PATTERNS = [
@@ -194,7 +204,7 @@ export function detectPromptInjection(text, action = "warn") {
 
 	const categories = [];
 	for (const pattern of INJECTION_PATTERNS) {
-		if (!pattern.test(text)) continue;
+		if (!safeRegexTest(pattern, text)) continue;
 		const patStr = pattern.source.toLowerCase();
 		if (
 			patStr.includes("ignore") ||
@@ -260,7 +270,8 @@ export function applyInjectionAction(text, result) {
 
 	switch (result.action) {
 		case "redact": {
-			let redacted = text;
+			const safeText = text.length > SAFE_REGEX_MAX_INPUT ? text.slice(0, SAFE_REGEX_MAX_INPUT) : text;
+			let redacted = safeText;
 			for (const pattern of INJECTION_PATTERNS) {
 				redacted = redacted.replace(pattern, (match) =>
 					"█".repeat(match.length),

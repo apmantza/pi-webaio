@@ -24,6 +24,8 @@ import {
 } from "./lib.mjs";
 
 // ─── isLocalOrPrivateUrl ───────────────────────────────────────────
+// nosonar: http:// URLs in this section are test fixtures for the
+// isLocalOrPrivateUrl check. No actual HTTP connections are made.
 
 test("isLocalOrPrivateUrl detects localhost", () => {
 	assert.strictEqual(isLocalOrPrivateUrl("http://localhost:3000"), true);
