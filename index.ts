@@ -1322,7 +1322,7 @@ async function pullGitHubFeature(url: string): Promise<PullResult | null> {
 					const label = item.rule?.description || item.severity || "";
 					const extra = label ? ` (${label})` : "";
 					const linkLabel = link ? ` — [view](${link})` : "";
-				md += `- ${number}${state} ${title}${extra}${linkLabel}\n`;
+					md += `- ${number}${state} ${title}${extra}${linkLabel}\n`;
 				}
 			}
 		} else if (typeof data === "object" && data !== null) {
