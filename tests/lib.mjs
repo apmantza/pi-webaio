@@ -393,18 +393,84 @@ export function parseDuckDuckGoResults(html) {
 }
 
 export function parseBraveResults(html) {
-	const { document } = parseHTML(html);
 	const results = [];
-	for (const el of document.querySelectorAll(".snippet")) {
-		const a = el.querySelector("a[href]");
-		const titleEl = el.querySelector(".title");
-		const descEl = el.querySelector(".description");
-		if (!a) continue;
-		const url = a.getAttribute("href") || "";
-		const title = titleEl?.textContent?.trim() || a.textContent?.trim() || "";
-		const text = descEl?.textContent?.trim() || "";
-		if (url && title) results.push({ title, url, snippet: text });
+
+	// Brave's search page uses Svelte-scoped CSS classes that linkedom
+	// can't query reliably. Instead, find each data-type="web" snippet div
+	// by tracking DOM nesting depth, then extract fields with regex on raw HTML.
+
+	let pos = 0;
+	while (pos < html.length) {
+		// Find the next web result snippet div
+		const dataAttr = html.indexOf('data-type="web"', pos);
+		if (dataAttr === -1) break;
+
+		// Walk back to the opening <div
+		const divStart = html.lastIndexOf("<div", dataAttr);
+		if (divStart === -1) {
+			pos = dataAttr + 1;
+			continue;
+		}
+
+		// Track nesting depth to find the matching closing </div>
+		let depth = 0;
+		let divEnd = -1;
+		for (let i = divStart + 4; i < html.length; i++) {
+			if (html.slice(i, i + 4) === "<div") {
+				depth++;
+				i += 3;
+			}
+			if (html.slice(i, i + 5) === "</div") {
+				if (depth === 0) {
+					divEnd = i + 5;
+					break;
+				}
+				depth--;
+				i += 4;
+			}
+		}
+
+		if (divEnd === -1) {
+			pos = dataAttr + 1;
+			continue;
+		}
+
+		const block = html.slice(divStart, divEnd + 1);
+
+		// Extract URL from first <a href="...">
+		const urlMatch = block.match(/href="(https?:\/\/[^"]+)"/);
+		if (!urlMatch) {
+			pos = divEnd + 1;
+			continue;
+		}
+		const url = urlMatch[1];
+
+		// Extract title from search-snippet-title div
+		const titleMatch = block.match(/search-snippet-title[^>]*>([^<]+)<\/div>/);
+		const title =
+			titleMatch?.[1]?.trim() ||
+			block.match(/title="([^"]+)"/)?.[1]?.trim() ||
+			"";
+
+		// Extract description from generic-snippet > .content
+		const gsMatch = block.match(
+			/generic-snippet[^>]*>[\s\S]*?content[^>]*>([\s\S]*?)<\/div>/,
+		);
+		const snippet = gsMatch
+			? gsMatch[1]
+					.replace(/<![^>]*-->/g, "")
+					.replace(/<[^>]+>/g, "")
+					.replace(/\s+/g, " ")
+					.trim()
+			: "";
+
+		if (url && title) {
+			results.push({ title, url, snippet });
+		}
+
+		pos = divEnd + 1;
 	}
+
 	return results;
 }
 

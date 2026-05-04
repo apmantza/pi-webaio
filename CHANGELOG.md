@@ -13,11 +13,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`require("node:os")` in `src/google-ai.ts`** — 3 calls replaced with proper ESM `import { tmpdir }`.
 - **`require("pdf-parse")` in `index.ts`** — replaced with `createRequire(import.meta.url)` for CJS interop.
 - Webfetch summarization label corrected from "Gemini" to "Google AI".
+- **Brave search results broken** — `parseBraveResults()` used linkedom DOM queries against Svelte-scoped CSS classes (`.snippet`, `.title`, `.description`) that never matched. Rewrote with regex-based chunking on `data-type="web"` divs, extracting URL/title/snippet from raw HTML.
 
 ### Changed
 
 - **AI summarization is now the default for ALL responses** — not just long content (>1800 chars). Short content also gets summarized when CDP is available. Falls back to raw display (short) or truncation (long) when summarization fails.
 - **Summarization timeout: 10s → 15s** — empirically tested at 3.5–5s for real pages.
+- **Brave search runs in parallel with DDG** — `searchWeb()` now fans out DDG + Brave via `Promise.all` (previously sequential: DDG first, Brave as fallback). Both must complete within the 7s cap.
+- **Three-way result deduplication** — DDG, Brave, and Google results are all merged and deduplicated by URL (DDG/Brave take priority over Google on conflict).
+- **Search header now shows all engines** — output header changed from `"DDG"` (or `"DDG + Google"`) to `"DDG + Brave"` (or `"DDG + Brave + Google"`) to reflect Brave is always attempted.
+- **Search details now include per-engine counts** — `ddgCount`, `braveCount`, and `googleCount` are all tracked separately in the tool result (previously Brave was invisible).
 
 ### Added
 

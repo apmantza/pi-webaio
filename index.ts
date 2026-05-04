@@ -933,68 +933,143 @@ function parseDuckDuckGoResults(html: string): SearchResult[] {
 }
 
 function parseBraveResults(html: string): SearchResult[] {
-	const { document } = parseHTML(html);
 	const results: SearchResult[] = [];
 
-	for (const el of document.querySelectorAll(".snippet")) {
-		const a = el.querySelector("a[href]");
-		const titleEl = el.querySelector(".title");
-		const descEl = el.querySelector(".description");
-		if (!a) continue;
-		const url = a.getAttribute("href") || "";
-		const title = titleEl?.textContent?.trim() || a.textContent?.trim() || "";
-		const text = descEl?.textContent?.trim() || "";
-		if (url && title) {
-			results.push({ title, url, snippet: text });
+	// Brave's search page uses Svelte-scoped CSS classes that linkedom
+	// can't query reliably. Instead, find each data-type="web" snippet div
+	// by tracking DOM nesting depth, then extract fields with regex on raw HTML.
+
+	let pos = 0;
+	while (pos < html.length) {
+		// Find the next web result snippet div
+		const dataAttr = html.indexOf('data-type="web"', pos);
+		if (dataAttr === -1) break;
+
+		// Walk back to the opening <div
+		const divStart = html.lastIndexOf("<div", dataAttr);
+		if (divStart === -1) {
+			pos = dataAttr + 1;
+			continue;
 		}
+
+		// Track nesting depth to find the matching closing </div>
+		let depth = 0;
+		let divEnd = -1;
+		for (let i = divStart + 4; i < html.length; i++) {
+			if (html.slice(i, i + 4) === "<div") {
+				depth++;
+				i += 3;
+			}
+			if (html.slice(i, i + 5) === "</div") {
+				if (depth === 0) {
+					divEnd = i + 5;
+					break;
+				}
+				depth--;
+				i += 4;
+			}
+		}
+
+		if (divEnd === -1) {
+			pos = dataAttr + 1;
+			continue;
+		}
+
+		const block = html.slice(divStart, divEnd + 1);
+
+		// Extract URL from first <a href="...">
+		const urlMatch = block.match(/href="(https?:\/\/[^"]+)"/);
+		if (!urlMatch) {
+			pos = divEnd + 1;
+			continue;
+		}
+		const url = urlMatch[1]!;
+
+		// Extract title from search-snippet-title div
+		const titleMatch = block.match(/search-snippet-title[^>]*>([^<]+)<\/div>/);
+		const title =
+			titleMatch?.[1]?.trim() ||
+			block.match(/title="([^"]+)"/)?.[1]?.trim() ||
+			"";
+
+		// Extract description from generic-snippet > .content
+		// Scope to content div inside generic-snippet to avoid matching
+		// the outer result-content wrapper.
+		const gsMatch = block.match(
+			/generic-snippet[^>]*>[\s\S]*?content[^>]*>([\s\S]*?)<\/div>/,
+		);
+		const snippet = gsMatch
+			? gsMatch[1]!
+					.replace(/<![^>]*-->/g, "") // strip Svelte comments
+					.replace(/<[^>]+>/g, "") // strip remaining HTML tags
+					.replace(/\s+/g, " ")
+					.trim()
+			: "";
+
+		if (url && title) {
+			results.push({ title, url, snippet });
+		}
+
+		pos = divEnd + 1;
 	}
+
 	return results;
 }
 
-async function searchWeb(query: string): Promise<SearchResult[]> {
+async function searchWeb(
+	query: string,
+): Promise<{ results: SearchResult[]; ddgCount: number; braveCount: number }> {
 	// Check in-memory cache first
 	const cached = getCachedSearch(query);
-	if (cached) return cached;
+	if (cached)
+		return { results: cached, ddgCount: cached.length, braveCount: 0 };
 
 	const encoded = encodeURIComponent(query);
 
-	const ddg = await smartFetch(
-		`https://html.duckduckgo.com/html/?q=${encoded}`,
-		{
-			headers: {
-				Accept: "text/html",
-				"User-Agent":
-					"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-			},
-		},
-	);
+	// Run DDG + Brave in parallel
+	const commonHeaders = {
+		Accept: "text/html",
+		"User-Agent":
+			"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+	};
+
+	const [ddg, brave] = await Promise.all([
+		smartFetch(`https://html.duckduckgo.com/html/?q=${encoded}`, {
+			headers: commonHeaders,
+		}),
+		smartFetch(`https://search.brave.com/search?q=${encoded}`, {
+			headers: commonHeaders,
+		}),
+	]);
+
+	// Parse both results
+	let ddgResults: SearchResult[] = [];
 	if (ddg && ddg.status < 400) {
-		const results = parseDuckDuckGoResults(ddg.text);
-		if (results.length > 0) {
-			storeSearchResults(query, results);
-			return results;
-		}
+		ddgResults = parseDuckDuckGoResults(ddg.text);
 	}
 
-	const brave = await smartFetch(
-		`https://search.brave.com/search?q=${encoded}`,
-		{
-			headers: {
-				Accept: "text/html",
-				"User-Agent":
-					"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-			},
-		},
-	);
+	let braveResults: SearchResult[] = [];
 	if (brave && brave.status < 400) {
-		const results = parseBraveResults(brave.text);
-		if (results.length > 0) {
-			storeSearchResults(query, results);
-			return results;
-		}
+		braveResults = parseBraveResults(brave.text);
 	}
 
-	return [];
+	// Merge & deduplicate by URL
+	const seen = new Set<string>();
+	const merged: SearchResult[] = [];
+	for (const r of [...ddgResults, ...braveResults]) {
+		if (seen.has(r.url)) continue;
+		seen.add(r.url);
+		merged.push(r);
+	}
+
+	if (merged.length > 0) {
+		storeSearchResults(query, merged);
+	}
+	return {
+		results: merged,
+		ddgCount: ddgResults.length,
+		braveCount: braveResults.length,
+	};
 }
 
 // ─── GitHub-aware fetch ─────────────────────────────────────────────
@@ -2138,8 +2213,18 @@ export default function (pi: ExtensionAPI) {
 			const SEARCH_TIMEOUT = 7000;
 
 			const ddgPromise = searchWeb(query).then(
-				(r) => ({ source: "ddg" as const, results: r.slice(0, max) }),
-				() => ({ source: "ddg" as const, results: [] as SearchResult[] }),
+				(r) => ({
+					source: "ddg" as const,
+					results: r.results.slice(0, max),
+					searchWebDdgCount: r.ddgCount,
+					searchWebBraveCount: r.braveCount,
+				}),
+				() => ({
+					source: "ddg" as const,
+					results: [] as SearchResult[],
+					searchWebDdgCount: 0,
+					searchWebBraveCount: 0,
+				}),
 			);
 
 			let googlePromise: Promise<{
@@ -2184,15 +2269,23 @@ export default function (pi: ExtensionAPI) {
 
 			let ddgResults: SearchResult[] = [];
 			let googleResults: SearchResult[] = [];
+			let searchWebDdgCount = 0;
+			let searchWebBraveCount = 0;
 
 			if (result) {
 				ddgResults = result[0].results;
 				googleResults = result[1].results;
+				searchWebDdgCount = (result[0] as any).searchWebDdgCount ?? 0;
+				searchWebBraveCount = (result[0] as any).searchWebBraveCount ?? 0;
 			} else {
 				// Timeout hit — grab whatever settled already
 				const settled = await Promise.allSettled([ddgPromise, googlePromise]);
-				if (settled[0].status === "fulfilled")
+				if (settled[0].status === "fulfilled") {
 					ddgResults = settled[0].value.results;
+					searchWebDdgCount = (settled[0].value as any).searchWebDdgCount ?? 0;
+					searchWebBraveCount =
+						(settled[0].value as any).searchWebBraveCount ?? 0;
+				}
 				if (settled[1].status === "fulfilled")
 					googleResults = settled[1].value.results;
 			}
@@ -2219,8 +2312,13 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			const limited = merged.slice(0, max);
+
+			// Determine which engines contributed (searchWeb always runs DDG + Brave together)
+			const engineLabel = ["DDG", "Brave"];
+			if (googleResults.length) engineLabel.push("Google");
+
 			const text = [
-				`Search results for "${query}" (DDG${googleResults.length ? " + Google" : ""}):`,
+				`Search results for "${query}" (${engineLabel.join(" + ")}):`,
 				"",
 				...limited.map(
 					(r, i) => `${i + 1}. **${r.title}**\n   ${r.url}\n   ${r.snippet}`,
@@ -2232,7 +2330,8 @@ export default function (pi: ExtensionAPI) {
 				details: {
 					query,
 					results: limited,
-					ddgCount: ddgResults.length,
+					ddgCount: searchWebDdgCount,
+					braveCount: searchWebBraveCount,
 					googleCount: googleResults.length,
 				},
 			};

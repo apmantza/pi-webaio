@@ -462,26 +462,40 @@ test("parseDuckDuckGoResults handles empty HTML", () => {
 
 test("parseBraveResults extracts results from Brave HTML", () => {
 	const html = `
-		<div class="snippet">
-			<a class="title" href="https://nodejs.org">Node.js</a>
-			<div class="description">Node.js is a JavaScript runtime built on Chrome's V8 engine.</div>
+		<div data-type="web">
+			<a href="https://nodejs.org">
+				<div class="search-snippet-title">Node.js</div>
+			</a>
+			<div class="generic-snippet">
+				<div class="content">Node.js is a JavaScript runtime built on Chrome's V8 engine.</div>
+			</div>
 		</div>
-		<div class="snippet">
-			<a href="https://deno.land"><span class="title">Deno</span></a>
-			<div class="description">A modern runtime for JavaScript and TypeScript.</div>
+		<div data-type="web">
+			<a href="https://deno.land">
+				<div class="search-snippet-title">Deno</div>
+			</a>
+			<div class="generic-snippet">
+				<div class="content">A modern runtime for JavaScript and TypeScript.</div>
+			</div>
 		</div>
 	`;
 	const results = parseBraveResults(html);
 	assert.strictEqual(results.length, 2);
 	assert.strictEqual(results[0].title, "Node.js");
 	assert.strictEqual(results[0].url, "https://nodejs.org");
+	assert.ok(results[0].snippet.includes("JavaScript runtime"));
 	assert.strictEqual(results[1].title, "Deno");
 	assert.strictEqual(results[1].url, "https://deno.land");
 });
 
 test("parseBraveResults skips snippets without links", () => {
-	const html = `<div class="snippet"><div class="title">No link</div></div>`;
+	const html = `<div data-type="web"><div class="search-snippet-title">No link</div></div>`;
 	const results = parseBraveResults(html);
+	assert.strictEqual(results.length, 0);
+});
+
+test("parseBraveResults handles empty HTML", () => {
+	const results = parseBraveResults("");
 	assert.strictEqual(results.length, 0);
 });
 
