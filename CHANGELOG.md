@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`require("pdf-parse")` in `index.ts`** — replaced with `createRequire(import.meta.url)` for CJS interop.
 - Webfetch summarization label corrected from "Gemini" to "Google AI".
 - **Brave search results broken** — `parseBraveResults()` used linkedom DOM queries against Svelte-scoped CSS classes (`.snippet`, `.title`, `.description`) that never matched. Rewrote with regex-based chunking on `data-type="web"` divs, extracting URL/title/snippet from raw HTML.
+- **SonarCloud: all 20 security hotspots resolved** — S5852 regex DoS (safeRegexTest with 10K input truncation; `/^http:/i` → string ops); S5332 HTTP in test fixtures (nosonar); S7637 short SHA (already full 40-char); S4036 PATH trust comment.
+- **SonarCloud: all 18 MAJOR issues resolved** — S5843 regex complexity (split/simplified patterns); S5869+S6397 char class cleanup; S6582 optional chaining (`foo?.bar`); S7721+S4144 duplicate function (removed `_normalizeCacheKey`); S4624 nested template literals (extracted variables); S8233 workflow permissions (moved to job level).
 
 ### Changed
 
