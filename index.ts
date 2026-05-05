@@ -1437,11 +1437,14 @@ const GH_NATIVE_COMMANDS: Record<
  * Parse a sonarcloud.io URL and return the project key and page type.
  * Returns null for non-SonarCloud URLs.
  */
-function parseSonarCloudUrl(url: string): { projectKey: string; page: string } | null {
+function parseSonarCloudUrl(
+	url: string,
+): { projectKey: string; page: string } | null {
 	try {
 		const u = new URL(url);
 		if (u.hostname !== "sonarcloud.io") return null;
-		const projectKey = u.searchParams.get("id") || u.searchParams.get("project");
+		const projectKey =
+			u.searchParams.get("id") || u.searchParams.get("project");
 		if (!projectKey) return null;
 		const match = u.pathname.match(/\/project\/([^/?#]+)/);
 		const page = match?.[1] || "overview";
@@ -1520,7 +1523,14 @@ async function pullSonarCloud(url: string): Promise<PullResult | null> {
 						for (const item of items.slice(0, 20)) {
 							const file = item.component?.split(":").pop() || "?";
 							const line = item.line ? `:${item.line}` : "";
-							const status = item.status === "TO_REVIEW" ? "🟡" : item.status === "FIXED" ? "✅" : item.status === "SAFE" ? "🟢" : "🔴";
+							const status =
+								item.status === "TO_REVIEW"
+									? "🟡"
+									: item.status === "FIXED"
+										? "✅"
+										: item.status === "SAFE"
+											? "🟢"
+											: "🔴";
 							const rule = item.rule?.description || "";
 							md += `${status} \`${file}${line}\` — ${item.message}${rule ? ` _(${rule})_` : ""}\n`;
 						}
@@ -1555,7 +1565,8 @@ async function pullSonarCloud(url: string): Promise<PullResult | null> {
 				} else {
 					md += "| Metric | Value |\n|--------|-------|\n";
 					for (const m of measures) {
-						const val = m.value !== undefined ? m.value : m.period?.value || "—";
+						const val =
+							m.value !== undefined ? m.value : m.period?.value || "—";
 						md += `| ${m.metric} | ${val} |\n`;
 					}
 				}
@@ -1568,8 +1579,12 @@ async function pullSonarCloud(url: string): Promise<PullResult | null> {
 					md += "_(no activity found)_\n";
 				} else {
 					for (const a of analyses.slice(0, 20)) {
-						const date = a.date ? new Date(a.date).toISOString().slice(0, 10) : "?";
-						const events = (a.events || []).map((e: any) => e.name || e.category || "?").join(", ");
+						const date = a.date
+							? new Date(a.date).toISOString().slice(0, 10)
+							: "?";
+						const events = (a.events || [])
+							.map((e: any) => e.name || e.category || "?")
+							.join(", ");
 						md += `- ${date}: ${a.projectVersion || "?"}${events ? ` (${events})` : ""}\n`;
 					}
 				}
