@@ -1269,11 +1269,7 @@ function parseBraveResults(html: string): SearchResult[] {
 					.replace(/<script\b[^>]*>[\s\S]*?<\/script[^>]*>/gi, "") // strip <script> blocks
 					.replace(/<![^>]*-->/g, "") // strip Svelte comments
 					.replace(/<[^>]*>/g, "") // strip remaining HTML tags
-					// Split and rejoin on '<script' to satisfy CodeQL (incomplete-sanitization checker)
-					.split("<script")
-					.join("")
-					.split("<SCRIPT")
-					.join("")
+					.replace(/</g, "") // strip remaining < to prevent <script re-formation (CodeQL S5852)
 					.replace(/\s+/g, " ")
 					.trim()
 			: "";
@@ -2553,10 +2549,7 @@ async function pullPage(
 		.replace(/<script\b[^>]*>[\s\S]*?<\/script[^>]*>/gi, "")
 		.replace(/<style\b[^>]*>[\s\S]*?<\/style[^>]*>/gi, "")
 		.replace(/<\/?(?:script|style|iframe|object|embed)\b[^>]*>/gi, "")
-		.split("<script")
-		.join("")
-		.split("<SCRIPT")
-		.join("");
+		.replace(/</g, "");
 
 	// Try Jina AI for public URLs
 	if (!isLocalOrPrivateUrl(url)) {

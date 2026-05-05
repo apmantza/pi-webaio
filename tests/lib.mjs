@@ -469,10 +469,7 @@ export function parseBraveResults(html) {
 					.replace(/<script\b[^>]*>[\s\S]*?<\/script[^>]*>/gi, "")
 					.replace(/<![^>]*-->/g, "")
 					.replace(/<[^>]*>/g, "")
-					.split("<script")
-					.join("")
-					.split("<SCRIPT")
-					.join("")
+					.replace(/</g, "")
 					.replace(/\s+/g, " ")
 					.trim()
 			: "";
