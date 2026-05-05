@@ -70,13 +70,14 @@ interface PullResult {
 	errorInfo?: FetchErrorInfo;
 	/** Path to downloaded binary file (set for non-text downloads). */
 	filePath?: string;
-	// Rich metadata extracted from the page
+	/** Rich metadata extracted from the page */
 	author?: string;
 	published?: string;
 	site?: string;
 	language?: string;
 	description?: string;
 	wordCount?: number;
+
 }
 
 interface FetchOpts {
@@ -2842,16 +2843,18 @@ export default function (pi: ExtensionAPI) {
 				if (!r.ok) throw new Error(r.error ?? "Fetch failed");
 				const preview = await readFile(r.outPath!, "utf8");
 
-				// ── Always try Google AI summarization first ──
+				// ── Google AI summarization (skip for API-sourced content) ──
 				let summary: string | null = null;
 				let summarized = false;
+				const skipSummary = preview.includes("> via gh api") || preview.includes("> via SonarCloud API");
+
 				const searchCtx =
 					lastSearchContext &&
 					Date.now() - lastSearchContext.timestamp < SEARCH_CONTEXT_TTL_MS
 						? lastSearchContext.query
 						: undefined;
 
-				if (cdpAvailableGA()) {
+				if (!skipSummary && cdpAvailableGA()) {
 					try {
 						await ensureChrome(true);
 						summary = await summarizeUrl(r.url as string, {
