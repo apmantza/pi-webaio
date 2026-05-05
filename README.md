@@ -32,7 +32,7 @@ pi install git:github.com/apmantza/pi-webaio
 | Parameter | Type      | Default | Description                                                                       |
 | --------- | --------- | ------- | --------------------------------------------------------------------------------- |
 | `query`   | `string`  | —       | Search query (e.g. 'React Server Components RFC')                                 |
-| `max`     | `number`  | `10`    | Max results to return per engine                                                  |
+| `max`     | `number`  | `10`    | Max results per engine. Up to 25 total after dedup across all engines.            |
 | `google`  | `boolean` | `true`  | Also search Google via headless Chrome CDP. Set to `false` to use only DDG/Brave. |
 
 #### `aio-webfetch`

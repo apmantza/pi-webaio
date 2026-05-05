@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Session startup blocked by sync cache scan** — `loadContentCacheFromDisk()` was declared `async` but used only sync FS calls (`readdirSync`, `statSync`, `openSync`, `readSync`) with zero `await`s. JS runs async functions synchronously until the first `await`, so the entire recursive tree scan blocked extension init inline. Fixed by deferring the scan via `setImmediate` and removing the no-op `async`/`Promise<void>` return type. Startup log removed — cache loading is now silent and seamless.
+- **Double `max` slice discarded Google search results** — `aio-websearch` applied `max` twice: once per engine (each returned ≤10) and again after merge+dedup (`slice(0, max)`). DDG/Brave results come first in the merge array, so Google's unique results were almost always chopped off. Fixed by decoupling the final cap (fixed 25) from the per-engine request cap (`max`, default 10). Parameter description updated accordingly.
 - **Critical: `gh` CLI completely broken** — `ghAvailable()` used `require("node:child_process")` which fails in ESM (`require is not defined`). Silently cached `false` forever, disabling all GitHub CLI features (clone, api, issue/pr listing). Fixed by importing `execSync` directly.
 - **`require("node:os")` in `src/google-ai.ts`** — 3 calls replaced with proper ESM `import { tmpdir }`.
 - **`require("pdf-parse")` in `index.ts`** — replaced with `createRequire(import.meta.url)` for CJS interop.
