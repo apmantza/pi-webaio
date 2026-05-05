@@ -15,12 +15,14 @@ import {
 	getOrOpenTab,
 	handleError,
 	injectClipboardInterceptor,
+	jitter,
 	outputJson,
 	parseArgs,
 	parseSourcesFromMarkdown,
 	prepareArgs,
 	TIMING,
 	validateQuery,
+	waitForSelector,
 	waitForStreamComplete,
 } from "./common.mjs";
 import { dismissConsent, handleVerification } from "./consent.mjs";
@@ -103,21 +105,12 @@ async function main() {
 		await handleVerification(tab, cdp, 60000);
 
 		// Wait for input to be ready
-		const deadline = Date.now() + 8000;
-		while (Date.now() < deadline) {
-			const ready = await cdp([
-				"eval",
-				tab,
-				`!!document.querySelector('${S.input}')`,
-			]).catch(() => "false");
-			if (ready === "true") break;
-			await new Promise((r) => setTimeout(r, TIMING.inputPoll));
-		}
-		await new Promise((r) => setTimeout(r, TIMING.postClick));
+		await waitForSelector(tab, S.input, 8000, TIMING.inputPoll);
+		await new Promise((r) => setTimeout(r, jitter(TIMING.postClick)));
 
 		await injectClipboardInterceptor(tab, GLOBAL_VAR);
 		await typeIntoGemini(tab, query);
-		await new Promise((r) => setTimeout(r, TIMING.postType));
+		await new Promise((r) => setTimeout(r, jitter(TIMING.postType)));
 
 		await cdp([
 			"eval",
