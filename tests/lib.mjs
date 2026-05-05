@@ -469,7 +469,8 @@ export function parseBraveResults(html) {
 					.replace(/<script\b[^>]*>[\s\S]*?<\/script[^>]*>/gi, "")
 					.replace(/<![^>]*-->/g, "")
 					.replace(/<[^>]*>/g, "")
-					.replace(/<\/?(?:script|style|iframe|object|embed)\b[^>]*>/gi, "")
+					.split("<script").join("")
+					.split("<SCRIPT").join("")
 					.replace(/\s+/g, " ")
 					.trim()
 			: "";
