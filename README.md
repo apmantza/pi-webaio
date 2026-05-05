@@ -18,33 +18,33 @@ pi install git:github.com/apmantza/pi-webaio
 
 ## Tools
 
-| Tool             | Description                                                                                                                                                           |
-| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `aio-websearch`  | Search the web using DuckDuckGo, Brave, and Google in parallel (no API keys required). Returns compact results with title, URL, and snippet. 7s cap — returns whatever is ready. Google runs via headless Chrome CDP (auto-launched). 10-minute cache.               |
-| `aio-webfetch`   | Fetch a single URL (or batch of URLs) and convert to markdown with anti-bot TLS fingerprinting. Long content is **AI-summarized** via Google AI Mode; full file always saved. Detects PDFs, GitHub repos, and Next.js RSC. |
-| `aio-webcontent` | Retrieve previously fetched content from session storage by URL. Returns **full untruncated content** — no data loss.                                                 |
-| `aio-webpull`    | Pull any public website or docs site into local markdown files with anti-bot TLS fingerprinting. Discovers pages via sitemap, navigation links, or crawling.          |
+| Tool             | Description                                                                                                                                                                                                                                            |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `aio-websearch`  | Search the web using DuckDuckGo, Brave, and Google in parallel (no API keys required). Returns compact results with title, URL, and snippet. 7s cap — returns whatever is ready. Google runs via headless Chrome CDP (auto-launched). 10-minute cache. |
+| `aio-webfetch`   | Fetch a single URL (or batch of URLs) and convert to markdown with anti-bot TLS fingerprinting. Long content is **AI-summarized** via Google AI Mode; full file always saved. Detects PDFs, GitHub repos, and Next.js RSC.                             |
+| `aio-webcontent` | Retrieve previously fetched content from session storage by URL. Returns **full untruncated content** — no data loss.                                                                                                                                  |
+| `aio-webpull`    | Pull any public website or docs site into local markdown files with anti-bot TLS fingerprinting. Discovers pages via sitemap, navigation links, or crawling.                                                                                           |
 
 ### Tool Parameters
 
 #### `aio-websearch`
 
-| Parameter | Type     | Default | Description                                       |
-| --------- | -------- | ------- | ------------------------------------------------- |
-| `query`   | `string` | —       | Search query (e.g. 'React Server Components RFC') |
-| `max`     | `number` | `10`    | Max results to return per engine                  |
-| `google`  | `boolean`| `true`  | Also search Google via headless Chrome CDP. Set to `false` to use only DDG/Brave. |
+| Parameter | Type      | Default | Description                                                                       |
+| --------- | --------- | ------- | --------------------------------------------------------------------------------- |
+| `query`   | `string`  | —       | Search query (e.g. 'React Server Components RFC')                                 |
+| `max`     | `number`  | `10`    | Max results to return per engine                                                  |
+| `google`  | `boolean` | `true`  | Also search Google via headless Chrome CDP. Set to `false` to use only DDG/Brave. |
 
 #### `aio-webfetch`
 
-| Parameter | Type       | Default      | Description                                                                                           |
-| --------- | ---------- | ------------ | ----------------------------------------------------------------------------------------------------- |
-| `url`     | `string`   | —            | Single URL to fetch. Use either `url` or `urls`, not both.                                            |
-| `urls`    | `string[]` | —            | Multiple URLs to fetch in parallel. Use either `url` or `urls`, not both.                             |
-| `out`     | `string`   | auto-derived | Output file path under temp (for single url only)                                                     |
+| Parameter | Type       | Default      | Description                                                                                                                       |
+| --------- | ---------- | ------------ | --------------------------------------------------------------------------------------------------------------------------------- |
+| `url`     | `string`   | —            | Single URL to fetch. Use either `url` or `urls`, not both.                                                                        |
+| `urls`    | `string[]` | —            | Multiple URLs to fetch in parallel. Use either `url` or `urls`, not both.                                                         |
+| `out`     | `string`   | auto-derived | Output file path under temp (for single url only)                                                                                 |
 | `browser` | `string`   | latest       | Browser profile for TLS fingerprinting. Auto-selects latest Chrome. Options: `chrome_145`, `firefox_147`, `safari_26`, `edge_145` |
-| `os`      | `string`   | `windows`    | OS profile for fingerprinting. Options: `windows`, `macos`, `linux`, `android`, `ios`                 |
-| `proxy`   | `string`   | —            | Proxy URL (`http://user:pass@host:port` or `socks5://host:port`). Supports HTTP, HTTPS, SOCKS5.
+| `os`      | `string`   | `windows`    | OS profile for fingerprinting. Options: `windows`, `macos`, `linux`, `android`, `ios`                                             |
+| `proxy`   | `string`   | —            | Proxy URL (`http://user:pass@host:port` or `socks5://host:port`). Supports HTTP, HTTPS, SOCKS5.                                   |
 
 #### `aio-webcontent`
 
@@ -54,14 +54,14 @@ pi install git:github.com/apmantza/pi-webaio
 
 #### `aio-webpull`
 
-| Parameter | Type     | Default      | Description                                                                                           |
-| --------- | -------- | ------------ | ----------------------------------------------------------------------------------------------------- |
-| `url`     | `string` | —            | URL to pull (e.g. https://docs.example.com)                                                           |
-| `out`     | `string` | `<hostname>` | Output directory under temp                                                                           |
-| `max`     | `number` | `100`        | Max pages to pull                                                                                     |
+| Parameter | Type     | Default      | Description                                                                                                                       |
+| --------- | -------- | ------------ | --------------------------------------------------------------------------------------------------------------------------------- |
+| `url`     | `string` | —            | URL to pull (e.g. https://docs.example.com)                                                                                       |
+| `out`     | `string` | `<hostname>` | Output directory under temp                                                                                                       |
+| `max`     | `number` | `100`        | Max pages to pull                                                                                                                 |
 | `browser` | `string` | latest       | Browser profile for TLS fingerprinting. Auto-selects latest Chrome. Options: `chrome_145`, `firefox_147`, `safari_26`, `edge_145` |
-| `os`      | `string` | `windows`    | OS profile for fingerprinting. Options: `windows`, `macos`, `linux`, `android`, `ios`                 |
-| `proxy`   | `string` | —            | Proxy URL (`http://user:pass@host:port` or `socks5://host:port`). Supports HTTP, HTTPS, SOCKS5.
+| `os`      | `string` | `windows`    | OS profile for fingerprinting. Options: `windows`, `macos`, `linux`, `android`, `ios`                                             |
+| `proxy`   | `string` | —            | Proxy URL (`http://user:pass@host:port` or `socks5://host:port`). Supports HTTP, HTTPS, SOCKS5.                                   |
 
 ## Features
 

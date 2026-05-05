@@ -884,8 +884,12 @@ test("wordCount counts words correctly", () => {
 // ─── stripDefuddleComments ─────────────────────────────────────────
 
 test("stripDefuddleComments removes comment section", () => {
-	const input = "# Hello\n\nThis is content.\n\n---\n\n## Comments\n\nExtracted by Defuddle v2";
-	assert.strictEqual(stripDefuddleComments(input), "# Hello\n\nThis is content.");
+	const input =
+		"# Hello\n\nThis is content.\n\n---\n\n## Comments\n\nExtracted by Defuddle v2";
+	assert.strictEqual(
+		stripDefuddleComments(input),
+		"# Hello\n\nThis is content.",
+	);
 });
 
 test("stripDefuddleComments passes through clean content", () => {
@@ -898,6 +902,7 @@ test("stripDefuddleComments handles empty input", () => {
 });
 
 test("stripDefuddleComments strips only the comment footer", () => {
-	const input = "Content before.\n\n---\n\n## Comments\n\nExtractor note\n\nMore text under comments";
+	const input =
+		"Content before.\n\n---\n\n## Comments\n\nExtractor note\n\nMore text under comments";
 	assert.strictEqual(stripDefuddleComments(input), "Content before.");
 });

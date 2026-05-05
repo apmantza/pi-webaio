@@ -176,7 +176,11 @@ function getLatestChromeProfile(): string {
 			const profiles = wreqGetProfiles();
 			const chromes = profiles.filter((p: string) => p.startsWith("chrome_"));
 			if (chromes.length > 0) {
-				chromes.sort();
+				chromes.sort((a: string, b: string) => {
+				const an = parseInt(a.split("_").pop() || "0", 10);
+				const bn = parseInt(b.split("_").pop() || "0", 10);
+				return an - bn;
+			});
 				_latestChrome = chromes[chromes.length - 1];
 			}
 		} catch {
