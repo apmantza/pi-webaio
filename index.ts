@@ -326,7 +326,13 @@ function storeContent(
 	title: string | undefined,
 	content: string,
 	filePath?: string,
-	metadata?: { author?: string; published?: string; site?: string; language?: string; wordCount?: number },
+	metadata?: {
+		author?: string;
+		published?: string;
+		site?: string;
+		language?: string;
+		wordCount?: number;
+	},
 ) {
 	const key = normalizeCacheKey(url);
 	// Enforce max size with simple LRU (delete oldest)
@@ -340,7 +346,15 @@ function storeContent(
 		content,
 		filePath,
 		timestamp: Date.now(),
-		...(metadata ? { author: metadata.author, published: metadata.published, site: metadata.site, language: metadata.language, wordCount: metadata.wordCount } : {}),
+		...(metadata
+			? {
+					author: metadata.author,
+					published: metadata.published,
+					site: metadata.site,
+					language: metadata.language,
+					wordCount: metadata.wordCount,
+				}
+			: {}),
 	});
 }
 
@@ -1252,8 +1266,9 @@ function parseBraveResults(html: string): SearchResult[] {
 		);
 		const snippet = gsMatch
 			? gsMatch[1]!
+					.replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, "") // strip <script> blocks
 					.replace(/<![^>]*-->/g, "") // strip Svelte comments
-					.replace(/<[^>]+>/g, "") // strip remaining HTML tags
+					.replace(/<[^>]*>/g, "") // strip remaining HTML tags
 					.replace(/\s+/g, " ")
 					.trim()
 			: "";
@@ -2236,7 +2251,17 @@ async function pullPage(
 			return finalizePullResult(dl, redirectNotice);
 		}
 	} else if (!binPeek) {
-		return { ok: false, url, error: "Request failed", errorInfo: { message: "Request failed", code: "network_error", phase: "connecting", retryable: true } };
+		return {
+			ok: false,
+			url,
+			error: "Request failed",
+			errorInfo: {
+				message: "Request failed",
+				code: "network_error",
+				phase: "connecting",
+				retryable: true,
+			},
+		};
 	}
 
 	// ── 3. Standard text fetch ──
@@ -2248,7 +2273,18 @@ async function pullPage(
 			...opts?.headers,
 		},
 	});
-	if (!res) return { ok: false, url, error: "Request failed", errorInfo: { message: "Request failed", code: "network_error", phase: "loading", retryable: true } };
+	if (!res)
+		return {
+			ok: false,
+			url,
+			error: "Request failed",
+			errorInfo: {
+				message: "Request failed",
+				code: "network_error",
+				phase: "loading",
+				retryable: true,
+			},
+		};
 	if (res.status >= 400) {
 		return {
 			ok: false,
@@ -2427,12 +2463,20 @@ async function pullPage(
 function frontmatter(
 	title: string,
 	url: string,
-	metadata?: { author?: string; published?: string; site?: string; language?: string; wordCount?: number },
+	metadata?: {
+		author?: string;
+		published?: string;
+		site?: string;
+		language?: string;
+		wordCount?: number;
+	},
 ): string {
-	let fm = `---\ntitle: "${title.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"\nurl: "${url}"`;
-	if (metadata?.author) fm += `\nauthor: "${metadata.author.replace(/"/g, '\\"')}"`;
+	let fm = `---\ntitle: "${title.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"\nurl: "${url.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+	if (metadata?.author)
+		fm += `\nauthor: "${metadata.author.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 	if (metadata?.published) fm += `\npublished: "${metadata.published}"`;
-	if (metadata?.site) fm += `\nsite: "${metadata.site.replace(/"/g, '\\"')}"`;
+	if (metadata?.site)
+		fm += `\nsite: "${metadata.site.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 	if (metadata?.language) fm += `\nlanguage: "${metadata.language}"`;
 	if (metadata?.wordCount) fm += `\nword_count: ${metadata.wordCount}`;
 	fm += "\n---\n\n";
