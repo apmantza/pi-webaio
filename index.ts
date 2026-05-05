@@ -177,10 +177,10 @@ function getLatestChromeProfile(): string {
 			const chromes = profiles.filter((p: string) => p.startsWith("chrome_"));
 			if (chromes.length > 0) {
 				chromes.sort((a: string, b: string) => {
-				const an = parseInt(a.split("_").pop() || "0", 10);
-				const bn = parseInt(b.split("_").pop() || "0", 10);
-				return an - bn;
-			});
+					const an = parseInt(a.split("_").pop() || "0", 10);
+					const bn = parseInt(b.split("_").pop() || "0", 10);
+					return an - bn;
+				});
 				_latestChrome = chromes[chromes.length - 1];
 			}
 		} catch {
@@ -1693,7 +1693,6 @@ async function pullSonarCloud(url: string): Promise<PullResult | null> {
 	}
 }
 
-
 async function pullGitHub(url: string): Promise<PullResult | null> {
 	// Try standard GitHub pipeline (tree/blob/repo)
 	const ref = parseGitHubUrl(url);
@@ -2495,7 +2494,6 @@ async function pullPage(
 
 	const sc = await pullSonarCloud(url);
 	if (sc) return finalizePullResult(sc, redirectNotice);
-
 
 	// ── 2. Binary download detection (Content-Disposition or non-text MIME) ──
 	// Peek at headers first via a lightweight HEAD-like request via fetchBuffer
@@ -3414,5 +3412,4 @@ export default function (pi: ExtensionAPI) {
 			};
 		},
 	});
-
 }
