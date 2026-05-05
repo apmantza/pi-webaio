@@ -3085,7 +3085,8 @@ export default function (pi: ExtensionAPI) {
 			}),
 			max: Type.Optional(
 				Type.Number({
-					description: "Max results to return per engine (default: 10)",
+					description:
+						"Max results to request from each engine (default: 10). Up to 25 returned after dedup across all engines.",
 					default: 10,
 				}),
 			),
@@ -3206,7 +3207,8 @@ export default function (pi: ExtensionAPI) {
 				};
 			}
 
-			const limited = merged.slice(0, max);
+			const MAX_TOTAL = 25;
+			const limited = merged.slice(0, MAX_TOTAL);
 
 			// Determine which engines contributed (searchWeb always runs DDG + Brave together)
 			const engineLabel = ["DDG", "Brave"];
