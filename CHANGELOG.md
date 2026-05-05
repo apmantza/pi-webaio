@@ -32,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Alternate link fallback** — when Readability extraction produces <30 words (thin HTML shell pages), the HTML `<head>` is scanned for `<link rel="alternate" type="application/json">` entries and the JSON API is fetched automatically. Catches SPAs, docs sites with JSON backends, and API-driven pages.
 - **Persistent content cache** — `aio-webcontent` now survives restarts. On startup, `BASE_TEMP` is scanned for `.md` files and their frontmatter URLs are registered in the session store. Content is lazy-loaded from disk on first access — zero memory waste.
 - **Token-bucket rate limiter** — per-domain rate limiting (5 req/s, burst 10) in `smartFetch`. All tools (webfetch, webpull, websearch, GitHub API) are throttled politely. The limiter waits (sleeps) when the bucket is empty — no dropped requests.
+- **Proxy support** — `proxy` parameter added to `aio-webfetch` and `aio-webpull`. Supports HTTP, HTTPS, and SOCKS5 proxies (`http://user:pass@host:port` or `socks5://host:port`). Routed through to `wreq-js` for all fetches including discovery, bot protection fallback, and alternate link fallback.
 - **Search context bridging** — when `aio-webfetch` follows a recent `aio-websearch` (within 5 min), the original search query is injected into the summarization prompt: `"The user searched for: X. Give a concise summary of this page focusing on the user's search topic"` → summaries become context-aware and more focused.
 
 ## [0.1.8] - 2026-05-02
