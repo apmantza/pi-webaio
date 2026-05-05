@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.0] - 2026-05-05
 
 ### Fixed
 
@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Package description** — Updated to "All-in-one web tools for pi with search (Google, Brave, DDG) and fetch with headless browser AI summarization".
 - **AI summarization is now the default for ALL responses** — not just long content (>1800 chars). Short content also gets summarized when CDP is available. Falls back to raw display (short) or truncation (long) when summarization fails.
 - **Summarization timeout: 10s → 15s** — empirically tested at 3.5–5s for real pages.
 - **Brave search runs in parallel with DDG** — `searchWeb()` now fans out DDG + Brave via `Promise.all` (previously sequential: DDG first, Brave as fallback). Both must complete within the 7s cap.
@@ -36,6 +37,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Token-bucket rate limiter** — per-domain rate limiting (5 req/s, burst 10) in `smartFetch`. All tools (webfetch, webpull, websearch, GitHub API) are throttled politely. The limiter waits (sleeps) when the bucket is empty — no dropped requests.
 - **Proxy support** — `proxy` parameter added to `aio-webfetch` and `aio-webpull`. Supports HTTP, HTTPS, and SOCKS5 proxies (`http://user:pass@host:port` or `socks5://host:port`). Routed through to `wreq-js` for all fetches including discovery, bot protection fallback, and alternate link fallback.
 - **Search context bridging** — when `aio-webfetch` follows a recent `aio-websearch` (within 5 min), the original search query is injected into the summarization prompt: `"The user searched for: X. Give a concise summary of this page focusing on the user's search topic"` → summaries become context-aware and more focused.
+
+## [Unreleased]
 
 ## [0.1.8] - 2026-05-02
 
