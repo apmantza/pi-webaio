@@ -18,7 +18,7 @@
 //   GREEDY_SEARCH_VISIBLE=1  — Show Chrome window (disables headless mode)
 //   CHROME_PATH              — Path to Chrome executable
 
-import { execSync, spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import {
 	existsSync,
 	mkdirSync,
@@ -207,7 +207,7 @@ function isRunning() {
 }
 
 function getPortPid(port) {
-	// Validate port is a positive integer before shell interpolation
+	// Validate port is a positive integer
 	const safePort = Number.isFinite(port)
 		? String(Math.floor(Math.abs(port)))
 		: String(port);
@@ -216,28 +216,44 @@ function getPortPid(port) {
 	try {
 		const os = platform();
 		if (os === "win32") {
-			const out = execSync(`netstat -ano -p TCP 2>nul`, { encoding: "utf8" });
+			const out = spawnSync("netstat", ["-ano", "-p", "TCP"], {
+				encoding: "utf8",
+				stdio: ["ignore", "pipe", "pipe"],
+			});
+			if (out.error || out.status !== 0) return null;
 			const regex = new RegExp(
 				String.raw`TCP\s+[^\s]*:${safePort}\s+[^\s]*:0\s+LISTENING\s+(\d+)`,
 				"i",
 			);
-			const match = out.match(regex);
+			const match = out.stdout.match(regex);
 			return match ? Number.parseInt(match[1], 10) : null;
 		}
-		const out = execSync(
-			String.raw`lsof -i :${safePort} -t 2>/dev/null || ss -tlnp 2>/dev/null | grep :${safePort} | grep -oP 'pid=\K\d+'`,
-			{
-				encoding: "utf8",
-			},
-		).trim();
-		return out ? Number.parseInt(out.split("\n")[0], 10) : null;
+		// Try lsof first, fall back to ss (no shell pipes — separate spawnSync calls)
+		const lsof = spawnSync("lsof", ["-i", `:${safePort}`, "-t"], {
+			encoding: "utf8",
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+		if (!lsof.error && lsof.status === 0) {
+			const pid = lsof.stdout.trim().split("\n")[0];
+			if (pid) return Number.parseInt(pid, 10);
+		}
+		// Fallback: ss
+		const ss = spawnSync("ss", ["-tlnp"], {
+			encoding: "utf8",
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+		if (ss.error || ss.status !== 0) return null;
+		const pidMatch = ss.stdout.match(
+			new RegExp(`:${safePort}\\s.+?pid=(\\d+)`),
+		);
+		return pidMatch ? Number.parseInt(pidMatch[1], 10) : null;
 	} catch {
 		return null;
 	}
 }
 
 function killProcess(pid) {
-	// Validate pid is a positive integer before shell interpolation
+	// Validate pid is a positive integer
 	const safePid = Number.isFinite(pid)
 		? String(Math.floor(Math.abs(pid)))
 		: String(pid);
@@ -245,7 +261,9 @@ function killProcess(pid) {
 
 	try {
 		if (platform() === "win32") {
-			execSync(`taskkill //F //T //PID ${safePid}`, { stdio: "ignore" });
+			spawnSync("taskkill", ["/F", "/T", "/PID", safePid], {
+				stdio: "ignore",
+			});
 		} else {
 			process.kill(pid, "SIGTERM");
 		}
