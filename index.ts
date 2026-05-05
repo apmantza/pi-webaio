@@ -1954,7 +1954,10 @@ function formatJsonContent(text: string, url: string): PullResult {
  * Client-side meta refresh redirect. Returns the target URL or null.
  * Follows redirects that fire in <30s (bounded, avoids infinite loops).
  */
-function extractClientSideRedirect(html: string, baseUrl: string): string | null {
+function extractClientSideRedirect(
+	html: string,
+	baseUrl: string,
+): string | null {
 	const snippet = html.slice(0, 4096);
 	const m = snippet.match(
 		/<meta[^>]+http-equiv=["']?refresh["']?[^>]+content=["']?([^"'>]*)/i,
@@ -1963,7 +1966,10 @@ function extractClientSideRedirect(html: string, baseUrl: string): string | null
 	const parts = m[1]!.split(";");
 	const delay = Number.parseFloat(parts[0]!.trim());
 	if (!Number.isFinite(delay) || delay < 0 || delay >= 30) return null;
-	const urlMatch = parts.slice(1).join(";").match(/url\s*=\s*(.+)/i);
+	const urlMatch = parts
+		.slice(1)
+		.join(";")
+		.match(/url\s*=\s*(.+)/i);
 	if (!urlMatch) return null;
 	const target = urlMatch[1]!.trim().replace(/^['"]|['"]$/g, "");
 	try {
@@ -1979,7 +1985,12 @@ function extractClientSideRedirect(html: string, baseUrl: string): string | null
  * JSON, text/markdown, or text/plain content types.
  */
 function extractAlternateLinks(html: string, baseUrl: string): string[] {
-	const accepted = ["application/json", "text/json", "text/markdown", "text/plain"];
+	const accepted = [
+		"application/json",
+		"text/json",
+		"text/markdown",
+		"text/plain",
+	];
 	const snippet = html.length > 10000 ? html.slice(0, 10000) : html;
 	const links: string[] = [];
 	const pattern =
@@ -2084,7 +2095,52 @@ const MAX_CLIENT_REDIRECTS = 5;
 /** Minimum word count from extraction before trying alternate link fallback. */
 const MIN_ALTERNATE_FALLBACK_WORDS = 30;
 
-async function pullPage(url: string, opts?: FetchOpts, _redirectCount = 0): Promise<PullResult> {
+/**
+ * Try alternate link fallback: when extraction produces thin content, scan
+ * the original HTML for <link rel="alternate" type="application/json"> (or
+ * text/markdown, text/plain) and re-fetch the alternate URL.
+ */
+async function tryAlternateLinks(
+	rawHtml: string,
+	baseUrl: string,
+	opts: FetchOpts | undefined,
+): Promise<PullResult | null> {
+	const altLinks = extractAlternateLinks(rawHtml, baseUrl);
+	for (const altUrl of altLinks.slice(0, 3)) {
+		const altRes = await smartFetch(altUrl, {
+			...opts,
+			headers: {
+				Accept: "application/json,text/plain,*/*;q=0.8",
+				...opts?.headers,
+			},
+		});
+		if (altRes && altRes.status < 400) {
+			const altText = altRes.text;
+			const altCt = altRes.headers.get("content-type") ?? "";
+			if (isJsonContentType(altCt) || isLikelyJsonBody(altText)) {
+				return formatJsonContent(altText, baseUrl);
+			}
+			return {
+				ok: true,
+				url: baseUrl,
+				title: "",
+				content: altText,
+			};
+		}
+	}
+	return null;
+}
+
+/** Estimate word count by splitting on whitespace. */
+function wordCount(text: string): number {
+	return text.trim().split(/\s+/).filter(Boolean).length;
+}
+
+async function pullPage(
+	url: string,
+	opts?: FetchOpts,
+	_redirectCount = 0,
+): Promise<PullResult> {
 	let redirectNotice: string | undefined;
 
 	// ── 1. GitHub special-case ──
@@ -2121,7 +2177,8 @@ async function pullPage(url: string, opts?: FetchOpts, _redirectCount = 0): Prom
 	const res = await smartFetch(url, {
 		...opts,
 		headers: {
-			Accept: "text/html,application/xhtml+xml,application/json;q=0.9,text/markdown;q=0.8,*/*;q=0.7",
+			Accept:
+				"text/html,application/xhtml+xml,application/json;q=0.9,text/markdown;q=0.8,*/*;q=0.7",
 			...opts?.headers,
 		},
 	});
@@ -2152,7 +2209,10 @@ async function pullPage(url: string, opts?: FetchOpts, _redirectCount = 0): Prom
 
 	// ── 5. JSON auto-detection ──
 	if (isJsonContentType(ct) || isLikelyJsonBody(text)) {
-		return finalizePullResult(formatJsonContent(text, finalUrl), redirectNotice);
+		return finalizePullResult(
+			formatJsonContent(text, finalUrl),
+			redirectNotice,
+		);
 	}
 
 	// ── 6. Plain text (txt, logs, configs) → wrap in code block ──
@@ -2163,12 +2223,21 @@ async function pullPage(url: string, opts?: FetchOpts, _redirectCount = 0): Prom
 			finalUrl;
 		// If it looks like markdown already, return as-is
 		if (MARKDOWN_SIGNAL.test(text) || ct.includes("text/markdown")) {
-			return finalizePullResult({ ok: true, url: finalUrl, title, content: text }, redirectNotice);
+			return finalizePullResult(
+				{ ok: true, url: finalUrl, title, content: text },
+				redirectNotice,
+			);
 		}
 		// Plain text → wrap in code block
-		const truncated = text.length > 50000 ? text.slice(0, 50000) + "\n\n[... truncated]" : text;
+		const truncated =
+			text.length > 50000 ? text.slice(0, 50000) + "\n\n[... truncated]" : text;
 		return finalizePullResult(
-			{ ok: true, url: finalUrl, title, content: "```\n" + truncated + "\n```" },
+			{
+				ok: true,
+				url: finalUrl,
+				title,
+				content: "```\n" + truncated + "\n```",
+			},
 			redirectNotice,
 		);
 	}
@@ -2189,36 +2258,31 @@ async function pullPage(url: string, opts?: FetchOpts, _redirectCount = 0): Prom
 	// Try Jina AI for public URLs
 	if (!isLocalOrPrivateUrl(url)) {
 		const jina = await fetchJina(url);
-		if (jina) return finalizePullResult(jina, redirectNotice);
+		if (jina) {
+			// If Jina produced thin content, try alternate links before returning
+			if (wordCount(jina.content || "") < MIN_ALTERNATE_FALLBACK_WORDS) {
+				const alt = await tryAlternateLinks(text, finalUrl, opts);
+				if (alt) return finalizePullResult(alt, redirectNotice);
+			}
+			return finalizePullResult(jina, redirectNotice);
+		}
 	}
 
 	// Try Readability
 	const readability = extractReadability(cleaned, finalUrl);
 	if (readability) {
-		const wordCount = readability.content.split(/\s+/).length;
-		// ── 8a. Alternate link fallback: if Readability produced thin content, check <link rel="alternate"> ──
-		if (wordCount < MIN_ALTERNATE_FALLBACK_WORDS) {
-			const altLinks = extractAlternateLinks(text, finalUrl);
-			for (const altUrl of altLinks.slice(0, 3)) {
-				const altRes = await smartFetch(altUrl, {
-					...opts,
-					headers: { Accept: "application/json,text/plain,*/*;q=0.8", ...opts?.headers },
-				});
-				if (altRes && altRes.status < 400) {
-					const altText = altRes.text;
-					const altCt = altRes.headers.get("content-type") ?? "";
-					if (isJsonContentType(altCt) || isLikelyJsonBody(altText)) {
-						return finalizePullResult(formatJsonContent(altText, finalUrl), redirectNotice);
-					}
-					return finalizePullResult(
-						{ ok: true, url: finalUrl, title: readability.title, content: altText },
-						redirectNotice,
-					);
-				}
-			}
+		// If Readability produced thin content, try alternate links
+		if (wordCount(readability.content) < MIN_ALTERNATE_FALLBACK_WORDS) {
+			const alt = await tryAlternateLinks(text, finalUrl, opts);
+			if (alt) return finalizePullResult(alt, redirectNotice);
 		}
 		return finalizePullResult(
-			{ ok: true, url: finalUrl, title: readability.title, content: readability.content },
+			{
+				ok: true,
+				url: finalUrl,
+				title: readability.title,
+				content: readability.content,
+			},
 			redirectNotice,
 		);
 	}
@@ -2227,7 +2291,12 @@ async function pullPage(url: string, opts?: FetchOpts, _redirectCount = 0): Prom
 	const rsc = extractRSC(text);
 	if (rsc) {
 		return finalizePullResult(
-			{ ok: true, url: finalUrl, title: new URL(finalUrl).hostname, content: rsc },
+			{
+				ok: true,
+				url: finalUrl,
+				title: new URL(finalUrl).hostname,
+				content: rsc,
+			},
 			redirectNotice,
 		);
 	}
@@ -2238,12 +2307,28 @@ async function pullPage(url: string, opts?: FetchOpts, _redirectCount = 0): Prom
 			Defuddle(cleaned, finalUrl, { markdown: true }),
 			DEFUDDLE_TIMEOUT,
 		);
+		const defContent = result.content || "";
+		// If Defuddle produced thin content, try alternate links
+		if (wordCount(defContent) < MIN_ALTERNATE_FALLBACK_WORDS) {
+			const alt = await tryAlternateLinks(text, finalUrl, opts);
+			if (alt) return finalizePullResult(alt, redirectNotice);
+		}
 		return finalizePullResult(
-			{ ok: true, url: finalUrl, title: result.title || "", content: result.content || "" },
+			{
+				ok: true,
+				url: finalUrl,
+				title: result.title || "",
+				content: defContent,
+			},
 			redirectNotice,
 		);
 	} catch {
 		const { title, content } = fallbackExtract(cleaned);
+		// Last resort: if even the fallback is thin, try alternate links
+		if (wordCount(content) < MIN_ALTERNATE_FALLBACK_WORDS) {
+			const alt = await tryAlternateLinks(text, finalUrl, opts);
+			if (alt) return finalizePullResult(alt, redirectNotice);
+		}
 		return finalizePullResult(
 			{ ok: true, url: finalUrl, title, content },
 			redirectNotice,

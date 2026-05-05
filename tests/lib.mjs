@@ -534,6 +534,103 @@ export function extractLinks(html, base, visited, scope) {
 	return [...new Set(out)];
 }
 
+// ─── Smart content-type detection ──────────────────────────────────
+
+const ACCEPTED_ALT_TYPES = [
+	"application/json",
+	"text/json",
+	"text/markdown",
+	"text/plain",
+];
+
+export function isJsonContentType(ct) {
+	const norm = (ct || "").split(";")[0]?.trim().toLowerCase() ?? "";
+	return (
+		norm === "application/json" ||
+		norm === "text/json" ||
+		norm.endsWith("+json")
+	);
+}
+
+export function isLikelyJsonBody(text) {
+	const trimmed = (text || "").trim();
+	return trimmed.startsWith("{") || trimmed.startsWith("[");
+}
+
+export function formatJsonContent(text, url) {
+	try {
+		const parsed = JSON.parse(text);
+		const formatted = JSON.stringify(parsed, null, 2);
+		const truncated =
+			formatted.length > 50000
+				? formatted.slice(0, 50000) + "\n\n[... truncated]"
+				: formatted;
+		const pathParts = new URL(url).pathname.split("/").filter(Boolean);
+		return {
+			ok: true,
+			url,
+			title: pathParts.pop() || "response.json",
+			content: "```json\n" + truncated + "\n```",
+		};
+	} catch {
+		return {
+			ok: true,
+			url,
+			title: "response.json",
+			content: "```\n" + text.slice(0, 50000) + "\n```",
+		};
+	}
+}
+
+export function extractClientSideRedirect(html, baseUrl) {
+	const snippet = (html || "").slice(0, 4096);
+	const m = snippet.match(
+		/<meta[^>]+http-equiv=["']?refresh["']?[^>]+content=["']?([^"'>]*)/i,
+	);
+	if (!m) return null;
+	const parts = m[1].split(";");
+	const delay = Number.parseFloat(parts[0].trim());
+	if (!Number.isFinite(delay) || delay < 0 || delay >= 30) return null;
+	const urlMatch = parts.slice(1).join(";").match(/url\s*=\s*(.+)/i);
+	if (!urlMatch) return null;
+	const target = urlMatch[1].trim().replace(/^['"]|['"]$/g, "");
+	try {
+		const resolved = new URL(target, baseUrl).toString();
+		return resolved === baseUrl ? null : resolved;
+	} catch {
+		return null;
+	}
+}
+
+export function extractAlternateLinks(html, baseUrl) {
+	const snippet = (html || "").length > 10000 ? html.slice(0, 10000) : html || "";
+	const links = [];
+	const pattern =
+		/<link[^>]+rel=["']alternate["'][^>]*type=["']([^"']+)["'][^>]*href=["']([^"']+)["'][^>]*>/gi;
+	const pattern2 =
+		/<link[^>]+type=["']([^"']+)["'][^>]*rel=["']alternate["'][^>]*href=["']([^"']+)["'][^>]*>/gi;
+	for (const re of [pattern, pattern2]) {
+		let match;
+		while ((match = re.exec(snippet)) !== null) {
+			const type = match[1].toLowerCase();
+			if (ACCEPTED_ALT_TYPES.some((a) => type === a || type.endsWith("+json"))) {
+				const href = match[2];
+				try {
+					const target = new URL(href, baseUrl).toString();
+					if (target !== baseUrl && !links.includes(target)) {
+						links.push(target);
+					}
+				} catch {}
+			}
+		}
+	}
+	return links;
+}
+
+export function wordCount(text) {
+	return (text || "").trim().split(/\s+/).filter(Boolean).length;
+}
+
 // ─── Playwright fallback (graceful, returns null if not installed) ──
 
 export async function fetchWithPlaywright(url) {

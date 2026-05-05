@@ -4,14 +4,19 @@ import {
 	applyInjectionAction,
 	createSessionCache,
 	detectPromptInjection,
+	extractAlternateLinks,
+	extractClientSideRedirect,
 	extractDdgUrl,
 	extractLinks,
 	extractRSC,
 	fetchWithPlaywright,
 	filterAndDedupe,
 	finalizePullResult,
+	formatJsonContent,
 	frontmatter,
 	getScopePath,
+	isJsonContentType,
+	isLikelyJsonBody,
 	isLikelyBotProtection,
 	isLocalOrPrivateUrl,
 	isRetryableNetworkError,
@@ -21,6 +26,7 @@ import {
 	parseGitHubUrl,
 	parseLocs,
 	scanForSecrets,
+	wordCount,
 } from "./lib.mjs";
 
 // ─── isLocalOrPrivateUrl ───────────────────────────────────────────
@@ -679,4 +685,160 @@ test("fetchWithPlaywright gracefully degrades when Playwright not installed", {
 		assert.ok(typeof result === "string");
 		assert.ok(result.includes("Example Domain"));
 	}
+});
+
+// ─── isJsonContentType ────────────────────────────────────────────
+
+test("isJsonContentType detects application/json", () => {
+	assert.strictEqual(isJsonContentType("application/json"), true);
+	assert.strictEqual(isJsonContentType("application/json; charset=utf-8"), true);
+});
+
+test("isJsonContentType detects text/json", () => {
+	assert.strictEqual(isJsonContentType("text/json"), true);
+});
+
+test("isJsonContentType detects +json types", () => {
+	assert.strictEqual(isJsonContentType("application/ld+json"), true);
+	assert.strictEqual(isJsonContentType("application/vnd.api+json"), true);
+});
+
+test("isJsonContentType rejects HTML", () => {
+	assert.strictEqual(isJsonContentType("text/html"), false);
+	assert.strictEqual(isJsonContentType("text/plain"), false);
+	assert.strictEqual(isJsonContentType(""), false);
+});
+
+// ─── isLikelyJsonBody ─────────────────────────────────────────────
+
+test("isLikelyJsonBody detects JSON object", () => {
+	assert.strictEqual(isLikelyJsonBody('{"key": "value"}'), true);
+	assert.strictEqual(isLikelyJsonBody('{"a":1}'), true);
+});
+
+test("isLikelyJsonBody detects JSON array", () => {
+	assert.strictEqual(isLikelyJsonBody('[{"a":1}, {"b":2}]'), true);
+	assert.strictEqual(isLikelyJsonBody("[]"), true);
+});
+
+test("isLikelyJsonBody rejects HTML and plain text", () => {
+	assert.strictEqual(isLikelyJsonBody("<html></html>"), false);
+	assert.strictEqual(isLikelyJsonBody("Hello world"), false);
+	assert.strictEqual(isLikelyJsonBody(""), false);
+});
+
+// ─── formatJsonContent ────────────────────────────────────────────
+
+test("formatJsonContent pretty-prints valid JSON", () => {
+	const result = formatJsonContent('{"name": "test", "value": 42}', "https://api.example.com/data.json");
+	assert.strictEqual(result.ok, true);
+	assert.ok(result.content.includes("```json"));
+	assert.ok(result.content.includes('"name"'));
+	assert.ok(result.content.includes('"test"'));
+	assert.ok(result.content.includes("42"));
+});
+
+test("formatJsonContent handles invalid JSON gracefully", () => {
+	const result = formatJsonContent("not json at all", "https://api.example.com/data");
+	assert.strictEqual(result.ok, true);
+	assert.ok(result.content.includes("```"));
+	assert.ok(result.content.includes("not json at all"));
+});
+
+test("formatJsonContent extracts title from URL path", () => {
+	const result = formatJsonContent("42", "https://api.example.com/users/123");
+	assert.strictEqual(result.title, "123");
+});
+
+test("formatJsonContent truncates long JSON", () => {
+	const big = JSON.stringify({ data: "x".repeat(60000) });
+	const result = formatJsonContent(big, "https://api.example.com/big");
+	assert.ok(result.content.length < 60000 || result.content.includes("[... truncated]"));
+});
+
+// ─── extractClientSideRedirect ────────────────────────────────────
+
+test("extractClientSideRedirect follows meta refresh", () => {
+	const html = '<meta http-equiv="refresh" content="0; url=https://example.com/new">';
+	assert.strictEqual(extractClientSideRedirect(html, "https://old.com"), "https://example.com/new");
+});
+
+test("extractClientSideRedirect handles unquoted http-equiv", () => {
+	const html = '<meta http-equiv=refresh content="0; url=https://example.com/new">';
+	assert.strictEqual(extractClientSideRedirect(html, "https://old.com"), "https://example.com/new");
+});
+
+test("extractClientSideRedirect ignores long-delay redirects", () => {
+	const html = '<meta http-equiv="refresh" content="60; url=https://example.com/new">';
+	assert.strictEqual(extractClientSideRedirect(html, "https://old.com"), null);
+});
+
+test("extractClientSideRedirect ignores self-redirects", () => {
+	const html = '<meta http-equiv="refresh" content="0; url=https://same.com/page">';
+	assert.strictEqual(extractClientSideRedirect(html, "https://same.com/page"), null);
+});
+
+test("extractClientSideRedirect returns null when no meta refresh", () => {
+	assert.strictEqual(extractClientSideRedirect("<html></html>", "https://example.com"), null);
+});
+
+test("extractClientSideRedirect skips case-insensitive http-equiv", () => {
+	const html = '<META HTTP-EQUIV="REFRESH" CONTENT="0;url=https://example.com/new">';
+	assert.strictEqual(extractClientSideRedirect(html, "https://old.com"), "https://example.com/new");
+});
+
+// ─── extractAlternateLinks ────────────────────────────────────────
+
+test("extractAlternateLinks finds JSON alternate link", () => {
+	const html = `<head><link rel="alternate" type="application/json" href="https://api.example.com/posts.json"></head>`;
+	const links = extractAlternateLinks(html, "https://example.com/posts");
+	assert.deepStrictEqual(links, ["https://api.example.com/posts.json"]);
+});
+
+test("extractAlternateLinks finds markdown alternate link", () => {
+	const html = `<head><link rel="alternate" type="text/markdown" href="/readme.md"></head>`;
+	const links = extractAlternateLinks(html, "https://example.com");
+	assert.deepStrictEqual(links, ["https://example.com/readme.md"]);
+});
+
+test("extractAlternateLinks handles type before rel", () => {
+	const html = `<head><link type="application/json" rel="alternate" href="/data.json"></head>`;
+	const links = extractAlternateLinks(html, "https://example.com");
+	assert.deepStrictEqual(links, ["https://example.com/data.json"]);
+});
+
+test("extractAlternateLinks ignores non-alternate links", () => {
+	const html = `<head><link rel="stylesheet" type="text/css" href="/style.css"></head>`;
+	assert.deepStrictEqual(extractAlternateLinks(html, "https://example.com"), []);
+});
+
+test("extractAlternateLinks deduplicates results", () => {
+	const html = `<head>
+		<link rel="alternate" type="application/json" href="/data.json">
+		<link rel="alternate" type="application/json" href="/data.json">
+	</head>`;
+	const links = extractAlternateLinks(html, "https://example.com");
+	assert.strictEqual(links.length, 1);
+});
+
+test("extractAlternateLinks accepts +json subtypes", () => {
+	const html = `<head><link rel="alternate" type="application/vnd.api+json" href="/api.json"></head>`;
+	const links = extractAlternateLinks(html, "https://example.com");
+	assert.strictEqual(links.length, 1);
+	assert.strictEqual(links[0], "https://example.com/api.json");
+});
+
+test("extractAlternateLinks ignores self-referencing href", () => {
+	const html = `<head><link rel="alternate" type="application/json" href="https://example.com/current"></head>`;
+	assert.deepStrictEqual(extractAlternateLinks(html, "https://example.com/current"), []);
+});
+
+// ─── wordCount ─────────────────────────────────────────────────────
+
+test("wordCount counts words correctly", () => {
+	assert.strictEqual(wordCount("hello world"), 2);
+	assert.strictEqual(wordCount("one two three four"), 4);
+	assert.strictEqual(wordCount(""), 0);
+	assert.strictEqual(wordCount("   "), 0);
+	assert.strictEqual(wordCount("single"), 1);
 });
