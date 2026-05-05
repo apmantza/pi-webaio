@@ -44,6 +44,8 @@ interface PullResult {
 	title?: string;
 	content?: string;
 	error?: string;
+	/** Path to downloaded binary file (set for non-text downloads). */
+	filePath?: string;
 }
 
 interface FetchOpts {
@@ -1905,6 +1907,147 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 	]);
 }
 
+// ─── Smart content-type detection ───────────────────────────────────
+
+/** Check if a Content-Type header indicates JSON. */
+function isJsonContentType(ct: string): boolean {
+	const norm = ct.split(";")[0]?.trim().toLowerCase() ?? "";
+	return (
+		norm === "application/json" ||
+		norm === "text/json" ||
+		norm.endsWith("+json")
+	);
+}
+
+/** Check if a body string looks like JSON (starts with { or [). */
+function isLikelyJsonBody(text: string): boolean {
+	const trimmed = text.trim();
+	return trimmed.startsWith("{") || trimmed.startsWith("[");
+}
+
+/** Pretty-print JSON content in a markdown code block. */
+function formatJsonContent(text: string, url: string): PullResult {
+	try {
+		const parsed = JSON.parse(text);
+		const formatted = JSON.stringify(parsed, null, 2);
+		const truncated =
+			formatted.length > 50000
+				? formatted.slice(0, 50000) + "\n\n[... truncated]"
+				: formatted;
+		return {
+			ok: true,
+			url,
+			title: new URL(url).pathname.split("/").pop() || "response.json",
+			content: `\`\`\`json\n${truncated}\n\`\`\``,
+		};
+	} catch {
+		return {
+			ok: true,
+			url,
+			title: "response.json",
+			content: `\`\`\`\n${text.slice(0, 50000)}\n\`\`\``,
+		};
+	}
+}
+
+/**
+ * Client-side meta refresh redirect. Returns the target URL or null.
+ * Follows redirects that fire in <30s (bounded, avoids infinite loops).
+ */
+function extractClientSideRedirect(html: string, baseUrl: string): string | null {
+	const snippet = html.slice(0, 4096);
+	const m = snippet.match(
+		/<meta[^>]+http-equiv=["']?refresh["']?[^>]+content=["']?([^"'>]*)/i,
+	);
+	if (!m) return null;
+	const parts = m[1]!.split(";");
+	const delay = Number.parseFloat(parts[0]!.trim());
+	if (!Number.isFinite(delay) || delay < 0 || delay >= 30) return null;
+	const urlMatch = parts.slice(1).join(";").match(/url\s*=\s*(.+)/i);
+	if (!urlMatch) return null;
+	const target = urlMatch[1]!.trim().replace(/^['"]|['"]$/g, "");
+	try {
+		const resolved = new URL(target, baseUrl).toString();
+		return resolved === baseUrl ? null : resolved;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Scan for <link rel="alternate"> entries in <head> that match
+ * JSON, text/markdown, or text/plain content types.
+ */
+function extractAlternateLinks(html: string, baseUrl: string): string[] {
+	const accepted = ["application/json", "text/json", "text/markdown", "text/plain"];
+	const snippet = html.length > 10000 ? html.slice(0, 10000) : html;
+	const links: string[] = [];
+	const pattern =
+		/<link[^>]+rel=["']alternate["'][^>]*type=["']([^"']+)["'][^>]*href=["']([^"']+)["'][^>]*>/gi;
+	const pattern2 =
+		/<link[^>]+type=["']([^"']+)["'][^>]*rel=["']alternate["'][^>]*href=["']([^"']+)["'][^>]*>/gi;
+	for (const re of [pattern, pattern2]) {
+		let match: RegExpExecArray | null;
+		while ((match = re.exec(snippet)) !== null) {
+			const type = match[1]!.toLowerCase();
+			if (accepted.some((a) => type === a || type.endsWith("+json"))) {
+				const href = match[2]!;
+				try {
+					const target = new URL(href, baseUrl).toString();
+					if (target !== baseUrl && !links.includes(target)) {
+						links.push(target);
+					}
+				} catch {}
+			}
+		}
+	}
+	return links;
+}
+
+/**
+ * Download raw bytes to a temp file under BASE_TEMP.
+ * Returns PullResult with filePath set.
+ */
+async function downloadToTemp(
+	buffer: Buffer,
+	contentType: string,
+	contentDisposition: string,
+	url: string,
+): Promise<PullResult> {
+	// Extract filename from Content-Disposition or URL
+	let filename = "";
+	const cdMatch = contentDisposition.match(/filename\*?=(?:UTF-8'')?([^;]+)/i);
+	if (cdMatch) {
+		try {
+			filename = decodeURIComponent(cdMatch[1]!.trim().replace(/^"|"$/g, ""));
+		} catch {
+			filename = cdMatch[1]!.trim().replace(/^"|"$/g, "");
+		}
+	}
+	if (!filename) {
+		const urlPath = new URL(url).pathname;
+		filename = urlPath.split("/").filter(Boolean).pop() || "download";
+	}
+	// Sanitize
+	filename = filename.replace(/[^a-zA-Z0-9._-]/g, "_");
+
+	const dir = join(BASE_TEMP, "downloads");
+	await mkdir(dir, { recursive: true });
+	const filePath = join(dir, filename);
+	await writeFile(filePath, buffer);
+
+	const ext = filename.split(".").pop() || "";
+	const typeLabel = ext.toUpperCase() || contentType.split("/").pop() || "file";
+
+	return {
+		ok: true,
+		url,
+		title: `📦 ${filename} (${typeLabel}, ${buffer.length} bytes)`,
+		content: `Downloaded to \`${filePath}\` (${buffer.length} bytes, ${typeLabel})`,
+		filePath,
+	};
+}
+
 function fallbackExtract(html: string): { title: string; content: string } {
 	const { document } = parseHTML(html);
 	const t = document.querySelector("title")?.textContent || "";
@@ -1936,28 +2079,49 @@ function finalizePullResult(
 	};
 }
 
-async function pullPage(url: string, opts?: FetchOpts): Promise<PullResult> {
+/** Max client-side meta-refresh redirects to follow. */
+const MAX_CLIENT_REDIRECTS = 5;
+/** Minimum word count from extraction before trying alternate link fallback. */
+const MIN_ALTERNATE_FALLBACK_WORDS = 30;
+
+async function pullPage(url: string, opts?: FetchOpts, _redirectCount = 0): Promise<PullResult> {
 	let redirectNotice: string | undefined;
 
-	// GitHub special-case
+	// ── 1. GitHub special-case ──
 	const gh = await pullGitHub(url);
 	if (gh) return finalizePullResult(gh, redirectNotice);
 
-	// Try binary fetch first (PDF detection)
-	const isPdfUrl = url.toLowerCase().endsWith(".pdf");
-	if (isPdfUrl) {
-		const bin = await fetchBuffer(url, opts);
-		if (bin && bin.status < 400) {
-			const pdf = await extractPDF(bin.buffer, url);
+	// ── 2. Binary download detection (Content-Disposition or non-text MIME) ──
+	// Peek at headers first via a lightweight HEAD-like request via fetchBuffer
+	const binPeek = await fetchBuffer(url, opts);
+	if (binPeek && binPeek.status < 400) {
+		// PDF by URL extension
+		if (url.toLowerCase().endsWith(".pdf")) {
+			const pdf = await extractPDF(binPeek.buffer, url);
 			if (pdf) return finalizePullResult(pdf, redirectNotice);
 		}
+
+		// Check if this looks like a binary download: non-text content-type
+		// or Content-Disposition: attachment. We detect by trying to parse the
+		// buffer as text — if it contains null bytes or is mostly non-ASCII, it's binary.
+		const headBytes = binPeek.buffer.slice(0, 1024);
+		const isBinary =
+			headBytes.includes(0) ||
+			headBytes.toString("utf8").replace(/[\x20-\x7E\n\r\t]/g, "").length >
+				headBytes.length * 0.3;
+		if (isBinary && !url.toLowerCase().endsWith(".pdf")) {
+			const dl = await downloadToTemp(binPeek.buffer, "", "", url);
+			return finalizePullResult(dl, redirectNotice);
+		}
+	} else if (!binPeek) {
+		return { ok: false, url, error: "Request failed" };
 	}
 
-	// Standard text fetch
+	// ── 3. Standard text fetch ──
 	const res = await smartFetch(url, {
 		...opts,
 		headers: {
-			Accept: "text/markdown,text/html,*/*;q=0.8",
+			Accept: "text/html,application/xhtml+xml,application/json;q=0.9,text/markdown;q=0.8,*/*;q=0.7",
 			...opts?.headers,
 		},
 	});
@@ -1977,7 +2141,7 @@ async function pullPage(url: string, opts?: FetchOpts): Promise<PullResult> {
 		}
 	} catch {}
 
-	// PDF by content-type
+	// ── 4. PDF by content-type (missed by URL check) ──
 	if (ct.includes("application/pdf")) {
 		const bin = await fetchBuffer(url, opts);
 		if (bin) {
@@ -1986,24 +2150,38 @@ async function pullPage(url: string, opts?: FetchOpts): Promise<PullResult> {
 		}
 	}
 
-	// Markdown or already readable
-	if (
-		ct.includes("text/markdown") ||
-		(!ct.includes("text/html") && MARKDOWN_SIGNAL.test(text))
-	) {
+	// ── 5. JSON auto-detection ──
+	if (isJsonContentType(ct) || isLikelyJsonBody(text)) {
+		return finalizePullResult(formatJsonContent(text, finalUrl), redirectNotice);
+	}
+
+	// ── 6. Plain text (txt, logs, configs) → wrap in code block ──
+	if (ct.includes("text/plain") || ct.includes("text/markdown")) {
 		const title =
-			text.match(/^#\s+(.+)$/m)?.[1]?.trim() || new URL(finalUrl).pathname;
+			text.match(/^#\s+(.+)$/m)?.[1]?.trim() ||
+			new URL(finalUrl).pathname.split("/").pop() ||
+			finalUrl;
+		// If it looks like markdown already, return as-is
+		if (MARKDOWN_SIGNAL.test(text) || ct.includes("text/markdown")) {
+			return finalizePullResult({ ok: true, url: finalUrl, title, content: text }, redirectNotice);
+		}
+		// Plain text → wrap in code block
+		const truncated = text.length > 50000 ? text.slice(0, 50000) + "\n\n[... truncated]" : text;
 		return finalizePullResult(
-			{
-				ok: true,
-				url: finalUrl,
-				title,
-				content: text,
-			},
+			{ ok: true, url: finalUrl, title, content: "```\n" + truncated + "\n```" },
 			redirectNotice,
 		);
 	}
 
+	// ── 7. Client-side meta redirect (only for HTML) ──
+	if (_redirectCount < MAX_CLIENT_REDIRECTS && ct.includes("text/html")) {
+		const redirectTarget = extractClientSideRedirect(text, finalUrl);
+		if (redirectTarget) {
+			return pullPage(redirectTarget, opts, _redirectCount + 1);
+		}
+	}
+
+	// ── 8. HTML content pipeline ──
 	const cleaned = text
 		.replace(/<script\b[^>]*>[\s\S]*?<\/script[^>]*>/gi, "")
 		.replace(/<style\b[^>]*>[\s\S]*?<\/style[^>]*>/gi, "");
@@ -2017,13 +2195,30 @@ async function pullPage(url: string, opts?: FetchOpts): Promise<PullResult> {
 	// Try Readability
 	const readability = extractReadability(cleaned, finalUrl);
 	if (readability) {
+		const wordCount = readability.content.split(/\s+/).length;
+		// ── 8a. Alternate link fallback: if Readability produced thin content, check <link rel="alternate"> ──
+		if (wordCount < MIN_ALTERNATE_FALLBACK_WORDS) {
+			const altLinks = extractAlternateLinks(text, finalUrl);
+			for (const altUrl of altLinks.slice(0, 3)) {
+				const altRes = await smartFetch(altUrl, {
+					...opts,
+					headers: { Accept: "application/json,text/plain,*/*;q=0.8", ...opts?.headers },
+				});
+				if (altRes && altRes.status < 400) {
+					const altText = altRes.text;
+					const altCt = altRes.headers.get("content-type") ?? "";
+					if (isJsonContentType(altCt) || isLikelyJsonBody(altText)) {
+						return finalizePullResult(formatJsonContent(altText, finalUrl), redirectNotice);
+					}
+					return finalizePullResult(
+						{ ok: true, url: finalUrl, title: readability.title, content: altText },
+						redirectNotice,
+					);
+				}
+			}
+		}
 		return finalizePullResult(
-			{
-				ok: true,
-				url: finalUrl,
-				title: readability.title,
-				content: readability.content,
-			},
+			{ ok: true, url: finalUrl, title: readability.title, content: readability.content },
 			redirectNotice,
 		);
 	}
@@ -2032,12 +2227,7 @@ async function pullPage(url: string, opts?: FetchOpts): Promise<PullResult> {
 	const rsc = extractRSC(text);
 	if (rsc) {
 		return finalizePullResult(
-			{
-				ok: true,
-				url: finalUrl,
-				title: new URL(finalUrl).hostname,
-				content: rsc,
-			},
+			{ ok: true, url: finalUrl, title: new URL(finalUrl).hostname, content: rsc },
 			redirectNotice,
 		);
 	}
@@ -2049,12 +2239,7 @@ async function pullPage(url: string, opts?: FetchOpts): Promise<PullResult> {
 			DEFUDDLE_TIMEOUT,
 		);
 		return finalizePullResult(
-			{
-				ok: true,
-				url: finalUrl,
-				title: result.title || "",
-				content: result.content || "",
-			},
+			{ ok: true, url: finalUrl, title: result.title || "", content: result.content || "" },
 			redirectNotice,
 		);
 	} catch {
