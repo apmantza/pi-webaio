@@ -77,7 +77,6 @@ interface PullResult {
 	language?: string;
 	description?: string;
 	wordCount?: number;
-
 }
 
 interface FetchOpts {
@@ -1267,9 +1266,10 @@ function parseBraveResults(html: string): SearchResult[] {
 		);
 		const snippet = gsMatch
 			? gsMatch[1]!
-					.replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, "") // strip <script> blocks
+					.replace(/<script\b[^>]*>[\s\S]*?<\/script[^>]*>/gi, "") // strip <script> blocks
 					.replace(/<![^>]*-->/g, "") // strip Svelte comments
 					.replace(/<[^>]*>/g, "") // strip remaining HTML tags
+					.replace(/<\/?(?:script|style|iframe|object|embed)\b[^>]*>/gi, "") // catch any leftover script/style/embed tags
 					.replace(/\s+/g, " ")
 					.trim()
 			: "";
@@ -2547,7 +2547,8 @@ async function pullPage(
 	// ── 8. HTML content pipeline ──
 	const cleaned = text
 		.replace(/<script\b[^>]*>[\s\S]*?<\/script[^>]*>/gi, "")
-		.replace(/<style\b[^>]*>[\s\S]*?<\/style[^>]*>/gi, "");
+		.replace(/<style\b[^>]*>[\s\S]*?<\/style[^>]*>/gi, "")
+		.replace(/<\/?(?:script|style|iframe|object|embed)\b[^>]*>/gi, "");
 
 	// Try Jina AI for public URLs
 	if (!isLocalOrPrivateUrl(url)) {
@@ -2846,7 +2847,9 @@ export default function (pi: ExtensionAPI) {
 				// ── Google AI summarization (skip for API-sourced content) ──
 				let summary: string | null = null;
 				let summarized = false;
-				const skipSummary = preview.includes("> via gh api") || preview.includes("> via SonarCloud API");
+				const skipSummary =
+					preview.includes("> via gh api") ||
+					preview.includes("> via SonarCloud API");
 
 				const searchCtx =
 					lastSearchContext &&

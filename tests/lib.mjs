@@ -466,9 +466,10 @@ export function parseBraveResults(html) {
 		);
 		const snippet = gsMatch
 			? gsMatch[1]
-					.replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, "")
+					.replace(/<script\b[^>]*>[\s\S]*?<\/script[^>]*>/gi, "")
 					.replace(/<![^>]*-->/g, "")
 					.replace(/<[^>]*>/g, "")
+					.replace(/<\/?(?:script|style|iframe|object|embed)\b[^>]*>/gi, "")
 					.replace(/\s+/g, " ")
 					.trim()
 			: "";
