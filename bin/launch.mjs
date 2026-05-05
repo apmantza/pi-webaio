@@ -208,7 +208,9 @@ function isRunning() {
 
 function getPortPid(port) {
 	// Validate port is a positive integer before shell interpolation
-	const safePort = Number.isFinite(port) ? String(Math.floor(Math.abs(port))) : String(port);
+	const safePort = Number.isFinite(port)
+		? String(Math.floor(Math.abs(port)))
+		: String(port);
 	if (!/^\d+$/.test(safePort)) return null;
 
 	try {
@@ -236,7 +238,9 @@ function getPortPid(port) {
 
 function killProcess(pid) {
 	// Validate pid is a positive integer before shell interpolation
-	const safePid = Number.isFinite(pid) ? String(Math.floor(Math.abs(pid))) : String(pid);
+	const safePid = Number.isFinite(pid)
+		? String(Math.floor(Math.abs(pid)))
+		: String(pid);
 	if (!/^\d+$/.test(safePid)) return false;
 
 	try {

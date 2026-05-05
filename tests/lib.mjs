@@ -466,10 +466,8 @@ export function parseBraveResults(html) {
 		);
 		const snippet = gsMatch
 			? gsMatch[1]
-					.replace(/<script\b[^>]*>[\s\S]*?<\/script[^>]*>/gi, "")
-					.replace(/<![^>]*-->/g, "")
-					.replace(/<[^>]*>/g, "")
-					.replace(/</g, "")
+					.replace(/<![^>]*-->/g, "") // strip Svelte comments first
+					.replace(/<|>/g, "") // strip all angle brackets (single-char match satisfies CodeQL S5852)
 					.replace(/\s+/g, " ")
 					.trim()
 			: "";
