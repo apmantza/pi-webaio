@@ -207,19 +207,23 @@ function isRunning() {
 }
 
 function getPortPid(port) {
+	// Validate port is a positive integer before shell interpolation
+	const safePort = Number.isFinite(port) ? String(Math.floor(Math.abs(port))) : String(port);
+	if (!/^\d+$/.test(safePort)) return null;
+
 	try {
 		const os = platform();
 		if (os === "win32") {
 			const out = execSync(`netstat -ano -p TCP 2>nul`, { encoding: "utf8" });
 			const regex = new RegExp(
-				String.raw`TCP\s+[^\s]*:${port}\s+[^\s]*:0\s+LISTENING\s+(\d+)`,
+				String.raw`TCP\s+[^\s]*:${safePort}\s+[^\s]*:0\s+LISTENING\s+(\d+)`,
 				"i",
 			);
 			const match = out.match(regex);
 			return match ? Number.parseInt(match[1], 10) : null;
 		}
 		const out = execSync(
-			String.raw`lsof -i :${port} -t 2>/dev/null || ss -tlnp 2>/dev/null | grep :${port} | grep -oP 'pid=\K\d+'`,
+			String.raw`lsof -i :${safePort} -t 2>/dev/null || ss -tlnp 2>/dev/null | grep :${safePort} | grep -oP 'pid=\K\d+'`,
 			{
 				encoding: "utf8",
 			},
@@ -231,9 +235,13 @@ function getPortPid(port) {
 }
 
 function killProcess(pid) {
+	// Validate pid is a positive integer before shell interpolation
+	const safePid = Number.isFinite(pid) ? String(Math.floor(Math.abs(pid))) : String(pid);
+	if (!/^\d+$/.test(safePid)) return false;
+
 	try {
 		if (platform() === "win32") {
-			execSync(`taskkill //F //T //PID ${pid}`, { stdio: "ignore" });
+			execSync(`taskkill //F //T //PID ${safePid}`, { stdio: "ignore" });
 		} else {
 			process.kill(pid, "SIGTERM");
 		}

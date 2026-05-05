@@ -590,7 +590,7 @@ const INJECTION_PATTERNS = [
 	/real\s+instructions?\s*[:=]/i,
 	// Role injection
 	/you\s+are\s+now\s+/i,
-	/from\s+now\s+on\s*[,:]?\s*(you|your)/i,
+	/from\s+now\s+on[\s,:]*(you|your)/i, // nosonar: simplified char class avoids nested quantifier backtracking
 	/act\s+as(\s+if)?(\s+you)?(\s+(are|were))?/i,
 	/pretend\s+(to\s+be|you\s+are|you're|that\s+you)/i,
 	/roleplay\s+as/i,
@@ -604,7 +604,7 @@ const INJECTION_PATTERNS = [
 	/bypass\s+(all\s+)?(restrictions?|filters?|safety|security|limits?)/i,
 	/enable\s+(unrestricted|unlimited|full)\s+(mode|access)/i,
 	/remove\s+(all\s+)?(limitations?|restrictions?|filters?)/i,
-	/turn\s+off\s+(safety|security|content)?\s*(filters?|checks?|restrictions?)/i,
+	/turn\s+off\s+(?:(?:safety|security|content)\s+)?(filters?|checks?|restrictions?)/i, // nosonar: moved \s+ into optional group to avoid backtracking
 	// Prompt leak
 	/reveal\s+(your\s+)?(system\s+)?(prompt|instructions?|directives?)/i,
 	/show\s+(me\s+)?(your\s+)?(system\s+)?(prompt|instructions?|rules?|directives?)/i,
@@ -950,7 +950,7 @@ async function tryFetch(
 }
 
 function parseLocs(xml: string): string[] {
-	return [...xml.matchAll(/<loc>\s*(.*?)\s*<\/loc>/gi)].map((m) =>
+	return [...xml.matchAll(/<loc>\s*([^<]*?)\s*<\/loc>/gi)].map((m) =>
 		m[1]!.trim(),
 	);
 }
@@ -2063,7 +2063,7 @@ async function fetchJina(url: string): Promise<PullResult | null> {
 		if (!res || res.status >= 400) return null;
 		const text = res.text.trim();
 		if (!text) return null;
-		const titleMatch = text.match(/^Title:\s*(.+)(?:\r?\n){2}/);
+		const titleMatch = text.match(/^Title:\s*(.+?)(?:\r?\n){2}/);
 		if (titleMatch) {
 			return {
 				ok: true,
