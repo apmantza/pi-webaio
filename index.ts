@@ -970,7 +970,7 @@ async function tryFetch(
 }
 
 function parseLocs(xml: string): string[] {
-	return [...xml.matchAll(/<loc>\s*([^<]*?)\s*<\/loc>/gi)].map((m) =>
+	return [...xml.matchAll(/<loc>([^<]*)<\/loc>/gi)].map((m) =>
 		m[1]!.trim(),
 	);
 }
@@ -2081,7 +2081,7 @@ async function fetchJina(url: string): Promise<PullResult | null> {
 		if (!res || res.status >= 400) return null;
 		const text = res.text.trim();
 		if (!text) return null;
-		const titleMatch = text.match(/^Title:\s*(.+?)(?:\r?\n){2}/);
+		const titleMatch = text.match(/^Title:\s*([^\n]+)(?:\r?\n){2}/);
 		if (titleMatch) {
 			return {
 				ok: true,
