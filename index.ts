@@ -1,4 +1,4 @@
-import { execSync, spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import {
@@ -104,6 +104,33 @@ function stripHtmlTags(text: string): string {
 	} while (text !== prev);
 	// Final single-char pass guarantees no angle brackets remain
 	return text.replace(/<|>/g, "");
+}
+
+/**
+ * Resolve a command to its absolute path using which/where.
+ * Caches results so PATH is only read once at first use.
+ */
+const _resolvedBinaries = new Map<string, string | null>();
+function resolveBinary(name: string): string | null {
+	const cached = _resolvedBinaries.get(name);
+	if (cached !== undefined) return cached;
+	try {
+		const cmd = process.platform === "win32" ? "where" : "which";
+		const out = spawnSync(cmd, [name], {
+			encoding: "utf8",
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+		if (out.error || out.status !== 0) {
+			_resolvedBinaries.set(name, null);
+			return null;
+		}
+		const resolved = out.stdout.trim().split("\n")[0] || null;
+		_resolvedBinaries.set(name, resolved);
+		return resolved;
+	} catch {
+		_resolvedBinaries.set(name, null);
+		return null;
+	}
 }
 
 interface StoredContent {
@@ -1790,9 +1817,11 @@ async function pullGitHubFeature(url: string): Promise<PullResult | null> {
 }
 
 /** Spawn gh with a subcommand (e.g. gh issue list --repo owner/repo --json ...) */
+const GH_PATH = /*#__PURE__*/ resolveBinary("gh");
 function ghCommand(cmd: string, args: string[]): Promise<string> {
+	const gh = GH_PATH || "gh";
 	return new Promise((resolve, reject) => {
-		const proc = spawn("gh", [cmd, ...args], {
+		const proc = spawn(gh, [cmd, ...args], {
 			stdio: ["ignore", "pipe", "pipe"],
 		});
 		let out = "";
@@ -1847,14 +1876,8 @@ async function githubApiFetch(path: string): Promise<unknown | null> {
 let _ghAvailable: boolean | null = null;
 function ghAvailable(): boolean {
 	if (_ghAvailable !== null) return _ghAvailable;
-	try {
-		// Check if gh CLI is installed. PATH is inherited from the trusted
-		// system environment where the user invoked pi.
-		execSync("gh --version", { stdio: "ignore" });
-		_ghAvailable = true;
-	} catch {
-		_ghAvailable = false;
-	}
+	const ghPath = resolveBinary("gh");
+	_ghAvailable = ghPath !== null;
 	return _ghAvailable;
 }
 
@@ -1936,10 +1959,11 @@ async function cloneGitHubRepo(
 		await mkdir(outDir, { recursive: true });
 
 		// Prefer gh CLI (handles auth, private repos)
-		if (ghAvailable()) {
+		const ghPath = resolveBinary("gh");
+		if (ghPath) {
 			await new Promise<void>((resolve, reject) => {
 				const proc = spawn(
-					"gh",
+					ghPath,
 					["repo", "clone", `${owner}/${repo}`, outDir, "--", "--depth", "1"],
 					{
 						stdio: "pipe",
@@ -1958,8 +1982,9 @@ async function cloneGitHubRepo(
 
 		// Fallback: git clone
 		const cloneUrl = `https://github.com/${owner}/${repo}.git`;
+		const gitPath = resolveBinary("git") || "git";
 		await new Promise<void>((resolve, reject) => {
-			const proc = spawn("git", ["clone", "--depth", "1", cloneUrl, outDir], {
+			const proc = spawn(gitPath, ["clone", "--depth", "1", cloneUrl, outDir], {
 				stdio: "pipe",
 			});
 			let stderr = "";
