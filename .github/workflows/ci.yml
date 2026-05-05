@@ -144,6 +144,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Setup Java (required by Sonar Scanner)
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
       - name: SonarQube Cloud Scan
         uses: sonarsource/sonarqube-scan-action@2f77a1ec69fb1d595b06f35ab27e97605bdef703 # v5
         env:
