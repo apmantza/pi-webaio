@@ -414,23 +414,23 @@ function storeContent(
  * in-memory session store. Content is NOT loaded — we store only the file path
  * and lazy-load on first access via getStoredContent().
  */
-async function loadContentCacheFromDisk(): Promise<void> {
+function loadContentCacheFromDisk(): void {
 	const root = BASE_TEMP;
-	let entries = 0;
 
-	function scan(dir: string): void {
+	function scan(dir: string): number {
 		let items: string[];
 		try {
 			items = readdirSync(dir);
 		} catch {
-			return;
+			return 0;
 		}
+		let entries = 0;
 		for (const name of items) {
 			const full = join(dir, name);
 			try {
 				const st = statSync(full);
 				if (st.isDirectory()) {
-					scan(full);
+					entries += scan(full);
 				} else if (name.endsWith(".md")) {
 					// Peek at first ~500 bytes to extract frontmatter URL without reading whole file
 					const fd = openSync(full, "r");
@@ -459,12 +459,13 @@ async function loadContentCacheFromDisk(): Promise<void> {
 				// Skip files we can't read
 			}
 		}
+		return entries;
 	}
 
-	scan(root);
-	if (entries > 0) {
-		console.log(`[pi-webaio] Loaded ${entries} cached pages from disk`);
-	}
+	// Defer to next event loop tick so we don't block session startup.
+	setImmediate(() => {
+		scan(root);
+	});
 }
 
 function storeSearchResults(query: string, results: SearchResult[]) {
@@ -2791,7 +2792,7 @@ export default function (pi: ExtensionAPI) {
 	// Load persisted search cache on startup
 	loadSearchCacheFromDisk().catch(() => {});
 	// Load persisted content cache from disk (lazy — contents loaded on first access)
-	loadContentCacheFromDisk().catch(() => {});
+	loadContentCacheFromDisk();
 
 	// Start session cache cleanup
 	setInterval(cleanupSessionCache, SESSION_CACHE_CLEANUP_MS);
