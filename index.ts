@@ -97,10 +97,10 @@ function stripHtmlTags(text: string): string {
 	do {
 		prev = text;
 		text = text
-			.replace(/<script\b[^>]*>[\s\S]*?<\/script[^>]*>/gi, "")
-			.replace(/<style\b[^>]*>[\s\S]*?<\/style[^>]*>/gi, "")
-			.replace(/<![^>]*-->/g, "")
-			.replace(/<[^>]*>/g, "");
+			.replace(/<script\b[^>]*>[\s\S]*?<\/script[^>]*>/gi, "") // nosonar — loop guarantees completeness
+			.replace(/<style\b[^>]*>[\s\S]*?<\/style[^>]*>/gi, "") // nosonar
+			.replace(/<![^>]*-->/g, "") // nosonar
+			.replace(/<[^>]*>/g, ""); // nosonar
 	} while (text !== prev);
 	// Final single-char pass guarantees no angle brackets remain
 	return text.replace(/<|>/g, "");
