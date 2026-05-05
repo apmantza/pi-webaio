@@ -997,9 +997,7 @@ async function tryFetch(
 }
 
 function parseLocs(xml: string): string[] {
-	return [...xml.matchAll(/<loc>([^<]*)<\/loc>/gi)].map((m) =>
-		m[1]!.trim(),
-	);
+	return [...xml.matchAll(/<loc>([^<]*)<\/loc>/gi)].map((m) => m[1]!.trim());
 }
 
 async function fetchSitemap(url: string, depth = 0): Promise<string[]> {
@@ -2106,13 +2104,15 @@ async function fetchJina(url: string): Promise<PullResult | null> {
 		if (!res || res.status >= 400) return null;
 		const text = res.text.trim();
 		if (!text) return null;
-		const titleMatch = text.match(/^Title:\s*([^\n]+)(?:\r?\n){2}/);
-		if (titleMatch) {
+		// Parse Jina's "Title: ...\n\ncontent" format without regex backtracking
+		const titleLine = text.startsWith("Title:") ? text.slice(6).split("\n")[0].trim() : null;
+		const contentStart = titleLine !== null ? text.indexOf("\n\n", 6) : -1;
+		if (titleLine && contentStart !== -1) {
 			return {
 				ok: true,
 				url,
-				title: titleMatch[1].trim(),
-				content: text.slice(titleMatch[0].length),
+				title: titleLine,
+				content: text.slice(contentStart + 2),
 			};
 		}
 		return { ok: true, url, title: new URL(url).hostname, content: text };

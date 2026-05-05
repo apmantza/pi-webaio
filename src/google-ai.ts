@@ -82,7 +82,7 @@ export function ensureChrome(headless = true): Promise<ChromeStatus> {
 			if (env[k] === undefined) delete env[k];
 		});
 
-		const proc = spawn("node", [launchBin], {
+		const proc = spawn(process.execPath, [launchBin], {
 			stdio: ["ignore", "pipe", "pipe"],
 			env: env as Record<string, string>,
 		});
@@ -135,7 +135,7 @@ export function checkChromeRunning(): Promise<ChromeStatus> {
 	return new Promise((resolve) => {
 		const launchBin = resolvePath("bin", "launch.mjs");
 
-		const proc = spawn("node", [launchBin, "--status"], {
+		const proc = spawn(process.execPath, [launchBin, "--status"], {
 			stdio: ["ignore", "pipe", "pipe"],
 		});
 
@@ -208,7 +208,7 @@ export function googleAISearch(
 			GREEDY_SEARCH_HEADLESS: headless ? "1" : "0",
 		};
 
-		const proc = spawn("node", args, {
+		const proc = spawn(process.execPath, args, {
 			stdio: ["ignore", "pipe", "pipe"],
 			env: env as Record<string, string>,
 		});
@@ -294,7 +294,7 @@ export function googleSearch(
 			GREEDY_SEARCH_HEADLESS: headless ? "1" : "0",
 		};
 
-		const proc = spawn("node", args, {
+		const proc = spawn(process.execPath, args, {
 			stdio: ["ignore", "pipe", "pipe"],
 			env: env as Record<string, string>,
 		});
@@ -381,7 +381,7 @@ export function summarizeUrl(
 			GREEDY_SEARCH_HEADLESS: headless ? "1" : "0",
 		};
 
-		const proc = spawn("node", [extractorBin, query], {
+		const proc = spawn(process.execPath, [extractorBin, query], {
 			stdio: ["ignore", "pipe", "pipe"],
 			env: env as Record<string, string>,
 		});

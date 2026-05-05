@@ -19,6 +19,27 @@
 //   CHROME_PATH              — Path to Chrome executable
 
 import { spawn, spawnSync } from "node:child_process";
+
+/** Resolve a command to its absolute path via which/where, cached. */
+const _binCache = new Map();
+function resolveBin(name) {
+	if (_binCache.has(name)) return _binCache.get(name);
+	try {
+		const cmd = process.platform === "win32" ? "where" : "which";
+		const out = spawnSync(cmd, [name], {
+			encoding: "utf8",
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+		const resolved = !out.error && out.status === 0
+			? out.stdout.trim().split("\n")[0] || null
+			: null;
+		_binCache.set(name, resolved);
+		return resolved;
+	} catch {
+		_binCache.set(name, null);
+		return null;
+	}
+}
 import {
 	existsSync,
 	mkdirSync,
@@ -206,6 +227,12 @@ function isRunning() {
 	}
 }
 
+// Resolve OS tool paths once (SonarCloud S4036)
+const _netstat = resolveBin("netstat") || "netstat";
+const _lsof = resolveBin("lsof") || "lsof";
+const _ss = resolveBin("ss") || "ss";
+const _taskkill = resolveBin("taskkill") || "taskkill";
+
 function getPortPid(port) {
 	// Validate port is a positive integer
 	const safePort = Number.isFinite(port)
@@ -216,7 +243,7 @@ function getPortPid(port) {
 	try {
 		const os = platform();
 		if (os === "win32") {
-			const out = spawnSync("netstat", ["-ano", "-p", "TCP"], {
+			const out = spawnSync(_netstat, ["-ano", "-p", "TCP"], {
 				encoding: "utf8",
 				stdio: ["ignore", "pipe", "pipe"],
 			});
@@ -229,7 +256,7 @@ function getPortPid(port) {
 			return match ? Number.parseInt(match[1], 10) : null;
 		}
 		// Try lsof first, fall back to ss (no shell pipes — separate spawnSync calls)
-		const lsof = spawnSync("lsof", ["-i", `:${safePort}`, "-t"], {
+		const lsof = spawnSync(_lsof, ["-i", `:${safePort}`, "-t"], {
 			encoding: "utf8",
 			stdio: ["ignore", "pipe", "pipe"],
 		});
@@ -238,7 +265,7 @@ function getPortPid(port) {
 			if (pid) return Number.parseInt(pid, 10);
 		}
 		// Fallback: ss
-		const ss = spawnSync("ss", ["-tlnp"], {
+		const ss = spawnSync(_ss, ["-tlnp"], {
 			encoding: "utf8",
 			stdio: ["ignore", "pipe", "pipe"],
 		});
@@ -261,7 +288,7 @@ function killProcess(pid) {
 
 	try {
 		if (platform() === "win32") {
-			spawnSync("taskkill", ["/F", "/T", "/PID", safePid], {
+			spawnSync(_taskkill, ["/F", "/T", "/PID", safePid], {
 				stdio: "ignore",
 			});
 		} else {
