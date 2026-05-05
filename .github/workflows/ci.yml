@@ -145,6 +145,6 @@ jobs:
         run: npm ci
 
       - name: SonarQube Cloud Scan
-        uses: sonarsource/sonarqube-scan-action@59db25f34e16620e48ab4bb9e4a5dce155cb5432 # v8.0.0
+        uses: sonarsource/sonarqube-scan-action@2f77a1ec69fb1d595b06f35ab27e97605bdef703 # v5
         env:
           SONAR_TOKEN: \${{ secrets.SONAR_TOKEN }}
