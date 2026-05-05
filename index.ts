@@ -1500,13 +1500,48 @@ function parseSonarCloudUrl(
 
 /**
  * Map a SonarCloud page type to its API endpoint path (without host prefix).
+ * Forwards relevant query parameters from the original web UI URL to the API.
  */
-function sonarCloudApiPath(page: string, projectKey: string): string | null {
+function sonarCloudApiPath(
+	page: string,
+	projectKey: string,
+	params: URLSearchParams,
+): string | null {
+	// Query params from the original URL that map to API params
+	const forwarded = new URLSearchParams();
+	for (const key of [
+		"impactSoftwareQualities",
+		"impactSeverities",
+		"issueStatuses",
+		"severities",
+		"types",
+		"tags",
+		"resolved",
+		"rules",
+		"languages",
+		"scopes",
+		"owaspTop10",
+		"sansTop25",
+		"cwe",
+		"sonarsourceSecurity",
+		"statuses",
+		"securityCategories",
+	]) {
+		const val = params.get(key);
+		if (val) forwarded.set(key, val);
+	}
+
 	switch (page) {
 		case "security_hotspots":
-			return `/api/hotspots/search?projectKey=${encodeURIComponent(projectKey)}&ps=50`;
+			forwarded.set("projectKey", projectKey);
+			if (!forwarded.has("ps")) forwarded.set("ps", "50");
+			return `/api/hotspots/search?${forwarded.toString()}`;
 		case "issues":
-			return `/api/issues/search?projectKey=${encodeURIComponent(projectKey)}&ps=50&issueStatuses=OPEN%2CCONFIRMED`;
+			forwarded.set("componentKeys", projectKey);
+			if (!forwarded.has("ps")) forwarded.set("ps", "50");
+			if (!forwarded.has("issueStatuses"))
+				forwarded.set("issueStatuses", "OPEN,CONFIRMED");
+			return `/api/issues/search?${forwarded.toString()}`;
 		case "overview":
 			return `/api/measures/component?component=${encodeURIComponent(projectKey)}&metricKeys=security_hotspots_reviewed,issues,coverage,duplicated_lines_density,alert_status,quality_gate_details,bugs,vulnerabilities,code_smells,security_rating,security_review_rating,reliability_rating,sqale_rating,sqale_index,ncloc`;
 		case "activity":
@@ -1523,7 +1558,11 @@ async function pullSonarCloud(url: string): Promise<PullResult | null> {
 	const parsed = parseSonarCloudUrl(url);
 	if (!parsed) return null;
 
-	const apiPath = sonarCloudApiPath(parsed.page, parsed.projectKey);
+	const apiPath = sonarCloudApiPath(
+		parsed.page,
+		parsed.projectKey,
+		new URL(url).searchParams,
+	);
 	if (!apiPath) return null;
 
 	try {
@@ -1649,6 +1688,7 @@ async function pullSonarCloud(url: string): Promise<PullResult | null> {
 		return null;
 	}
 }
+
 
 async function pullGitHub(url: string): Promise<PullResult | null> {
 	// Try standard GitHub pipeline (tree/blob/repo)
@@ -2105,7 +2145,9 @@ async function fetchJina(url: string): Promise<PullResult | null> {
 		const text = res.text.trim();
 		if (!text) return null;
 		// Parse Jina's "Title: ...\n\ncontent" format without regex backtracking
-		const titleLine = text.startsWith("Title:") ? text.slice(6).split("\n")[0].trim() : null;
+		const titleLine = text.startsWith("Title:")
+			? text.slice(6).split("\n")[0].trim()
+			: null;
 		const contentStart = titleLine !== null ? text.indexOf("\n\n", 6) : -1;
 		if (titleLine && contentStart !== -1) {
 			return {
@@ -2449,6 +2491,7 @@ async function pullPage(
 
 	const sc = await pullSonarCloud(url);
 	if (sc) return finalizePullResult(sc, redirectNotice);
+
 
 	// ── 2. Binary download detection (Content-Disposition or non-text MIME) ──
 	// Peek at headers first via a lightweight HEAD-like request via fetchBuffer
@@ -3367,4 +3410,5 @@ export default function (pi: ExtensionAPI) {
 			};
 		},
 	});
+
 }

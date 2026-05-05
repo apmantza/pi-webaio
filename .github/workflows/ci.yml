@@ -22,10 +22,10 @@ jobs:
           cache: "npm"
 
       - name: Install dependencies
-        run: npm ci --omit=optional
+        run: npm ci --ignore-scripts --omit=optional
 
       - name: TypeScript type-check
-        run: npx tsc --noEmit
+        run: ./node_modules/.bin/tsc --noEmit
 
   test:
     name: Unit tests
@@ -42,7 +42,7 @@ jobs:
           cache: "npm"
 
       - name: Install dependencies
-        run: npm ci --omit=optional
+        run: npm ci --ignore-scripts --omit=optional
 
       - name: Run tests
         run: npm test
@@ -67,7 +67,7 @@ jobs:
           cache: "npm"
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: Pack tarball
         run: npm pack
@@ -116,7 +116,7 @@ jobs:
         run: |
           INSTALL_DIR=$(npm root -g)/pi-webaio
           cd "$INSTALL_DIR"
-          npx tsx index.ts 2>&1 | tee /tmp/tsx-output.txt || true
+          npx --ignore-scripts --no-install tsx index.ts 2>&1 | tee /tmp/tsx-output.txt || true
           if grep -q "ERR_MODULE_NOT_FOUND\|Cannot find module" /tmp/tsx-output.txt; then
             echo "FAILED: missing module dependency detected"
             cat /tmp/tsx-output.txt
@@ -142,7 +142,7 @@ jobs:
           cache: "npm"
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: SonarQube Cloud Scan
         uses: SonarSource/sonarqube-scan-action@fd88b7d7ccbaefd23d8f36f73b59db7a3d246602 # v6.0.0

@@ -68,7 +68,7 @@ jobs:
 
       - name: Install dependencies
         if: steps.meta.outputs.should_release == 'true' && steps.meta.outputs.has_npm_token == 'true'
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: Dry-run publish (validates tarball + registry auth)
         if: steps.meta.outputs.should_release == 'true' && steps.meta.outputs.has_npm_token == 'true'
