@@ -26,6 +26,7 @@ import {
 	parseGitHubUrl,
 	parseLocs,
 	scanForSecrets,
+	stripDefuddleComments,
 	wordCount,
 } from "./lib.mjs";
 
@@ -691,7 +692,10 @@ test("fetchWithPlaywright gracefully degrades when Playwright not installed", {
 
 test("isJsonContentType detects application/json", () => {
 	assert.strictEqual(isJsonContentType("application/json"), true);
-	assert.strictEqual(isJsonContentType("application/json; charset=utf-8"), true);
+	assert.strictEqual(
+		isJsonContentType("application/json; charset=utf-8"),
+		true,
+	);
 });
 
 test("isJsonContentType detects text/json", () => {
@@ -730,7 +734,10 @@ test("isLikelyJsonBody rejects HTML and plain text", () => {
 // ─── formatJsonContent ────────────────────────────────────────────
 
 test("formatJsonContent pretty-prints valid JSON", () => {
-	const result = formatJsonContent('{"name": "test", "value": 42}', "https://api.example.com/data.json");
+	const result = formatJsonContent(
+		'{"name": "test", "value": 42}',
+		"https://api.example.com/data.json",
+	);
 	assert.strictEqual(result.ok, true);
 	assert.ok(result.content.includes("```json"));
 	assert.ok(result.content.includes('"name"'));
@@ -739,7 +746,10 @@ test("formatJsonContent pretty-prints valid JSON", () => {
 });
 
 test("formatJsonContent handles invalid JSON gracefully", () => {
-	const result = formatJsonContent("not json at all", "https://api.example.com/data");
+	const result = formatJsonContent(
+		"not json at all",
+		"https://api.example.com/data",
+	);
 	assert.strictEqual(result.ok, true);
 	assert.ok(result.content.includes("```"));
 	assert.ok(result.content.includes("not json at all"));
@@ -753,38 +763,60 @@ test("formatJsonContent extracts title from URL path", () => {
 test("formatJsonContent truncates long JSON", () => {
 	const big = JSON.stringify({ data: "x".repeat(60000) });
 	const result = formatJsonContent(big, "https://api.example.com/big");
-	assert.ok(result.content.length < 60000 || result.content.includes("[... truncated]"));
+	assert.ok(
+		result.content.length < 60000 || result.content.includes("[... truncated]"),
+	);
 });
 
 // ─── extractClientSideRedirect ────────────────────────────────────
 
 test("extractClientSideRedirect follows meta refresh", () => {
-	const html = '<meta http-equiv="refresh" content="0; url=https://example.com/new">';
-	assert.strictEqual(extractClientSideRedirect(html, "https://old.com"), "https://example.com/new");
+	const html =
+		'<meta http-equiv="refresh" content="0; url=https://example.com/new">';
+	assert.strictEqual(
+		extractClientSideRedirect(html, "https://old.com"),
+		"https://example.com/new",
+	);
 });
 
 test("extractClientSideRedirect handles unquoted http-equiv", () => {
-	const html = '<meta http-equiv=refresh content="0; url=https://example.com/new">';
-	assert.strictEqual(extractClientSideRedirect(html, "https://old.com"), "https://example.com/new");
+	const html =
+		'<meta http-equiv=refresh content="0; url=https://example.com/new">';
+	assert.strictEqual(
+		extractClientSideRedirect(html, "https://old.com"),
+		"https://example.com/new",
+	);
 });
 
 test("extractClientSideRedirect ignores long-delay redirects", () => {
-	const html = '<meta http-equiv="refresh" content="60; url=https://example.com/new">';
+	const html =
+		'<meta http-equiv="refresh" content="60; url=https://example.com/new">';
 	assert.strictEqual(extractClientSideRedirect(html, "https://old.com"), null);
 });
 
 test("extractClientSideRedirect ignores self-redirects", () => {
-	const html = '<meta http-equiv="refresh" content="0; url=https://same.com/page">';
-	assert.strictEqual(extractClientSideRedirect(html, "https://same.com/page"), null);
+	const html =
+		'<meta http-equiv="refresh" content="0; url=https://same.com/page">';
+	assert.strictEqual(
+		extractClientSideRedirect(html, "https://same.com/page"),
+		null,
+	);
 });
 
 test("extractClientSideRedirect returns null when no meta refresh", () => {
-	assert.strictEqual(extractClientSideRedirect("<html></html>", "https://example.com"), null);
+	assert.strictEqual(
+		extractClientSideRedirect("<html></html>", "https://example.com"),
+		null,
+	);
 });
 
 test("extractClientSideRedirect skips case-insensitive http-equiv", () => {
-	const html = '<META HTTP-EQUIV="REFRESH" CONTENT="0;url=https://example.com/new">';
-	assert.strictEqual(extractClientSideRedirect(html, "https://old.com"), "https://example.com/new");
+	const html =
+		'<META HTTP-EQUIV="REFRESH" CONTENT="0;url=https://example.com/new">';
+	assert.strictEqual(
+		extractClientSideRedirect(html, "https://old.com"),
+		"https://example.com/new",
+	);
 });
 
 // ─── extractAlternateLinks ────────────────────────────────────────
@@ -809,7 +841,10 @@ test("extractAlternateLinks handles type before rel", () => {
 
 test("extractAlternateLinks ignores non-alternate links", () => {
 	const html = `<head><link rel="stylesheet" type="text/css" href="/style.css"></head>`;
-	assert.deepStrictEqual(extractAlternateLinks(html, "https://example.com"), []);
+	assert.deepStrictEqual(
+		extractAlternateLinks(html, "https://example.com"),
+		[],
+	);
 });
 
 test("extractAlternateLinks deduplicates results", () => {
@@ -830,7 +865,10 @@ test("extractAlternateLinks accepts +json subtypes", () => {
 
 test("extractAlternateLinks ignores self-referencing href", () => {
 	const html = `<head><link rel="alternate" type="application/json" href="https://example.com/current"></head>`;
-	assert.deepStrictEqual(extractAlternateLinks(html, "https://example.com/current"), []);
+	assert.deepStrictEqual(
+		extractAlternateLinks(html, "https://example.com/current"),
+		[],
+	);
 });
 
 // ─── wordCount ─────────────────────────────────────────────────────
@@ -841,4 +879,25 @@ test("wordCount counts words correctly", () => {
 	assert.strictEqual(wordCount(""), 0);
 	assert.strictEqual(wordCount("   "), 0);
 	assert.strictEqual(wordCount("single"), 1);
+});
+
+// ─── stripDefuddleComments ─────────────────────────────────────────
+
+test("stripDefuddleComments removes comment section", () => {
+	const input = "# Hello\n\nThis is content.\n\n---\n\n## Comments\n\nExtracted by Defuddle v2";
+	assert.strictEqual(stripDefuddleComments(input), "# Hello\n\nThis is content.");
+});
+
+test("stripDefuddleComments passes through clean content", () => {
+	const input = "# Hello\n\nJust normal content without comments.";
+	assert.strictEqual(stripDefuddleComments(input), input);
+});
+
+test("stripDefuddleComments handles empty input", () => {
+	assert.strictEqual(stripDefuddleComments(""), "");
+});
+
+test("stripDefuddleComments strips only the comment footer", () => {
+	const input = "Content before.\n\n---\n\n## Comments\n\nExtractor note\n\nMore text under comments";
+	assert.strictEqual(stripDefuddleComments(input), "Content before.");
 });

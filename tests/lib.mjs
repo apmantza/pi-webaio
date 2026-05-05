@@ -591,7 +591,10 @@ export function extractClientSideRedirect(html, baseUrl) {
 	const parts = m[1].split(";");
 	const delay = Number.parseFloat(parts[0].trim());
 	if (!Number.isFinite(delay) || delay < 0 || delay >= 30) return null;
-	const urlMatch = parts.slice(1).join(";").match(/url\s*=\s*(.+)/i);
+	const urlMatch = parts
+		.slice(1)
+		.join(";")
+		.match(/url\s*=\s*(.+)/i);
 	if (!urlMatch) return null;
 	const target = urlMatch[1].trim().replace(/^['"]|['"]$/g, "");
 	try {
@@ -603,7 +606,8 @@ export function extractClientSideRedirect(html, baseUrl) {
 }
 
 export function extractAlternateLinks(html, baseUrl) {
-	const snippet = (html || "").length > 10000 ? html.slice(0, 10000) : html || "";
+	const snippet =
+		(html || "").length > 10000 ? html.slice(0, 10000) : html || "";
 	const links = [];
 	const pattern =
 		/<link[^>]+rel=["']alternate["'][^>]*type=["']([^"']+)["'][^>]*href=["']([^"']+)["'][^>]*>/gi;
@@ -613,7 +617,9 @@ export function extractAlternateLinks(html, baseUrl) {
 		let match;
 		while ((match = re.exec(snippet)) !== null) {
 			const type = match[1].toLowerCase();
-			if (ACCEPTED_ALT_TYPES.some((a) => type === a || type.endsWith("+json"))) {
+			if (
+				ACCEPTED_ALT_TYPES.some((a) => type === a || type.endsWith("+json"))
+			) {
 				const href = match[2];
 				try {
 					const target = new URL(href, baseUrl).toString();
@@ -629,6 +635,10 @@ export function extractAlternateLinks(html, baseUrl) {
 
 export function wordCount(text) {
 	return (text || "").trim().split(/\s+/).filter(Boolean).length;
+}
+
+export function stripDefuddleComments(content) {
+	return (content || "").replace(/\n---\n+## Comments[\s\S]*$/i, "").trimEnd();
 }
 
 // ─── Playwright fallback (graceful, returns null if not installed) ──
