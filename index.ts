@@ -1,6 +1,14 @@
 import { execSync, spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import {
+	readFileSync,
+	readdirSync,
+	statSync,
+	openSync,
+	readSync,
+	closeSync,
+} from "node:fs";
 import { cpus, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
@@ -49,6 +57,8 @@ interface StoredContent {
 	title?: string;
 	content: string;
 	timestamp: number;
+	/** Path to persisted markdown file on disk (for lazy-load across restarts). */
+	filePath?: string;
 }
 
 // ─── Constants ───────────────────────────────────────────────────────
@@ -117,6 +127,58 @@ function isRetryableNetworkError(err: unknown): boolean {
 	);
 }
 
+// ─── Rate limiter (token bucket per domain) ────────────────────────────
+
+class TokenBucket {
+	private tokens: number;
+	private lastRefill: number;
+
+	constructor(
+		private maxTokens: number,
+		private refillRate: number,
+		private refillIntervalMs: number = 1000,
+	) {
+		this.tokens = maxTokens;
+		this.lastRefill = Date.now();
+	}
+
+	private refill(): void {
+		const now = Date.now();
+		const elapsed = now - this.lastRefill;
+		const newTokens =
+			Math.floor(elapsed / this.refillIntervalMs) * this.refillRate;
+		if (newTokens > 0) {
+			this.tokens = Math.min(this.maxTokens, this.tokens + newTokens);
+			this.lastRefill = now;
+		}
+	}
+
+	async acquire(): Promise<void> {
+		this.refill();
+		if (this.tokens < 1) {
+			const deficit = 1 - this.tokens;
+			const wait = Math.ceil(
+				(deficit / this.refillRate) * this.refillIntervalMs,
+			);
+			await new Promise((r) => setTimeout(r, wait));
+			this.refill();
+		}
+		this.tokens--;
+	}
+}
+
+const rateLimiters = new Map<string, TokenBucket>();
+
+function getRateLimiter(host: string): TokenBucket {
+	let limiter = rateLimiters.get(host);
+	if (!limiter) {
+		// 5 req/s per domain with burst of 10; webpull uses a stricter 2 req/s via its own instance
+		limiter = new TokenBucket(10, 5);
+		rateLimiters.set(host, limiter);
+	}
+	return limiter;
+}
+
 // ─── Session store ───────────────────────────────────────────────────
 
 const sessionStore = new Map<string, StoredContent>();
@@ -151,7 +213,39 @@ function getStoredContent(url: string): StoredContent | null {
 		sessionStore.delete(key);
 		return null;
 	}
+	// Lazy-load content from disk if entry has a filePath but no content loaded yet.
+	if (!entry.content && entry.filePath) {
+		try {
+			const raw = readFileSync(entry.filePath, "utf8");
+			entry.content = stripFrontmatter(raw);
+		} catch {
+			// File deleted or moved — treat as miss
+			sessionStore.delete(key);
+			return null;
+		}
+	}
 	return entry;
+}
+
+/** Strip YAML frontmatter from markdown content, returning everything after `---\n`. */
+function stripFrontmatter(raw: string): string {
+	if (!raw.startsWith("---\n")) return raw;
+	const end = raw.indexOf("\n---", 4);
+	if (end === -1) return raw;
+	return raw.slice(end + 5).trimStart();
+}
+
+/**
+ * Parse YAML frontmatter to extract the `url:` value.
+ * Returns null if no frontmatter or no url found.
+ */
+function parseFrontmatterUrl(raw: string): string | null {
+	if (!raw.startsWith("---\n")) return null;
+	const end = raw.indexOf("\n---", 4);
+	if (end === -1) return null;
+	const fm = raw.slice(4, end);
+	const m = fm.match(/^url: "([^"]+)"$/m);
+	return m ? m[1] : null;
 }
 
 function cleanupSessionCache(): void {
@@ -163,7 +257,12 @@ function cleanupSessionCache(): void {
 	}
 }
 
-function storeContent(url: string, title: string | undefined, content: string) {
+function storeContent(
+	url: string,
+	title: string | undefined,
+	content: string,
+	filePath?: string,
+) {
 	const key = normalizeCacheKey(url);
 	// Enforce max size with simple LRU (delete oldest)
 	while (sessionStore.size >= MAX_SESSION_CACHE_ENTRIES) {
@@ -174,8 +273,67 @@ function storeContent(url: string, title: string | undefined, content: string) {
 		url,
 		title,
 		content,
+		filePath,
 		timestamp: Date.now(),
 	});
+}
+
+/**
+ * Scan BASE_TEMP for all .md files with YAML frontmatter and populate the
+ * in-memory session store. Content is NOT loaded — we store only the file path
+ * and lazy-load on first access via getStoredContent().
+ */
+async function loadContentCacheFromDisk(): Promise<void> {
+	const root = BASE_TEMP;
+	let entries = 0;
+
+	function scan(dir: string): void {
+		let items: string[];
+		try {
+			items = readdirSync(dir);
+		} catch {
+			return;
+		}
+		for (const name of items) {
+			const full = join(dir, name);
+			try {
+				const st = statSync(full);
+				if (st.isDirectory()) {
+					scan(full);
+				} else if (name.endsWith(".md")) {
+					// Peek at first ~500 bytes to extract frontmatter URL without reading whole file
+					const fd = openSync(full, "r");
+					try {
+						const buf = Buffer.alloc(512);
+						const bytesRead = readSync(fd, buf, 0, 512, 0);
+						const head = buf.toString("utf8", 0, bytesRead);
+						const fmUrl = parseFrontmatterUrl(head);
+						if (fmUrl) {
+							const key = normalizeCacheKey(fmUrl);
+							if (!sessionStore.has(key)) {
+								sessionStore.set(key, {
+									url: fmUrl,
+									content: "", // lazy-load
+									filePath: full,
+									timestamp: Date.now(),
+								});
+								entries++;
+							}
+						}
+					} finally {
+						closeSync(fd);
+					}
+				}
+			} catch {
+				// Skip files we can't read
+			}
+		}
+	}
+
+	scan(root);
+	if (entries > 0) {
+		console.log(`[pi-webaio] Loaded ${entries} cached pages from disk`);
+	}
 }
 
 function storeSearchResults(query: string, results: SearchResult[]) {
@@ -602,6 +760,10 @@ async function smartFetch(
 	status: number;
 	headers: { get(name: string): string | null };
 } | null> {
+	// Rate limit — 5 req/s per domain with burst of 10
+	const rlHost = new URL(url).hostname;
+	await getRateLimiter(rlHost).acquire();
+
 	// HTTP→HTTPS auto-upgrade
 	if (url.startsWith("http://")) {
 		url = "https://" + url.slice(7);
@@ -1952,6 +2114,8 @@ async function runInBatches<T, R>(
 export default function (pi: ExtensionAPI) {
 	// Load persisted search cache on startup
 	loadSearchCacheFromDisk().catch(() => {});
+	// Load persisted content cache from disk (lazy — contents loaded on first access)
+	loadContentCacheFromDisk().catch(() => {});
 
 	// Start session cache cleanup
 	setInterval(cleanupSessionCache, SESSION_CACHE_CLEANUP_MS);
