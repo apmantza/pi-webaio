@@ -16,7 +16,7 @@ import { Readability } from "@mozilla/readability";
 import { Defuddle } from "defuddle/node";
 import { parseHTML } from "linkedom";
 import { Type } from "typebox";
-import { fetch as wreqFetch } from "wreq-js";
+import { fetch as wreqFetch, getProfiles as wreqGetProfiles } from "wreq-js";
 import {
 	ensureChrome,
 	googleSearch,
@@ -38,14 +38,45 @@ interface Page {
 	markdown: string;
 }
 
+interface FetchErrorInfo {
+	/** Human-readable error description. */
+	message: string;
+	/** Machine-readable error code for programmatic handling. */
+	code?:
+		| "invalid_url"
+		| "http_error"
+		| "timeout"
+		| "network_error"
+		| "no_content"
+		| "blocked"
+		| "processing_error"
+		| "download_error"
+		| "too_many_redirects"
+		| "unknown";
+	/** Phase of the fetch lifecycle where the error occurred. */
+	phase?: "validation" | "connecting" | "waiting" | "loading" | "processing";
+	/** Whether retrying the request may help. */
+	retryable?: boolean;
+	/** HTTP status code, if applicable. */
+	statusCode?: number;
+}
+
 interface PullResult {
 	ok: boolean;
 	url: string;
 	title?: string;
 	content?: string;
 	error?: string;
+	errorInfo?: FetchErrorInfo;
 	/** Path to downloaded binary file (set for non-text downloads). */
 	filePath?: string;
+	// Rich metadata extracted from the page
+	author?: string;
+	published?: string;
+	site?: string;
+	language?: string;
+	description?: string;
+	wordCount?: number;
 }
 
 interface FetchOpts {
@@ -86,6 +117,36 @@ const MAX_PREVIEW_CHARS = 1800; // ~500 tokens for tool result preview
 
 const DEFAULT_BROWSER = "chrome_145";
 const DEFAULT_OS = "windows";
+
+/**
+ * Discover the latest Chrome TLS profile available from wreq-js.
+ * Falls back to DEFAULT_BROWSER if wreq-js profiles are unavailable.
+ */
+let _latestChrome: string | null = null;
+function getLatestChromeProfile(): string {
+	if (!_latestChrome) {
+		try {
+			const profiles = wreqGetProfiles();
+			const chromes = profiles.filter((p: string) => p.startsWith("chrome_"));
+			if (chromes.length > 0) {
+				chromes.sort();
+				_latestChrome = chromes[chromes.length - 1];
+			}
+		} catch {
+			// wreq-js not ready yet
+		}
+	}
+	return _latestChrome ?? DEFAULT_BROWSER;
+}
+
+/**
+ * Strip Defuddle extractor footer comments from markdown content.
+ * Removes everything after the last `---` divider when it's followed by
+ * a ## Comments or similar extractor metadata section.
+ */
+function stripDefuddleComments(content: string): string {
+	return content.replace(/\n---\n+## Comments[\s\S]*$/i, "").trimEnd();
+}
 
 const BASE_TEMP = join(tmpdir(), "pi-webaio");
 const SEARCH_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
@@ -265,6 +326,7 @@ function storeContent(
 	title: string | undefined,
 	content: string,
 	filePath?: string,
+	metadata?: { author?: string; published?: string; site?: string; language?: string; wordCount?: number },
 ) {
 	const key = normalizeCacheKey(url);
 	// Enforce max size with simple LRU (delete oldest)
@@ -278,6 +340,7 @@ function storeContent(
 		content,
 		filePath,
 		timestamp: Date.now(),
+		...(metadata ? { author: metadata.author, published: metadata.published, site: metadata.site, language: metadata.language, wordCount: metadata.wordCount } : {}),
 	});
 }
 
@@ -682,7 +745,7 @@ async function fetchWithRetry(
 			if (isLocalOrPrivateUrl(url)) {
 				res = await fetch(url, { redirect: "follow", headers });
 			} else {
-				const browser = (options.browser as any) ?? DEFAULT_BROWSER;
+				const browser = (options.browser as any) ?? getLatestChromeProfile();
 				const os = (options.os as any) ?? DEFAULT_OS;
 				res = await wreqFetch(url, {
 					redirect: "follow",
@@ -2173,7 +2236,7 @@ async function pullPage(
 			return finalizePullResult(dl, redirectNotice);
 		}
 	} else if (!binPeek) {
-		return { ok: false, url, error: "Request failed" };
+		return { ok: false, url, error: "Request failed", errorInfo: { message: "Request failed", code: "network_error", phase: "connecting", retryable: true } };
 	}
 
 	// ── 3. Standard text fetch ──
@@ -2185,8 +2248,21 @@ async function pullPage(
 			...opts?.headers,
 		},
 	});
-	if (!res) return { ok: false, url, error: "Request failed" };
-	if (res.status >= 400) return { ok: false, url, error: `HTTP ${res.status}` };
+	if (!res) return { ok: false, url, error: "Request failed", errorInfo: { message: "Request failed", code: "network_error", phase: "loading", retryable: true } };
+	if (res.status >= 400) {
+		return {
+			ok: false,
+			url,
+			error: `HTTP ${res.status}`,
+			errorInfo: {
+				message: `Server responded with HTTP ${res.status}`,
+				code: "http_error",
+				phase: "loading",
+				retryable: res.status >= 500 || res.status === 429,
+				statusCode: res.status,
+			},
+		};
+	}
 
 	const text = res.text;
 	const finalUrl = res.url;
@@ -2310,7 +2386,9 @@ async function pullPage(
 			Defuddle(cleaned, finalUrl, { markdown: true }),
 			DEFUDDLE_TIMEOUT,
 		);
-		const defContent = result.content || "";
+		let defContent = result.content || "";
+		// Strip Defuddle extractor footer comments
+		defContent = stripDefuddleComments(defContent);
 		// If Defuddle produced thin content, try alternate links
 		if (wordCount(defContent) < MIN_ALTERNATE_FALLBACK_WORDS) {
 			const alt = await tryAlternateLinks(text, finalUrl, opts);
@@ -2322,6 +2400,11 @@ async function pullPage(
 				url: finalUrl,
 				title: result.title || "",
 				content: defContent,
+				author: result.author || undefined,
+				published: result.published || undefined,
+				site: result.site || undefined,
+				language: result.language || undefined,
+				wordCount: result.wordCount || undefined,
 			},
 			redirectNotice,
 		);
@@ -2341,8 +2424,19 @@ async function pullPage(
 
 // ─── Write ──────────────────────────────────────────────────────────
 
-function frontmatter(title: string, url: string): string {
-	return `---\ntitle: "${title.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"\nurl: "${url}"\n---\n\n`;
+function frontmatter(
+	title: string,
+	url: string,
+	metadata?: { author?: string; published?: string; site?: string; language?: string; wordCount?: number },
+): string {
+	let fm = `---\ntitle: "${title.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"\nurl: "${url}"`;
+	if (metadata?.author) fm += `\nauthor: "${metadata.author.replace(/"/g, '\\"')}"`;
+	if (metadata?.published) fm += `\npublished: "${metadata.published}"`;
+	if (metadata?.site) fm += `\nsite: "${metadata.site.replace(/"/g, '\\"')}"`;
+	if (metadata?.language) fm += `\nlanguage: "${metadata.language}"`;
+	if (metadata?.wordCount) fm += `\nword_count: ${metadata.wordCount}`;
+	fm += "\n---\n\n";
+	return fm;
 }
 
 function pageToPath(page: Page): string {
@@ -2447,7 +2541,7 @@ export default function (pi: ExtensionAPI) {
 				throw new Error("Provide either 'url' or 'urls'");
 			}
 
-			const browser = (params.browser as string) ?? DEFAULT_BROWSER;
+			const browser = (params.browser as string) ?? getLatestChromeProfile();
 			const os = (params.os as string) ?? DEFAULT_OS;
 			const proxy = params.proxy as string | undefined;
 
@@ -2489,13 +2583,24 @@ export default function (pi: ExtensionAPI) {
 					}
 
 					const markdown =
-						frontmatter(result.title || url.pathname, result.url!) +
-						(result.content ?? "");
+						frontmatter(result.title || url.pathname, result.url!, {
+							author: result.author,
+							published: result.published,
+							site: result.site,
+							language: result.language,
+							wordCount: result.wordCount,
+						}) + (result.content ?? "");
 
 					await mkdir(dirname(outPath), { recursive: true });
 					await writeFile(outPath, markdown, "utf8");
 
-					storeContent(result.url!, result.title, markdown);
+					storeContent(result.url!, result.title, markdown, undefined, {
+						author: result.author,
+						published: result.published,
+						site: result.site,
+						language: result.language,
+						wordCount: result.wordCount,
+					});
 
 					return {
 						ok: true,
@@ -2875,7 +2980,7 @@ export default function (pi: ExtensionAPI) {
 				: join(BASE_TEMP, url.hostname);
 			const max = params.max ?? 100;
 			const concurrency = Math.max(4, cpus().length * 2);
-			const browser = (params.browser as string) ?? DEFAULT_BROWSER;
+			const browser = (params.browser as string) ?? getLatestChromeProfile();
 			const os = (params.os as string) ?? DEFAULT_OS;
 			const proxy = params.proxy as string | undefined;
 			const fetchOpts: FetchOpts = { browser, os, proxy };
@@ -2922,15 +3027,26 @@ export default function (pi: ExtensionAPI) {
 					url: result.url!,
 					title: result.title || new URL(result.url!).pathname,
 					markdown:
-						frontmatter(result.title || "", result.url!) +
-						(result.content ?? ""),
+						frontmatter(result.title || "", result.url!, {
+							author: result.author,
+							published: result.published,
+							site: result.site,
+							language: result.language,
+							wordCount: result.wordCount,
+						}) + (result.content ?? ""),
 				};
 
 				const rel = await writePage(page, outDir);
 				files.push(rel);
 				ok++;
 
-				storeContent(result.url!, result.title, page.markdown);
+				storeContent(result.url!, result.title, page.markdown, undefined, {
+					author: result.author,
+					published: result.published,
+					site: result.site,
+					language: result.language,
+					wordCount: result.wordCount,
+				});
 
 				if ((i + 1) % 10 === 0 || i === urls.length - 1) {
 					onUpdate?.({
