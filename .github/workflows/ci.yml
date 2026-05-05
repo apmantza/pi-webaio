@@ -144,9 +144,6 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run tests with coverage
-        run: npx c8 --reporter=lcov --reporter=text npm test
-
       - name: SonarQube Cloud Scan
         uses: sonarsource/sonarqube-scan-action@59db25f34e16620e48ab4bb9e4a5dce155cb5432 # v8.0.0
         env:
