@@ -52,6 +52,7 @@ interface FetchOpts {
 	browser?: string;
 	os?: string;
 	headers?: Record<string, string>;
+	proxy?: string;
 }
 
 interface StoredContent {
@@ -688,6 +689,7 @@ async function fetchWithRetry(
 					headers,
 					browser,
 					os,
+					...(options.proxy ? { proxy: options.proxy } : {}),
 				});
 			}
 
@@ -807,6 +809,7 @@ async function smartFetch(
 				headers,
 				browser: fb as any,
 				os: (options.os as any) ?? DEFAULT_OS,
+				...(options.proxy ? { proxy: options.proxy } : {}),
 			});
 			if (fbRes?.ok) {
 				const fbText = await fbRes.text();
@@ -2430,6 +2433,12 @@ export default function (pi: ExtensionAPI) {
 					description: `OS profile for fingerprinting. Default: "${DEFAULT_OS}"`,
 				}),
 			),
+			proxy: Type.Optional(
+				Type.String({
+					description:
+						"Proxy URL (e.g. http://user:pass@host:port or socks5://host:port)",
+				}),
+			),
 		}) as any,
 
 		async execute(_toolCallId: string, params: any): Promise<any> {
@@ -2440,6 +2449,7 @@ export default function (pi: ExtensionAPI) {
 
 			const browser = (params.browser as string) ?? DEFAULT_BROWSER;
 			const os = (params.os as string) ?? DEFAULT_OS;
+			const proxy = params.proxy as string | undefined;
 
 			const results = await runInBatches(
 				targets,
@@ -2469,7 +2479,7 @@ export default function (pi: ExtensionAPI) {
 					}
 					const outPath = resolve(outFile);
 
-					const result = await pullPage(url.href, { browser, os });
+					const result = await pullPage(url.href, { browser, os, proxy });
 					if (!result.ok) {
 						return {
 							ok: false,
@@ -2559,6 +2569,7 @@ export default function (pi: ExtensionAPI) {
 						url: r.url,
 						browser,
 						os,
+						proxy,
 						truncated: !summarized && !isShort,
 						summarized,
 						fullLength: preview.length,
@@ -2840,6 +2851,12 @@ export default function (pi: ExtensionAPI) {
 					description: `OS profile for fingerprinting. Default: "${DEFAULT_OS}". Options: windows, macos, linux, android, ios`,
 				}),
 			),
+			proxy: Type.Optional(
+				Type.String({
+					description:
+						"Proxy URL (e.g. http://user:pass@host:port or socks5://host:port)",
+				}),
+			),
 		}) as any,
 
 		async execute(_toolCallId, params, signal, onUpdate) {
@@ -2860,7 +2877,8 @@ export default function (pi: ExtensionAPI) {
 			const concurrency = Math.max(4, cpus().length * 2);
 			const browser = (params.browser as string) ?? DEFAULT_BROWSER;
 			const os = (params.os as string) ?? DEFAULT_OS;
-			const fetchOpts: FetchOpts = { browser, os };
+			const proxy = params.proxy as string | undefined;
+			const fetchOpts: FetchOpts = { browser, os, proxy };
 
 			onUpdate?.({
 				content: [
@@ -2960,6 +2978,7 @@ export default function (pi: ExtensionAPI) {
 					errors,
 					browser,
 					os,
+					proxy,
 				},
 			};
 		},
