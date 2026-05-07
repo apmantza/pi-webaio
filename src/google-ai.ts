@@ -363,7 +363,11 @@ export function summarizeUrl(
 		const extractorBin = resolvePath("extractors", "google-ai.mjs");
 
 		if (!existsSync(extractorBin)) {
-			reject(new Error("Google AI extractor not found (extractors/google-ai.mjs is missing). AI summarization unavailable."));
+			reject(
+				new Error(
+					"Google AI extractor not found (extractors/google-ai.mjs is missing). AI summarization unavailable.",
+				),
+			);
 			return;
 		}
 

@@ -910,8 +910,8 @@ async function fetchWithPlaywright(url: string): Promise<string | null> {
 		if (!_pwWarned) {
 			console.warn(
 				"[pi-webaio] Playwright not found — JS-rendered page fallback is unavailable. " +
-				"Install it with: npm install playwright (optional dependency for " +
-				"rendering JavaScript-heavy pages that wreq-js cannot handle)",
+					"Install it with: npm install playwright (optional dependency for " +
+					"rendering JavaScript-heavy pages that wreq-js cannot handle)",
 			);
 			_pwWarned = true;
 		}

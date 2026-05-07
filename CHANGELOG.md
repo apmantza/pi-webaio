@@ -40,6 +40,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Pi scope migration** — Updated imports from `@mariozechner/pi-coding-agent` to `@earendil-works/pi-coding-agent` to match pi 0.74.0 package scope. Peer dependency updated, lockfile regenerated.
+- **Streaming webpull** — `aio-webpull` now streams each page via `onUpdate` as it completes (file path, title, URL, word count). Agent can inspect pages while the pull continues instead of waiting for the entire crawl.
+- **Clearer Chrome CDP errors** — Replaced cryptic "CDP launcher not found" and "google-ai.mjs not found" messages with actionable descriptions explaining which features are affected.
+- **Persistent search context** — Search→fetch context bridging now uses the session store instead of a global variable. Survives compaction, branching, and session restarts.
+- **Improved TypeScript types** — Expanded `types/pi-coding-agent.d.ts` from a bare `registerTool` stub to include `registerCommand`, `registerShortcut`, and `on()` — more accurately reflecting the real `@earendil-works/pi-coding-agent` API.
+
+### Added
+
+- **Playwright runtime warning** — One-time `console.warn` when Playwright is not installed, with install instructions. No more silent fail for JS-rendered page fallback.
+- **`AGENTS.md`** — Full project context document covering architecture, tool descriptions, extraction pipeline, security features, caching, rate limiting, and test setup for future agents.
+
 ## [0.1.8] - 2026-05-02
 
 ### Fixed
