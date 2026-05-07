@@ -63,7 +63,7 @@
     "wreq-js": "^2.3.0"
   },
   "peerDependencies": {
-    "@mariozechner/pi-coding-agent": "*",
+    "@earendil-works/pi-coding-agent": "*",
     "typebox": "*"
   },
   "optionalDependencies": {
