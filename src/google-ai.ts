@@ -66,7 +66,7 @@ export function ensureChrome(headless = true): Promise<ChromeStatus> {
 		if (!existsSync(launchBin)) {
 			reject(
 				new Error(
-					"CDP launcher not found. Make sure bin/launch.mjs is installed.",
+					"Chrome CDP launcher not found (bin/launch.mjs is missing). AI summarization and Google search are unavailable without the CDP infrastructure.",
 				),
 			);
 			return;
@@ -186,7 +186,7 @@ export function googleAISearch(
 		if (!existsSync(extractorBin)) {
 			reject(
 				new Error(
-					"google-ai.mjs not found. Make sure extractors/google-ai.mjs is installed.",
+					"Google AI extractor not found (extractors/google-ai.mjs is missing). AI summarization unavailable without this file.",
 				),
 			);
 			return;
@@ -278,7 +278,7 @@ export function googleSearch(
 		if (!existsSync(extractorBin)) {
 			reject(
 				new Error(
-					"google-search.mjs not found. Make sure extractors/google-search.mjs is installed.",
+					"Google search extractor not found (extractors/google-search.mjs is missing). Google search unavailable without this file.",
 				),
 			);
 			return;
@@ -363,7 +363,7 @@ export function summarizeUrl(
 		const extractorBin = resolvePath("extractors", "google-ai.mjs");
 
 		if (!existsSync(extractorBin)) {
-			reject(new Error("google-ai.mjs not found."));
+			reject(new Error("Google AI extractor not found (extractors/google-ai.mjs is missing). AI summarization unavailable."));
 			return;
 		}
 

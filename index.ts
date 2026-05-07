@@ -206,7 +206,32 @@ const SEARCH_CACHE_FILE = join(BASE_TEMP, "search-cache.json");
 // Search context bridging: when webfetch follows a websearch, include the original query
 // in the AI summarization prompt for more focused summaries
 const SEARCH_CONTEXT_TTL_MS = 5 * 60 * 1000; // 5 minutes
-let lastSearchContext: { query: string; timestamp: number } | null = null;
+const SEARCH_CONTEXT_KEY = "__webaio_search_context__";
+
+function getSearchContext(): { query: string } | null {
+	const entry = sessionStore.get(SEARCH_CONTEXT_KEY);
+	if (!entry) return null;
+	if (Date.now() - entry.timestamp > SEARCH_CONTEXT_TTL_MS) {
+		sessionStore.delete(SEARCH_CONTEXT_KEY);
+		return null;
+	}
+	try {
+		return JSON.parse(entry.content);
+	} catch {
+		return null;
+	}
+}
+
+function setSearchContext(query: string): void {
+	// Use delete + set to move to end (LRU-friendly)
+	sessionStore.delete(SEARCH_CONTEXT_KEY);
+	sessionStore.set(SEARCH_CONTEXT_KEY, {
+		url: SEARCH_CONTEXT_KEY,
+		title: "search context",
+		content: JSON.stringify({ query }),
+		timestamp: Date.now(),
+	});
+}
 
 // Bot protection markers
 const BOT_PROTECTION_MARKERS = [
@@ -858,6 +883,8 @@ function normalizeFetchedUrl(url: string): string {
 
 // ─── Playwright fallback (JS-rendered pages) ───────────────────────
 
+let _pwWarned = false;
+
 async function fetchWithPlaywright(url: string): Promise<string | null> {
 	try {
 		const { chromium } = await import("playwright");
@@ -879,7 +906,15 @@ async function fetchWithPlaywright(url: string): Promise<string | null> {
 			} catch {}
 		}
 	} catch {
-		// Playwright not installed — skip gracefully
+		// Playwright not installed — emit one-time warning
+		if (!_pwWarned) {
+			console.warn(
+				"[pi-webaio] Playwright not found — JS-rendered page fallback is unavailable. " +
+				"Install it with: npm install playwright (optional dependency for " +
+				"rendering JavaScript-heavy pages that wreq-js cannot handle)",
+			);
+			_pwWarned = true;
+		}
 	}
 	return null;
 }
@@ -2937,11 +2972,7 @@ export default function (pi: ExtensionAPI) {
 					preview.includes("> via gh api") ||
 					preview.includes("> via SonarCloud API");
 
-				const searchCtx =
-					lastSearchContext &&
-					Date.now() - lastSearchContext.timestamp < SEARCH_CONTEXT_TTL_MS
-						? lastSearchContext.query
-						: undefined;
+				const searchCtx = getSearchContext()?.query;
 
 				if (!skipSummary && cdpAvailableGA()) {
 					try {
@@ -3101,7 +3132,7 @@ export default function (pi: ExtensionAPI) {
 
 		async execute(_toolCallId, params) {
 			const query = params.query;
-			lastSearchContext = { query, timestamp: Date.now() };
+			setSearchContext(query);
 			const max = params.max ?? 10;
 			const useGoogle = params.google ?? true;
 
@@ -3329,7 +3360,7 @@ export default function (pi: ExtensionAPI) {
 			const files: string[] = [];
 			const errors: string[] = [];
 
-			await runInBatches(urls, concurrency, async (pageUrl, i) => {
+			await runInBatches(urls, concurrency, async (pageUrl, _i) => {
 				if (signal?.aborted) return;
 
 				const result = await pullPage(pageUrl, fetchOpts);
@@ -3364,22 +3395,25 @@ export default function (pi: ExtensionAPI) {
 					wordCount: result.wordCount,
 				});
 
-				if ((i + 1) % 10 === 0 || i === urls.length - 1) {
-					onUpdate?.({
-						content: [
-							{
-								type: "text",
-								text: `⏳ ${ok + err}/${urls.length} pages processed (${ok} ok, ${err} err)...`,
-							},
-						],
-						details: {
-							stage: "progress",
-							ok,
-							err,
-							total: urls.length,
+				// Stream each page as it completes so the agent can inspect pages while pull continues
+				onUpdate?.({
+					content: [
+						{
+							type: "text",
+							text: `⏳ ${ok + err}/${urls.length} pages processed — pulled ${result.title || page.url} → ${rel}`,
 						},
-					});
-				}
+					],
+					details: {
+						stage: "stream",
+						ok,
+						err,
+						total: urls.length,
+						file: rel,
+						title: result.title,
+						url: result.url,
+						wordCount: result.wordCount,
+					},
+				});
 			});
 
 			const summary = [
