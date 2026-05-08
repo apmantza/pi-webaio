@@ -33,6 +33,13 @@ import {
 	runVerticalExtractor,
 	findVerticalExtractor,
 } from "./src/verticals/registry.js";
+import { compressHtml } from "./src/html-compress.js";
+import { estimateTokens } from "./src/token-count.js";
+import {
+	extractInteractables,
+	formatInteractablesSection,
+} from "./src/interactive-elements.js";
+import { pruneMarkdown } from "./src/prune-markdown.js";
 
 // ─── pdf-parse loose typing (CJS, no bundled .d.ts) ────────────────
 
@@ -87,6 +94,8 @@ interface PullResult {
 	language?: string;
 	description?: string;
 	wordCount?: number;
+	/** Raw HTML before extraction */
+	rawHtml?: string;
 }
 
 type ScrapeMode = "fast" | "fingerprint" | "browser" | "auto";
@@ -97,6 +106,8 @@ interface FetchOpts {
 	headers?: Record<string, string>;
 	proxy?: string;
 	mode?: ScrapeMode;
+	interactive?: boolean;
+	pruneTokens?: number;
 }
 
 /** Elements to remove before extraction — navigation, scaffolding, embeds. */
@@ -2998,9 +3009,10 @@ async function pullPage(
 	}
 
 	// ── 8. HTML content pipeline ──
-	// Pre-clean: remove noise elements (nav, footer, header, etc.) via DOM,
-	// then strip script/style tags via regex. Preserves structural HTML for Readability.
-	const cleaned = preCleanHtml(text);
+	// Pre-clean: remove noise elements, strip script/style tags. Then compress HTML.
+	let cleaned = preCleanHtml(text);
+	cleaned = compressHtml(cleaned);
+	const rawHtml = text;
 
 	// Try Jina AI for public URLs
 	if (!(await isDangerousUrl(url))) {
@@ -3038,6 +3050,7 @@ async function pullPage(
 					url: finalUrl,
 					title: readability.title,
 					content: readability.content,
+					rawHtml,
 				},
 				redirectNotice,
 			);
@@ -3095,7 +3108,7 @@ async function pullPage(
 			if (alt) return finalizePullResult(alt, redirectNotice);
 		}
 		return finalizePullResult(
-			{ ok: true, url: finalUrl, title, content },
+			{ ok: true, url: finalUrl, title, content, rawHtml },
 			redirectNotice,
 		);
 	}
@@ -3371,6 +3384,16 @@ export default function (pi: ExtensionAPI) {
 					description: "Compile batch results into a single context package.",
 				}),
 			),
+			prune: Type.Optional(
+				Type.Number({
+					description: "Prune markdown to token budget (e.g. 3000).",
+				}),
+			),
+			interactive: Type.Optional(
+				Type.Boolean({
+					description: "Extract interactive elements as numbered refs.",
+				}),
+			),
 		}) as any,
 
 		async execute(_toolCallId: string, params: any): Promise<any> {
@@ -3412,6 +3435,8 @@ export default function (pi: ExtensionAPI) {
 					const outPath = resolve(outFile);
 
 					const mode = (params.mode as ScrapeMode) ?? "auto";
+					const interactive = params.interactive === true;
+					const pruneTokens = params.prune as number | undefined;
 					const result = await pullPageEnhanced(url.href, {
 						browser,
 						os,
@@ -3426,6 +3451,24 @@ export default function (pi: ExtensionAPI) {
 						};
 					}
 
+					// Post-processing: interactive extraction + token pruning
+					let contentBody = result.content ?? "";
+
+					if (interactive && result.rawHtml) {
+						const interactables = extractInteractables(result.rawHtml);
+						const actionsSection = formatInteractablesSection(interactables);
+						if (actionsSection) {
+							contentBody = actionsSection + "\n" + contentBody;
+						}
+					}
+
+					const tokenCount = estimateTokens(contentBody);
+
+					if (pruneTokens && pruneTokens > 0 && tokenCount > pruneTokens) {
+						const pruned = pruneMarkdown(contentBody, pruneTokens);
+						contentBody = pruned.content;
+					}
+
 					const markdown =
 						frontmatter(result.title || url.pathname, result.url!, {
 							author: result.author,
@@ -3433,7 +3476,7 @@ export default function (pi: ExtensionAPI) {
 							site: result.site,
 							language: result.language,
 							wordCount: result.wordCount,
-						}) + (result.content ?? "");
+						}) + contentBody;
 
 					await mkdir(dirname(outPath), { recursive: true });
 					await writeFile(outPath, markdown, "utf8");
