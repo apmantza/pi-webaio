@@ -1,6 +1,7 @@
 // extractors/common.mjs — shared utilities for CDP-based extractors
 // Extracts common patterns: cdp wrapper, tab management, clipboard interception, source parsing
 
+import { randomInt } from "node:crypto";
 import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,7 +21,7 @@ const CDP = join(__dir, "..", "bin", "cdp.mjs");
  */
 export function cdp(args, timeoutMs = 30000) {
 	return new Promise((resolve, reject) => {
-		const proc = spawn("node", [CDP, ...args], {
+		const proc = spawn(process.execPath, [CDP, ...args], {
 			stdio: ["ignore", "pipe", "pipe"],
 		});
 		let out = "";
@@ -235,10 +236,7 @@ export async function injectHeadlessStealth(tab) {
  * @returns {Array<{title: string, url: string}>} Extracted sources
  */
 export function parseSourcesFromMarkdown(text) {
-	// Bound repetitions to prevent any theoretical ReDoS; URLs longer than 2000 chars are unlikely
-	return Array.from(
-		text.matchAll(/\[([^\]]{1,500})\]\((https?:\/\/[^\s)]{1,2000})\)/g),
-	)
+	return Array.from(text.matchAll(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g))
 		.map((m) => ({ title: m[1], url: m[2] }))
 		.filter((v, i, arr) => arr.findIndex((x) => x.url === v.url) === i)
 		.slice(0, 10);
@@ -301,7 +299,9 @@ export async function waitForCopyButton(tab, selector, options = {}) {
  * @returns {number} Jittered interval
  */
 export function jitter(ms) {
-	return Math.max(50, ms + (Math.random() * ms * 0.4 - ms * 0.2));
+	const variance = ms * 0.4;
+	const offset = randomInt(-Math.floor(variance), Math.floor(variance) + 1);
+	return Math.max(50, Math.round(ms + offset));
 }
 
 // ============================================================================
@@ -508,8 +508,7 @@ export function validateQuery(args, usage) {
  */
 export function formatAnswer(answer, short, maxLen = 300) {
 	if (!short || answer.length <= maxLen) return answer;
-	// Bound \S* to 200 chars to satisfy SonarCloud S5852; maxLen caps input length
-	return `${answer.slice(0, maxLen).replace(/\s+\S{0,200}$/, "")}…`;
+	return `${answer.slice(0, maxLen).replace(/\s+\S*$/, "")}…`;
 }
 
 /**
