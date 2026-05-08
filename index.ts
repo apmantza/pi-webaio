@@ -1,4 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
+import { lookup as dnsLookup } from "node:dns/promises";
 import { createRequire } from "node:module";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import {
@@ -9,6 +10,7 @@ import {
 	readSync,
 	closeSync,
 } from "node:fs";
+import { isIP } from "node:net";
 import { cpus, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -23,6 +25,14 @@ import {
 	summarizeUrl,
 	cdpAvailable as cdpAvailableGA,
 } from "./src/google-ai.js";
+import { detectBotBlock } from "./src/bot-detection.js";
+import { extractDataIslands } from "./src/data-islands.js";
+import { storeResult, getResult, listResults } from "./src/storage.js";
+import { compileContextPackage } from "./src/context-package.js";
+import {
+	runVerticalExtractor,
+	findVerticalExtractor,
+} from "./src/verticals/registry.js";
 
 // ─── pdf-parse loose typing (CJS, no bundled .d.ts) ────────────────
 
@@ -79,30 +89,58 @@ interface PullResult {
 	wordCount?: number;
 }
 
+type ScrapeMode = "fast" | "fingerprint" | "browser" | "auto";
+
 interface FetchOpts {
 	browser?: string;
 	os?: string;
 	headers?: Record<string, string>;
 	proxy?: string;
+	mode?: ScrapeMode;
+}
+
+/** Elements to remove before extraction — navigation, scaffolding, embeds. */
+const NOISE_SELECTORS = [
+	"nav",
+	"footer",
+	"header",
+	"svg",
+	"canvas",
+	"iframe",
+	"form",
+	"[aria-hidden='true']",
+	"[hidden]",
+	"[role='navigation']",
+	"[role='banner']",
+	"[role='contentinfo']",
+].join(",");
+
+/**
+ * Pre-clean HTML with linkedom: remove noise elements (nav, footer, header, etc.)
+ * before feeding into Readability or Defuddle. Significantly improves extraction
+ * quality by stripping scaffolding that looks like content to heuristics.
+ */
+function preCleanHtml(html: string): string {
+	try {
+		const { document } = parseHTML(html);
+		document.querySelectorAll(NOISE_SELECTORS).forEach((el) => el.remove());
+		return document.documentElement.outerHTML;
+	} catch {
+		return html; // fallback: passthrough on parse failure
+	}
 }
 
 /**
- * Strip HTML tags from text using a repeated-pass approach to satisfy
- * CodeQL's js/incomplete-multi-character-sanitization (S5852).
- * Multi-character .replace() patterns can leave remnants that re-form
- * into the target string; looping until stable guarantees completeness.
+ * Normalize whitespace: collapse runs of spaces (but preserve newlines),
+ * strip carriage returns, collapse 3+ newlines to 2.
  */
-function stripHtmlTags(text: string): string {
-	let prev: string;
-	do {
-		prev = text;
-		text = text
-			.replace(/<script\b[^>]{0,5000}>[\s\S]*?<\/script[^>]{0,5000}>/gi, "")
-			.replace(/<style\b[^>]{0,5000}>[\s\S]*?<\/style[^>]{0,5000}>/gi, "")
-			.replace(/<![^>]{0,5000}-->/g, "")
-			.replace(/<[^>]{0,5000}>/g, "");
-	} while (text !== prev);
-	return text.replace(/<|>/g, "");
+function cleanText(value: string): string {
+	return value
+		.replace(/\r/g, "")
+		.replace(/[^\S\n]+/g, " ")
+		.replace(/ *\n */g, "\n")
+		.replace(/\n{3,}/g, "\n\n")
+		.trim();
 }
 
 /**
@@ -340,7 +378,9 @@ function normalizeCacheKey(url: string): string {
 		if (u.pathname === "/" && url.endsWith("/")) {
 			return url.slice(0, -1);
 		}
-	} catch {}
+	} catch {
+		/* ignore */
+	}
 	return url;
 }
 
@@ -537,21 +577,133 @@ function getCachedSearch(query: string): SearchResult[] | null {
 
 // ─── Local / private URL detection ─────────────────────────────────
 
-function isLocalOrPrivateUrl(url: string): boolean {
+/** Blocked metadata/magic hostnames — cloud provider instance metadata endpoints. */
+const BLOCKED_HOSTS = new Set([
+	"localhost",
+	"ip6-localhost",
+	"0.0.0.0",
+	"metadata.google.internal",
+	"169.254.169.254",
+]);
+
+/**
+ * Validate an IP is in a private/internal/loopback range.
+ * Covers all RFC 1918, RFC 6598 (CGN), RFC 3927 (link-local),
+ * loopback (127.x, ::1), unique local IPv6 (fc00::/7, fd00::/8),
+ * and link-local IPv6 (fe80::/10).
+ */
+function isPrivateIp(ip: string): boolean {
+	const version = isIP(ip);
+	if (version === 4) return isPrivateIPv4(ip);
+	if (version === 6) return isPrivateIPv6(ip);
+	return true; // unparseable = treat as dangerous
+}
+
+function isPrivateIPv4(ip: string): boolean {
+	const parts = ip.split(".").map((x) => Number(x));
+	if (parts.length !== 4 || parts.some((x) => Number.isNaN(x))) return true;
+	const [a, b] = parts as [number, number];
+	return (
+		a === 10 || // RFC 1918
+		a === 127 || // loopback
+		(a === 172 && b >= 16 && b <= 31) || // RFC 1918
+		(a === 192 && b === 168) || // RFC 1918
+		(a === 169 && b === 254) || // link-local
+		(a === 100 && b >= 64 && b <= 127) || // CGN (RFC 6598)
+		a === 0 // "this" network
+	);
+}
+
+function isPrivateIPv6(ip: string): boolean {
+	const n = ip.toLowerCase();
+	// Loopback, unspecified
+	if (n === "::1" || n === "::") return true;
+	// Unique local (fc00::/7, fd00::/8) and link-local (fe80::/10)
+	if (n.startsWith("fc") || n.startsWith("fd") || n.startsWith("fe80"))
+		return true;
+
+	// ::ffff:x.x.x.x IPv4-mapped — extract embedded v4 and check it
+	const v4Mapped = n.match(/^::ffff:([\d.]+)$/);
+	if (v4Mapped) return isPrivateIPv4(v4Mapped[1]!);
+
+	// ::/96 IPv4-compatible (deprecated but still supported)
+	const v4Compat = n.match(/^::([\d.]+)$/);
+	if (v4Compat) return isPrivateIPv4(v4Compat[1]!);
+
+	// 6to4 (2002::/16) — embedded IPv4 in bytes 2-5 of the hex groups.
+	// 2002:VVXX:YYZZ:: → extract VV.XX.YY.ZZ as an IPv4 address.
+	const sixTo4 = n.match(
+		/^2002:([0-9a-f]{2})([0-9a-f]{2}):([0-9a-f]{2})([0-9a-f]{2})/i,
+	);
+	if (sixTo4) {
+		const v4 = [
+			parseInt(sixTo4[1]!, 16),
+			parseInt(sixTo4[2]!, 16),
+			parseInt(sixTo4[3]!, 16),
+			parseInt(sixTo4[4]!, 16),
+		].join(".");
+		return isPrivateIPv4(v4);
+	}
+
+	// Teredo (2001:0::/32) — client v4 XOR'd with 0xff in last 32 bits.
+	// 2001:0000:XXXX:XXXX:XXXX:XXXX:VVXX:YYZZ → XOR VV.XX.YY.ZZ with 255.
+	const teredo = n.match(
+		/^2001:0(?:000)?:.*?:([0-9a-f]{2})([0-9a-f]{2}):([0-9a-f]{2})([0-9a-f]{2})$/i,
+	);
+	if (teredo) {
+		const v4 = [
+			parseInt(teredo[1]!, 16) ^ 0xff,
+			parseInt(teredo[2]!, 16) ^ 0xff,
+			parseInt(teredo[3]!, 16) ^ 0xff,
+			parseInt(teredo[4]!, 16) ^ 0xff,
+		].join(".");
+		return isPrivateIPv4(v4);
+	}
+
+	return false;
+}
+
+/**
+ * Deep SSRF check: resolves DNS and validates ALL returned IPs
+ * against private/loopback/link-local ranges. Also blocks known
+ * metadata endpoints and cloud magic hostnames.
+ */
+async function isDangerousUrl(url: string): Promise<boolean> {
 	try {
 		const u = new URL(url);
-		const h = u.hostname;
-		if (h === "localhost" || h === "127.0.0.1" || h === "::1" || h === "[::1]")
-			return true;
-		if (h.endsWith(".local")) return true;
-		if (h.startsWith("192.168.") || h.startsWith("10.")) return true;
-		if (h.startsWith("172.")) {
-			const octet = Number.parseInt(h.split(".")[1] ?? "0", 10);
+		const host = u.hostname.toLowerCase();
+
+		// Quick block: known dangerous hostnames
+		if (BLOCKED_HOSTS.has(host)) return true;
+
+		// Quick block: literal IP in private range
+		const cleanedIp = host.replace(/^\[|\]$/g, "");
+		if (isIP(cleanedIp)) {
+			return isPrivateIp(cleanedIp);
+		}
+
+		// Quick block: .local and obvious private prefixes (fast path)
+		if (host.endsWith(".local")) return true;
+		if (host.startsWith("192.168.") || host.startsWith("10.")) return true;
+		if (host.startsWith("172.")) {
+			const octet = Number.parseInt(host.split(".")[1] ?? "0", 10);
 			if (octet >= 16 && octet <= 31) return true;
 		}
+
+		// Deep check: resolve DNS and validate every IP
+		try {
+			const records = await dnsLookup(host, { all: true, verbatim: true });
+			for (const record of records) {
+				if (isPrivateIp(record.address)) return true;
+			}
+		} catch {
+			// DNS failure — treat as potentially dangerous
+			return true;
+		}
+
 		return false;
 	} catch {
-		return false;
+		return true; // unparseable URL = dangerous
 	}
 }
 
@@ -832,18 +984,55 @@ async function fetchWithRetry(
 	for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
 		try {
 			let res: any;
-			if (isLocalOrPrivateUrl(url)) {
-				res = await fetch(url, { redirect: "follow", headers });
+			const isLocal = await isDangerousUrl(url);
+			if (isLocal) {
+				res = await fetch(url, { redirect: "manual", headers });
 			} else {
 				const browser = (options.browser as any) ?? getLatestChromeProfile();
 				const os = (options.os as any) ?? DEFAULT_OS;
 				res = await wreqFetch(url, {
-					redirect: "follow",
+					redirect: "manual",
 					headers,
 					browser,
 					os,
 					...(options.proxy ? { proxy: options.proxy } : {}),
 				});
+			}
+
+			// Follow redirects manually, re-validating SSRF on every hop.
+			// Without this, a public host can 302 to an internal IP and
+			// bypass the initial URL guard.
+			const MAX_REDIRECT_HOPS = 5;
+			for (let hop = 0; hop < MAX_REDIRECT_HOPS; hop++) {
+				if (res.status < 300 || res.status >= 400) break;
+				const location = res.headers.get("location");
+				if (!location) break;
+				// Discard redirect body to free connection
+				try {
+					res.body?.cancel?.();
+				} catch {
+					/* ignore */
+				}
+				let nextRaw: string;
+				try {
+					nextRaw = new URL(location, url).href;
+				} catch {
+					return null; // invalid redirect target
+				}
+				// Reject redirects to dangerous hosts
+				if (await isDangerousUrl(nextRaw)) return null;
+				url = nextRaw;
+				if (isLocal) {
+					res = await fetch(url, { redirect: "manual", headers });
+				} else {
+					res = await wreqFetch(url, {
+						redirect: "manual",
+						headers,
+						browser: (options.browser as any) ?? getLatestChromeProfile(),
+						os: (options.os as any) ?? DEFAULT_OS,
+						...(options.proxy ? { proxy: options.proxy } : {}),
+					});
+				}
 			}
 
 			// Non-retryable status: fail immediately
@@ -902,7 +1091,9 @@ async function fetchWithPlaywright(url: string): Promise<string | null> {
 				const content = await page.content();
 				await browser.close();
 				return content;
-			} catch {}
+			} catch {
+				/* ignore */
+			}
 		}
 	} catch {
 		// Playwright not installed — emit one-time warning
@@ -1086,7 +1277,9 @@ function extractNav(base: URL, html: string): string[] {
 				const r = new URL(href, base);
 				r.hash = r.search = "";
 				if (!IGNORED.test(r.pathname)) urls.add(r.href);
-			} catch {}
+			} catch {
+				/* ignore */
+			}
 		}
 	}
 	urls.add(base.href);
@@ -1111,7 +1304,9 @@ function extractLinks(
 				!visited.has(r.href)
 			)
 				out.push(r.href);
-		} catch {}
+		} catch {
+			/* ignore */
+		}
 	}
 	return [...new Set(out)];
 }
@@ -1181,7 +1376,9 @@ function filterAndDedupe(
 				seen.add(u.pathname);
 				out.push(u.href);
 			}
-		} catch {}
+		} catch {
+			/* ignore */
+		}
 	}
 	return out.slice(0, max);
 }
@@ -1229,7 +1426,9 @@ async function discover(
 		for (const u of urls) {
 			try {
 				hosts.add(new URL(u).hostname);
-			} catch {}
+			} catch {
+				/* ignore */
+			}
 		}
 		const filtered = filterAndDedupe(urls, hosts, scope, max);
 		if (filtered.length > best.length) best = filtered;
@@ -1248,6 +1447,61 @@ async function discover(
 
 // ─── Web Search ────────────────────────────────────────────────────
 
+// Provider cooldown tracker — prevents wasting requests on dead/rate-limited engines.
+const QUOTA_TTL_MS = 10 * 60 * 1000; // 10 min for quota/auth errors
+const NETWORK_TTL_MS = 2 * 60 * 1000; // 2 min for connection failures
+const providerCooldowns = new Map<string, { until: number; reason: string }>();
+
+function isProviderAvailable(provider: string): boolean {
+	const state = providerCooldowns.get(provider);
+	if (!state) return true;
+	if (Date.now() >= state.until) {
+		providerCooldowns.delete(provider);
+		return true;
+	}
+	return false;
+}
+
+function recordProviderCooldown(
+	provider: string,
+	reason: string,
+	ttlMs: number,
+): void {
+	providerCooldowns.set(provider, { until: Date.now() + ttlMs, reason });
+}
+
+function recordProviderQuota(provider: string, reason: string): void {
+	recordProviderCooldown(provider, reason, QUOTA_TTL_MS);
+}
+
+function recordProviderNetworkFailure(provider: string, msg: string): void {
+	const lower = msg.toLowerCase();
+	const isConnFailure =
+		lower.includes("econnrefused") ||
+		lower.includes("ehostunreach") ||
+		lower.includes("enetunreach") ||
+		lower.includes("connection refused") ||
+		lower.includes("connection reset") ||
+		lower.includes("fetch failed") ||
+		lower.includes("enotfound") ||
+		lower.includes("getaddrinfo");
+	recordProviderCooldown(
+		provider,
+		msg,
+		isConnFailure ? NETWORK_TTL_MS : QUOTA_TTL_MS,
+	);
+}
+
+function isQuotaError(status: number, body: string): boolean {
+	return (
+		status === 429 ||
+		status === 402 ||
+		status === 403 ||
+		status === 1015 ||
+		/rate limit|quota|credits|limit reached|monthly limit/i.test(body)
+	);
+}
+
 interface SearchResult {
 	title: string;
 	url: string;
@@ -1259,7 +1513,9 @@ function extractDdgUrl(href: string): string {
 		const u = new URL(href, "https://duckduckgo.com");
 		const real = u.searchParams.get("uddg");
 		if (real) return decodeURIComponent(real);
-	} catch {}
+	} catch {
+		/* ignore */
+	}
 	return href;
 }
 
@@ -1376,31 +1632,63 @@ async function searchWeb(
 
 	const encoded = encodeURIComponent(query);
 
-	// Run DDG + Brave in parallel
+	// Run DDG + Brave in parallel (skip cooldown'd providers)
 	const commonHeaders = {
 		Accept: "text/html",
 		"User-Agent":
 			"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
 	};
 
-	const [ddg, brave] = await Promise.all([
-		smartFetch(`https://html.duckduckgo.com/html/?q=${encoded}`, {
-			headers: commonHeaders,
-		}),
-		smartFetch(`https://search.brave.com/search?q=${encoded}`, {
-			headers: commonHeaders,
-		}),
-	]);
+	const ddgAvailable = isProviderAvailable("ddg");
+	const braveAvailable = isProviderAvailable("brave");
+
+	const ddgPromise = ddgAvailable
+		? smartFetch(`https://html.duckduckgo.com/html/?q=${encoded}`, {
+				headers: commonHeaders,
+			}).then(
+				(res) => ({ source: "ddg" as const, res }),
+				(err) => {
+					recordProviderNetworkFailure("ddg", String(err));
+					return { source: "ddg" as const, res: null };
+				},
+			)
+		: Promise.resolve({ source: "ddg" as const, res: null });
+
+	const bravePromise = braveAvailable
+		? smartFetch(`https://search.brave.com/search?q=${encoded}`, {
+				headers: commonHeaders,
+			}).then(
+				(res) => ({ source: "brave" as const, res }),
+				(err) => {
+					recordProviderNetworkFailure("brave", String(err));
+					return { source: "brave" as const, res: null };
+				},
+			)
+		: Promise.resolve({ source: "brave" as const, res: null });
+
+	const results = await Promise.all([ddgPromise, bravePromise]);
 
 	// Parse both results
 	let ddgResults: SearchResult[] = [];
-	if (ddg && ddg.status < 400) {
-		ddgResults = parseDuckDuckGoResults(ddg.text);
+	for (const r of results) {
+		if (r.source === "ddg") {
+			if (r.res && r.res.status < 400) {
+				ddgResults = parseDuckDuckGoResults(r.res.text);
+			} else if (r.res && isQuotaError(r.res.status, r.res.text)) {
+				recordProviderQuota("ddg", `HTTP ${r.res.status}`);
+			}
+		}
 	}
 
 	let braveResults: SearchResult[] = [];
-	if (brave && brave.status < 400) {
-		braveResults = parseBraveResults(brave.text);
+	for (const r of results) {
+		if (r.source === "brave") {
+			if (r.res && r.res.status < 400) {
+				braveResults = parseBraveResults(r.res.text);
+			} else if (r.res && isQuotaError(r.res.status, r.res.text)) {
+				recordProviderQuota("brave", `HTTP ${r.res.status}`);
+			}
+		}
 	}
 
 	// Merge & deduplicate by URL
@@ -2127,7 +2415,9 @@ async function buildRepoMarkdown(outDir: string): Promise<string> {
 			const readme = await readFile(join(outDir, name), "utf8");
 			md += `---\n\n## README\n\n${readme}\n`;
 			break;
-		} catch {}
+		} catch {
+			/* ignore */
+		}
 	}
 
 	return md;
@@ -2257,7 +2547,9 @@ function extractRSC(html: string): string | null {
 					.join("\n\n");
 				if (readable) chunks.push(readable);
 			}
-		} catch {}
+		} catch {
+			/* ignore */
+		}
 	}
 	return chunks.length ? chunks.join("\n\n").slice(0, 20000) : null;
 }
@@ -2397,7 +2689,9 @@ function extractAlternateLinks(html: string, baseUrl: string): string[] {
 					if (target !== baseUrl && !links.includes(target)) {
 						links.push(target);
 					}
-				} catch {}
+				} catch {
+					/* ignore */
+				}
 			}
 		}
 	}
@@ -2457,7 +2751,7 @@ function fallbackExtract(html: string): { title: string; content: string } {
 		document.querySelector("body");
 	return {
 		title: t,
-		content: el?.textContent?.replace(/\n{3,}/g, "\n\n").trim() ?? "",
+		content: cleanText(el?.textContent ?? ""),
 	};
 }
 
@@ -2471,6 +2765,9 @@ function finalizePullResult(
 	if (redirectNotice) {
 		content = redirectNotice + "\n\n" + content;
 	}
+
+	// Wrap in explicit trust boundary markers — pi-search pattern
+	content = `[UNTRUSTED WEB CONTENT START]\n${content}\n[UNTRUSTED WEB CONTENT END]`;
 
 	const injection = detectPromptInjection(content, "warn");
 	return {
@@ -2576,7 +2873,7 @@ async function pullPage(
 	}
 
 	// ── 3. Standard text fetch ──
-	const res = await smartFetch(url, {
+	let res = await smartFetch(url, {
 		...opts,
 		headers: {
 			Accept:
@@ -2597,6 +2894,28 @@ async function pullPage(
 			},
 		};
 	if (res.status >= 400) {
+		// Cloudflare challenge detection: retry with alternate UA before giving up.
+		// CF challenges return 403 with distinctive markers in the first ~4KB.
+		const isCf403 =
+			res.status === 403 &&
+			(res.headers.get("cf-mitigated") === "challenge" ||
+				/just a moment|cf-chl-bypass/i.test(res.text.slice(0, 4096)));
+		if (isCf403) {
+			const cfRes = await smartFetch(url, {
+				...opts,
+				headers: {
+					Accept:
+						"text/html,application/xhtml+xml,application/json;q=0.9,text/markdown;q=0.8,*/*;q=0.7",
+					"User-Agent":
+						"Mozilla/5.0 (compatible; OpenCode/1.0; +https://opencode.ai)",
+					...opts?.headers,
+				},
+			});
+			if (cfRes && cfRes.status < 400) {
+				// Cloudflare bypassed — resume normal pipeline with the successful response
+				res = cfRes;
+			}
+		}
 		return {
 			ok: false,
 			url,
@@ -2622,7 +2941,9 @@ async function pullPage(
 		if (origHost !== finalHost) {
 			redirectNotice = `> ⚠️ Cross-host redirect detected: \`${url}\` → \`${finalUrl}\``;
 		}
-	} catch {}
+	} catch {
+		/* ignore */
+	}
 
 	// ── 4. PDF by content-type (missed by URL check) ──
 	if (ct.includes("application/pdf")) {
@@ -2677,10 +2998,12 @@ async function pullPage(
 	}
 
 	// ── 8. HTML content pipeline ──
-	const cleaned = stripHtmlTags(text);
+	// Pre-clean: remove noise elements (nav, footer, header, etc.) via DOM,
+	// then strip script/style tags via regex. Preserves structural HTML for Readability.
+	const cleaned = preCleanHtml(text);
 
 	// Try Jina AI for public URLs
-	if (!isLocalOrPrivateUrl(url)) {
+	if (!(await isDangerousUrl(url))) {
 		const jina = await fetchJina(url);
 		if (jina) {
 			// If Jina produced thin content, try alternate links before returning
@@ -2695,20 +3018,30 @@ async function pullPage(
 	// Try Readability
 	const readability = extractReadability(cleaned, finalUrl);
 	if (readability) {
-		// If Readability produced thin content, try alternate links
-		if (wordCount(readability.content) < MIN_ALTERNATE_FALLBACK_WORDS) {
-			const alt = await tryAlternateLinks(text, finalUrl, opts);
-			if (alt) return finalizePullResult(alt, redirectNotice);
+		// Heuristic: if Readability output is <1% of original HTML (>10KB),
+		// it likely picked the wrong container (e.g. a footer on a JS-only page).
+		// Fall through to Defuddle instead of returning garbage.
+		if (
+			text.length > 10000 &&
+			readability.content.length < 0.01 * text.length
+		) {
+			// skip — readability failed, try next extractor
+		} else {
+			// If Readability produced thin content, try alternate links
+			if (wordCount(readability.content) < MIN_ALTERNATE_FALLBACK_WORDS) {
+				const alt = await tryAlternateLinks(text, finalUrl, opts);
+				if (alt) return finalizePullResult(alt, redirectNotice);
+			}
+			return finalizePullResult(
+				{
+					ok: true,
+					url: finalUrl,
+					title: readability.title,
+					content: readability.content,
+				},
+				redirectNotice,
+			);
 		}
-		return finalizePullResult(
-			{
-				ok: true,
-				url: finalUrl,
-				title: readability.title,
-				content: readability.content,
-			},
-			redirectNotice,
-		);
 	}
 
 	// Try RSC (Next.js flight data)
@@ -2734,6 +3067,7 @@ async function pullPage(
 		let defContent = result.content || "";
 		// Strip Defuddle extractor footer comments
 		defContent = stripDefuddleComments(defContent);
+		defContent = cleanText(defContent);
 		// If Defuddle produced thin content, try alternate links
 		if (wordCount(defContent) < MIN_ALTERNATE_FALLBACK_WORDS) {
 			const alt = await tryAlternateLinks(text, finalUrl, opts);
@@ -2765,6 +3099,142 @@ async function pullPage(
 			redirectNotice,
 		);
 	}
+}
+
+// ─── Enhanced pull page with verticals, data islands, bot detection, modes ───
+
+async function pullPageEnhanced(
+	url: string,
+	opts?: FetchOpts,
+	_redirectCount = 0,
+): Promise<PullResult> {
+	const mode = opts?.mode ?? "auto";
+
+	// ── 0. Vertical extractors (API-first for known sites) ──
+	const vertical = await runVerticalExtractor(
+		url,
+		async (u) => {
+			const r = await smartFetch(u, {
+				...opts,
+				headers: { Accept: "application/json", ...opts?.headers },
+			});
+			if (!r || r.status >= 400) return null;
+			try {
+				return JSON.parse(r.text);
+			} catch {
+				return null;
+			}
+		},
+		async (u) => {
+			const r = await smartFetch(u, opts);
+			if (!r || r.status >= 400) return null;
+			return r.text;
+		},
+		async (u) => {
+			const r = await smartFetch(u, opts);
+			if (!r || r.status >= 400) return null;
+			return r.text;
+		},
+	);
+	if (vertical) {
+		return finalizePullResult({
+			ok: true,
+			url,
+			title: vertical.title,
+			content: `> via ${findVerticalExtractor(url) ?? "vertical extractor"}\n\n${vertical.content}`,
+		});
+	}
+
+	// ── 1. Fast path (default / auto) ──
+	if (mode === "fast" || mode === "auto" || mode === "fingerprint") {
+		const result = await pullPage(url, opts, _redirectCount);
+
+		// Structured bot-block detection
+		if (result.ok && result.content) {
+			const botCheck = detectBotBlock(result.content);
+			if (botCheck.blocked) {
+				// If blocked and mode is auto, try escalation
+				if (mode === "auto" && botCheck.retryable) {
+					// Try fingerprint mode first (alternate browser profiles)
+					const fallbackBrowsers = ["firefox_147", "safari_26", "edge_145"];
+					for (const fb of fallbackBrowsers) {
+						const fbResult = await pullPage(
+							url,
+							{ ...opts, browser: fb },
+							_redirectCount,
+						);
+						if (fbResult.ok && fbResult.content) {
+							const fbBotCheck = detectBotBlock(fbResult.content);
+							if (!fbBotCheck.blocked) {
+								return fbResult;
+							}
+						}
+					}
+					// Last resort: browser mode with Playwright
+					const pwHtml = await fetchWithPlaywright(url);
+					if (pwHtml) {
+						const pwResult = await pullPage(url, opts, _redirectCount);
+						// Replace the HTML with Playwright-rendered version
+						if (pwResult.ok && pwResult.content) {
+							const pwBotCheck = detectBotBlock(pwResult.content);
+							if (!pwBotCheck.blocked) {
+								return pwResult;
+							}
+						}
+					}
+				}
+				// Return structured blocked result
+				return {
+					ok: false,
+					url,
+					error: `[BLOCKED] ${botCheck.message} (type: ${botCheck.blockerType}, confidence: ${Math.round(botCheck.confidence * 100)}%)`,
+					errorInfo: {
+						message: botCheck.message,
+						code: "blocked",
+						phase: "loading",
+						retryable: botCheck.retryable,
+					},
+				};
+			}
+
+			// SPA data-island recovery (try before returning thin content)
+			if (result.content.length < 5000) {
+				const islands = extractDataIslands(result.content);
+				if (islands.found && islands.markdown) {
+					return finalizePullResult({
+						...result,
+						content: `> Data islands recovered from: ${islands.islands.map((i) => i.source).join(", ")}\n\n${islands.markdown}`,
+					});
+				}
+			}
+		}
+
+		return result;
+	}
+
+	// ── 2. Browser mode (Playwright) ──
+	if (mode === "browser") {
+		const pwHtml = await fetchWithPlaywright(url);
+		if (pwHtml) {
+			// Feed Playwright HTML through the normal pipeline
+			return pullPage(url, opts, _redirectCount);
+		}
+		return {
+			ok: false,
+			url,
+			error:
+				"Browser mode failed: Playwright not available or page load failed",
+			errorInfo: {
+				message: "Playwright browser rendering failed",
+				code: "processing_error",
+				phase: "loading",
+				retryable: false,
+			},
+		};
+	}
+
+	// Fallback
+	return pullPage(url, opts, _redirectCount);
 }
 
 // ─── Write ──────────────────────────────────────────────────────────
@@ -2870,6 +3340,11 @@ export default function (pi: ExtensionAPI) {
 						"Output file path under temp for single url (default: auto-derived from URL)",
 				}),
 			),
+			mode: Type.Optional(
+				Type.String({
+					description: `Scrape mode: "auto" (default), "fast", "fingerprint", or "browser". Auto escalates from fast → fingerprint → browser when bot protection is detected.`,
+				}),
+			),
 			browser: Type.Optional(
 				Type.String({
 					description: `Browser profile for TLS fingerprinting. Default: "${DEFAULT_BROWSER}"`,
@@ -2884,6 +3359,16 @@ export default function (pi: ExtensionAPI) {
 				Type.String({
 					description:
 						"Proxy URL (e.g. http://user:pass@host:port or socks5://host:port)",
+				}),
+			),
+			cacheTtlSeconds: Type.Optional(
+				Type.Number({
+					description: "Opt-in cache TTL in seconds. Omit for fresh fetches.",
+				}),
+			),
+			compile: Type.Optional(
+				Type.Boolean({
+					description: "Compile batch results into a single context package.",
 				}),
 			),
 		}) as any,
@@ -2926,7 +3411,13 @@ export default function (pi: ExtensionAPI) {
 					}
 					const outPath = resolve(outFile);
 
-					const result = await pullPage(url.href, { browser, os, proxy });
+					const mode = (params.mode as ScrapeMode) ?? "auto";
+					const result = await pullPageEnhanced(url.href, {
+						browser,
+						os,
+						proxy,
+						mode,
+					});
 					if (!result.ok) {
 						return {
 							ok: false,
@@ -2955,12 +3446,23 @@ export default function (pi: ExtensionAPI) {
 						wordCount: result.wordCount,
 					});
 
+					const responseId = await storeResult(
+						result.url!,
+						markdown,
+						"webfetch",
+						{
+							title: result.title || url.pathname,
+							ttlSeconds: params.cacheTtlSeconds,
+						},
+					);
+
 					return {
 						ok: true,
 						url: result.url!,
 						title: result.title || url.pathname,
 						outPath,
 						length: markdown.length,
+						responseId,
 					};
 				},
 			);
@@ -3016,6 +3518,7 @@ export default function (pi: ExtensionAPI) {
 					`✓ Fetched and saved to ${r.outPath}${summaryNotice}`,
 					`\nTitle: ${r.title}`,
 					`URL: ${r.url}`,
+					`Response ID: ${(r as any).responseId}`,
 					"\n---\n",
 					displayContent,
 				].join("\n");
@@ -3026,6 +3529,7 @@ export default function (pi: ExtensionAPI) {
 						outPath: r.outPath,
 						title: r.title,
 						url: r.url,
+						responseId: (r as any).responseId,
 						browser,
 						os,
 						proxy,
@@ -3037,13 +3541,38 @@ export default function (pi: ExtensionAPI) {
 				};
 			}
 
+			// Compile context package if requested
+			let packagePath: string | undefined;
+			if (params.compile && okResults.length > 0) {
+				const pages = await Promise.all(
+					okResults.map(async (r) => {
+						const content = await readFile(r.outPath!, "utf8");
+						return {
+							url: r.url,
+							title: r.title || r.url,
+							content,
+							relPath: r.outPath!.replace(BASE_TEMP, "").replace(/^\\/, ""),
+						};
+					}),
+				);
+				const pkg = await compileContextPackage(
+					pages,
+					join(BASE_TEMP, "packages"),
+					{
+						packageName: `webfetch-${Date.now()}`,
+					},
+				);
+				packagePath = pkg.packagePath;
+			}
+
 			// Batch result
 			const lines = [
 				`Fetched ${okResults.length}/${targets.length} URLs:`,
+				packagePath ? `\n📦 Compiled package: ${packagePath}` : "",
 				"",
 				...okResults.map(
 					(r) =>
-						`✓ ${r.title} — ${r.url}\n  → ${r.outPath} (${r.length} chars)`,
+						`✓ ${r.title} — ${r.url}\n  → ${r.outPath} (${r.length} chars)${(r as any).responseId ? `\n  ID: ${(r as any).responseId}` : ""}`,
 				),
 				...(errResults.length
 					? ["", "Errors:", ...errResults.map((r) => `✗ ${r.url}: ${r.error}`)]
@@ -3051,7 +3580,7 @@ export default function (pi: ExtensionAPI) {
 			];
 			return {
 				content: [{ type: "text", text: lines.join("\n") }],
-				details: { results, browser, os },
+				details: { results, browser, os, packagePath },
 			};
 		},
 	});
@@ -3101,6 +3630,61 @@ export default function (pi: ExtensionAPI) {
 					title: stored.title,
 					url: stored.url,
 					timestamp: stored.timestamp,
+					length: stored.content.length,
+				},
+			};
+		},
+	});
+
+	// ─── webresult tool ──────────────────────────────────────────────
+	pi.registerTool({
+		name: "aio-webresult",
+		label: "Get Stored Result",
+		description:
+			"Retrieve a previously fetched web scrape result by response ID. Results are stored automatically after every successful aio-webfetch or aio-webpull.",
+		promptSnippet: "Retrieve a stored web scrape by response ID",
+		promptGuidelines: [
+			"Use aio-webresult when you need to retrieve a previously fetched result by its response ID.",
+			"Response IDs are shown after every successful aio-webfetch call.",
+			"Use aio-webcontent to retrieve content by URL instead of by ID.",
+		],
+		parameters: Type.Object({
+			id: Type.String({
+				description: "Response ID from a previous webfetch call",
+			}),
+		}) as any,
+
+		async execute(_toolCallId: string, params: any): Promise<any> {
+			const stored = await getResult(params.id);
+			if (!stored) {
+				// Try listing to give the user context
+				const recent = (await listResults()).slice(0, 5);
+				return {
+					content: [
+						{
+							type: "text",
+							text: `No result found for ID: ${params.id}\n\nRecent results:\n${recent.map((r) => `  - ${r.id}: ${r.url} (${r.source})`).join("\n") || "  (none)"}`,
+						},
+					],
+				};
+			}
+			const text = [
+				`Retrieved result ${stored.id}`,
+				`URL: ${stored.url}`,
+				`Tool: ${stored.source}`,
+				`Length: ${stored.content.length} chars`,
+				"\n---\n",
+				stored.content.length > 50000
+					? stored.content.slice(0, 50000) + "\n\n[... truncated]"
+					: stored.content,
+			].join("\n");
+			return {
+				content: [{ type: "text", text }],
+				details: {
+					id: stored.id,
+					url: stored.url,
+					tool: stored.source,
+					timestamp: stored.createdAt,
 					length: stored.content.length,
 				},
 			};
@@ -3167,7 +3751,7 @@ export default function (pi: ExtensionAPI) {
 				source: "google";
 				results: SearchResult[];
 			}>;
-			if (useGoogle && cdpAvailableGA()) {
+			if (useGoogle && cdpAvailableGA() && isProviderAvailable("google")) {
 				googlePromise = (async () => {
 					try {
 						await ensureChrome(true);
@@ -3184,7 +3768,8 @@ export default function (pi: ExtensionAPI) {
 								snippet: r.snippet,
 							})),
 						};
-					} catch {
+					} catch (err) {
+						recordProviderNetworkFailure("google", String(err));
 						return { source: "google" as const, results: [] };
 					}
 				})();
@@ -3275,6 +3860,102 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
+	// ─── webmap tool ─────────────────────────────────────────────────
+	pi.registerTool({
+		name: "aio-webmap",
+		label: "Web Map",
+		description:
+			"Discovery-only tool — finds pages via robots.txt, sitemaps, navigation links, llms.txt, and crawling without fetching content. Returns structured URLs grouped by source.",
+		promptSnippet: "Discover pages on a website without fetching content",
+		promptGuidelines: [
+			"Use aio-webmap to discover all pages on a site before a full pull.",
+			"Returns URLs grouped by discovery source: sitemaps, robots.txt, navigation, llms.txt, crawl.",
+			"Use aio-webpull to actually fetch and convert the discovered pages.",
+		],
+		parameters: Type.Object({
+			url: Type.String({
+				description:
+					"URL to discover pages for (e.g. https://docs.example.com)",
+			}),
+			max: Type.Optional(
+				Type.Number({
+					description: "Max URLs to discover (default: 100)",
+					default: 100,
+				}),
+			),
+			browser: Type.Optional(
+				Type.String({
+					description: `Browser profile for TLS fingerprinting. Default: "${DEFAULT_BROWSER}"`,
+				}),
+			),
+			os: Type.Optional(
+				Type.String({
+					description: `OS profile for fingerprinting. Default: "${DEFAULT_OS}"`,
+				}),
+			),
+		}) as any,
+
+		async execute(_toolCallId, params) {
+			let raw = params.url;
+			if (!/^https?:\/\//i.test(raw)) raw = `https://${raw}`;
+
+			let url: URL;
+			try {
+				url = new URL(raw);
+			} catch {
+				throw new Error(`Bad URL: ${params.url}`);
+			}
+
+			const max = params.max ?? 100;
+			const browser = (params.browser as string) ?? getLatestChromeProfile();
+			const os = (params.os as string) ?? DEFAULT_OS;
+			const fetchOpts: FetchOpts = { browser, os };
+
+			// Discover pages (same pipeline as webpull, just returns URLs)
+			const urls = await discover(url.href, max, fetchOpts);
+
+			// Also try llms.txt (LLM-friendly index)
+			let llmsUrls: string[] = [];
+			try {
+				const llmsRes = await smartFetch(`${url.origin}/llms.txt`, fetchOpts);
+				if (llmsRes && llmsRes.status < 400) {
+					llmsUrls = llmsRes.text
+						.split(/\n/)
+						.filter((l) => /^https?:\/\//i.test(l.trim()))
+						.map((l) => l.trim());
+				}
+			} catch {
+				/* ignore */
+			}
+
+			const text = [
+				`🌐 Site map for ${url.href}`,
+				`\nDiscovered ${urls.length} pages via sitemaps/robots/nav/crawl.`,
+				llmsUrls.length > 0
+					? `\nFound ${llmsUrls.length} entries in llms.txt`
+					: "",
+				"\n\nFirst 50 pages:",
+				...urls.slice(0, 50).map((u, i) => `${i + 1}. ${u}`),
+				urls.length > 50 ? `\n... and ${urls.length - 50} more` : "",
+				llmsUrls.length > 0
+					? `\n\nllms.txt entries:\n${llmsUrls.map((u) => `  - ${u}`).join("\n")}`
+					: "",
+			].join("\n");
+
+			return {
+				content: [{ type: "text", text }],
+				details: {
+					url: url.href,
+					totalUrls: urls.length,
+					urls,
+					llmsUrls,
+					browser,
+					os,
+				},
+			};
+		},
+	});
+
 	// ─── webpull tool ────────────────────────────────────────────────
 	pi.registerTool({
 		name: "aio-webpull",
@@ -3302,6 +3983,11 @@ export default function (pi: ExtensionAPI) {
 					default: 100,
 				}),
 			),
+			mode: Type.Optional(
+				Type.String({
+					description: `Scrape mode: "auto" (default), "fast", "fingerprint", or "browser". Auto escalates when bot protection is detected.`,
+				}),
+			),
 			browser: Type.Optional(
 				Type.String({
 					description: `Browser profile for TLS fingerprinting. Default: "${DEFAULT_BROWSER}". Examples: chrome_145, firefox_147, safari_26, edge_145`,
@@ -3316,6 +4002,12 @@ export default function (pi: ExtensionAPI) {
 				Type.String({
 					description:
 						"Proxy URL (e.g. http://user:pass@host:port or socks5://host:port)",
+				}),
+			),
+			compile: Type.Optional(
+				Type.Boolean({
+					description:
+						"Compile pulled pages into a single context package after completion.",
 				}),
 			),
 		}) as any,
@@ -3339,7 +4031,9 @@ export default function (pi: ExtensionAPI) {
 			const browser = (params.browser as string) ?? getLatestChromeProfile();
 			const os = (params.os as string) ?? DEFAULT_OS;
 			const proxy = params.proxy as string | undefined;
-			const fetchOpts: FetchOpts = { browser, os, proxy };
+			const mode = (params.mode as ScrapeMode) ?? "auto";
+			const compile = (params.compile as boolean) ?? false;
+			const fetchOpts: FetchOpts = { browser, os, proxy, mode };
 
 			onUpdate?.({
 				content: [
@@ -3372,7 +4066,7 @@ export default function (pi: ExtensionAPI) {
 			await runInBatches(urls, concurrency, async (pageUrl, _i) => {
 				if (signal?.aborted) return;
 
-				const result = await pullPage(pageUrl, fetchOpts);
+				const result = await pullPageEnhanced(pageUrl, fetchOpts);
 				if (!result.ok) {
 					err++;
 					errors.push(`${pageUrl}: ${result.error}`);
@@ -3442,8 +4136,49 @@ export default function (pi: ExtensionAPI) {
 				.filter(Boolean)
 				.join("\n");
 
+			// Compile context package if requested
+			let packagePath: string | undefined;
+			if (compile && ok > 0) {
+				try {
+					const pages = await Promise.all(
+						files.map(async (rel) => {
+							const filePath = join(outDir, rel);
+							try {
+								const content = await readFile(filePath, "utf8");
+								return { url: rel, title: rel, content, relPath: rel };
+							} catch {
+								return null;
+							}
+						}),
+					);
+					const validPages = pages.filter((p) => p !== null);
+					if (validPages.length > 0) {
+						const pkg = await compileContextPackage(
+							validPages,
+							join(outDir, "..", "packages"),
+							{
+								packageName: `${url.hostname}-${Date.now()}`,
+							},
+						);
+						packagePath = pkg.packagePath;
+					}
+				} catch {
+					// best effort
+				}
+			}
+
 			return {
-				content: [{ type: "text", text: summary }],
+				content: [
+					{
+						type: "text",
+						text:
+							summary +
+							(packagePath
+								? `
+📦 Compiled package: ${packagePath}`
+								: ""),
+					},
+				],
 				details: {
 					outDir,
 					total: urls.length,
@@ -3454,6 +4189,7 @@ export default function (pi: ExtensionAPI) {
 					browser,
 					os,
 					proxy,
+					packagePath,
 				},
 			};
 		},

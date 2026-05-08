@@ -7,7 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.2.1] - 2026-05-08
+## [0.3.0] - 2026-05-08
+
+### Added
+
+- **2 new tools: `aio-webmap` and `aio-webresult`** — bringing the total to 6 tools
+  - `aio-webmap` — Discovery-only tool that finds pages via robots.txt, sitemaps, navigation links, and llms.txt without fetching content. Returns structured URL list grouped by source.
+  - `aio-webresult` — Retrieves previously fetched results by persistent response ID (survives restarts). Falls back to showing recent results when ID not found.
+- **Vertical extractors** — 6 API-first extractors for known sites that hit structured APIs instead of scraping HTML: npm (registry.npmjs.org), PyPI (pypi.org/pypi), Hacker News (Firebase API), Reddit (.json endpoint), arXiv (Atom export), and platform-aware docs-site extractors (Docusaurus, GitBook, MDN, VitePress, ReadTheDocs). Run before the HTML content pipeline for matching URLs.
+- **Auto escalation pipeline** — New `mode` parameter on `aio-webfetch` and `aio-webpull` with four modes: `auto` (default), `fast`, `fingerprint`, `browser`. Auto mode escalates from fast fetch → fingerprint rotation → Playwright rendering when bot protection is detected.
+- **Cloudflare challenge bypass** — Detects CF challenges via `cf-mitigated` header and body markers (`just a moment`, `cf-chl-bypass`) in the first 4KB of 403 responses. Retries with OpenCode UA — cheaper than full fingerprint rotation or Playwright.
+- **Bot-block detection module** (`src/bot-detection.ts`) — Structured detection of Cloudflare, Anubis, PerimeterX, DataDome, Incapsula, and Akamai bot protection. Returns typed `BotBlockResult` with blocker type, confidence score, retry advice, and human-readable messages.
+- **SPA data-island recovery** (`src/data-islands.ts`) — Extracts JSON hydration data from `<script>` tags, 16 framework globals (`__NEXT_DATA__`, `__NUXT__`, etc.), and Next.js RSC chunks. Recovers content from JS-rendered pages where traditional extraction produces empty results.
+- **Persistent result storage** (`src/storage.ts`) — Content-addressed blob storage with JSON metadata index, 500 max results, 24h TTL, LRU eviction. Each `aio-webfetch` call returns a `responseId` for later retrieval via `aio-webresult`.
+- **Context packages** (`src/context-package.ts`) — `compile` parameter on `aio-webfetch` (batch mode) and `aio-webpull` compiles multiple pages into a single Markdown file with YAML index and configurable size bounds.
+- **Content trust boundaries** — All fetched content wrapped in `[UNTRUSTED WEB CONTENT START] / [UNTRUSTED WEB CONTENT END]` markers. Applied in `finalizePullResult()` — the single choke point for all pull output. Zero-trust safety pattern adopted from pi-search.
+- **DNS-based SSRF protection** — Replaced weak string-based localhost check with `isDangerousUrl()` which resolves DNS and validates all returned IPs against full RFC 1918/RFC 6598/RFC 3927 ranges, blocks cloud metadata endpoints (169.254.169.254, metadata.google.internal), handles IPv6 tunnel encodings (IPv4-mapped, IPv4-compatible, 6to4, Teredo), and includes fast-path prefix checks for obvious private ranges.
+- **Redirect-hop SSRF re-validation** — `smartFetch` now uses manual redirect following (`redirect: "manual"`) and re-validates every redirect target against `isDangerousUrl()`. Max 5 hops. Prevents `302 → http://169.254.169.254/` bypass attacks.
+- **Provider cooldown system** — Search providers (DDG, Brave, Google) now track failures with TTL-based cooldowns: 10 minutes for quota/rate-limit errors (429, 402, 403), 2 minutes for connection failures (ECONNREFUSED, ENOTFOUND). Skipped engines don't waste request time.
+- **`preCleanHtml()` — DOM-based noise removal** before extraction. Removes nav, footer, header, svg, canvas, iframe, form, `[aria-hidden]`, `[hidden]`, and role-based navigation/banner/contentinfo elements via linkedom BEFORE feeding to Readability/Defuddle. Significantly improves extraction quality on chrome-heavy pages.
+- **`cleanText()` — improved whitespace normalization** adopted from strip-search. Collapses whitespace runs while preserving newlines, strips carriage returns, normalizes 3+ newlines to 2. Applied after Defuddle and in fallback extraction.
+- **`<1% fallback heuristic`** — If Readability output is <1% of original HTML size (and original >10KB), assume wrong container → skip Readability and fall through to Defuddle.
+- **Teredo and 6to4 IPv6 tunnel detection** — `isPrivateIPv6()` now extracts and validates embedded IPv4 addresses from Teredo (RFC 4380) and 6to4 tunnel addresses.
+
+### Changed
+
+- `aio-webfetch` new parameters: `mode` (scrape mode), `cacheTtlSeconds` (opt-in cache TTL), `compile` (compile batch into context package)
+- `aio-webpull` new parameters: `mode` (scrape mode), `compile` (compile pulled pages into package)
+- `aio-webfetch` now uses `pullPageEnhanced()` which runs vertical extractors, data-island recovery, and auto escalation before falling through to the standard HTML pipeline
+- `aio-webpull` now uses `pullPageEnhanced()` per page, enabling auto escalation and vertical extractors for discovered pages
+- Extraction pipeline now starts with `preCleanHtml()` (DOM-based) instead of `stripHtmlTags()` (regex-based), preserving structural HTML for Readability/Defuddle
+
+### Removed
+
+- `stripHtmlTags()` — replaced by `preCleanHtml()` which surgically removes noise elements via DOM while preserving structural HTML tags needed by Readability and Defuddle
 
 ### Changed
 

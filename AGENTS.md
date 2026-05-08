@@ -2,15 +2,28 @@
 
 ## What is this?
 
-pi-webaio is an **all-in-one web tools extension** for [pi](https://pi.dev) (the coding agent) that provides search, fetch, crawl, and extraction capabilities via 4 tools: `aio-websearch`, `aio-webfetch`, `aio-webcontent`, and `aio-webpull`. It's published as `npm:pi-webaio` and installable via `pi install npm:pi-webaio`.
+pi-webaio is an **all-in-one web tools extension** for [pi](https://pi.dev) (the coding agent) that provides search, fetch, crawl, extraction, discovery, storage, and compilation capabilities via 6 tools: `aio-websearch`, `aio-webfetch`, `aio-webcontent`, `aio-webpull`, `aio-webmap`, and `aio-webresult`. It's published as `npm:pi-webaio` and installable via `pi install npm:pi-webaio`.
 
 ## Architecture
 
 ```
 pi-webaio/
-├── index.ts                  ← Main extension entry point. Registers 4 pi tools.
+├── index.ts                  ← Main extension entry point. Registers 6 pi tools.
 ├── src/
 │   ├── google-ai.ts          ← TypeScript wrapper — spawns CDP child processes
+│   ├── bot-detection.ts      ← Structured bot-block detection (Cloudflare, Anubis, etc.)
+│   ├── data-islands.ts       ← SPA hydration data recovery from <script> JSON
+│   ├── storage.ts            ← Persistent result storage with response IDs (JSON + blobs)
+│   ├── context-package.ts    ← Compile multiple pages into a single Markdown package
+│   ├── verticals/            ← API-first extractors for known sites
+│   │   ├── registry.ts       ← Pattern-matching registry
+│   │   ├── types.ts          ← Shared types
+│   │   ├── npm.ts            ← npm registry API
+│   │   ├── pypi.ts           ← PyPI JSON API
+│   │   ├── hackernews.ts     ← Hacker News Firebase API
+│   │   ├── reddit.ts         ← Reddit .json endpoint
+│   │   ├── arxiv.ts          ← arXiv Atom export API
+│   │   └── docs-site.ts      ← Docusaurus, GitBook, MDN, VitePress extraction
 │   └── search/               ← CDP infrastructure (used by bin/extractors)
 │       ├── constants.mjs
 │       ├── chrome.mjs
@@ -37,7 +50,7 @@ pi-webaio/
 └── README.md
 ```
 
-## The 4 Tools
+## The 6 Tools
 
 ### 1. `aio-websearch`
 
@@ -86,6 +99,23 @@ pi-webaio/
 - Writes files preserving URL structure with YAML frontmatter
 - Parameters: `url`, `out` (optional output dir), `max` (default 100), `browser`, `os`, `proxy`
 - Concurrent workers (4 × CPU cores)
+- Parameters: `url`, `out` (optional output dir), `max` (default 100), `mode`, `browser`, `os`, `proxy`, `compile`
+- New: `mode` param enables auto escalation (fast → fingerprint → browser)
+- New: `compile` param compiles pulled pages into a context package
+
+### 5. `aio-webmap`
+
+- Discovery-only tool — finds pages via robots.txt, sitemaps, navigation links, llms.txt
+- Returns structured URLs grouped by source without fetching content
+- Parameters: `url`, `max` (default 100), `browser`, `os`
+- Useful for previewing what pages webpull would fetch
+
+### 6. `aio-webresult`
+
+- Retrieves previously fetched results by response ID
+- Durable storage with 24h TTL (JSON index + content blobs in os.tmpdir())
+- Parameters: `id` (string) — response ID from a previous webfetch call
+- Shows recent results if the requested ID is not found
 
 ## Key Technical Details
 
@@ -100,6 +130,16 @@ pi-webaio/
 | Markdown conversion | `defuddle` ^0.18.1            | HTML → markdown (extractor comments stripped)         |
 | PDF                 | `pdf-parse` ^2.4.5            | Text extraction from PDFs                             |
 | Image processing    | `sharp` ^0.34.5               | Image ops (resize, format conversion)                 |
+
+### New Modules (v0.3.0)
+
+| Module                   | Role                                                                                          |
+| ------------------------ | --------------------------------------------------------------------------------------------- |
+| `src/bot-detection.ts`   | Cloudflare, Anubis, DataDome, PerimeterX, Akamai, Incapsula detection with confidence scoring |
+| `src/data-islands.ts`    | SPA hydration recovery — JSON from `<script>` tags, 16 framework globals, Next.js RSC chunks  |
+| `src/storage.ts`         | Persistent result storage — content-addressed blobs, 500 max, 24h TTL, LRU eviction           |
+| `src/context-package.ts` | Compile pulled pages into single Markdown with YAML index                                     |
+| `src/verticals/`         | 6 API-first extractors: npm, PyPI, Hacker News, Reddit, arXiv, docs sites                     |
 
 ### Caching
 
