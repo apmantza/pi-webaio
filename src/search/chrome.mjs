@@ -8,7 +8,7 @@
 // after GREEDY_SEARCH_IDLE_TIMEOUT_MINUTES (default 5). Only the tracked
 // headless instance (PID file + port 9222) is killed — never the main session.
 
-import { spawn, execSync } from "node:child_process";
+import { spawn, execSync, spawnSync } from "node:child_process";
 import {
 	existsSync,
 	readFileSync,
@@ -62,12 +62,23 @@ export function touchActivity() {
 	} catch {}
 }
 
+/** Validate a port is a safe positive integer to prevent shell injection. */
+function isSafePort(port) {
+	return Number.isInteger(port) && port > 0 && port <= 65535;
+}
+
+/** Validate a PID is a safe positive integer to prevent shell injection. */
+function isSafePid(pid) {
+	return Number.isInteger(pid) && pid > 0;
+}
+
 /**
  * Find the PID of the process listening on GREEDY_PORT via OS tools.
  * Falls back to the PID file if netstat/lsof isn't available.
  */
 function getPortPid() {
 	try {
+		if (!isSafePort(GREEDY_PORT)) return null;
 		if (platform() === "win32") {
 			const out = execSync("netstat -ano -p TCP 2>nul", {
 				encoding: "utf8",
@@ -79,10 +90,9 @@ function getPortPid() {
 			const m = out.match(re);
 			return m ? Number.parseInt(m[1], 10) : null;
 		}
-		const out = execSync(
-			`lsof -i :${GREEDY_PORT} -t 2>/dev/null || ss -tlnp 2>/dev/null | grep :${GREEDY_PORT} | grep -oP 'pid=\\K\\d+'`,
-			{ encoding: "utf8" },
-		).trim();
+		// Use execSync with the port safely embedded
+		const pidCmd = `lsof -i :${GREEDY_PORT} -t 2>/dev/null || ss -tlnp 2>/dev/null | grep :${GREEDY_PORT} | grep -oP 'pid=\\K\\d+'`;
+		const out = execSync(pidCmd, { encoding: "utf8" }).trim();
 		return out ? Number.parseInt(out.split("\n")[0], 10) : null;
 	} catch {
 		return null;
@@ -100,10 +110,10 @@ function killProcessOnPort() {
 		if (!pid && existsSync(PID_FILE)) {
 			pid = Number.parseInt(readFileSync(PID_FILE, "utf8").trim(), 10) || null;
 		}
-		if (!pid) return false;
+		if (!isSafePid(pid)) return false;
 
 		if (platform() === "win32") {
-			execSync(`taskkill /F /PID ${pid}`, { stdio: "ignore" });
+			spawnSync("taskkill", ["/F", "/PID", String(pid)], { stdio: "ignore" });
 		} else {
 			process.kill(pid, "SIGKILL");
 		}

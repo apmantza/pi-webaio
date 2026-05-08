@@ -235,7 +235,10 @@ export async function injectHeadlessStealth(tab) {
  * @returns {Array<{title: string, url: string}>} Extracted sources
  */
 export function parseSourcesFromMarkdown(text) {
-	return Array.from(text.matchAll(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g))
+	// Bound repetitions to prevent any theoretical ReDoS; URLs longer than 2000 chars are unlikely
+	return Array.from(
+		text.matchAll(/\[([^\]]{1,500})\]\((https?:\/\/[^\s)]{1,2000})\)/g),
+	)
 		.map((m) => ({ title: m[1], url: m[2] }))
 		.filter((v, i, arr) => arr.findIndex((x) => x.url === v.url) === i)
 		.slice(0, 10);
@@ -505,7 +508,8 @@ export function validateQuery(args, usage) {
  */
 export function formatAnswer(answer, short, maxLen = 300) {
 	if (!short || answer.length <= maxLen) return answer;
-	return `${answer.slice(0, maxLen).replace(/\s+\S*$/, "")}…`;
+	// Bound \S* to 200 chars to satisfy SonarCloud S5852; maxLen caps input length
+	return `${answer.slice(0, maxLen).replace(/\s+\S{0,200}$/, "")}…`;
 }
 
 /**

@@ -97,12 +97,11 @@ function stripHtmlTags(text: string): string {
 	do {
 		prev = text;
 		text = text
-			.replace(/<script\b[^>]*>[\s\S]*?<\/script[^>]*>/gi, "") // nosonar — loop guarantees completeness
-			.replace(/<style\b[^>]*>[\s\S]*?<\/style[^>]*>/gi, "") // nosonar
-			.replace(/<![^>]*-->/g, "") // nosonar
-			.replace(/<[^>]*>/g, ""); // nosonar
+			.replace(/<script\b[^>]{0,5000}>[\s\S]*?<\/script[^>]{0,5000}>/gi, "")
+			.replace(/<style\b[^>]{0,5000}>[\s\S]*?<\/style[^>]{0,5000}>/gi, "")
+			.replace(/<![^>]{0,5000}-->/g, "")
+			.replace(/<[^>]{0,5000}>/g, "");
 	} while (text !== prev);
-	// Final single-char pass guarantees no angle brackets remain
 	return text.replace(/<|>/g, "");
 }
 
@@ -1060,8 +1059,8 @@ async function fetchSitemap(url: string, depth = 0): Promise<string[]> {
 async function sitemapFromRobots(origin: string): Promise<string[]> {
 	const r = await tryFetch(`${origin}/robots.txt`);
 	if (!r) return [];
-	const urls = (r.text.match(/^Sitemap:\s*(.+)$/gim) ?? []).map((l) =>
-		l.replace(/^Sitemap:\s*/i, "").trim(),
+	const urls = (r.text.match(/^Sitemap:\s*([^\n]{1,2000})$/gim) ?? []).map(
+		(l) => l.replace(/^Sitemap:\s*/i, "").trim(),
 	);
 	if (!urls.length) return [];
 	const results = await Promise.all(urls.map((u) => fetchSitemap(u)));
@@ -1746,19 +1745,28 @@ async function pullGitHub(url: string): Promise<PullResult | null> {
 }
 
 async function pullGitHubRef(ref: GitHubRef): Promise<PullResult | null> {
+	let result: PullResult | null = null;
 	switch (ref.type) {
 		case "blob":
-			return fetchGitHubRaw(
+			result = await fetchGitHubRaw(
 				ref.owner,
 				ref.repo,
 				ref.ref || "main",
 				ref.path || "",
 			);
+			break;
 		case "tree":
-			return fetchGitHubTree(ref);
+			result = await fetchGitHubTree(ref);
+			break;
 		case "repo":
-			return fetchGitHubRepo(ref);
+			result = await fetchGitHubRepo(ref);
+			break;
 	}
+	// Add source marker so webfetch's AI summarization knows to skip
+	if (result?.ok && result.content) {
+		result.content = "> via GitHub\n\n" + result.content;
+	}
+	return result;
 }
 
 async function pullGitHubFeature(url: string): Promise<PullResult | null> {
@@ -2970,6 +2978,7 @@ export default function (pi: ExtensionAPI) {
 				let summarized = false;
 				const skipSummary =
 					preview.includes("> via gh api") ||
+					preview.includes("> via GitHub") ||
 					preview.includes("> via SonarCloud API");
 
 				const searchCtx = getSearchContext()?.query;
