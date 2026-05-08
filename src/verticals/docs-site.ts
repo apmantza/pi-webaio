@@ -5,6 +5,17 @@
 import { parseHTML } from "linkedom";
 import type { VerticalResult } from "./types.js";
 
+/** Check if a URL's hostname equals or ends with the given host (with dot). */
+function isHostMatch(url: string, host: string): boolean {
+	try {
+		const u = new URL(url);
+		const h = u.hostname;
+		return h === host || h.endsWith("." + host);
+	} catch {
+		return false;
+	}
+}
+
 export function matchesDocsSite(url: string): boolean {
 	const hosts = [
 		"docs.",
@@ -17,7 +28,8 @@ export function matchesDocsSite(url: string): boolean {
 	];
 	try {
 		const u = new URL(url);
-		return hosts.some((h) => u.hostname.includes(h));
+		const h = u.hostname;
+		return hosts.some((host) => h === host || h.endsWith("." + host));
 	} catch {
 		return false;
 	}
@@ -46,7 +58,7 @@ export function extractDocsSite(
 		platform = "gitbook";
 	else if (
 		document.querySelector(".mdn-content") ||
-		url.includes("developer.mozilla.org")
+		isHostMatch(url, "developer.mozilla.org")
 	)
 		platform = "mdn";
 	else if (

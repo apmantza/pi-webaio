@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-05-08
+
+### Changed
+
+- **Banner redesign** — Updated from 4-tool single-row layout to 6-tool 2×3 grid (560px). New cards for `aio-webmap` and `aio-webresult` with cyan/green color accents. Tagline updated. SVG and PNG regenerated.
+
+### Fixed
+
+- **CodeQL alerts #41 and #42** — Removed stale JSDoc comment from removed `stripHtmlTags()` function that contained `<script` and `<style` substrings in documentation text, triggering false-positive "incomplete multi-character sanitization" alerts.
+- **CodeQL alert #43** — Fixed `url.includes("developer.mozilla.org")` in `src/verticals/docs-site.ts` which could match attacker-controlled subdomains (e.g. `developer.mozilla.org.evil.com`). Replaced with proper hostname parsing via new `isHostMatch()` helper. Also hardened `matchesDocsSite()` with the same pattern.
+
 ## [0.3.0] - 2026-05-08
 
 ### Added

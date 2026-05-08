@@ -1,6 +1,6 @@
 {
   "name": "pi-webaio",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "All-in-one web tools for pi with search (Google, Brave, DDG) and fetch with headless browser AI summarization",
   "license": "MIT",
   "repository": {
