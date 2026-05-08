@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.2.1] - 2026-05-08
+
+### Changed
+
+- **Pi scope migration** — Updated imports from `@mariozechner/pi-coding-agent` to `@earendil-works/pi-coding-agent` to match pi 0.74.0 package scope. Peer dependency updated, lockfile regenerated.
+- **Streaming webpull** — `aio-webpull` now streams each page via `onUpdate` as it completes (file path, title, URL, word count). Agent can inspect pages while the pull continues instead of waiting for the entire crawl.
+- **Clearer Chrome CDP errors** — Replaced cryptic "CDP launcher not found" and "google-ai.mjs not found" messages with actionable descriptions explaining which features are affected.
+- **Persistent search context** — Search→fetch context bridging now uses the session store instead of a global variable. Survives compaction, branching, and session restarts.
+- **Improved TypeScript types** — Expanded `types/pi-coding-agent.d.ts` from a bare `registerTool` stub to include `registerCommand`, `registerShortcut`, and `on()` — more accurately reflecting the real `@earendil-works/pi-coding-agent` API.
+
+### Added
+
+- **Playwright runtime warning** — One-time `console.warn` when Playwright is not installed, with install instructions. No more silent fail for JS-rendered page fallback.
+- **`AGENTS.md`** — Full project context document covering architecture, tool descriptions, extraction pipeline, security features, caching, rate limiting, and test setup for future agents.
+
+### Fixed
+
+- **SonarCloud security hotspots** — Resolved 13 hotspots across 5 files: command injection (HIGH, 4) in `bin/launch.mjs` and `src/search/chrome.mjs` via `spawnSync` + port/pid validation; regex DoS (MEDIUM, 5) by bounding capture groups in `extractors/common.mjs`, `extractors/selectors.mjs`, and `index.ts`; weak cryptography and PATH injection left untouched per user request.
+- **GitHub marker for AI summarization** — Added `>` marker to `pullGitHubRef` to prevent AI summarization on GitHub raw/tree/repo pages (3 previously uncovered code paths).
+
 ## [0.2.0] - 2026-05-05
 
 ### Fixed
@@ -37,21 +59,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Token-bucket rate limiter** — per-domain rate limiting (5 req/s, burst 10) in `smartFetch`. All tools (webfetch, webpull, websearch, GitHub API) are throttled politely. The limiter waits (sleeps) when the bucket is empty — no dropped requests.
 - **Proxy support** — `proxy` parameter added to `aio-webfetch` and `aio-webpull`. Supports HTTP, HTTPS, and SOCKS5 proxies (`http://user:pass@host:port` or `socks5://host:port`). Routed through to `wreq-js` for all fetches including discovery, bot protection fallback, and alternate link fallback.
 - **Search context bridging** — when `aio-webfetch` follows a recent `aio-websearch` (within 5 min), the original search query is injected into the summarization prompt: `"The user searched for: X. Give a concise summary of this page focusing on the user's search topic"` → summaries become context-aware and more focused.
-
-## [Unreleased]
-
-### Changed
-
-- **Pi scope migration** — Updated imports from `@mariozechner/pi-coding-agent` to `@earendil-works/pi-coding-agent` to match pi 0.74.0 package scope. Peer dependency updated, lockfile regenerated.
-- **Streaming webpull** — `aio-webpull` now streams each page via `onUpdate` as it completes (file path, title, URL, word count). Agent can inspect pages while the pull continues instead of waiting for the entire crawl.
-- **Clearer Chrome CDP errors** — Replaced cryptic "CDP launcher not found" and "google-ai.mjs not found" messages with actionable descriptions explaining which features are affected.
-- **Persistent search context** — Search→fetch context bridging now uses the session store instead of a global variable. Survives compaction, branching, and session restarts.
-- **Improved TypeScript types** — Expanded `types/pi-coding-agent.d.ts` from a bare `registerTool` stub to include `registerCommand`, `registerShortcut`, and `on()` — more accurately reflecting the real `@earendil-works/pi-coding-agent` API.
-
-### Added
-
-- **Playwright runtime warning** — One-time `console.warn` when Playwright is not installed, with install instructions. No more silent fail for JS-rendered page fallback.
-- **`AGENTS.md`** — Full project context document covering architecture, tool descriptions, extraction pipeline, security features, caching, rate limiting, and test setup for future agents.
 
 ## [0.1.8] - 2026-05-02
 

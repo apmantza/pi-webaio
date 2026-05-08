@@ -132,7 +132,7 @@ pi-webaio/
 
 ## Recent Changes
 
-### pi Scope Migration (v0.2.0)
+### pi Scope Migration (unreleased)
 
 - Pi moved from `@mariozechner/pi-*` to `@earendil-works/pi-*` package scope (pi 0.73.1+)
 - Extension imports updated accordingly
