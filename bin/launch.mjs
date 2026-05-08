@@ -18,7 +18,7 @@
 //   GREEDY_SEARCH_VISIBLE=1  — Show Chrome window (disables headless mode)
 //   CHROME_PATH              — Path to Chrome executable
 
-import { execSync, spawn, spawnSync } from "node:child_process";
+import { execSync, spawn } from "node:child_process";
 import {
 	existsSync,
 	mkdirSync,
@@ -208,19 +208,8 @@ function isRunning() {
 	}
 }
 
-/** Validate a port or PID is a safe positive integer to prevent shell injection. */
-function isSafePort(port) {
-	return Number.isInteger(port) && port > 0 && port <= 65535;
-}
-
-/** Validate a PID is a safe positive integer to prevent shell injection. */
-function isSafePid(pid) {
-	return Number.isInteger(pid) && pid > 0;
-}
-
 function getPortPid(port) {
 	try {
-		if (!isSafePort(port)) return null;
 		const os = platform();
 		if (os === "win32") {
 			const out = execSync(`netstat -ano -p TCP 2>nul`, { encoding: "utf8" });
@@ -245,11 +234,8 @@ function getPortPid(port) {
 
 function killProcess(pid) {
 	try {
-		if (!isSafePid(pid)) return false;
 		if (platform() === "win32") {
-			spawnSync("taskkill", ["/F", "/T", "/PID", String(pid)], {
-				stdio: "ignore",
-			});
+			execSync(`taskkill /F /T /PID ${pid}`, { stdio: "ignore" });
 		} else {
 			process.kill(pid, "SIGTERM");
 		}
