@@ -8,3 +8,4 @@ dist/
 .pi-lens/
 grep-test.json
 nul
+docs/

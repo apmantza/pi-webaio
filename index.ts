@@ -40,6 +40,7 @@ import {
 	formatInteractablesSection,
 } from "./src/interactive-elements.js";
 import { pruneMarkdown } from "./src/prune-markdown.js";
+import { ghFetch, getGithubToken } from "./src/github-api.js";
 
 // ─── pdf-parse loose typing (CJS, no bundled .d.ts) ────────────────
 
@@ -209,6 +210,7 @@ const NAV_SELECTORS = [
 const MARKDOWN_SIGNAL = /^(#{1,6}\s|[-*]\s|\d+\.\s|```|>\s|\[.+\]\(.+\))/m;
 const DEFUDDLE_TIMEOUT = 8000;
 const MAX_PREVIEW_CHARS = 1800; // ~500 tokens for tool result preview
+const MAX_RESPONSE_BYTES = 10 * 1024 * 1024; // 10 MB — streaming cap to prevent memory exhaustion
 
 const DEFAULT_BROWSER = "chrome_145";
 const DEFAULT_OS = "windows";
@@ -1120,6 +1122,38 @@ async function fetchWithPlaywright(url: string): Promise<string | null> {
 	return null;
 }
 
+/**
+ * Stream-read a response body with a byte budget cap.
+ * Prevents memory exhaustion from unexpectedly large responses.
+ * Cancels the reader when the cap is exceeded.
+ */
+async function readResponseText(response: any): Promise<string> {
+	if (!response.body) return response.text();
+	const reader = response.body.getReader();
+	const decoder = new TextDecoder();
+	let result = "";
+	let bytesRead = 0;
+	try {
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			bytesRead += value.byteLength;
+			if (bytesRead > MAX_RESPONSE_BYTES) {
+				reader.cancel();
+				throw new Error(
+					`Response exceeds ${MAX_RESPONSE_BYTES} byte limit (${(MAX_RESPONSE_BYTES / 1024 / 1024).toFixed(1)}MB)`,
+				);
+			}
+			result += decoder.decode(value, { stream: true });
+		}
+		result += decoder.decode();
+		return result;
+	} catch (err) {
+		reader.cancel();
+		throw err;
+	}
+}
+
 async function smartFetch(
 	url: string,
 	options: FetchOpts = {},
@@ -1162,7 +1196,7 @@ async function smartFetch(
 		return null;
 	}
 
-	const text = await res.text();
+	const text = await readResponseText(res);
 
 	// Bot protection fallback: try alternate browser profiles
 	if (isLikelyBotProtection(text)) {
@@ -1177,7 +1211,7 @@ async function smartFetch(
 				...(options.proxy ? { proxy: options.proxy } : {}),
 			});
 			if (fbRes?.ok) {
-				const fbText = await fbRes.text();
+				const fbText = await readResponseText(fbRes);
 				if (!isLikelyBotProtection(fbText)) {
 					return {
 						text: fbText,
@@ -1786,33 +1820,6 @@ const GH_FEATURE_API_MAP: Record<string, string> = {
 	// discussions, wiki, settings, network, community, graphs
 };
 
-// Feature pages where gh has a dedicated subcommand (better than raw API)
-const GH_NATIVE_COMMANDS: Record<
-	string,
-	{ cmd: string; args: string[]; formatter: string }
-> = {
-	issues: {
-		cmd: "issue",
-		args: ["list", "--state", "all", "--limit", "20"],
-		formatter: "--json",
-	},
-	pulls: {
-		cmd: "pr",
-		args: ["list", "--state", "all", "--limit", "20"],
-		formatter: "--json",
-	},
-	actions: {
-		cmd: "run",
-		args: ["list", "--limit", "20"],
-		formatter: "--json",
-	},
-	releases: {
-		cmd: "release",
-		args: ["list", "--limit", "20"],
-		formatter: "--json",
-	},
-};
-
 // ─── SonarCloud API handler ─────────────────────────────────
 
 /**
@@ -2034,11 +2041,9 @@ async function pullGitHub(url: string): Promise<PullResult | null> {
 		return pullGitHubRef(ref);
 	}
 
-	// Feature page? Try gh api if available
-	if (ghAvailable()) {
-		const featureResult = await pullGitHubFeature(url);
-		if (featureResult) return featureResult;
-	}
+	// Feature page? Try GitHub API (works unauthenticated for public repos)
+	const featureResult = await pullGitHubFeature(url);
+	if (featureResult) return featureResult;
 
 	return null;
 }
@@ -2076,10 +2081,8 @@ async function pullGitHubFeature(url: string): Promise<PullResult | null> {
 
 		const [owner, repo, feature, ...rest] = parts;
 		const baseRepoPath = `/repos/${owner}/${repo}`;
-		const fullRepo = `${owner}/${repo}`;
 
 		let apiPath: string | null = null;
-		let useNativeCommand: (typeof GH_NATIVE_COMMANDS)[string] | null = null;
 		let featureLabel = feature;
 
 		// ── Handle /security sub-pages ──
@@ -2121,38 +2124,20 @@ async function pullGitHubFeature(url: string): Promise<PullResult | null> {
 			const mapped = GH_FEATURE_API_MAP[feature];
 			if (mapped !== undefined) {
 				apiPath = `${baseRepoPath}${mapped}`;
-				// Check for native gh command
-				if (GH_NATIVE_COMMANDS[feature]) {
-					useNativeCommand = GH_NATIVE_COMMANDS[feature];
-				}
 			}
 		}
 
 		if (!apiPath) return null;
 
-		let raw: string;
+		let data: any;
 		try {
-			if (useNativeCommand) {
-				// Use gh subcommand (e.g. gh issue list --repo owner/repo)
-				raw = await ghCommand(useNativeCommand.cmd, [
-					...useNativeCommand.args,
-					"--repo",
-					fullRepo,
-					useNativeCommand.formatter,
-					"number,title,state,url",
-				]);
-			} else {
-				raw = await ghApi(apiPath);
-			}
-		} catch (err: any) {
-			// gh failed (not logged in, rate limited, etc.) → web fetch
+			data = await ghFetch(apiPath);
+		} catch (_err) {
 			return null;
 		}
 
-		const data = JSON.parse(raw);
-
 		let md = `# ${owner}/${repo} — ${featureLabel}\n\n`;
-		md += `> via gh api\n\n`;
+		md += `> via GitHub API\n\n`;
 
 		if (Array.isArray(data)) {
 			const items = data.slice(0, 20);
@@ -2200,69 +2185,12 @@ async function pullGitHubFeature(url: string): Promise<PullResult | null> {
 	}
 }
 
-/** Spawn gh with a subcommand (e.g. gh issue list --repo owner/repo --json ...) */
-const GH_PATH = /*#__PURE__*/ resolveBinary("gh");
-function ghCommand(cmd: string, args: string[]): Promise<string> {
-	const gh = GH_PATH || "gh";
-	return new Promise((resolve, reject) => {
-		const proc = spawn(gh, [cmd, ...args], {
-			stdio: ["ignore", "pipe", "pipe"],
-		});
-		let out = "";
-		let err = "";
-		proc.stdout.on("data", (d: Buffer) => (out += d));
-		proc.stderr.on("data", (d: Buffer) => (err += d));
-		proc.on("close", (code: number) => {
-			if (code === 0) resolve(out.trim());
-			else reject(new Error(err.trim() || `gh ${cmd} exit ${code}`));
-		});
-		proc.on("error", reject);
-	});
-}
-
-/** Spawn gh api (generic REST API call) */
-function ghApi(path: string): Promise<string> {
-	return ghCommand("api", [
-		"-H",
-		"Accept: application/vnd.github+json",
-		"-H",
-		"X-GitHub-Api-Version: 2022-11-28",
-		path,
-	]);
-}
-
 async function githubApiFetch(path: string): Promise<unknown | null> {
-	// Try gh CLI first (authenticated: 5000 req/hr, private repos)
-	if (ghAvailable()) {
-		try {
-			const out = await ghApi(path);
-			return JSON.parse(out);
-		} catch {
-			// Fall through to unauthenticated API
-		}
-	}
-
-	const res = await smartFetch(`https://api.github.com${path}`, {
-		headers: {
-			Accept: "application/vnd.github+json",
-			"X-GitHub-Api-Version": "2022-11-28",
-			"User-Agent": "pi-webaio",
-		},
-	});
-	if (!res || res.status >= 400) return null;
 	try {
-		return JSON.parse(res.text);
+		return await ghFetch(path);
 	} catch {
 		return null;
 	}
-}
-
-let _ghAvailable: boolean | null = null;
-function ghAvailable(): boolean {
-	if (_ghAvailable !== null) return _ghAvailable;
-	const ghPath = resolveBinary("gh");
-	_ghAvailable = ghPath !== null;
-	return _ghAvailable;
 }
 
 async function fetchGitHubRaw(
@@ -2271,7 +2199,34 @@ async function fetchGitHubRaw(
 	ref: string,
 	path: string,
 ): Promise<PullResult> {
-	const branches = [ref, "main", "master"];
+	// Collect branches to try: caller-provided ref, then main, then master.
+	// If ref is a commit SHA (40 hex chars), query the API for the default branch
+	// so we don't waste 3 failed requests.
+	const tried = new Set<string>();
+	const branches: string[] = [ref];
+	tried.add(ref);
+
+	for (const b of ["main", "master"]) {
+		if (!tried.has(b)) {
+			branches.push(b);
+			tried.add(b);
+		}
+	}
+
+	// If ref looks like a SHA (40 hex chars), query the repo's default branch
+	if (/^[0-9a-f]{40}$/i.test(ref)) {
+		try {
+			const repoInfo = (await ghFetch(`/repos/${owner}/${repo}`)) as any;
+			const defaultBranch = repoInfo?.default_branch;
+			if (defaultBranch && !tried.has(defaultBranch)) {
+				branches.splice(1, 0, defaultBranch); // try right after the SHA
+				tried.add(defaultBranch);
+			}
+		} catch {
+			// API unavailable — continue with current list
+		}
+	}
+
 	for (const b of branches) {
 		const res = await smartFetch(
 			`https://raw.githubusercontent.com/${owner}/${repo}/${b}/${path}`,
@@ -2364,8 +2319,12 @@ async function cloneGitHubRepo(
 			return { ok: true, path: outDir };
 		}
 
-		// Fallback: git clone
-		const cloneUrl = `https://github.com/${owner}/${repo}.git`;
+		// Fallback: git clone. If GITHUB_TOKEN is available, inject it for private repos.
+		let cloneUrl = `https://github.com/${owner}/${repo}.git`;
+		const token = await getGithubToken();
+		if (token) {
+			cloneUrl = `https://x-access-token:${token}@github.com/${owner}/${repo}.git`;
+		}
 		const gitPath = resolveBinary("git") || "git";
 		await new Promise<void>((resolve, reject) => {
 			const proc = spawn(gitPath, ["clone", "--depth", "1", cloneUrl, outDir], {
@@ -3394,6 +3353,18 @@ export default function (pi: ExtensionAPI) {
 					description: "Extract interactive elements as numbered refs.",
 				}),
 			),
+			start_index: Type.Optional(
+				Type.Number({
+					description:
+						"Return content starting from this character index (0-based). Use with max_length for pagination.",
+				}),
+			),
+			max_length: Type.Optional(
+				Type.Number({
+					description:
+						"Maximum characters to return (default: unlimited). Use with start_index for pagination.",
+				}),
+			),
 		}) as any,
 
 		async execute(_toolCallId: string, params: any): Promise<any> {
@@ -3437,6 +3408,8 @@ export default function (pi: ExtensionAPI) {
 					const mode = (params.mode as ScrapeMode) ?? "auto";
 					const interactive = params.interactive === true;
 					const pruneTokens = params.prune as number | undefined;
+					const startIndex = params.start_index as number | undefined;
+					const maxLength = params.max_length as number | undefined;
 					const result = await pullPageEnhanced(url.href, {
 						browser,
 						os,
@@ -3451,7 +3424,7 @@ export default function (pi: ExtensionAPI) {
 						};
 					}
 
-					// Post-processing: interactive extraction + token pruning
+					// Post-processing: interactive extraction + pagination + token pruning
 					let contentBody = result.content ?? "";
 
 					if (interactive && result.rawHtml) {
@@ -3459,6 +3432,24 @@ export default function (pi: ExtensionAPI) {
 						const actionsSection = formatInteractablesSection(interactables);
 						if (actionsSection) {
 							contentBody = actionsSection + "\n" + contentBody;
+						}
+					}
+
+					const totalChars = contentBody.length;
+
+					// Apply pagination (start_index + max_length) before pruning
+					if (startIndex !== undefined || maxLength !== undefined) {
+						const si = startIndex ?? 0;
+						const ml =
+							maxLength !== undefined && maxLength > 0
+								? maxLength
+								: totalChars - si;
+						const end = Math.min(si + ml, totalChars);
+						if (si < totalChars) {
+							contentBody = contentBody.slice(si, end);
+							contentBody += `\n\n_(chars ${si + 1}-${end} of ${totalChars} total)_`;
+						} else {
+							contentBody = `_(start_index ${si} exceeds content length ${totalChars})_`;
 						}
 					}
 

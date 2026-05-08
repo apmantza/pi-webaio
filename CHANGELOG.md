@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **GitHub CLI dependency removed** — Replaced all `gh api` and `gh subcommand` calls with direct REST API via new `src/github-api.ts`. The `gh` binary is no longer required for reading GitHub repos, trees, blobs, or feature pages (issues, PRs, actions, releases, commits, security alerts, etc.). Feature-page URL parsing still works unauthenticated for public repos at 60 req/hr.
+- **`ghFetch<T>()` helper** — 3-tier auth fallback: `GITHUB_TOKEN` env → `GH_TOKEN` env → `gh auth token` (from logged-in CLI) → unauthenticated. Exponential backoff on 429/5xx/network errors with `Retry-After` header support. Exported `isRetryableNetworkError` for testing.
+- **`cloneGitHubRepo()` private repo support** — Injects `GITHUB_TOKEN` into clone URL (`x-access-token:TOKEN@github.com/...`) when `gh` CLI is unavailable but a token is set. Enables cloning private repos without the `gh` binary.
+- **`fetchGitHubRaw()` smarter branch fallback** — Queries `GET /repos/{owner}/{repo}` for the default branch when the ref looks like a commit SHA (40 hex chars), instead of guessing main→master→fail.
+- **Streaming response reader** — New `readResponseText()` function replaces `res.text()` in `smartFetch()`. Streams via `ReadableStream` with 10MB byte cap (`MAX_RESPONSE_BYTES`) to prevent memory exhaustion from unexpectedly large responses.
+- **Pagination on `aio-webfetch`** — New `start_index` and `max_length` params. Applied after interactive extraction, before token pruning. Returns `_(chars X–Y of Z total)_` footer so the agent knows where it is. Out-of-bounds `start_index` returns a clear error.
+
+### Removed
+
+- **`ghCommand()`, `ghApi()`, `ghAvailable()`, `GH_NATIVE_COMMANDS`** (~90 lines) — Replaced by `ghFetch()` in `src/github-api.ts`.
+
 ## [0.3.1] - 2026-05-08
 
 ### Changed
