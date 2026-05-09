@@ -2167,8 +2167,8 @@ async function pullGitHubFeature(url: string): Promise<PullResult | null> {
 
 			// Fetch jobs
 			try {
-				const jobsData = await ghFetch(`/repos/${owner}/${repo}/actions/runs/${runId}/jobs?per_page=20`);
-				let jobs = jobsData?.jobs ? (jobsData as any).jobs : [];
+				const jobsData = await ghFetch(`/repos/${owner}/${repo}/actions/runs/${runId}/jobs?per_page=20`) as any;
+				let jobs = jobsData?.jobs || [];
 
 				// If a specific job ID is in the URL, fetch it individually and show first
 				if (highlightJobId) {
