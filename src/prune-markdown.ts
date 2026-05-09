@@ -84,7 +84,7 @@ function splitSections(markdown: string): Array<{
 function scoreSection(
 	section: { heading: string; level: number; content: string },
 	index: number,
-	total: number,
+	_total: number,
 ): number {
 	let score = 0;
 

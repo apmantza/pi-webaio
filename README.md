@@ -39,16 +39,21 @@ pi install git:github.com/apmantza/pi-webaio
 
 #### `aio-webfetch`
 
-| Parameter | Type       | Default      | Description                                                                                                                       |
-| --------- | ---------- | ------------ | --------------------------------------------------------------------------------------------------------------------------------- |
-| `url`     | `string`   | —            | Single URL to fetch. Use either `url` or `urls`, not both.                                                                        |
-| `urls`    | `string[]` | —            | Multiple URLs to fetch in parallel. Use either `url` or `urls`, not both.                                                         |
-| `out`     | `string`   | auto-derived | Output file path under temp (for single url only)                                                                                 |
-| `mode`    | `string`   | `auto`       | Scrape mode: `auto` (escalates), `fast`, `fingerprint`, or `browser`                                                              |
-| `browser` | `string`   | latest       | Browser profile for TLS fingerprinting. Auto-selects latest Chrome. Options: `chrome_145`, `firefox_147`, `safari_26`, `edge_145` |
-| `os`      | `string`   | `windows`    | OS profile for fingerprinting. Options: `windows`, `macos`, `linux`, `android`, `ios`                                             |
-| `proxy`   | `string`   | —            | Proxy URL (`http://user:pass@host:port` or `socks5://host:port`). Supports HTTP, HTTPS, SOCKS5.                                   |
-| `compile` | `boolean`  | `false`      | Compile batch results into a single context package                                                                               |
+| Parameter         | Type       | Default      | Description                                                                                                                       |
+| ----------------- | ---------- | ------------ | --------------------------------------------------------------------------------------------------------------------------------- |
+| `url`             | `string`   | —            | Single URL to fetch. Use either `url` or `urls`, not both.                                                                        |
+| `urls`            | `string[]` | —            | Multiple URLs to fetch in parallel. Use either `url` or `urls`, not both.                                                         |
+| `out`             | `string`   | auto-derived | Output file path under temp (for single url only)                                                                                 |
+| `mode`            | `string`   | `auto`       | Scrape mode: `auto` (escalates), `fast`, `fingerprint`, or `browser`                                                              |
+| `browser`         | `string`   | latest       | Browser profile for TLS fingerprinting. Auto-selects latest Chrome. Options: `chrome_145`, `firefox_147`, `safari_26`, `edge_145` |
+| `os`              | `string`   | `windows`    | OS profile for fingerprinting. Options: `windows`, `macos`, `linux`, `android`, `ios`                                             |
+| `proxy`           | `string`   | —            | Proxy URL (`http://user:pass@host:port` or `socks5://host:port`). Supports HTTP, HTTPS, SOCKS5.                                   |
+| `cacheTtlSeconds` | `number`   | —            | Opt-in cache TTL in seconds. Omit for fresh fetches.                                                                              |
+| `compile`         | `boolean`  | `false`      | Compile batch results into a single context package                                                                               |
+| `prune`           | `number`   | —            | Prune markdown to token budget (e.g. 3000)                                                                                        |
+| `interactive`     | `boolean`  | `false`      | Extract interactive elements as numbered refs                                                                                     |
+| `start_index`     | `number`   | `0`          | Return content starting from this character index (0-based). Use with `max_length` for pagination.                                |
+| `max_length`      | `number`   | unlimited    | Maximum characters to return. Use with `start_index` for pagination.                                                              |
 
 #### `aio-webcontent`
 

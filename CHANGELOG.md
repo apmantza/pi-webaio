@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **HTML compression pipeline** (`src/html-compress.ts`) — Strips noise attributes (class, id, data-\*, style, event handlers, ARIA) before feeding HTML to Readability/Defuddle. Removes empty elements across multiple passes. Runs after `preCleanHtml()` in the extraction pipeline. Reduces token bloat from HTML cruft while preserving semantic attributes (href, src, alt, itemprop, role).
+- **Token counting** (`src/token-count.ts`) — Approximate GPT-family token estimation with CJK detection. `estimateTokensFast()` for hot paths, `estimateTokens()` for accuracy-sensitive use.
+- **Interactive element extraction** (`src/interactive-elements.ts`) — Extracts buttons, links, forms, selects, inputs, textareas as numbered `[1] button: "Submit" ⌥ B` refs. New `interactive` parameter on `aio-webfetch`.
+- **Token-budget pruning** (`src/prune-markdown.ts`) — Score-based markdown section pruning. Splits content by headings, scores sections by importance (headings, first-section bonus, keyword matching, code-block penalty), greedily fills token budget. New `prune` parameter on `aio-webfetch`.
+- **Architecture detection** — `detectArchitectureSignals()` analyzes cloned repo file trees for Docker, CI/CD (GitHub Actions, GitLab CI, Jenkins, CircleCI, Travis, Azure Pipelines, Bitbucket Pipelines), test frameworks (Jest, Vitest, Playwright, Cypress, pytest, Mocha, Karma), monorepo tooling (Lerna, Nx, Turborepo, pnpm workspaces, Rush), package managers (from lockfiles), and security signals (SECURITY.md, .env committed, Dependabot). Integrated into `buildRepoMarkdown()` for GitHub repo fetches.
+- **Link rewriting** — `rewriteLinks()` converts absolute URLs between pulled pages to relative `.md` paths during `aio-webpull`. Fragment preservation. Only activates when ≥2 page links match.
+- **CI run handler** — `pullGitHubFeature()` now fetches job details and step-by-step status tables for individual GitHub Actions run URLs (`/actions/runs/{id}`). Supports `/actions/runs/{id}/job/{jid}` sub-paths — highlights the specific job and fetches failed-job log excerpts (last 15 error lines or 50 tail lines). Shows PR references when available (e.g. dependabot PRs).
+
+### Fixed
+
+- **Browser mode discarded Playwright HTML** — Both the explicit `mode: "browser"` path and the auto-escalation Playwright fallback in `pullPageEnhanced()` called `fetchWithPlaywright()` to get JS-rendered HTML, then immediately discarded it and called `pullPage()` which did a fresh `wreq-js` fetch. Browser mode was effectively a no-op. Fixed by adding an optional `htmlOverride` parameter to `pullPage()` and extracting the 100+ line HTML extraction pipeline into a shared `runHtmlPipeline()` helper. Both the browser mode path and auto-escalation fallback now pass Playwright HTML through via `htmlOverride`.
+- **DNS failures not retried in main fetch** — `isRetryableNetworkError()` in `index.ts` was missing `ENOTFOUND` and `getaddrinfo` detection (already present in `src/github-api.ts`). DNS resolution failures during `smartFetch` were not retried. Added both markers.
+- **Unused imports and variables** — Removed unused `readdir`/`stat` imports from `src/storage.ts`, removed unused `running` variable and `profileDir` from `src/google-ai.ts`, renamed unused `total` parameter to `_total` in `src/prune-markdown.ts:scoreSection()`.
+- **Implicit `any` and deprecated API** — Added explicit `string` type annotation to `l` parameter in sitemap parser (`index.ts:1301`). Replaced deprecated `Buffer.slice()` with `Buffer.subarray()` in binary detection (`index.ts:3254`).
+
 ### Changed
 
 - **GitHub CLI dependency removed** — Replaced all `gh api` and `gh subcommand` calls with direct REST API via new `src/github-api.ts`. The `gh` binary is no longer required for reading GitHub repos, trees, blobs, or feature pages (issues, PRs, actions, releases, commits, security alerts, etc.). Feature-page URL parsing still works unauthenticated for public repos at 60 req/hr.

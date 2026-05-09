@@ -2,14 +2,7 @@
 // Durable storage with response IDs that survive restarts.
 // Uses a JSON metadata index + content-addressed blobs under os.tmpdir().
 
-import {
-	mkdir,
-	readFile,
-	writeFile,
-	readdir,
-	stat,
-	unlink,
-} from "node:fs/promises";
+import { mkdir, readFile, writeFile, unlink } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { tmpdir } from "node:os";

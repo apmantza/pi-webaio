@@ -108,8 +108,6 @@ export function ensureChrome(headless = true): Promise<ChromeStatus> {
 
 			if (code === 0) {
 				// Parse status from output
-				const running =
-					output.includes("already running") || output.includes("Ready");
 				const ready = output.includes("Ready");
 				resolve({ running: true, ready });
 			} else if (output.includes("already running")) {
@@ -196,10 +194,8 @@ export function googleAISearch(
 		if (short) args.push("--short");
 		if (locale) args.push("--locale", locale);
 
-		// Set CDP_PROFILE_DIR so cdp.mjs targets the GreedySearch Chrome profile
-		const profileDir = resolvePath("..", "greedysearch-chrome-profile");
-		// Actually, constants.mjs uses tmpdir(), so we need to set it to match
-		// what launch.mjs uses
+		// Set CDP_PROFILE_DIR so cdp.mjs targets the GreedySearch Chrome profile.
+		// constants.mjs uses tmpdir(), so we set it to match what launch.mjs uses.
 		const greedyProfileDir = `${tmpdir().replace(/\\/g, "/")}/greedysearch-chrome-profile`;
 
 		const env: Record<string, string> = {

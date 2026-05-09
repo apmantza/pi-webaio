@@ -313,7 +313,9 @@ function isRetryableNetworkError(err: unknown): boolean {
 		msg.includes("ECONNRESET") ||
 		msg.includes("ETIMEDOUT") ||
 		msg.includes("ECONNREFUSED") ||
-		msg.includes("timeout")
+		msg.includes("timeout") ||
+		msg.includes("ENOTFOUND") ||
+		msg.includes("getaddrinfo")
 	);
 }
 
@@ -1296,7 +1298,7 @@ async function sitemapFromRobots(origin: string): Promise<string[]> {
 	const r = await tryFetch(`${origin}/robots.txt`);
 	if (!r) return [];
 	const urls = (r.text.match(/^Sitemap:\s*([^\n]{1,2000})$/gim) ?? []).map(
-		(l) => l.replace(/^Sitemap:\s*/i, "").trim(),
+		(l: string) => l.replace(/^Sitemap:\s*/i, "").trim(),
 	);
 	if (!urls.length) return [];
 	const results = await Promise.all(urls.map((u) => fetchSitemap(u)));
@@ -2145,17 +2147,27 @@ async function pullGitHubFeature(url: string): Promise<PullResult | null> {
 		md += `> via GitHub API\n\n`;
 
 		// Special handling for individual CI runs — fetch job details
-		if (feature === "actions" && rest[0] === "runs" && rest[1] && data && !Array.isArray(data)) {
+		if (
+			feature === "actions" &&
+			rest[0] === "runs" &&
+			rest[1] &&
+			data &&
+			!Array.isArray(data)
+		) {
 			const run = data;
 			const runId = rest[1];
 			const highlightJobId = rest[2] === "job" && rest[3] ? rest[3] : null;
 
 			const statusIcon =
-				run.conclusion === "success" ? "✅"
-				: run.conclusion === "failure" ? "❌"
-				: run.conclusion === "cancelled" ? "⏹️"
-				: run.status === "in_progress" ? "🔄"
-				: "⏳";
+				run.conclusion === "success"
+					? "✅"
+					: run.conclusion === "failure"
+						? "❌"
+						: run.conclusion === "cancelled"
+							? "⏹️"
+							: run.status === "in_progress"
+								? "🔄"
+								: "⏳";
 			md += `${statusIcon} **${run.display_title || run.name}** (#${run.run_number})\n`;
 			md += `- **Status:** ${run.status} / ${run.conclusion || "pending"}\n`;
 			md += `- **Branch:** ${run.head_branch} (${run.head_sha?.slice(0, 7)})\n`;
@@ -2167,13 +2179,17 @@ async function pullGitHubFeature(url: string): Promise<PullResult | null> {
 
 			// Fetch jobs
 			try {
-				const jobsData = await ghFetch(`/repos/${owner}/${repo}/actions/runs/${runId}/jobs?per_page=20`) as any;
+				const jobsData = (await ghFetch(
+					`/repos/${owner}/${repo}/actions/runs/${runId}/jobs?per_page=20`,
+				)) as any;
 				let jobs = jobsData?.jobs || [];
 
 				// If a specific job ID is in the URL, fetch it individually and show first
 				if (highlightJobId) {
 					try {
-						const singleJob = await ghFetch(`/repos/${owner}/${repo}/actions/jobs/${highlightJobId}`);
+						const singleJob = await ghFetch(
+							`/repos/${owner}/${repo}/actions/jobs/${highlightJobId}`,
+						);
 						if (singleJob && !(singleJob as any).message) {
 							// Replace or add this job at the top
 							jobs = jobs.filter((j: any) => j.id !== (singleJob as any).id);
@@ -2187,32 +2203,48 @@ async function pullGitHubFeature(url: string): Promise<PullResult | null> {
 				if (jobs.length) {
 					md += `\n## Jobs (${jobs.length})\n\n`;
 					for (const job of jobs) {
-						const isHighlighted = highlightJobId && String(job.id) === highlightJobId;
+						const isHighlighted =
+							highlightJobId && String(job.id) === highlightJobId;
 						const jIcon =
-							job.conclusion === "success" ? "✅"
-							: job.conclusion === "failure" ? "❌"
-							: job.conclusion === "cancelled" ? "⏹️"
-							: job.status === "in_progress" ? "🔄"
-							: "⏳";
+							job.conclusion === "success"
+								? "✅"
+								: job.conclusion === "failure"
+									? "❌"
+									: job.conclusion === "cancelled"
+										? "⏹️"
+										: job.status === "in_progress"
+											? "🔄"
+											: "⏳";
 						md += `### ${jIcon} ${isHighlighted ? "👉 " : ""}${job.name}\n\n`;
 						md += `- **Status:** ${job.status} / ${job.conclusion || "pending"}\n`;
-						if (job.completed_at) md += `- **Completed:** ${job.completed_at}\n`;
+						if (job.completed_at)
+							md += `- **Completed:** ${job.completed_at}\n`;
 
 						// If highlighting a specific job, fetch its log
-						if (isHighlighted && job.status === "completed" && job.conclusion === "failure") {
+						if (
+							isHighlighted &&
+							job.status === "completed" &&
+							job.conclusion === "failure"
+						) {
 							try {
 								const logRes = await fetch(job.logs_url || `${job.url}/logs`, {
 									headers: { Accept: "text/plain", "User-Agent": "pi-webaio" },
 								});
-								if (logRes.ok && logRes.headers.get("content-type")?.includes("text/plain")) {
+								if (
+									logRes.ok &&
+									logRes.headers.get("content-type")?.includes("text/plain")
+								) {
 									const logText = await logRes.text();
 									// Extract lines that look like errors or the last 50 lines
 									const lines = logText.split("\n");
-									const errorLines = lines.filter((l) => /error|fail|Error|FAIL/i.test(l));
+									const errorLines = lines.filter((l) =>
+										/error|fail|Error|FAIL/i.test(l),
+									);
 									const tail = lines.slice(-50);
-									const logExcerpt = errorLines.length > 0
-										? errorLines.slice(-15).join("\n")
-										: tail.join("\n");
+									const logExcerpt =
+										errorLines.length > 0
+											? errorLines.slice(-15).join("\n")
+											: tail.join("\n");
 									md += `\n<details>\n<summary>📋 Failed job log excerpt</summary>\n\n\`\`\`\n${logExcerpt.slice(0, 3000)}\n\`\`\`\n</details>\n\n`;
 								}
 							} catch {
@@ -2224,11 +2256,15 @@ async function pullGitHubFeature(url: string): Promise<PullResult | null> {
 							md += `\n| Step | Status |\n|------|--------|\n`;
 							for (const step of job.steps) {
 								const sIcon =
-									step.conclusion === "success" ? "✅"
-									: step.conclusion === "failure" ? "❌"
-									: step.conclusion === "cancelled" ? "⏹️"
-									: step.conclusion === "skipped" ? "⏭️"
-									: "⏳";
+									step.conclusion === "success"
+										? "✅"
+										: step.conclusion === "failure"
+											? "❌"
+											: step.conclusion === "cancelled"
+												? "⏹️"
+												: step.conclusion === "skipped"
+													? "⏭️"
+													: "⏳";
 								md += `| ${sIcon} ${step.name} | ${step.conclusion || step.status} |\n`;
 							}
 							md += `\n`;
@@ -2240,7 +2276,12 @@ async function pullGitHubFeature(url: string): Promise<PullResult | null> {
 				md += `\n_(job details unavailable)_\n`;
 			}
 
-			return { ok: true, url, title: `${owner}/${repo} — ${featureLabel}`, content: md };
+			return {
+				ok: true,
+				url,
+				title: `${owner}/${repo} — ${featureLabel}`,
+				content: md,
+			};
 		}
 
 		if (Array.isArray(data)) {
@@ -2510,7 +2551,11 @@ function detectArchitectureSignals(paths: string[]): string {
 	const lines: string[] = [];
 
 	// Docker
-	if (paths.some((p) => /^(Dockerfile|docker-compose\.(yml|yaml)|\.dockerignore)$/.test(p)))
+	if (
+		paths.some((p) =>
+			/^(Dockerfile|docker-compose\.(yml|yaml)|\.dockerignore)$/.test(p),
+		)
+	)
 		lines.push("- 🐳 **Docker:** yes");
 
 	// CI/CD
@@ -2549,13 +2594,12 @@ function detectArchitectureSignals(paths: string[]): string {
 	if (paths.some((p) => p === ".env")) secSignals.push("⚠ .env committed");
 	if (
 		paths.some(
-			(p) =>
-				p === ".github/dependabot.yml" ||
-				p === ".github/dependabot.yaml",
+			(p) => p === ".github/dependabot.yml" || p === ".github/dependabot.yaml",
 		)
 	)
 		secSignals.push("Dependabot");
-	if (secSignals.length) lines.push(`- 🔒 **Security:** ${secSignals.join(", ")}`);
+	if (secSignals.length)
+		lines.push(`- 🔒 **Security:** ${secSignals.join(", ")}`);
 
 	if (!lines.length) return "";
 	return `\n## Architecture\n\n${lines.join("\n")}\n`;
@@ -3034,12 +3078,158 @@ function wordCount(text: string): number {
 	return text.trim().split(/\s+/).filter(Boolean).length;
 }
 
+/**
+ * Run the HTML content extraction pipeline (steps 4-8 of pullPage).
+ * Shared by both the normal fetch path and the browser-mode htmlOverride path.
+ */
+async function runHtmlPipeline(
+	text: string,
+	finalUrl: string,
+	url: string,
+	_opts: FetchOpts | undefined,
+	redirectNotice: string | undefined,
+): Promise<PullResult> {
+	// Steps 4-6 (PDF/JSON/plain-text dispatch) are handled by pullPage before calling us.
+	// We assume the caller has already determined this is HTML content.
+
+	// ── 7. Client-side meta redirect (safety net for edge cases) ──
+	if (text.includes("http-equiv")) {
+		const redirectTarget = extractClientSideRedirect(text, finalUrl);
+		if (redirectTarget) {
+			return pullPage(redirectTarget, _opts, 1, undefined);
+		}
+	}
+
+	// ── 8. HTML content pipeline ──
+	// Pre-clean: remove noise elements, strip script/style tags. Then compress HTML.
+	let cleaned = preCleanHtml(text);
+	cleaned = compressHtml(cleaned);
+	const rawHtml = text;
+
+	// Try Jina AI for public URLs
+	if (!(await isDangerousUrl(url))) {
+		const jina = await fetchJina(url);
+		if (jina) {
+			// If Jina produced thin content, try alternate links before returning
+			if (wordCount(jina.content || "") < MIN_ALTERNATE_FALLBACK_WORDS) {
+				const alt = await tryAlternateLinks(text, finalUrl, _opts);
+				if (alt) return finalizePullResult(alt, redirectNotice);
+			}
+			return finalizePullResult(jina, redirectNotice);
+		}
+	}
+
+	// Try Readability
+	const readability = extractReadability(cleaned, finalUrl);
+	if (readability) {
+		// Heuristic: if Readability output is <1% of original HTML (>10KB),
+		// it likely picked the wrong container (e.g. a footer on a JS-only page).
+		// Fall through to Defuddle instead of returning garbage.
+		if (
+			text.length > 10000 &&
+			readability.content.length < 0.01 * text.length
+		) {
+			// skip — readability failed, try next extractor
+		} else {
+			// If Readability produced thin content, try alternate links
+			if (wordCount(readability.content) < MIN_ALTERNATE_FALLBACK_WORDS) {
+				const alt = await tryAlternateLinks(text, finalUrl, _opts);
+				if (alt) return finalizePullResult(alt, redirectNotice);
+			}
+			return finalizePullResult(
+				{
+					ok: true,
+					url: finalUrl,
+					title: readability.title,
+					content: readability.content,
+					rawHtml,
+				},
+				redirectNotice,
+			);
+		}
+	}
+
+	// Try RSC (Next.js flight data)
+	const rscContent = extractRSC(text);
+	if (rscContent) {
+		return finalizePullResult(
+			{
+				ok: true,
+				url: finalUrl,
+				title: new URL(finalUrl).hostname,
+				content: rscContent,
+			},
+			redirectNotice,
+		);
+	}
+
+	// Defuddle
+	try {
+		const result = await withTimeout(
+			Defuddle(cleaned, finalUrl, { markdown: true }),
+			DEFUDDLE_TIMEOUT,
+		);
+		let defContent = result.content || "";
+		// Strip Defuddle extractor footer comments
+		defContent = stripDefuddleComments(defContent);
+		defContent = cleanText(defContent);
+		// If Defuddle produced thin content, try alternate links
+		if (wordCount(defContent) < MIN_ALTERNATE_FALLBACK_WORDS) {
+			const alt = await tryAlternateLinks(text, finalUrl, _opts);
+			if (alt) return finalizePullResult(alt, redirectNotice);
+		}
+		return finalizePullResult(
+			{
+				ok: true,
+				url: finalUrl,
+				title: result.title || "",
+				content: defContent,
+				author: result.author || undefined,
+				published: result.published || undefined,
+				site: result.site || undefined,
+				language: result.language || undefined,
+				wordCount: result.wordCount || undefined,
+			},
+			redirectNotice,
+		);
+	} catch {
+		const { title, content } = fallbackExtract(cleaned);
+		// Last resort: if even the fallback is thin, try alternate links
+		if (wordCount(content) < MIN_ALTERNATE_FALLBACK_WORDS) {
+			const alt = await tryAlternateLinks(text, finalUrl, _opts);
+			if (alt) return finalizePullResult(alt, redirectNotice);
+		}
+		return finalizePullResult(
+			{ ok: true, url: finalUrl, title, content, rawHtml },
+			redirectNotice,
+		);
+	}
+}
+
 async function pullPage(
 	url: string,
 	opts?: FetchOpts,
 	_redirectCount = 0,
+	htmlOverride?: string,
 ): Promise<PullResult> {
 	let redirectNotice: string | undefined;
+
+	// ── 0. HTML override path (used by browser mode / Playwright fallback) ──
+	if (htmlOverride !== undefined) {
+		const text = htmlOverride;
+		const finalUrl = url;
+
+		// ── 7. Client-side meta redirect (only for HTML) ──
+		if (_redirectCount < MAX_CLIENT_REDIRECTS) {
+			const redirectTarget = extractClientSideRedirect(text, finalUrl);
+			if (redirectTarget) {
+				return pullPage(redirectTarget, opts, _redirectCount + 1, undefined);
+			}
+		}
+
+		// ── 8. HTML content pipeline ──
+		return runHtmlPipeline(text, finalUrl, url, opts, redirectNotice);
+	}
 
 	// ── 1. Special-cases (GitHub, SonarCloud) ──
 	const gh = await pullGitHub(url);
@@ -3061,7 +3251,7 @@ async function pullPage(
 		// Check if this looks like a binary download: non-text content-type
 		// or Content-Disposition: attachment. We detect by trying to parse the
 		// buffer as text — if it contains null bytes or is mostly non-ASCII, it's binary.
-		const headBytes = binPeek.buffer.slice(0, 1024);
+		const headBytes = binPeek.buffer.subarray(0, 1024);
 		const isBinary =
 			headBytes.includes(0) ||
 			headBytes.toString("utf8").replace(/[\x20-\x7E\n\r\t]/g, "").length >
@@ -3210,109 +3400,7 @@ async function pullPage(
 	}
 
 	// ── 8. HTML content pipeline ──
-	// Pre-clean: remove noise elements, strip script/style tags. Then compress HTML.
-	let cleaned = preCleanHtml(text);
-	cleaned = compressHtml(cleaned);
-	const rawHtml = text;
-
-	// Try Jina AI for public URLs
-	if (!(await isDangerousUrl(url))) {
-		const jina = await fetchJina(url);
-		if (jina) {
-			// If Jina produced thin content, try alternate links before returning
-			if (wordCount(jina.content || "") < MIN_ALTERNATE_FALLBACK_WORDS) {
-				const alt = await tryAlternateLinks(text, finalUrl, opts);
-				if (alt) return finalizePullResult(alt, redirectNotice);
-			}
-			return finalizePullResult(jina, redirectNotice);
-		}
-	}
-
-	// Try Readability
-	const readability = extractReadability(cleaned, finalUrl);
-	if (readability) {
-		// Heuristic: if Readability output is <1% of original HTML (>10KB),
-		// it likely picked the wrong container (e.g. a footer on a JS-only page).
-		// Fall through to Defuddle instead of returning garbage.
-		if (
-			text.length > 10000 &&
-			readability.content.length < 0.01 * text.length
-		) {
-			// skip — readability failed, try next extractor
-		} else {
-			// If Readability produced thin content, try alternate links
-			if (wordCount(readability.content) < MIN_ALTERNATE_FALLBACK_WORDS) {
-				const alt = await tryAlternateLinks(text, finalUrl, opts);
-				if (alt) return finalizePullResult(alt, redirectNotice);
-			}
-			return finalizePullResult(
-				{
-					ok: true,
-					url: finalUrl,
-					title: readability.title,
-					content: readability.content,
-					rawHtml,
-				},
-				redirectNotice,
-			);
-		}
-	}
-
-	// Try RSC (Next.js flight data)
-	const rsc = extractRSC(text);
-	if (rsc) {
-		return finalizePullResult(
-			{
-				ok: true,
-				url: finalUrl,
-				title: new URL(finalUrl).hostname,
-				content: rsc,
-			},
-			redirectNotice,
-		);
-	}
-
-	// Defuddle
-	try {
-		const result = await withTimeout(
-			Defuddle(cleaned, finalUrl, { markdown: true }),
-			DEFUDDLE_TIMEOUT,
-		);
-		let defContent = result.content || "";
-		// Strip Defuddle extractor footer comments
-		defContent = stripDefuddleComments(defContent);
-		defContent = cleanText(defContent);
-		// If Defuddle produced thin content, try alternate links
-		if (wordCount(defContent) < MIN_ALTERNATE_FALLBACK_WORDS) {
-			const alt = await tryAlternateLinks(text, finalUrl, opts);
-			if (alt) return finalizePullResult(alt, redirectNotice);
-		}
-		return finalizePullResult(
-			{
-				ok: true,
-				url: finalUrl,
-				title: result.title || "",
-				content: defContent,
-				author: result.author || undefined,
-				published: result.published || undefined,
-				site: result.site || undefined,
-				language: result.language || undefined,
-				wordCount: result.wordCount || undefined,
-			},
-			redirectNotice,
-		);
-	} catch {
-		const { title, content } = fallbackExtract(cleaned);
-		// Last resort: if even the fallback is thin, try alternate links
-		if (wordCount(content) < MIN_ALTERNATE_FALLBACK_WORDS) {
-			const alt = await tryAlternateLinks(text, finalUrl, opts);
-			if (alt) return finalizePullResult(alt, redirectNotice);
-		}
-		return finalizePullResult(
-			{ ok: true, url: finalUrl, title, content, rawHtml },
-			redirectNotice,
-		);
-	}
+	return runHtmlPipeline(text, finalUrl, url, opts, redirectNotice);
 }
 
 // ─── Enhanced pull page with verticals, data islands, bot detection, modes ───
@@ -3387,8 +3475,7 @@ async function pullPageEnhanced(
 					// Last resort: browser mode with Playwright
 					const pwHtml = await fetchWithPlaywright(url);
 					if (pwHtml) {
-						const pwResult = await pullPage(url, opts, _redirectCount);
-						// Replace the HTML with Playwright-rendered version
+						const pwResult = await pullPage(url, opts, _redirectCount, pwHtml);
 						if (pwResult.ok && pwResult.content) {
 							const pwBotCheck = detectBotBlock(pwResult.content);
 							if (!pwBotCheck.blocked) {
@@ -3431,7 +3518,7 @@ async function pullPageEnhanced(
 		const pwHtml = await fetchWithPlaywright(url);
 		if (pwHtml) {
 			// Feed Playwright HTML through the normal pipeline
-			return pullPage(url, opts, _redirectCount);
+			return pullPage(url, opts, _redirectCount, pwHtml);
 		}
 		return {
 			ok: false,
@@ -3511,34 +3598,31 @@ function rewriteLinks(
 		stemToPath.set(urlStem(url), path);
 	}
 
-	return markdown.replace(
-		/\[([^\]]*)\]\(([^)\s]+)\)/g,
-		(match, text, url) => {
-			// Skip anchor-only, mailto, javascript, data links
-			if (/^(#|mailto:|javascript:|data:)/.test(url)) return match;
+	return markdown.replace(/\[([^\]]*)\]\(([^)\s]+)\)/g, (match, text, url) => {
+		// Skip anchor-only, mailto, javascript, data links
+		if (/^(#|mailto:|javascript:|data:)/.test(url)) return match;
 
-			const key = urlStem(url);
-			const target = stemToPath.get(key);
+		const key = urlStem(url);
+		const target = stemToPath.get(key);
 
-			if (target && target !== currentPath) {
-				const fromDir = dirname(currentPath);
-				let relPath = relative(fromDir, target).replace(/\\/g, "/");
-				if (!relPath.startsWith(".")) relPath = "./" + relPath;
+		if (target && target !== currentPath) {
+			const fromDir = dirname(currentPath);
+			let relPath = relative(fromDir, target).replace(/\\/g, "/");
+			if (!relPath.startsWith(".")) relPath = "./" + relPath;
 
-				// Preserve fragment from the original link
-				try {
-					const hash = new URL(url, "http://x").hash;
-					if (hash) relPath += hash;
-				} catch {
-					/* ignore */
-				}
-
-				return `[${text}](${relPath})`;
+			// Preserve fragment from the original link
+			try {
+				const hash = new URL(url, "http://x").hash;
+				if (hash) relPath += hash;
+			} catch {
+				/* ignore */
 			}
 
-			return match;
-		},
-	);
+			return `[${text}](${relPath})`;
+		}
+
+		return match;
+	});
 }
 
 async function writePage(page: Page, outDir: string): Promise<string> {
@@ -4460,7 +4544,7 @@ export default function (pi: ExtensionAPI) {
 				for (const rel of files) {
 					const full = join(outDir, rel);
 					try {
-						let md = await readFile(full, "utf8");
+						const md = await readFile(full, "utf8");
 						const rewritten = rewriteLinks(md, pageUrlToPath, rel);
 						if (rewritten !== md) {
 							await writeFile(full, rewritten, "utf8");
@@ -4472,7 +4556,9 @@ export default function (pi: ExtensionAPI) {
 				}
 				if (rewrites > 0) {
 					onUpdate?.({
-						content: [{ type: "text", text: `🔗 Rewrote links in ${rewrites} files` }],
+						content: [
+							{ type: "text", text: `🔗 Rewrote links in ${rewrites} files` },
+						],
 						details: { stage: "rewrite", filesRewritten: rewrites },
 					});
 				}
