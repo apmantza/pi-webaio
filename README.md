@@ -18,14 +18,14 @@ pi install git:github.com/apmantza/pi-webaio
 
 ## Tools
 
-| Tool             | Description                                                                                                                                                                                                                                            |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `aio-websearch`  | Search the web using DuckDuckGo, Brave, and Google in parallel (no API keys required). Returns compact results with title, URL, and snippet. 7s cap — returns whatever is ready. Google runs via headless Chrome CDP (auto-launched). 10-minute cache. |
-| `aio-webfetch`   | Fetch a single URL (or batch of URLs) and convert to markdown with anti-bot TLS fingerprinting. Long content is **AI-summarized** via Google AI Mode; full file always saved. Detects PDFs, GitHub repos, and Next.js RSC. Supports auto escalation.   |
-| `aio-webcontent` | Retrieve previously fetched content from session storage by URL. Returns **full untruncated content** — no data loss.                                                                                                                                  |
-| `aio-webmap`     | Discovery-only tool — finds pages via robots.txt, sitemaps, navigation links, and llms.txt without fetching content. Returns structured URL list.                                                                                                      |
-| `aio-webresult`  | Retrieve a previously fetched result by persistent response ID. Survives restarts. Shows recent results if ID not found.                                                                                                                               |
-| `aio-webpull`    | Pull any public website or docs site into local markdown files with anti-bot TLS fingerprinting. Discovers pages via sitemap, navigation links, or crawling. Supports auto escalation and context package compilation.                                 |
+| Tool             | Description                                                                                                                                                                                                                                                             |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `aio-websearch`  | Search the web using DuckDuckGo, Brave, and Google in parallel (no API keys required). Returns compact results with title, URL, and snippet. 7s cap — returns whatever is ready. Google runs via headless Chrome CDP (auto-launched). 10-minute cache.                  |
+| `aio-webfetch`   | Fetch a single URL (or batch of URLs) and convert to markdown with anti-bot TLS fingerprinting. Long content is **AI-summarized** via Google AI Mode; full file always saved. Detects PDFs, GitHub repos, and Next.js RSC. Supports auto escalation.                    |
+| `aio-webcontent` | Retrieve previously fetched content from session storage by URL. Returns **full untruncated content** — no data loss.                                                                                                                                                   |
+| `aio-webmap`     | Discovery-only tool — finds pages via robots.txt, sitemaps, navigation links, and llms.txt without fetching content. Returns structured URL list.                                                                                                                       |
+| `aio-webresult`  | Retrieve a previously fetched result by persistent response ID. Survives restarts. Shows recent results if ID not found.                                                                                                                                                |
+| `aio-webpull`    | Pull any public website or docs site into local markdown files with anti-bot TLS fingerprinting. Discovers pages via sitemap, navigation links, or crawling. Rewrites internal links to relative `.md` paths. Supports auto escalation and context package compilation. |
 
 ### Tool Parameters
 
@@ -102,7 +102,8 @@ pi install git:github.com/apmantza/pi-webaio
 - **Provider cooldown system** — Search engines (DDG, Brave, Google) track failures with TTL cooldowns (10min quota / 2min network). Skipped engines don't waste time.
 - **HTTP→HTTPS auto-upgrade** — Normalizes `http://` requests and responses
 - **Cross-host redirect detection** — Surfaces a warning notice when a fetch redirects to a different domain
-- **GitHub-aware fetch** — Detects repos, trees, blobs; clones repos or uses API
+- **GitHub-aware fetch** — Detects repos, trees, blobs; clones repos or uses API. Special handling for GitHub Actions run URLs — fetches job details, step-by-step status, and failed job log excerpts
+- **Architecture detection** — Analyzes cloned repos for Docker, CI/CD platforms, test frameworks, monorepo tooling, package managers, and security signals
 - **PDF extraction** — Extracts text from PDFs (`pdf-parse`)
 - **RSC extraction** — Extracts Next.js React Server Components flight data
 - **JSON auto-detection** — Detects `application/json` content-type or body starting with `{`/`[`, returns pretty-printed

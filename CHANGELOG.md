@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-05-09
+
 ### Added
 
 - **HTML compression pipeline** (`src/html-compress.ts`) — Strips noise attributes (class, id, data-\*, style, event handlers, ARIA) before feeding HTML to Readability/Defuddle. Removes empty elements across multiple passes. Runs after `preCleanHtml()` in the extraction pipeline. Reduces token bloat from HTML cruft while preserving semantic attributes (href, src, alt, itemprop, role).
