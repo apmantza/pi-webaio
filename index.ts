@@ -12,7 +12,7 @@ import {
 } from "node:fs";
 import { isIP } from "node:net";
 import { cpus, tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Readability } from "@mozilla/readability";
 import { Defuddle } from "defuddle/node";
@@ -2136,8 +2136,67 @@ async function pullGitHubFeature(url: string): Promise<PullResult | null> {
 			return null;
 		}
 
+		// Unwrap paginated workflow_runs wrapper for actions list
+		if (data?.workflow_runs && Array.isArray(data.workflow_runs)) {
+			data = data.workflow_runs;
+		}
+
 		let md = `# ${owner}/${repo} — ${featureLabel}\n\n`;
 		md += `> via GitHub API\n\n`;
+
+		// Special handling for individual CI runs — fetch job details
+		if (feature === "actions" && rest[0] === "runs" && rest[1] && data && !Array.isArray(data)) {
+			const run = data;
+			const statusIcon =
+				run.conclusion === "success" ? "✅"
+				: run.conclusion === "failure" ? "❌"
+				: run.conclusion === "cancelled" ? "⏹️"
+				: run.status === "in_progress" ? "🔄"
+				: "⏳";
+			md += `${statusIcon} **${run.display_title || run.name}** (#${run.run_number})\n`;
+			md += `- **Status:** ${run.status} / ${run.conclusion || "pending"}\n`;
+			md += `- **Branch:** ${run.head_branch} (${run.head_sha?.slice(0, 7)})\n`;
+			md += `- **Trigger:** ${run.event} by ${run.actor?.login || "unknown"}\n`;
+			md += `\n[View on GitHub](${run.html_url})\n`;
+
+			// Fetch jobs
+			try {
+				const jobsData = await ghFetch(`/repos/${owner}/${repo}/actions/runs/${rest[1]}/jobs?per_page=20`);
+				const jobs = jobsData?.jobs ? (jobsData as any).jobs : [];
+				if (jobs.length) {
+					md += `\n## Jobs (${jobs.length})\n\n`;
+					for (const job of jobs) {
+						const jIcon =
+							job.conclusion === "success" ? "✅"
+							: job.conclusion === "failure" ? "❌"
+							: job.conclusion === "cancelled" ? "⏹️"
+							: job.status === "in_progress" ? "🔄"
+							: "⏳";
+						md += `### ${jIcon} ${job.name}\n\n`;
+						md += `- **Status:** ${job.status} / ${job.conclusion || "pending"}\n`;
+						if (job.completed_at) md += `- **Completed:** ${job.completed_at}\n`;
+						if (job.steps?.length) {
+							md += `\n| Step | Status |\n|------|--------|\n`;
+							for (const step of job.steps) {
+								const sIcon =
+									step.conclusion === "success" ? "✅"
+									: step.conclusion === "failure" ? "❌"
+									: step.conclusion === "cancelled" ? "⏹️"
+									: step.conclusion === "skipped" ? "⏭️"
+									: "⏳";
+								md += `| ${sIcon} ${step.name} | ${step.conclusion || step.status} |\n`;
+							}
+							md += `\n`;
+						}
+						if (job.html_url) md += `[View job logs](${job.html_url})\n\n`;
+					}
+				}
+			} catch {
+				md += `\n_(job details unavailable)_\n`;
+			}
+
+			return { ok: true, url, title: `${owner}/${repo} — ${featureLabel}`, content: md };
+		}
 
 		if (Array.isArray(data)) {
 			const items = data.slice(0, 20);
@@ -2344,9 +2403,123 @@ async function cloneGitHubRepo(
 	}
 }
 
+// ─── Architecture detection (inspired by repocrunch) ───────────────
+
+/** File-pattern signals for CI/CD platforms. */
+const CI_PATTERNS: [RegExp, string][] = [
+	[/^\.github\/workflows\//, "GitHub Actions"],
+	[/^\.gitlab-ci\.yml$/, "GitLab CI"],
+	[/^Jenkinsfile$/, "Jenkins"],
+	[/^\.circleci\//, "CircleCI"],
+	[/^\.travis\.yml$/, "Travis CI"],
+	[/^azure-pipelines\.yml$/, "Azure Pipelines"],
+	[/^bitbucket-pipelines\.yml$/, "Bitbucket Pipelines"],
+];
+
+/** File-pattern signals for test frameworks. */
+const TEST_PATTERNS: [RegExp, string][] = [
+	[/^jest\.config\./, "Jest"],
+	[/^vitest\.config\./, "Vitest"],
+	[/^playwright\.config\./, "Playwright"],
+	[/^cypress\.config\./, "Cypress"],
+	[/^(.*\/)?conftest\.py$/, "pytest"],
+	[/^pytest\.ini$/, "pytest"],
+	[/^\.mocharc\./, "Mocha"],
+	[/^karma\.conf\./, "Karma"],
+];
+
+/** File-pattern signals for monorepo tooling. */
+const MONOREPO_PATTERNS: [RegExp, string][] = [
+	[/^lerna\.json$/, "Lerna"],
+	[/^nx\.json$/, "Nx"],
+	[/^turbo\.json$/, "Turborepo"],
+	[/^pnpm-workspace\.yaml$/, "pnpm workspaces"],
+	[/^rush\.json$/, "Rush"],
+];
+
+/** Lock-file → package manager mapping. */
+const LOCKFILE_MAP: Record<string, string> = {
+	"package-lock.json": "npm",
+	"yarn.lock": "yarn",
+	"pnpm-lock.yaml": "pnpm",
+	"bun.lockb": "bun",
+	"uv.lock": "uv",
+	"poetry.lock": "poetry",
+	"Pipfile.lock": "pipenv",
+	"Cargo.lock": "cargo",
+	"Gemfile.lock": "bundler",
+};
+
+function matched(patterns: [RegExp, string][], paths: string[]): string[] {
+	const found = new Set<string>();
+	for (const p of paths) {
+		for (const [re, label] of patterns) {
+			if (re.test(p)) found.add(label);
+		}
+	}
+	return [...found];
+}
+
+/** Analyze a list of relative file paths and return an architecture summary. */
+function detectArchitectureSignals(paths: string[]): string {
+	const lines: string[] = [];
+
+	// Docker
+	if (paths.some((p) => /^(Dockerfile|docker-compose\.(yml|yaml)|\.dockerignore)$/.test(p)))
+		lines.push("- 🐳 **Docker:** yes");
+
+	// CI/CD
+	const ciCd = matched(CI_PATTERNS, paths);
+	if (ciCd.length) lines.push(`- 🔄 **CI/CD:** ${ciCd.join(", ")}`);
+
+	// Tests
+	const tests = matched(TEST_PATTERNS, paths);
+	const hasTestDir = paths.some(
+		(p) =>
+			p.startsWith("__tests__/") ||
+			p.startsWith("tests/") ||
+			p.startsWith("test/") ||
+			p.startsWith("spec/"),
+	);
+	if (hasTestDir && !tests.length) tests.push("(test dir present)");
+	if (tests.length) lines.push(`- 🧪 **Tests:** ${tests.join(", ")}`);
+
+	// Monorepo tooling
+	const monorepo = matched(MONOREPO_PATTERNS, paths);
+	// Also detect multiple package.json in subdirectories (classic monorepo signal)
+	const pkgJsons = paths.filter((p) => p.endsWith("/package.json"));
+	if (pkgJsons.length > 1 && !monorepo.length) monorepo.push("multi-package");
+	if (monorepo.length) lines.push(`- 📦 **Monorepo:** ${monorepo.join(", ")}`);
+
+	// Package manager (from lockfiles)
+	const pms = new Set<string>();
+	for (const [file, pm] of Object.entries(LOCKFILE_MAP)) {
+		if (paths.some((p) => p === file || p.endsWith(`/${file}`))) pms.add(pm);
+	}
+	if (pms.size) lines.push(`- 📋 **Package managers:** ${[...pms].join(", ")}`);
+
+	// Security
+	const secSignals: string[] = [];
+	if (paths.some((p) => p === "SECURITY.md")) secSignals.push("SECURITY.md");
+	if (paths.some((p) => p === ".env")) secSignals.push("⚠ .env committed");
+	if (
+		paths.some(
+			(p) =>
+				p === ".github/dependabot.yml" ||
+				p === ".github/dependabot.yaml",
+		)
+	)
+		secSignals.push("Dependabot");
+	if (secSignals.length) lines.push(`- 🔒 **Security:** ${secSignals.join(", ")}`);
+
+	if (!lines.length) return "";
+	return `\n## Architecture\n\n${lines.join("\n")}\n`;
+}
+
 async function buildRepoMarkdown(outDir: string): Promise<string> {
 	// Build a file tree and include README
 	const { readdir } = await import("node:fs/promises");
+	const allPaths: string[] = [];
 
 	async function tree(dir: string, prefix = ""): Promise<string> {
 		const entries = await readdir(dir, { withFileTypes: true });
@@ -2371,13 +2544,37 @@ async function buildRepoMarkdown(outDir: string): Promise<string> {
 		return lines.join("\n");
 	}
 
+	// First pass: collect all file paths
+	async function collectPaths(dir: string, rel: string): Promise<void> {
+		try {
+			const entries = await readdir(dir, { withFileTypes: true });
+			for (const e of entries) {
+				const relPath = rel ? `${rel}/${e.name}` : e.name;
+				allPaths.push(relPath);
+				if (e.isDirectory()) {
+					await collectPaths(join(dir, e.name), relPath);
+				}
+			}
+		} catch {
+			/* ignore */
+		}
+	}
+
+	await collectPaths(outDir, "");
+
 	let md = "## File Tree\n\n```\n";
 	try {
 		md += await tree(outDir);
 	} catch {
 		md += "(empty)";
 	}
-	md += "\n```\n\n";
+	md += "\n```\n";
+
+	// Architecture detection from file tree
+	const arch = detectArchitectureSignals(allPaths);
+	if (arch) md += arch;
+
+	md += "\n";
 
 	// Try to include README
 	for (const name of ["README.md", "readme.md", "Readme.md"]) {
@@ -3242,6 +3439,63 @@ function pageToPath(page: Page): string {
 	return p;
 }
 
+// ─── Link Rewriting ─────────────────────────────────────────────────
+
+/** Normalize a URL to the same stem used by pageToPath for matching. */
+function urlStem(url: string): string {
+	try {
+		const u = new URL(url);
+		let p = u.origin + u.pathname;
+		if (p.endsWith("/")) p += "index";
+		p = p.replace(/\.html?$/, "");
+		return p;
+	} catch {
+		return url;
+	}
+}
+
+/** Rewrite absolute links between pulled pages to relative .md paths. */
+function rewriteLinks(
+	markdown: string,
+	pageUrlToPath: Map<string, string>,
+	currentPath: string,
+): string {
+	// Build a lookup keyed by normalized URL stem
+	const stemToPath = new Map<string, string>();
+	for (const [url, path] of pageUrlToPath) {
+		stemToPath.set(urlStem(url), path);
+	}
+
+	return markdown.replace(
+		/\[([^\]]*)\]\(([^)\s]+)\)/g,
+		(match, text, url) => {
+			// Skip anchor-only, mailto, javascript, data links
+			if (/^(#|mailto:|javascript:|data:)/.test(url)) return match;
+
+			const key = urlStem(url);
+			const target = stemToPath.get(key);
+
+			if (target && target !== currentPath) {
+				const fromDir = dirname(currentPath);
+				let relPath = relative(fromDir, target).replace(/\\/g, "/");
+				if (!relPath.startsWith(".")) relPath = "./" + relPath;
+
+				// Preserve fragment from the original link
+				try {
+					const hash = new URL(url, "http://x").hash;
+					if (hash) relPath += hash;
+				} catch {
+					/* ignore */
+				}
+
+				return `[${text}](${relPath})`;
+			}
+
+			return match;
+		},
+	);
+}
+
 async function writePage(page: Page, outDir: string): Promise<string> {
 	const rel = pageToPath(page);
 	const full = join(outDir, rel);
@@ -4096,6 +4350,7 @@ export default function (pi: ExtensionAPI) {
 			let err = 0;
 			const files: string[] = [];
 			const errors: string[] = [];
+			const pageUrlToPath = new Map<string, string>();
 
 			await runInBatches(urls, concurrency, async (pageUrl, _i) => {
 				if (signal?.aborted) return;
@@ -4122,6 +4377,7 @@ export default function (pi: ExtensionAPI) {
 
 				const rel = await writePage(page, outDir);
 				files.push(rel);
+				pageUrlToPath.set(page.url, rel);
 				ok++;
 
 				storeContent(result.url!, result.title, page.markdown, undefined, {
@@ -4152,6 +4408,30 @@ export default function (pi: ExtensionAPI) {
 					},
 				});
 			});
+
+			// Rewrite absolute links between pulled pages to relative .md paths
+			if (pageUrlToPath.size > 1) {
+				let rewrites = 0;
+				for (const rel of files) {
+					const full = join(outDir, rel);
+					try {
+						let md = await readFile(full, "utf8");
+						const rewritten = rewriteLinks(md, pageUrlToPath, rel);
+						if (rewritten !== md) {
+							await writeFile(full, rewritten, "utf8");
+							rewrites++;
+						}
+					} catch {
+						/* best effort — don't break the pull for link rewriting */
+					}
+				}
+				if (rewrites > 0) {
+					onUpdate?.({
+						content: [{ type: "text", text: `🔗 Rewrote links in ${rewrites} files` }],
+						details: { stage: "rewrite", filesRewritten: rewrites },
+					});
+				}
+			}
 
 			const summary = [
 				`✅ Pulled ${ok} pages to ${outDir}`,
