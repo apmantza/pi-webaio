@@ -128,7 +128,7 @@ jobs:
     name: SonarQube Cloud
     runs-on: ubuntu-latest
     needs: [lint-and-typecheck, test]
-    if: github.repository == 'apmantza/pi-webaio'
+    if: github.repository == 'apmantza/pi-webaio' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     permissions:
       contents: read
     steps:

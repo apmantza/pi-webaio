@@ -2147,6 +2147,9 @@ async function pullGitHubFeature(url: string): Promise<PullResult | null> {
 		// Special handling for individual CI runs — fetch job details
 		if (feature === "actions" && rest[0] === "runs" && rest[1] && data && !Array.isArray(data)) {
 			const run = data;
+			const runId = rest[1];
+			const highlightJobId = rest[2] === "job" && rest[3] ? rest[3] : null;
+
 			const statusIcon =
 				run.conclusion === "success" ? "✅"
 				: run.conclusion === "failure" ? "❌"
@@ -2157,24 +2160,66 @@ async function pullGitHubFeature(url: string): Promise<PullResult | null> {
 			md += `- **Status:** ${run.status} / ${run.conclusion || "pending"}\n`;
 			md += `- **Branch:** ${run.head_branch} (${run.head_sha?.slice(0, 7)})\n`;
 			md += `- **Trigger:** ${run.event} by ${run.actor?.login || "unknown"}\n`;
+			if (run.pull_requests?.length) {
+				md += `- **PRs:** ${run.pull_requests.map((p: any) => `#${p.number}`).join(", ")}\n`;
+			}
 			md += `\n[View on GitHub](${run.html_url})\n`;
 
 			// Fetch jobs
 			try {
-				const jobsData = await ghFetch(`/repos/${owner}/${repo}/actions/runs/${rest[1]}/jobs?per_page=20`);
-				const jobs = jobsData?.jobs ? (jobsData as any).jobs : [];
+				const jobsData = await ghFetch(`/repos/${owner}/${repo}/actions/runs/${runId}/jobs?per_page=20`);
+				let jobs = jobsData?.jobs ? (jobsData as any).jobs : [];
+
+				// If a specific job ID is in the URL, fetch it individually and show first
+				if (highlightJobId) {
+					try {
+						const singleJob = await ghFetch(`/repos/${owner}/${repo}/actions/jobs/${highlightJobId}`);
+						if (singleJob && !(singleJob as any).message) {
+							// Replace or add this job at the top
+							jobs = jobs.filter((j: any) => j.id !== (singleJob as any).id);
+							jobs.unshift(singleJob);
+						}
+					} catch {
+						/* best effort */
+					}
+				}
+
 				if (jobs.length) {
 					md += `\n## Jobs (${jobs.length})\n\n`;
 					for (const job of jobs) {
+						const isHighlighted = highlightJobId && String(job.id) === highlightJobId;
 						const jIcon =
 							job.conclusion === "success" ? "✅"
 							: job.conclusion === "failure" ? "❌"
 							: job.conclusion === "cancelled" ? "⏹️"
 							: job.status === "in_progress" ? "🔄"
 							: "⏳";
-						md += `### ${jIcon} ${job.name}\n\n`;
+						md += `### ${jIcon} ${isHighlighted ? "👉 " : ""}${job.name}\n\n`;
 						md += `- **Status:** ${job.status} / ${job.conclusion || "pending"}\n`;
 						if (job.completed_at) md += `- **Completed:** ${job.completed_at}\n`;
+
+						// If highlighting a specific job, fetch its log
+						if (isHighlighted && job.status === "completed" && job.conclusion === "failure") {
+							try {
+								const logRes = await fetch(job.logs_url || `${job.url}/logs`, {
+									headers: { Accept: "text/plain", "User-Agent": "pi-webaio" },
+								});
+								if (logRes.ok && logRes.headers.get("content-type")?.includes("text/plain")) {
+									const logText = await logRes.text();
+									// Extract lines that look like errors or the last 50 lines
+									const lines = logText.split("\n");
+									const errorLines = lines.filter((l) => /error|fail|Error|FAIL/i.test(l));
+									const tail = lines.slice(-50);
+									const logExcerpt = errorLines.length > 0
+										? errorLines.slice(-15).join("\n")
+										: tail.join("\n");
+									md += `\n<details>\n<summary>📋 Failed job log excerpt</summary>\n\n\`\`\`\n${logExcerpt.slice(0, 3000)}\n\`\`\`\n</details>\n\n`;
+								}
+							} catch {
+								/* best effort */
+							}
+						}
+
 						if (job.steps?.length) {
 							md += `\n| Step | Status |\n|------|--------|\n`;
 							for (const step of job.steps) {
