@@ -8,6 +8,7 @@ import { matchesHackerNews, extractHackerNews } from "./hackernews.js";
 import { matchesReddit, extractReddit } from "./reddit.js";
 import { matchesArxiv, extractArxiv } from "./arxiv.js";
 import { matchesDocsSite, extractDocsSite } from "./docs-site.js";
+import { matchesYouTube, extractYouTube } from "./youtube.js";
 
 export interface ExtractorMatch {
 	name: string;
@@ -20,6 +21,7 @@ export const VERTICAL_EXTRACTORS: ExtractorMatch[] = [
 	{ name: "hackernews", matcher: matchesHackerNews },
 	{ name: "reddit", matcher: matchesReddit },
 	{ name: "arxiv", matcher: matchesArxiv },
+	{ name: "youtube", matcher: matchesYouTube },
 	{ name: "docsite", matcher: matchesDocsSite },
 ];
 
@@ -57,6 +59,9 @@ export async function runVerticalExtractor(
 	}
 	if (matchesArxiv(url)) {
 		return extractArxiv(url, fetchText);
+	}
+	if (matchesYouTube(url)) {
+		return extractYouTube(url, fetchJson, fetchText, fetchHtml);
 	}
 	if (matchesDocsSite(url)) {
 		const html = await fetchHtml(url);
