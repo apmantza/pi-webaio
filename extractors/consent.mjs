@@ -1,29 +1,251 @@
 import { randomInt } from "node:crypto";
 
 // consent.mjs — auto-dismiss common cookie/consent banners and human-verification pages
-// Call dismissConsent(tab, cdpFn) after navigating to any page.
+// Call dismissConsent(tab, cdp) after navigating to any page.
+//
+// Covers major CMPs: OneTrust, Cookiebot, Didomi, Quantcast, Usercentrics,
+// TrustArc, Klaro, Sourcepoint, CookieYes, Osano, CookieFirst, Adobe,
+// SmartNews, CookieHub, TermsFeed, Google, YouTube, BBC, Amazon — plus
+// generic text-based fallbacks and iframe consent dialogs.
+
+// ─── Cookie consent dismissal JS (evaluated in the target page) ─────
 
 const CONSENT_JS = `
 (function() {
-  // Google consent page (consent.google.com)
-  var g = document.querySelector('#L2AGLb, button[jsname="b3VHJd"], .tHlp8d');
-  if (g) { g.click(); return 'google'; }
+  var clicked = [];
 
-  // OneTrust (used by many sites including Stack Overflow)
-  var ot = document.querySelector('#onetrust-accept-btn-handler, .onetrust-accept-btn-handler');
-  if (ot) { ot.click(); return 'onetrust'; }
+  var isVisible = function(el) {
+    if (!el) return false;
+    var style = getComputedStyle(el);
+    return style.display !== 'none' &&
+           style.visibility !== 'hidden' &&
+           style.opacity !== '0' &&
+           (el.offsetParent !== null || style.position === 'fixed' || style.position === 'sticky');
+  };
 
-  // Generic "accept all" / "agree" buttons
-  var btns = Array.from(document.querySelectorAll('button, a[role=button]'));
-  var accept = btns.find(b => /^(accept all|accept cookies|agree|i agree|got it|allow all|allow cookies)$/i.test(b.innerText?.trim()));
-  if (accept) { accept.click(); return 'generic:' + accept.innerText.trim(); }
+  var tryClick = function(selector, description) {
+    var el = typeof selector === 'string' ? document.querySelector(selector) : selector;
+    if (isVisible(el)) {
+      el.click();
+      clicked.push(description || selector);
+      return true;
+    }
+    return false;
+  };
 
-  return null;
-})()
+  var findButtonByText = function(patterns, container) {
+    container = container || document;
+    var buttons = Array.from(container.querySelectorAll('button, [role="button"], a.button, input[type="submit"], input[type="button"]'));
+    var sortedPatterns = [...patterns].sort(function(a, b) { return b.length - a.length; });
+    for (var i = 0; i < sortedPatterns.length; i++) {
+      for (var j = 0; j < buttons.length; j++) {
+        var btn = buttons[j];
+        var text = (btn.textContent || btn.value || '').trim().toLowerCase();
+        if (text.length > 100) continue;
+        if (!isVisible(btn)) continue;
+        var pattern = sortedPatterns[i];
+        if (typeof pattern === 'string' ? text.includes(pattern) : pattern.test(text)) {
+          return btn;
+        }
+      }
+    }
+    return null;
+  };
+
+  var acceptPatterns = [
+    'accept all', 'accept cookies', 'allow all', 'allow cookies',
+    'i agree', 'i accept', 'yes, i agree', 'agree and continue',
+    'alle akzeptieren', 'akzeptieren', 'alle zulassen', 'zustimmen',
+    'annehmen', 'einverstanden',
+    'accepter tout', 'tout accepter', "j'accepte", 'accepter et continuer', 'accepter',
+    'accetta tutti', 'accetta', 'accetto',
+    'aceptar todo', 'aceptar', 'acepto',
+    'aceitar tudo', 'aceitar',
+    'continue', 'agree',
+  ];
+
+  var rejectPatterns = [
+    'reject all', 'decline all', 'deny all', 'refuse all',
+    'i do not agree', 'i disagree', 'no thanks',
+    'alle ablehnen', 'ablehnen', 'nicht zustimmen',
+    'refuser tout', 'tout refuser', 'refuser',
+    'rifiuta tutti', 'rifiuta',
+    'rechazar todo', 'rechazar',
+    'rejeitar tudo', 'rejeitar',
+    'only necessary', 'necessary only', 'nur notwendige',
+    'essential only', 'nur essentielle',
+  ];
+
+  // ── OneTrust ──
+  if (document.querySelector('#onetrust-banner-sdk, #onetrust-consent-sdk')) {
+    if (tryClick('#onetrust-accept-btn-handler, .onetrust-accept-btn-handler', 'OneTrust')) return clicked;
+  }
+
+  // ── Google consent ──
+  if (document.querySelector('[data-consent-dialog]') || document.querySelector('form[action*="consent.google"]') || document.querySelector('#CXQnmb')) {
+    if (tryClick('#L2AGLb, button[jsname="b3VHJd"], .tHlp8d', 'Google Consent')) return clicked;
+  }
+
+  // ── YouTube (Google-owned, custom consent element) ──
+  if (document.querySelector('ytd-consent-bump-v2-lightbox')) {
+    var ytBtns = Array.from(document.querySelectorAll('ytd-consent-bump-v2-lightbox button'));
+    var ytBtn = ytBtns.find(function(b) {
+      return b.textContent.includes('Accept all') || b.textContent.includes('Reject all') ||
+             (b.getAttribute('aria-label') || '').includes('Accept') || (b.getAttribute('aria-label') || '').includes('Reject');
+    });
+    if (ytBtn) { ytBtn.click(); clicked.push('YouTube'); return clicked; }
+  }
+
+  // ── Cookiebot ──
+  if (document.querySelector('#CybotCookiebotDialog')) {
+    if (tryClick('#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll, #CybotCookiebotDialogBodyButtonAccept, #CybotCookiebotDialogBodyLevelButtonLevelOptinDeclineAll, #CybotCookiebotDialogBodyButtonDecline', 'Cookiebot')) return clicked;
+  }
+
+  // ── Didomi ──
+  if (document.querySelector('#didomi-host') || document.querySelector('.didomi-notice') || (window && window.Didomi)) {
+    if (tryClick('#didomi-notice-agree-button, [data-testid="disagree-button"]', 'Didomi')) return clicked;
+  }
+
+  // ── Quantcast ──
+  if (document.querySelector('.qc-cmp2-container') || document.querySelector('.qc-cmp2-ui-root')) {
+    if (tryClick('.qc-cmp2-summary-buttons button[mode="primary"], .qc-cmp2-button[data-testid="accept-all"], .qc-cmp2-summary-buttons button[mode="secondary"]', 'Quantcast')) return clicked;
+  }
+
+  // ── Usercentrics (shadow DOM) ──
+  var ucRoot = document.querySelector('#usercentrics-root');
+  if (ucRoot && ucRoot.shadowRoot) {
+    var shadow = ucRoot.shadowRoot;
+    var ucBtn = shadow.querySelector('[data-testid="uc-accept-all-button"], [data-testid="uc-deny-all-button"]');
+    if (ucBtn) { ucBtn.click(); clicked.push('Usercentrics'); return clicked; }
+  }
+
+  // ── TrustArc ──
+  if (document.querySelector('#truste-consent-track') || document.querySelector('#truste-consent-modal') || document.querySelector('.trustarc-banner')) {
+    if (tryClick('#truste-consent-button, .trustarc-agree-btn, .trustarc-decline-btn', 'TrustArc')) return clicked;
+  }
+
+  // ── Klaro ──
+  if (document.querySelector('.klaro')) {
+    if (tryClick('.klaro .cm-btn-accept-all, .klaro .cm-btn-success, .klaro .cm-btn-decline', 'Klaro')) return clicked;
+  }
+
+  // ── Sourcepoint ──
+  if (document.querySelector('#sp-root') || document.querySelector('#sp-frame-root') || document.querySelector('.sp-root')) {
+    var spBtn = document.querySelector('[title="Accept All"], [title="Accept"], [aria-label*="Accept"]');
+    if (tryClick(spBtn, 'Sourcepoint')) return clicked;
+  }
+
+  // ── BBC ──
+  if (document.querySelector('#bbccookies, .bbccookies-banner')) {
+    if (tryClick('#bbccookies-continue-button', 'BBC')) return clicked;
+  }
+
+  // ── Amazon ──
+  if (document.querySelector('#sp-cc') || document.querySelector('#sp-cc-accept')) {
+    if (tryClick('#sp-cc-accept, #sp-cc-rejectall-link, #sp-cc-decline', 'Amazon')) return clicked;
+  }
+
+  // ── CookieYes / Borzy ──
+  if (document.querySelector('#cookie-law-info-bar') || document.querySelector('.cky-consent-container')) {
+    if (tryClick('#cookie_action_close_header, .cky-btn-accept, .cky-btn-reject', 'CookieYes')) return clicked;
+  }
+
+  // ── Osano ──
+  if (document.querySelector('#osano-cm-dialog') || document.querySelector('#osano-cm-window')) {
+    if (tryClick('[data-osano-type="accept-all"], [data-osano-type="accept-necessary"], [data-osano-type="reject-all"]', 'Osano')) return clicked;
+  }
+
+  // ── CookieFirst ──
+  if (document.querySelector('#cookie-first')) {
+    if (tryClick('#cookie-first-accept-all, #cookie-first-reject-all', 'CookieFirst')) return clicked;
+  }
+
+  // ── Adobe Privacy Message Center ──
+  if (document.querySelector('#adobe-privacy-message-center')) {
+    if (tryClick('#adobe-privacy-message-center [class*="Accept"], #adobe-privacy-message-center [class*="Reject"]', 'Adobe PMC')) return clicked;
+  }
+
+  // ── SmartNews / SmartConsent ──
+  if (document.querySelector('#smartconsent-modal') || document.querySelector('#smartconsent-root')) {
+    if (tryClick('#smartconsent-accept-all, #smartconsent-reject-all', 'SmartConsent')) return clicked;
+  }
+
+  // ── CookieHub ──
+  if (document.querySelector('#chv-banner') || document.querySelector('#chv-module')) {
+    if (tryClick('#chv-accept, #chv-reject', 'CookieHub')) return clicked;
+  }
+
+  // ── TermsFeed ──
+  if (document.querySelector('#tc-warning')) {
+    if (tryClick('#tc-accept, .tc-btn-accept', 'TermsFeed')) return clicked;
+  }
+
+  // ── Generic containers (class/id heuristics) ──
+  var consentContainers = [
+    '[class*="cookie-banner"]', '[class*="cookie-consent"]', '[class*="cookie-notice"]',
+    '[class*="cookieBar"]', '[class*="cookieConsent"]', '[class*="CookieBanner"]',
+    '[class*="CookieConsent"]', '[class*="CookieNotice"]',
+    '[id*="cookie-banner"]', '[id*="cookie-consent"]', '[id*="cookie-notice"]',
+    '[id*="cookieBar"]', '[id*="CookieBanner"]', '[id*="CookieConsent"]',
+    '[class*="consent-banner"]', '[class*="consent-modal"]', '[class*="consent-dialog"]',
+    '[class*="consentBar"]', '[class*="ConsentBanner"]', '[class*="ConsentModal"]',
+    '[id*="consent-banner"]', '[id*="consent-dialog"]', '[id*="consent-modal"]',
+    '[class*="gdpr-banner"]', '[class*="gdpr-consent"]', '[class*="GdprBanner"]',
+    '[id*="gdpr-banner"]',
+    '[class*="privacy-banner"]', '[class*="privacy-notice"]', '[class*="PrivacyBanner"]',
+  ];
+
+  for (var c = 0; c < consentContainers.length; c++) {
+    var containers = document.querySelectorAll(consentContainers[c]);
+    for (var k = 0; k < containers.length; k++) {
+      var container = containers[k];
+      if (!isVisible(container)) continue;
+      if (container.tagName === 'HTML' || container.tagName === 'BODY') continue;
+      var btn = findButtonByText(acceptPatterns, container);
+      if (btn) { btn.click(); clicked.push('Generic (' + consentContainers[c] + ')'); return clicked; }
+    }
+  }
+
+  // ── Text-based fallback: look for containers mentioning "cookie" with accept buttons ──
+  var allContainers = document.querySelectorAll('div, section, aside, [class*="modal"], [class*="dialog"], [role="dialog"]');
+  for (var a = 0; a < allContainers.length; a++) {
+    var el = allContainers[a];
+    if (!isVisible(el)) continue;
+    var bodyText = (el.textContent || '').toLowerCase();
+    if (bodyText.includes('cookie') && bodyText.length > 100 && bodyText.length < 3000) {
+      var genericBtn = findButtonByText(acceptPatterns, el);
+      if (genericBtn && isVisible(genericBtn)) {
+        genericBtn.click();
+        clicked.push('Generic (text-based)');
+        return clicked;
+      }
+    }
+  }
+
+  // ── Last resort: any visible button with accept text on a cookie page ──
+  if ((document.body.textContent || '').toLowerCase().includes('cookie')) {
+    var exactPatterns = ['accept all', 'accept cookies', 'allow all', 'i agree', 'alle akzeptieren'];
+    var allBtns = document.querySelectorAll('button, [role="button"]');
+    for (var b = 0; b < allBtns.length; b++) {
+      var button = allBtns[b];
+      if (!isVisible(button)) continue;
+      var btnText = (button.textContent || '').trim().toLowerCase();
+      for (var p = 0; p < exactPatterns.length; p++) {
+        if (btnText.includes(exactPatterns[p])) {
+          button.click();
+          clicked.push('Generic (exact match)');
+          return clicked;
+        }
+      }
+    }
+  }
+
+  return clicked;
+})();
 `;
 
-// Detect verification challenges — returns element info (NOT clicking).
-// The CDP-side handleVerification performs human-like clicks on found elements.
+// ─── Human verification detection (unchanged from original) ─────────
+
 const VERIFY_DETECT_JS = `
 (function() {
   var url = document.location.href;
@@ -82,7 +304,6 @@ const VERIFY_DETECT_JS = `
 })()
 `;
 
-// Retry detection — returns 'cleared' if no verification page, or selector info
 const VERIFY_RETRY_JS = `
 (function() {
   var url = document.location.href;
@@ -112,11 +333,41 @@ const VERIFY_RETRY_JS = `
 })()
 `;
 
+// ─── Public API ─────────────────────────────────────────────────────
+
+/**
+ * Attempt to dismiss cookie consent banners in the main page.
+ * Returns an array of CMP names that were dismissed, or empty array if none found.
+ *
+ * Covers: OneTrust, Cookiebot, Didomi, Quantcast, Usercentrics (shadow DOM),
+ * TrustArc, Klaro, Sourcepoint, CookieYes, Osano, CookieFirst, Adobe PMC,
+ * SmartConsent, CookieHub, TermsFeed, Google, YouTube, BBC, Amazon — plus
+ * generic text-based fallbacks.
+ */
 export async function dismissConsent(tab, cdp) {
 	const result = await cdp(["eval", tab, CONSENT_JS]).catch(() => null);
+
 	if (result && result !== "null") {
-		await new Promise((r) => setTimeout(r, 1500));
+		try {
+			const dismissed = JSON.parse(result);
+			if (Array.isArray(dismissed) && dismissed.length > 0) {
+				process.stderr.write(
+					`[consent] Dismissed cookie dialog: ${dismissed.join(", ")}\n`,
+				);
+				await new Promise((r) => setTimeout(r, 1500));
+				return dismissed;
+			}
+		} catch {
+			// Legacy string result (e.g., "google", "onetrust")
+			if (typeof result === "string" && result.length > 0) {
+				process.stderr.write(`[consent] Dismissed cookie dialog: ${result}\n`);
+				await new Promise((r) => setTimeout(r, 1500));
+				return [result];
+			}
+		}
 	}
+
+	return [];
 }
 
 // ─── Human-like click simulation (multi-event with jitter) ────────────
@@ -150,7 +401,6 @@ export async function humanClickXY(tab, cdpFn, x, y) {
 		"Input.dispatchMouseEvent",
 		JSON.stringify({ ...base, type: "mouseMoved", x: jx, y: jy }),
 	]);
-	// Brief hover delay (80-180ms) — humans don't instant-click
 	await new Promise((r) => setTimeout(r, rng(80, 180)));
 
 	// ── mousePressed at jittered position ──
@@ -162,7 +412,6 @@ export async function humanClickXY(tab, cdpFn, x, y) {
 		"Input.dispatchMouseEvent",
 		JSON.stringify({ ...base, type: "mousePressed", x: px, y: py }),
 	]);
-	// Hold delay (30-90ms) — mimics human click duration
 	await new Promise((r) => setTimeout(r, rng(30, 90)));
 
 	// ── mouseReleased at jittered position ──
@@ -174,8 +423,6 @@ export async function humanClickXY(tab, cdpFn, x, y) {
 		"Input.dispatchMouseEvent",
 		JSON.stringify({ ...base, type: "mouseReleased", x: rx, y: ry }),
 	]);
-
-	// Post-click settle
 	await new Promise((r) => setTimeout(r, rng(100, 300)));
 
 	return `human-clicked at (${cx.toFixed(0)}, ${cy.toFixed(0)})`;
@@ -185,7 +432,6 @@ export async function humanClickXY(tab, cdpFn, x, y) {
  * Find an element by CSS selector and perform a human-like click on its center.
  */
 export async function humanClickElement(tab, cdpFn, selector) {
-	// Get element bounding rect
 	const rect = await cdpFn([
 		"eval",
 		tab,
@@ -198,7 +444,7 @@ export async function humanClickElement(tab, cdpFn, selector) {
 	]).catch(() => "null");
 
 	if (!rect || rect === "null") {
-		return null; // Element not found
+		return null;
 	}
 
 	const { x, y } = JSON.parse(rect);
@@ -218,7 +464,6 @@ async function tryHumanClick(tab, cdp, detectResult) {
 	)
 		return false;
 
-	// JSON format: {t:"sel",s:"...",txt:"..."} or {t:"xy",x:...,y:...}
 	try {
 		const info = JSON.parse(detectResult);
 		if (info.t === "sel" && info.s) {
@@ -240,13 +485,17 @@ async function tryHumanClick(tab, cdp, detectResult) {
 	return false;
 }
 
-// Returns 'clear' | 'clicked' | 'needs-human'
+// ─── Human verification handling (unchanged from original) ─────────────
+
+/**
+ * Detect and handle human verification challenges (CAPTCHA, Cloudflare, etc.).
+ * Returns 'clear' | 'clicked' | 'needs-human' | 'cleared-by-user'
+ */
 export async function handleVerification(tab, cdp, waitMs = 30000) {
 	const result = await cdp(["eval", tab, VERIFY_DETECT_JS]).catch(() => null);
 
 	if (!result || result === "null") return "clear";
 
-	// Hard CAPTCHA page — wait for user to solve it manually
 	if (result === "sorry-page") {
 		process.stderr.write(
 			`[greedysearch] Google CAPTCHA detected — please solve it in the browser window (waiting up to ${Math.floor(waitMs / 1000)}s)...\n`,
@@ -262,12 +511,10 @@ export async function handleVerification(tab, cdp, waitMs = 30000) {
 		return "needs-human";
 	}
 
-	// Perform human click on detected element
 	const clicked = await tryHumanClick(tab, cdp, result);
 	if (clicked) {
 		await new Promise((r) => setTimeout(r, 2000));
 
-		// Retry loop — keep checking until cleared or timeout
 		const deadline = Date.now() + waitMs;
 		while (Date.now() < deadline) {
 			const retryResult = await cdp(["eval", tab, VERIFY_RETRY_JS]).catch(

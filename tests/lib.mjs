@@ -2,6 +2,125 @@
 
 import { parseHTML } from "linkedom";
 
+// ─── Consent banner stripping (mirrors CONSENT_SELECTORS in index.ts) ─
+
+/**
+ * Cookie consent / CMP banner selectors — same as CONSENT_SELECTORS in index.ts.
+ * Strips known consent UI before extraction.
+ */
+const CONSENT_SELECTORS = [
+	// OneTrust
+	"#onetrust-banner-sdk",
+	"#onetrust-consent-sdk",
+	".onetrust-pc-dark-filter",
+	".onetrust-banner-container",
+	// Cookiebot
+	"#CybotCookiebotDialog",
+	".CybotCookiebotDialog",
+	"#CybotCookiebotDialogBackground",
+	// Didomi
+	"#didomi-host",
+	"#didomi-notice",
+	".didomi-notice",
+	// Quantcast
+	".qc-cmp2-ui-root",
+	".qc-cmp2-container",
+	".qc-cmp2-panel-container",
+	// Usercentrics
+	"#usercentrics-root",
+	".uc-ui-container",
+	// TrustArc
+	"#truste-consent-modal",
+	"#truste-consent-track",
+	".trustarc-banner",
+	"#truste-consent-heading",
+	// Klaro
+	".klaro",
+	// Sourcepoint
+	"#sp-root",
+	"#sp-frame-root",
+	".sp-root",
+	// CookieYes / Borzy
+	"#cookie-law-info-bar",
+	".cky-consent-container",
+	"#cookie-law-info",
+	// Osano
+	"#osano-cm-dialog",
+	".osano-cm-dialog",
+	"#osano-cm-window",
+	".osano-cm-window",
+	// CookieFirst
+	"#cookie-first",
+	// Adobe
+	"#adobe-font-manager",
+	"#adobe-privacy-message-center",
+	// SmartNews
+	"#smartconsent-modal",
+	"#smartconsent-root",
+	// CookieHub
+	"#chv-banner",
+	"#chv-module",
+	// TermsFeed
+	"#tc-warning",
+	// Generic cookie-consent (class-based)
+	"[class*='cookie-banner']",
+	"[class*='cookie-consent']",
+	"[class*='cookie-notice']",
+	"[class*='cookieBar']",
+	"[class*='cookieConsent']",
+	"[class*='CookieBanner']",
+	"[class*='CookieConsent']",
+	"[class*='CookieNotice']",
+	"[class*='cookie-bar']",
+	"[class*='CookieBar']",
+	// Generic gdpr/consent (class-based)
+	"[class*='gdpr-banner']",
+	"[class*='gdpr-consent']",
+	"[class*='GdprBanner']",
+	"[class*='consent-banner']",
+	"[class*='consent-modal']",
+	"[class*='consent-dialog']",
+	"[class*='consentBar']",
+	"[class*='ConsentBanner']",
+	"[class*='ConsentModal']",
+	// Generic privacy (class-based)
+	"[class*='privacy-banner']",
+	"[class*='privacy-notice']",
+	"[class*='PrivacyBanner']",
+	// Generic cookie-consent (id-based)
+	"[id*='cookie-banner']",
+	"[id*='cookie-consent']",
+	"[id*='cookie-notice']",
+	"[id*='cookieBar']",
+	"[id*='CookieBanner']",
+	"[id*='CookieConsent']",
+	"[id*='gdpr-banner']",
+	"[id*='consent-banner']",
+	"[id*='consent-dialog']",
+	"[id*='consent-modal']",
+	// ARIA
+	"[role='dialog']",
+	// Data attributes
+	"[data-cookieconsent]",
+	"[data-cmp]",
+].join(",");
+
+/**
+ * Strip consent banners from HTML using linkedom.
+ * Returns the cleaned HTML text (body innerHTML).
+ */
+export function stripConsentBanners(html) {
+	try {
+		const { document } = parseHTML(html);
+		document.querySelectorAll(CONSENT_SELECTORS).forEach((el) => el.remove());
+		return (
+			document.body?.innerHTML || document.documentElement?.outerHTML || ""
+		);
+	} catch {
+		return html;
+	}
+}
+
 export function isLocalOrPrivateUrl(url) {
 	try {
 		const u = new URL(url);

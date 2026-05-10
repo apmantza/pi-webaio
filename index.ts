@@ -128,14 +128,127 @@ const NOISE_SELECTORS = [
 ].join(",");
 
 /**
+ * Cookie consent / CMP banner selectors — strips known consent UI before
+ * extraction. Covers major CMPs (OneTrust, Cookiebot, Didomi, Quantcast,
+ * Usercentrics, TrustArc, Klaro, Sourcepoint, CookieYes) plus generic
+ * patterns (class/id heuristics for cookie-banner, gdpr, consent, etc.).
+ *
+ * Removing these server-side improves extraction quality for EU-facing sites
+ * that overlay heavy consent UI on otherwise clean content.
+ */
+const CONSENT_SELECTORS = [
+	// ── OneTrust ──
+	"#onetrust-banner-sdk",
+	"#onetrust-consent-sdk",
+	".onetrust-pc-dark-filter",
+	".onetrust-banner-container",
+	// ── Cookiebot ──
+	"#CybotCookiebotDialog",
+	".CybotCookiebotDialog",
+	"#CybotCookiebotDialogBackground",
+	// ── Didomi ──
+	"#didomi-host",
+	"#didomi-notice",
+	".didomi-notice",
+	// ── Quantcast Choice ──
+	".qc-cmp2-ui-root",
+	".qc-cmp2-container",
+	".qc-cmp2-panel-container",
+	// ── Usercentrics (including shadow DOM host) ──
+	"#usercentrics-root",
+	".uc-ui-container",
+	// ── TrustArc ──
+	"#truste-consent-modal",
+	"#truste-consent-track",
+	".trustarc-banner",
+	"#truste-consent-heading",
+	// ── Klaro ──
+	".klaro",
+	// ── Sourcepoint ──
+	"#sp-root",
+	"#sp-frame-root",
+	".sp-root",
+	// ── CookieYes / Borzy ──
+	"#cookie-law-info-bar",
+	".cky-consent-container",
+	"#cookie-law-info",
+	// ── Osano ──
+	"#osano-cm-dialog",
+	".osano-cm-dialog",
+	"#osano-cm-window",
+	".osano-cm-window",
+	// ── CookieFirst ──
+	"#cookie-first",
+	// ── Adobe Privacy Message Center ──
+	"#adobe-font-manager",
+	"#adobe-privacy-message-center",
+	// ── SmartNews ──
+	"#smartconsent-modal",
+	"#smartconsent-root",
+	// ── CookieHub ──
+	"#chv-banner",
+	"#chv-module",
+	// ── TermsFeed ──
+	"#tc-warning",
+	// ── Cookie Consent (osano-style) ──
+	"#cookie-preferences",
+	"#cookie-policy",
+	// ── Generic cookie-banner patterns (class-based) ──
+	"[class*='cookie-banner']",
+	"[class*='cookie-consent']",
+	"[class*='cookie-notice']",
+	"[class*='cookieBar']",
+	"[class*='cookieConsent']",
+	"[class*='CookieBanner']",
+	"[class*='CookieConsent']",
+	"[class*='CookieNotice']",
+	"[class*='cookie-bar']",
+	"[class*='CookieBar']",
+	// ── Generic gdpr/consent patterns (class-based) ──
+	"[class*='gdpr-banner']",
+	"[class*='gdpr-consent']",
+	"[class*='GdprBanner']",
+	"[class*='consent-banner']",
+	"[class*='consent-modal']",
+	"[class*='consent-dialog']",
+	"[class*='consentBar']",
+	"[class*='ConsentBanner']",
+	"[class*='ConsentModal']",
+	// ── Generic privacy patterns (class-based) ──
+	"[class*='privacy-banner']",
+	"[class*='privacy-notice']",
+	"[class*='PrivacyBanner']",
+	// ── Generic cookie/consent patterns (id-based) ──
+	"[id*='cookie-banner']",
+	"[id*='cookie-consent']",
+	"[id*='cookie-notice']",
+	"[id*='cookieBar']",
+	"[id*='CookieBanner']",
+	"[id*='CookieConsent']",
+	"[id*='gdpr-banner']",
+	"[id*='consent-banner']",
+	"[id*='consent-dialog']",
+	"[id*='consent-modal']",
+	// ── ARIA role="dialog" with cookie/consent label ──
+	"[role='dialog']",
+	// ── Bottom-fixed overlays (common banner pattern) ──
+	"[data-cookieconsent]",
+	"[data-cmp]",
+].join(",");
+
+/** Combined selectors for pre-cleaning: structural noise + consent banners. */
+const ALL_NOISE_SELECTORS = `${NOISE_SELECTORS},${CONSENT_SELECTORS}`;
+
+/**
  * Pre-clean HTML with linkedom: remove noise elements (nav, footer, header, etc.)
- * before feeding into Readability or Defuddle. Significantly improves extraction
- * quality by stripping scaffolding that looks like content to heuristics.
+ * and cookie consent banners before feeding into Readability or Defuddle.
+ * Significantly improves extraction quality by stripping scaffolding that looks
+ * like content to heuristics.
  */
 function preCleanHtml(html: string): string {
 	try {
 		const { document } = parseHTML(html);
-		document.querySelectorAll(NOISE_SELECTORS).forEach((el) => el.remove());
+		document.querySelectorAll(ALL_NOISE_SELECTORS).forEach((el) => el.remove());
 		return document.documentElement.outerHTML;
 	} catch {
 		return html; // fallback: passthrough on parse failure

@@ -117,7 +117,7 @@ pi install git:github.com/apmantza/pi-webaio
 
 ### Content Extraction Pipeline
 
-When fetching a page, pi-webaio tries the following backends **in order**, falling through until one returns clean content. HTML is **pre-cleaned** (nav/footer/header/svg removed via DOM) before entering the extraction pipeline. At every stage, if extracted content is <30 words or <1% of original HTML, the pipeline falls through to the next backend.
+When fetching a page, pi-webaio tries the following backends **in order**, falling through until one returns clean content. HTML is **pre-cleaned** (nav/footer/header/svg/cookie consent banners removed via DOM) before entering the extraction pipeline. At every stage, if extracted content is <30 words or <1% of original HTML, the pipeline falls through to the next backend.
 
 0. **Vertical extractors** — API-first: npm registry, PyPI JSON, Hacker News Firebase, Reddit .json, arXiv Atom, platform docs-sites
 1. **GitHub special-case** — Clones repos or fetches via GitHub API

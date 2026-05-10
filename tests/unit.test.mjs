@@ -26,6 +26,7 @@ import {
 	parseGitHubUrl,
 	parseLocs,
 	scanForSecrets,
+	stripConsentBanners,
 	stripDefuddleComments,
 	wordCount,
 } from "./lib.mjs";
@@ -905,4 +906,248 @@ test("stripDefuddleComments strips only the comment footer", () => {
 	const input =
 		"Content before.\n\n---\n\n## Comments\n\nExtractor note\n\nMore text under comments";
 	assert.strictEqual(stripDefuddleComments(input), "Content before.");
+});
+
+// ─── stripConsentBanners ──────────────────────────────────────────
+
+// Named CMPs: OneTrust
+test("stripConsentBanners removes OneTrust banner", () => {
+	const html = `<body>
+		<article id="main"><p>Article content here.</p></article>
+		<div id="onetrust-banner-sdk"><button>Accept All</button></div>
+	</body>`;
+	const result = stripConsentBanners(html);
+	assert.ok(!result.includes("onetrust"), "OneTrust banner should be removed");
+	assert.ok(
+		result.includes("Article content here"),
+		"Article content should remain",
+	);
+});
+
+// Named CMPs: Cookiebot
+test("stripConsentBanners removes Cookiebot dialog", () => {
+	const html = `<body>
+		<div id="CybotCookiebotDialog" class="cybotCookiebotDialog">Cookies!</div>
+		<main><p>Real content.</p></main>
+	</body>`;
+	const result = stripConsentBanners(html);
+	assert.ok(!result.includes("CybotCookiebotDialog"));
+	assert.ok(result.includes("Real content"));
+});
+
+// Named CMPs: Didomi
+test("stripConsentBanners removes Didomi host", () => {
+	const html = `<body>
+		<div id="didomi-host"><button>Accept</button></div>
+		<article><p>Content.</p></article>
+	</body>`;
+	const result = stripConsentBanners(html);
+	assert.ok(!result.includes("didomi"));
+	assert.ok(result.includes("Content"));
+});
+
+// Named CMPs: Quantcast
+test("stripConsentBanners removes Quantcast panel", () => {
+	const html = `<body>
+		<div class="qc-cmp2-container"><div class="qc-cmp2-panel-container">Quantcast</div></div>
+		<article><p>Article.</p></article>
+	</body>`;
+	const result = stripConsentBanners(html);
+	assert.ok(!result.includes("qc-cmp2"));
+	assert.ok(result.includes("Article"));
+});
+
+// Named CMPs: Usercentrics
+test("stripConsentBanners removes Usercentrics root", () => {
+	const html = `<body>
+		<div id="usercentrics-root"><button>Accept</button></div>
+		<main><p>Content.</p></main>
+	</body>`;
+	const result = stripConsentBanners(html);
+	assert.ok(!result.includes("usercentrics"));
+	assert.ok(result.includes("Content"));
+});
+
+// Named CMPs: TrustArc
+test("stripConsentBanners removes TrustArc banner", () => {
+	const html = `<body>
+		<div id="truste-consent-track">TrustArc</div>
+		<article><p>Real content.</p></article>
+	</body>`;
+	const result = stripConsentBanners(html);
+	assert.ok(!result.includes("truste-consent"));
+	assert.ok(result.includes("Real content"));
+});
+
+// Named CMPs: Sourcepoint
+test("stripConsentBanners removes Sourcepoint root", () => {
+	const html = `<body>
+		<div id="sp-root"><button>Accept</button></div>
+		<article><p>Content.</p></article>
+	</body>`;
+	const result = stripConsentBanners(html);
+	assert.ok(!result.includes("sp-root"));
+	assert.ok(result.includes("Content"));
+});
+
+// Named CMPs: CookieYes
+test("stripConsentBanners removes CookieYes bar", () => {
+	const html = `<body>
+		<div id="cookie-law-info-bar">Cookies!</div>
+		<article><p>Real content.</p></article>
+	</body>`;
+	const result = stripConsentBanners(html);
+	assert.ok(!result.includes("cookie-law-info"));
+	assert.ok(result.includes("Real content"));
+});
+
+// Named CMPs: Osano
+test("stripConsentBanners removes Osano dialog", () => {
+	const html = `<body>
+		<div id="osano-cm-dialog">Osano</div>
+		<main><p>Content.</p></main>
+	</body>`;
+	const result = stripConsentBanners(html);
+	assert.ok(!result.includes("osano"));
+	assert.ok(result.includes("Content"));
+});
+
+// Generic class-based patterns
+test("stripConsentBanners removes generic cookie-banner class", () => {
+	const html = `<body>
+		<div class="my-cookie-banner">Accept cookies</div>
+		<article><p>Content.</p></article>
+	</body>`;
+	const result = stripConsentBanners(html);
+	assert.ok(!result.includes("cookie-banner"));
+	assert.ok(result.includes("Content"));
+});
+
+test("stripConsentBanners removes consent-modal class", () => {
+	const html = `<body>
+		<div class="app-consent-modal">Consent</div>
+		<main><p>Content.</p></main>
+	</body>`;
+	const result = stripConsentBanners(html);
+	assert.ok(!result.includes("consent-modal"));
+	assert.ok(result.includes("Content"));
+});
+
+test("stripConsentBanners removes gdpr-banner class", () => {
+	const html = `<body>
+		<div class="gdpr-banner-wrapper">GDPR</div>
+		<article><p>Content.</p></article>
+	</body>`;
+	const result = stripConsentBanners(html);
+	assert.ok(!result.includes("gdpr-banner"));
+	assert.ok(result.includes("Content"));
+});
+
+// Generic id-based patterns
+test("stripConsentBanners removes generic cookie-consent id", () => {
+	const html = `<body>
+		<div id="app-cookie-consent">Consent</div>
+		<main><p>Content.</p></main>
+	</body>`;
+	const result = stripConsentBanners(html);
+	assert.ok(!result.includes("cookie-consent"));
+	assert.ok(result.includes("Content"));
+});
+
+// Multiple banners
+test("stripConsentBanners removes multiple banners simultaneously", () => {
+	const html = `<body>
+		<div id="onetrust-banner-sdk">OneTrust</div>
+		<div id="CybotCookiebotDialog">Cookiebot</div>
+		<div class="qc-cmp2-container">Quantcast</div>
+		<article><p>Real content.</p></article>
+	</body>`;
+	const result = stripConsentBanners(html);
+	assert.ok(!result.includes("onetrust"));
+	assert.ok(!result.includes("Cookiebot"));
+	assert.ok(!result.includes("qc-cmp2"));
+	assert.ok(result.includes("Real content"));
+});
+
+// False positive: legitimate content mentioning "cookie" should NOT be stripped
+test("stripConsentBanners preserves legitimate cookie-related content", () => {
+	const html = `<body>
+		<article>
+			<h1>How to Bake Chocolate Chip Cookies</h1>
+			<p>Mix flour, sugar, and butter. Add chocolate chips.</p>
+			<div class="recipe-steps"><ol><li>Mix</li><li>Bake</li></ol></div>
+		</article>
+	</body>`;
+	const result = stripConsentBanners(html);
+	assert.ok(result.includes("Chocolate Chip Cookies"));
+	assert.ok(result.includes("Mix flour"));
+});
+
+// False positive: GDPR blog post should not be stripped
+test("stripConsentBanners preserves GDPR informational content", () => {
+	const html = `<body>
+		<article>
+			<h1>Understanding GDPR Compliance</h1>
+			<p>The GDPR regulation requires consent management.</p>
+			<section class="article-section"><p>More about cookie consent laws.</p></section>
+		</article>
+	</body>`;
+	const result = stripConsentBanners(html);
+	assert.ok(result.includes("GDPR Compliance"));
+	assert.ok(result.includes("consent management"));
+	assert.ok(result.includes("cookie consent laws"));
+});
+
+// False positive: "consent" in non-banner context
+test("stripConsentBanners preserves consent-related article content", () => {
+	const html = `<body>
+		<main>
+			<h1>Parental Consent Requirements</h1>
+			<p>Schools require parental consent for field trips.</p>
+		</main>
+	</body>`;
+	const result = stripConsentBanners(html);
+	assert.ok(result.includes("Parental Consent"));
+	assert.ok(result.includes("field trips"));
+});
+
+// False positive: [role="dialog"] should be stripped but real content should survive
+test("stripConsentBanners strips role=dialog banners", () => {
+	const html = `<body>
+		<div role="dialog" aria-label="Cookie consent preferences">
+			<button>Accept All</button>
+			<button>Reject All</button>
+		</div>
+		<main><p>Article content.</p></main>
+	</body>`;
+	const result = stripConsentBanners(html);
+	assert.ok(!result.includes("Cookie consent preferences"));
+	assert.ok(result.includes("Article content"));
+});
+
+// Empty HTML
+test("stripConsentBanners handles empty HTML", () => {
+	assert.strictEqual(stripConsentBanners(""), "");
+});
+
+// No banners present
+test("stripConsentBanners passes through clean content", () => {
+	const html = `<body>
+		<article><p>Just normal content.</p></article>
+	</body>`;
+	const result = stripConsentBanners(html);
+	assert.ok(result.includes("Just normal content"));
+});
+
+// Nested banner inside article (should still be stripped)
+test("stripConsentBanners strips nested banner elements", () => {
+	const html = `<body>
+		<div class="page-wrapper">
+			<div id="onetrust-banner-sdk"><button>Accept</button></div>
+			<article><p>Content.</p></article>
+		</div>
+	</body>`;
+	const result = stripConsentBanners(html);
+	assert.ok(!result.includes("onetrust"));
+	assert.ok(result.includes("Content"));
 });
