@@ -109,11 +109,15 @@ pi install git:github.com/apmantza/pi-webaio
 - **JSON auto-detection** — Detects `application/json` content-type or body starting with `{`/`[`, returns pretty-printed
 - **Plain text handling** — Detects `text/plain`, wraps in code block (unless already markdown)
 - **Binary download detection** — Detects null bytes or >30% non-ASCII, streams to temp with filename from Content-Disposition
-- **Vertical extractors** — 6 API-first extractors for npm, PyPI, Hacker News, Reddit, arXiv, and docs sites — hit structured APIs instead of scraping HTML
+- **Vertical extractors** — 7 API-first extractors for npm, PyPI, Hacker News, Reddit, arXiv, YouTube, and docs sites — hit structured APIs instead of scraping HTML. The YouTube extractor fetches video transcripts + metadata via `youtube-transcript-plus` (Innertube API, no API key required). Supports standard URLs, `youtu.be`, Shorts, and embeds. Returns title, channel, duration, views, tags, description, and full transcript with configurable format (`text`, `vtt`, or `segments` with timestamps). Language selection with auto-fallback.
 - **SPA data-island recovery** — Extracts JSON hydration data from `<script>` tags and framework globals for JS-rendered pages
 - **Client-side meta redirect** — Follows `<meta http-equiv="refresh">` up to 5 hops recursively
 - **Proxy support** — Routes all requests through HTTP, HTTPS, or SOCKS5 proxy
 - **Structured error info** — Failed fetches include `errorCode`, `phase`, `retryable` flag, and `statusCode`
+
+### Cookie Consent Banner Stripping
+
+Cookie consent / CMP banners are stripped server-side during HTML pre-cleaning (`preCleanHtml()`). 80+ selectors covering 17+ named CMPs (OneTrust, Cookiebot, Didomi, Quantcast, Usercentrics, TrustArc, Klaro, Sourcepoint, CookieYes, Osano, CookieFirst, Adobe PMC, SmartConsent, CookieHub, TermsFeed, Google, YouTube, BBC, Amazon) plus generic class/id patterns (`[class*="cookie-banner"]`, `[class*="consent-modal"]`, `[class*="gdpr-banner"]`, `[class*="privacy-notice"]`) and ARIA/data-attribute patterns. Runs before Readability/Defuddle extraction so banner noise never reaches content heuristics.
 
 ### Content Extraction Pipeline
 
