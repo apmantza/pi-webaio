@@ -16,6 +16,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **4-engine search pipeline** (`searchWeb()` in `index.ts`) — Expanded from DDG+Brave to **DDG, Brave, Yahoo, and Bing** running in parallel. Yahoo bypasses EU GDPR consent walls via `region=us&lang=en` query params. Bing adds Microsoft index coverage. All 4 engines fan out simultaneously with a 7-second cap.
+- **Cross-engine consensus ranking** (`scoreAndRankResults()`, `buildResultBuckets()`, `ENGINE_WEIGHTS` in `index.ts`) — Results are scored by engine authority + cross-engine agreement. Higher weight = more trusted engine (Google 5, Bing 3, DDG 2, Brave 2, Yahoo 1). Consensus bonus: +2 per additional engine agreeing on a URL. Metadata (title/snippet) is taken from the highest-weight engine for each URL. High-confidence results (returned by multiple engines) bubble to the top.
+- **Per-session engine health tracking** (`EngineHealthRecord`, `recordEngineSuccess/Failure`, `isEngineAvailable` in `index.ts`) — Tracks successes, failures, consecutive failures, latency per engine. Auto-cooldown after 2 consecutive failures (10 min). Failed engines are skipped on subsequent searches until cooldown expires. Replaces the simpler `providerCooldowns` map.
+- **Login-redirect detection** (`detectLoginRedirect()` in `src/bot-detection.ts`) — Detects auth-wall redirects (accounts.google.com, login.microsoftonline.com, auth0.com, okta.com, etc.) and content pages that redirect to login forms. Returns structured reason string. Integrated into `smartFetch()` — login redirects return `null` instead of passing through the login page as content.
+- **Default search results cap raised** — `max` parameter default increased from 10 to 15. Final output cap remains 25 (after HTTP + Google merge and dedup).
+
+### Changed
+
+- **Search tool description** — Updated from "DuckDuckGo, Brave, and Google" to "DuckDuckGo, Brave, Yahoo, Bing, and Google" to reflect the 4 HTTP engines + 1 CDP engine architecture.
+- **Engine labels in output** — Now dynamic: only shows engines that actually contributed results (e.g. "DDG + Bing" or "DDG + Brave + Bing + Google"), replacing the static "DDG + Brave" label.
+
 ## [0.3.2] - 2026-05-09
 
 ### Added

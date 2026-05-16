@@ -25,7 +25,7 @@ import {
 	summarizeUrl,
 	cdpAvailable as cdpAvailableGA,
 } from "./src/google-ai.js";
-import { detectBotBlock } from "./src/bot-detection.js";
+import { detectBotBlock, detectLoginRedirect } from "./src/bot-detection.js";
 import { extractDataIslands } from "./src/data-islands.js";
 import { storeResult, getResult, listResults } from "./src/storage.js";
 import { compileContextPackage } from "./src/context-package.js";
@@ -1313,6 +1313,17 @@ async function smartFetch(
 
 	const text = await readResponseText(res);
 
+	// Login-redirect detection: treat auth-wall redirects as blocked
+	const loginRedirect = detectLoginRedirect(
+		url,
+		normalizeFetchedUrl(res.url),
+		text,
+	);
+	if (loginRedirect) {
+		console.error(`[BLOCKED] Login redirect detected: ${loginRedirect}`);
+		return null;
+	}
+
 	// Bot protection fallback: try alternate browser profiles
 	if (isLikelyBotProtection(text)) {
 		const fallbackBrowsers = ["firefox_147", "safari_26", "edge_145"];
@@ -1607,19 +1618,80 @@ async function discover(
 
 // ─── Web Search ────────────────────────────────────────────────────
 
-// Provider cooldown tracker — prevents wasting requests on dead/rate-limited engines.
-const QUOTA_TTL_MS = 10 * 60 * 1000; // 10 min for quota/auth errors
-const NETWORK_TTL_MS = 2 * 60 * 1000; // 2 min for connection failures
-const providerCooldowns = new Map<string, { until: number; reason: string }>();
+// ─── Engine health tracking ────────────────────────────────────────
+// Enhanced per-session health tracking for search engines.
+// Tracks successes, failures, consecutive failures, latency, and cooldown.
 
-function isProviderAvailable(provider: string): boolean {
-	const state = providerCooldowns.get(provider);
-	if (!state) return true;
-	if (Date.now() >= state.until) {
-		providerCooldowns.delete(provider);
+interface EngineHealthRecord {
+	successes: number;
+	failures: number;
+	consecutiveFailures: number;
+	lastFailureReason?: string;
+	lastLatencyMs?: number;
+	totalLatencyMs: number;
+	samples: number;
+	lastSuccessAt?: number;
+	lastFailureAt?: number;
+	coolDownUntil?: number;
+}
+
+const ENGINE_HEALTH_COOLDOWN_MS = 10 * 60 * 1000; // 10 min cooldown after threshold
+const ENGINE_FAILURE_THRESHOLD = 2; // consecutive failures before cooldown
+
+const sessionEngineHealth = new Map<string, EngineHealthRecord>();
+
+function getOrCreateEngineHealth(engine: string): EngineHealthRecord {
+	const existing = sessionEngineHealth.get(engine);
+	if (existing) return existing;
+
+	const created: EngineHealthRecord = {
+		successes: 0,
+		failures: 0,
+		consecutiveFailures: 0,
+		totalLatencyMs: 0,
+		samples: 0,
+	};
+	sessionEngineHealth.set(engine, created);
+	return created;
+}
+
+function recordEngineSuccess(engine: string, latencyMs: number): void {
+	const record = getOrCreateEngineHealth(engine);
+	record.successes += 1;
+	record.consecutiveFailures = 0;
+	record.coolDownUntil = undefined;
+	record.lastSuccessAt = Date.now();
+	record.lastLatencyMs = latencyMs;
+	record.totalLatencyMs += latencyMs;
+	record.samples += 1;
+}
+
+function recordEngineFailure(engine: string, reason: string): void {
+	const record = getOrCreateEngineHealth(engine);
+	record.failures += 1;
+	record.consecutiveFailures += 1;
+	record.lastFailureAt = Date.now();
+	record.lastFailureReason = reason;
+
+	if (record.consecutiveFailures >= ENGINE_FAILURE_THRESHOLD) {
+		record.coolDownUntil = Date.now() + ENGINE_HEALTH_COOLDOWN_MS;
+	}
+}
+
+function isEngineAvailable(engine: string): boolean {
+	const record = sessionEngineHealth.get(engine);
+	if (!record?.coolDownUntil) return true;
+	if (Date.now() >= record.coolDownUntil) {
+		record.coolDownUntil = undefined;
+		record.consecutiveFailures = 0;
 		return true;
 	}
-	return false;
+	return record.consecutiveFailures >= ENGINE_FAILURE_THRESHOLD;
+}
+
+// Backward-compatible aliases (delegate to new health system)
+function isProviderAvailable(provider: string): boolean {
+	return isEngineAvailable(provider);
 }
 
 function recordProviderCooldown(
@@ -1627,11 +1699,12 @@ function recordProviderCooldown(
 	reason: string,
 	ttlMs: number,
 ): void {
-	providerCooldowns.set(provider, { until: Date.now() + ttlMs, reason });
-}
-
-function recordProviderQuota(provider: string, reason: string): void {
-	recordProviderCooldown(provider, reason, QUOTA_TTL_MS);
+	const record = getOrCreateEngineHealth(provider);
+	record.failures += 1;
+	record.consecutiveFailures += 1;
+	record.lastFailureAt = Date.now();
+	record.lastFailureReason = reason;
+	record.coolDownUntil = Date.now() + ttlMs;
 }
 
 function recordProviderNetworkFailure(provider: string, msg: string): void {
@@ -1648,7 +1721,7 @@ function recordProviderNetworkFailure(provider: string, msg: string): void {
 	recordProviderCooldown(
 		provider,
 		msg,
-		isConnFailure ? NETWORK_TTL_MS : QUOTA_TTL_MS,
+		isConnFailure ? 2 * 60 * 1000 : 10 * 60 * 1000,
 	);
 }
 
@@ -1694,6 +1767,89 @@ function parseDuckDuckGoResults(html: string): SearchResult[] {
 		if (url && title) {
 			results.push({ title, url, snippet: text });
 		}
+	}
+	return results;
+}
+
+function parseYahooResults(html: string): SearchResult[] {
+	const { document } = parseHTML(html);
+	const results: SearchResult[] = [];
+
+	for (const el of document.querySelectorAll(
+		"#web li, ol.searchCenterMiddle li",
+	)) {
+		const a = el.querySelector("a");
+		if (!a) continue;
+		const rawUrl = a.getAttribute("href") || "";
+		const title = a.textContent?.trim() || "";
+		if (!title || !rawUrl) continue;
+
+		// Resolve Yahoo redirect URLs
+		let url: string | undefined;
+		try {
+			const u = new URL(rawUrl, "https://search.yahoo.com");
+			const ru = u.searchParams.get("RU") || u.searchParams.get("ru");
+			if (ru) {
+				url = decodeURIComponent(ru);
+			} else if (u.hostname === "r.search.yahoo.com") {
+				const match = u.pathname.match(/\/RU=([^/]+)\//);
+				if (match?.[1]) url = decodeURIComponent(match[1]);
+			} else {
+				url = rawUrl;
+			}
+		} catch {
+			url = rawUrl;
+		}
+
+		if (!url || !/^https?:/i.test(url)) continue;
+		if (
+			url.includes("search.yahoo.com") ||
+			url.includes("video.search.yahoo.com") ||
+			url.includes("r.search.yahoo.com")
+		)
+			continue;
+
+		const snippet = el.querySelector(".compText, p")?.textContent?.trim() || "";
+		results.push({ title, url, snippet });
+	}
+	return results;
+}
+
+function parseBingResults(html: string): SearchResult[] {
+	const { document } = parseHTML(html);
+	const results: SearchResult[] = [];
+
+	for (const el of document.querySelectorAll("li.b_algo")) {
+		const a = el.querySelector("h2 a");
+		if (!a) continue;
+		const rawUrl = a.getAttribute("href") || "";
+		const title = a.textContent?.trim() || "";
+		if (!title || !rawUrl) continue;
+
+		// Resolve Bing redirect URLs
+		let url: string | undefined;
+		try {
+			const u = new URL(rawUrl, "https://www.bing.com");
+			if (u.pathname.startsWith("/ck/a") && u.searchParams.has("u")) {
+				const encoded = u.searchParams.get("u")!;
+				// Bing uses base64-ish encoding prefixed with "a1"
+				const normalized = encoded.startsWith("a1")
+					? encoded.slice(2)
+					: encoded;
+				const decoded = Buffer.from(normalized, "base64").toString("utf8");
+				url = /^https?:/i.test(decoded) ? decoded : undefined;
+			} else {
+				url = rawUrl;
+			}
+		} catch {
+			url = rawUrl;
+		}
+
+		if (!url || !/^https?:/i.test(url)) continue;
+		if (url.includes("bing.com")) continue;
+
+		const snippet = el.querySelector(".b_caption p")?.textContent?.trim() || "";
+		results.push({ title, url, snippet });
 	}
 	return results;
 }
@@ -1782,92 +1938,175 @@ function parseBraveResults(html: string): SearchResult[] {
 	return results;
 }
 
-async function searchWeb(
-	query: string,
-): Promise<{ results: SearchResult[]; ddgCount: number; braveCount: number }> {
+async function searchWeb(query: string): Promise<{
+	results: SearchResult[];
+	ddgCount: number;
+	braveCount: number;
+	yahooCount: number;
+	bingCount: number;
+}> {
 	// Check in-memory cache first
 	const cached = getCachedSearch(query);
 	if (cached)
-		return { results: cached, ddgCount: cached.length, braveCount: 0 };
+		return {
+			results: cached,
+			ddgCount: cached.length,
+			braveCount: 0,
+			yahooCount: 0,
+			bingCount: 0,
+		};
 
 	const encoded = encodeURIComponent(query);
 
-	// Run DDG + Brave in parallel (skip cooldown'd providers)
+	// Run all 4 engines in parallel (skip cooldown'd providers)
 	const commonHeaders = {
 		Accept: "text/html",
 		"User-Agent":
 			"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
 	};
 
-	const ddgAvailable = isProviderAvailable("ddg");
-	const braveAvailable = isProviderAvailable("brave");
+	const engines = [
+		{
+			id: "ddg" as const,
+			url: `https://html.duckduckgo.com/html/?q=${encoded}`,
+			parser: parseDuckDuckGoResults,
+		},
+		{
+			id: "brave" as const,
+			url: `https://search.brave.com/search?q=${encoded}`,
+			parser: parseBraveResults,
+		},
+		{
+			id: "yahoo" as const,
+			url: `https://search.yahoo.com/search?p=${encoded}&region=us&lang=en`,
+			parser: parseYahooResults,
+		},
+		{
+			id: "bing" as const,
+			url: `https://www.bing.com/search?q=${encoded}`,
+			parser: parseBingResults,
+		},
+	];
 
-	const ddgPromise = ddgAvailable
-		? smartFetch(`https://html.duckduckgo.com/html/?q=${encoded}`, {
-				headers: commonHeaders,
-			}).then(
-				(res) => ({ source: "ddg" as const, res }),
-				(err) => {
-					recordProviderNetworkFailure("ddg", String(err));
-					return { source: "ddg" as const, res: null };
-				},
-			)
-		: Promise.resolve({ source: "ddg" as const, res: null });
+	const promises = engines.map((engine) => {
+		if (!isEngineAvailable(engine.id)) {
+			return Promise.resolve({
+				id: engine.id,
+				res: null as any,
+				latencyMs: 0,
+			});
+		}
+		const start = Date.now();
+		return smartFetch(engine.url, { headers: commonHeaders })
+			.then((res) => ({
+				id: engine.id,
+				res,
+				latencyMs: Date.now() - start,
+			}))
+			.catch((err) => {
+				recordEngineFailure(engine.id, String(err));
+				return {
+					id: engine.id,
+					res: null as any,
+					latencyMs: Date.now() - start,
+				};
+			});
+	});
 
-	const bravePromise = braveAvailable
-		? smartFetch(`https://search.brave.com/search?q=${encoded}`, {
-				headers: commonHeaders,
-			}).then(
-				(res) => ({ source: "brave" as const, res }),
-				(err) => {
-					recordProviderNetworkFailure("brave", String(err));
-					return { source: "brave" as const, res: null };
-				},
-			)
-		: Promise.resolve({ source: "brave" as const, res: null });
+	const settled = await Promise.all(promises);
 
-	const results = await Promise.all([ddgPromise, bravePromise]);
+	const counts = { ddg: 0, brave: 0, yahoo: 0, bing: 0 };
+	const engineResults = new Map<string, EngineSource[]>();
 
-	// Parse both results
-	let ddgResults: SearchResult[] = [];
-	for (const r of results) {
-		if (r.source === "ddg") {
-			if (r.res && r.res.status < 400) {
-				ddgResults = parseDuckDuckGoResults(r.res.text);
-			} else if (r.res && isQuotaError(r.res.status, r.res.text)) {
-				recordProviderQuota("ddg", `HTTP ${r.res.status}`);
+	for (const s of settled) {
+		const engine = engines.find((e) => e.id === s.id);
+		if (!engine || !s.res || s.res.status >= 400) {
+			if (s.res && isQuotaError(s.res.status, s.res.text)) {
+				recordEngineFailure(s.id, `HTTP ${s.res.status}`);
 			}
+			continue;
+		}
+
+		const parsed = engine.parser(s.res.text);
+		if (parsed.length > 0) {
+			recordEngineSuccess(s.id, s.latencyMs);
+		} else {
+			recordEngineFailure(s.id, "no results parsed");
+		}
+		counts[s.id] = parsed.length;
+
+		for (const r of parsed) {
+			const list = engineResults.get(r.url) || [];
+			list.push({
+				result: r,
+				engine: s.id,
+				weight: ENGINE_WEIGHTS[s.id] || 1,
+			});
+			engineResults.set(r.url, list);
 		}
 	}
 
-	let braveResults: SearchResult[] = [];
-	for (const r of results) {
-		if (r.source === "brave") {
-			if (r.res && r.res.status < 400) {
-				braveResults = parseBraveResults(r.res.text);
-			} else if (r.res && isQuotaError(r.res.status, r.res.text)) {
-				recordProviderQuota("brave", `HTTP ${r.res.status}`);
-			}
-		}
-	}
-
-	// Merge & deduplicate by URL
-	const seen = new Set<string>();
-	const merged: SearchResult[] = [];
-	for (const r of [...ddgResults, ...braveResults]) {
-		if (seen.has(r.url)) continue;
-		seen.add(r.url);
-		merged.push(r);
-	}
+	const scored = scoreAndRankResults(engineResults);
+	const merged = scored.map((s) => s.result);
 
 	if (merged.length > 0) {
 		storeSearchResults(query, merged);
 	}
 	return {
 		results: merged,
-		ddgCount: ddgResults.length,
-		braveCount: braveResults.length,
+		ddgCount: counts.ddg,
+		braveCount: counts.brave,
+		yahooCount: counts.yahoo,
+		bingCount: counts.bing,
 	};
+}
+
+// ─── Cross-engine result scoring ───────────────────────────────────
+
+const ENGINE_WEIGHTS: Record<string, number> = {
+	google: 5,
+	bing: 3,
+	ddg: 2,
+	brave: 2,
+	yahoo: 1,
+};
+
+interface EngineSource {
+	result: SearchResult;
+	engine: string;
+	weight: number;
+}
+
+function scoreAndRankResults(
+	buckets: Map<string, EngineSource[]>,
+): { result: SearchResult; score: number; sources: string[] }[] {
+	const scored: { result: SearchResult; score: number; sources: string[] }[] = [];
+	for (const [url, entries] of buckets) {
+		const sources = entries.map((e) => e.engine);
+		const weightSum = entries.reduce((sum, e) => sum + e.weight, 0);
+		const consensusBonus = Math.max(0, sources.length - 1) * 2;
+		const score = weightSum + consensusBonus;
+
+		// Pick metadata from the highest-weight engine
+		entries.sort((a, b) => b.weight - a.weight);
+		const best = entries[0].result;
+
+		scored.push({ result: { ...best, url }, score, sources });
+	}
+
+	scored.sort((a, b) => b.score - a.score);
+	return scored;
+}
+
+function buildResultBuckets(results: SearchResult[], engine: string): Map<string, EngineSource[]> {
+	const buckets = new Map<string, EngineSource[]>();
+	const weight = ENGINE_WEIGHTS[engine] || 1;
+	for (const r of results) {
+		const list = buckets.get(r.url) || [];
+		list.push({ result: r, engine, weight });
+		buckets.set(r.url, list);
+	}
+	return buckets;
 }
 
 // ─── GitHub-aware fetch ─────────────────────────────────────────────
@@ -4226,12 +4465,12 @@ export default function (pi: ExtensionAPI) {
 		name: "aio-websearch",
 		label: "Web Search",
 		description:
-			"Search the web using DuckDuckGo, Brave, and Google in parallel (no API keys required). Returns a compact list of results with title, URL, and snippet. Capped at ~7s — returns whatever is available by then.",
+			"Search the web using DuckDuckGo, Brave, Yahoo, Bing, and Google in parallel (no API keys required). Returns a compact list of results with title, URL, and snippet. Capped at ~7s — returns whatever is available by then.",
 		promptSnippet: "Search the web for current information or references",
 		promptGuidelines: [
 			"Use aio-websearch when the user asks a question that requires current or external information not in your training data.",
 			"After getting search results, use aio-webfetch or aio-webpull to retrieve the full content of the most relevant result.",
-			"Runs DDG/Brave + Google in parallel. Google requires headless Chrome (auto-launched). Set google: false to skip.",
+			"Runs DDG/Brave/Yahoo/Bing + Google in parallel. Google requires headless Chrome (auto-launched). Set google: false to skip.",
 		],
 		parameters: Type.Object({
 			query: Type.String({
@@ -4240,8 +4479,8 @@ export default function (pi: ExtensionAPI) {
 			max: Type.Optional(
 				Type.Number({
 					description:
-						"Max results to request from each engine (default: 10). Up to 25 returned after dedup across all engines.",
-					default: 10,
+						"Max results to request from each engine (default: 15). Up to 25 returned after dedup across all engines.",
+					default: 15,
 				}),
 			),
 			google: Type.Optional(
@@ -4256,24 +4495,27 @@ export default function (pi: ExtensionAPI) {
 		async execute(_toolCallId, params) {
 			const query = params.query;
 			setSearchContext(query);
-			const max = params.max ?? 10;
+			const max = params.max ?? 15;
 			const useGoogle = params.google ?? true;
 
-			// ── Run DDG/Brave + Google in parallel with 7s cap ──
+			// ── Run 4 HTTP engines + Google CDP in parallel with 7s cap ──
 			const SEARCH_TIMEOUT = 7000;
 
-			const ddgPromise = searchWeb(query).then(
+			const httpPromise = searchWeb(query).then(
 				(r) => ({
-					source: "ddg" as const,
+					source: "http" as const,
 					results: r.results.slice(0, max),
-					searchWebDdgCount: r.ddgCount,
-					searchWebBraveCount: r.braveCount,
+					httpCounts: {
+						ddg: r.ddgCount,
+						brave: r.braveCount,
+						yahoo: r.yahooCount,
+						bing: r.bingCount,
+					},
 				}),
 				() => ({
-					source: "ddg" as const,
+					source: "http" as const,
 					results: [] as SearchResult[],
-					searchWebDdgCount: 0,
-					searchWebBraveCount: 0,
+					httpCounts: { ddg: 0, brave: 0, yahoo: 0, bing: 0 },
 				}),
 			);
 
@@ -4315,40 +4557,39 @@ export default function (pi: ExtensionAPI) {
 			);
 
 			// Race all against the timeout — take whatever's ready
-			const allPromise = Promise.all([ddgPromise, googlePromise]);
+			const allPromise = Promise.all([httpPromise, googlePromise]);
 			const result = await Promise.race([allPromise, timeoutPromise]);
 
-			let ddgResults: SearchResult[] = [];
+			let httpResults: SearchResult[] = [];
 			let googleResults: SearchResult[] = [];
-			let searchWebDdgCount = 0;
-			let searchWebBraveCount = 0;
+			let httpCounts = { ddg: 0, brave: 0, yahoo: 0, bing: 0 };
 
 			if (result) {
-				ddgResults = result[0].results;
+				httpResults = result[0].results;
 				googleResults = result[1].results;
-				searchWebDdgCount = (result[0] as any).searchWebDdgCount ?? 0;
-				searchWebBraveCount = (result[0] as any).searchWebBraveCount ?? 0;
+				httpCounts = (result[0] as any).httpCounts ?? httpCounts;
 			} else {
 				// Timeout hit — grab whatever settled already
-				const settled = await Promise.allSettled([ddgPromise, googlePromise]);
+				const settled = await Promise.allSettled([httpPromise, googlePromise]);
 				if (settled[0].status === "fulfilled") {
-					ddgResults = settled[0].value.results;
-					searchWebDdgCount = (settled[0].value as any).searchWebDdgCount ?? 0;
-					searchWebBraveCount =
-						(settled[0].value as any).searchWebBraveCount ?? 0;
+					httpResults = settled[0].value.results;
+					httpCounts = (settled[0].value as any).httpCounts ?? httpCounts;
 				}
 				if (settled[1].status === "fulfilled")
 					googleResults = settled[1].value.results;
 			}
 
-			// ── Merge & deduplicate by URL ──
-			const seen = new Set<string>();
-			const merged: SearchResult[] = [];
-			for (const r of [...ddgResults, ...googleResults]) {
-				if (seen.has(r.url)) continue;
-				seen.add(r.url);
-				merged.push(r);
+			// ── Merge, score, and rank by engine consensus + authority ──
+			const buckets = buildResultBuckets(httpResults, "http");
+			// Re-bucket Google results under their own engine name for scoring
+			for (const r of googleResults) {
+				const list = buckets.get(r.url) || [];
+				list.push({ result: r, engine: "google", weight: ENGINE_WEIGHTS.google });
+				buckets.set(r.url, list);
 			}
+
+			const scored = scoreAndRankResults(buckets);
+			const merged = scored.map((s) =>> s.result);
 
 			if (!merged.length) {
 				return {
@@ -4365,9 +4606,14 @@ export default function (pi: ExtensionAPI) {
 			const MAX_TOTAL = 25;
 			const limited = merged.slice(0, MAX_TOTAL);
 
-			// Determine which engines contributed (searchWeb always runs DDG + Brave together)
-			const engineLabel = ["DDG", "Brave"];
+			// Determine which engines contributed
+			const engineLabel: string[] = [];
+			if (httpCounts.ddg) engineLabel.push("DDG");
+			if (httpCounts.brave) engineLabel.push("Brave");
+			if (httpCounts.yahoo) engineLabel.push("Yahoo");
+			if (httpCounts.bing) engineLabel.push("Bing");
 			if (googleResults.length) engineLabel.push("Google");
+			if (!engineLabel.length) engineLabel.push("HTTP");
 
 			const text = [
 				`Search results for "${query}" (${engineLabel.join(" + ")}):`,
@@ -4382,8 +4628,7 @@ export default function (pi: ExtensionAPI) {
 				details: {
 					query,
 					results: limited,
-					ddgCount: searchWebDdgCount,
-					braveCount: searchWebBraveCount,
+					...httpCounts,
 					googleCount: googleResults.length,
 				},
 			};

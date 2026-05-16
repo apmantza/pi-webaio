@@ -192,6 +192,83 @@ export function detectBotBlock(
 	};
 }
 
+// ─── Login-redirect detection ──────────────────────────────────────
+
+/** Known authentication/login domains. */
+const AUTH_DOMAINS = [
+	"accounts.google.com",
+	"login.microsoftonline.com",
+	"login.live.com",
+	"auth0.com",
+	"okta.com",
+	"signin.aws.amazon.com",
+	"console.aws.amazon.com",
+];
+
+/** Hostname prefixes that indicate an auth/login service. */
+const AUTH_HOSTNAME_PREFIXES = [
+	"login.",
+	"signin.",
+	"auth.",
+	"sso.",
+	"accounts.",
+	"idp.",
+];
+
+/** Content patterns that indicate a login wall when combined with a hostname redirect. */
+const LOGIN_CONTENT_PATTERNS = [
+	"sign in",
+	"log in",
+	"authentication required",
+	"create an account to continue",
+	"login to continue",
+	"please sign in",
+	"please log in",
+];
+
+/**
+ * Detects redirect-to-login pages: sites that return 200 but redirect to an
+ * auth domain or serve a login form instead of the requested content.
+ *
+ * Only triggers when the response was redirected to a different hostname —
+ * this avoids false positives on pages that legitimately mention "sign in".
+ */
+export function detectLoginRedirect(
+	requestedUrl: string,
+	finalUrl: string,
+	html: string,
+): string | undefined {
+	try {
+		const requested = new URL(requestedUrl);
+		const final = new URL(finalUrl);
+
+		if (requested.hostname.toLowerCase() === final.hostname.toLowerCase()) {
+			return undefined;
+		}
+
+		const finalHost = final.hostname.toLowerCase();
+
+		if (
+			AUTH_DOMAINS.some((d) => finalHost === d || finalHost.endsWith(`.${d}`))
+		) {
+			return `redirected to login (${final.hostname})`;
+		}
+
+		if (AUTH_HOSTNAME_PREFIXES.some((p) => finalHost.startsWith(p))) {
+			return `redirected to login (${final.hostname})`;
+		}
+
+		const sample = html.slice(0, 20000).toLowerCase();
+		if (LOGIN_CONTENT_PATTERNS.some((p) => sample.includes(p))) {
+			return `redirected to login page (${final.hostname})`;
+		}
+	} catch {
+		// URL parsing failures are not login redirects.
+	}
+
+	return undefined;
+}
+
 /**
  * Backward-compatible boolean check. Use detectBotBlock() for full metadata.
  */
