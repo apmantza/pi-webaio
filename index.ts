@@ -2080,7 +2080,8 @@ interface EngineSource {
 function scoreAndRankResults(
 	buckets: Map<string, EngineSource[]>,
 ): { result: SearchResult; score: number; sources: string[] }[] {
-	const scored: { result: SearchResult; score: number; sources: string[] }[] = [];
+	const scored: { result: SearchResult; score: number; sources: string[] }[] =
+		[];
 	for (const [url, entries] of buckets) {
 		const sources = entries.map((e) => e.engine);
 		const weightSum = entries.reduce((sum, e) => sum + e.weight, 0);
@@ -2098,7 +2099,10 @@ function scoreAndRankResults(
 	return scored;
 }
 
-function buildResultBuckets(results: SearchResult[], engine: string): Map<string, EngineSource[]> {
+function buildResultBuckets(
+	results: SearchResult[],
+	engine: string,
+): Map<string, EngineSource[]> {
 	const buckets = new Map<string, EngineSource[]>();
 	const weight = ENGINE_WEIGHTS[engine] || 1;
 	for (const r of results) {
@@ -4584,12 +4588,16 @@ export default function (pi: ExtensionAPI) {
 			// Re-bucket Google results under their own engine name for scoring
 			for (const r of googleResults) {
 				const list = buckets.get(r.url) || [];
-				list.push({ result: r, engine: "google", weight: ENGINE_WEIGHTS.google });
+				list.push({
+					result: r,
+					engine: "google",
+					weight: ENGINE_WEIGHTS.google,
+				});
 				buckets.set(r.url, list);
 			}
 
 			const scored = scoreAndRankResults(buckets);
-			const merged = scored.map((s) =>> s.result);
+			const merged = scored.map((s) => s.result);
 
 			if (!merged.length) {
 				return {
