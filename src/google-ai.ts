@@ -463,8 +463,6 @@ export function cdpAvailable(): boolean {
 		existsSync(resolvePath("extractors", "google-search.mjs")) &&
 		existsSync(resolvePath("extractors", "common.mjs")) &&
 		existsSync(resolvePath("extractors", "consent.mjs")) &&
-		existsSync(resolvePath("extractors", "selectors.mjs")) &&
-		existsSync(resolvePath("src", "search", "constants.mjs")) &&
-		existsSync(resolvePath("src", "search", "chrome.mjs"))
+		existsSync(resolvePath("extractors", "selectors.mjs"))
 	);
 }
