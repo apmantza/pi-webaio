@@ -4,6 +4,20 @@
 
 All-in-one web access tools for [pi](https://pi.dev) with search, fetch, crawl, extraction, anti-bot TLS fingerprinting, and intelligent resilience.
 
+## What is this?
+
+**pi-webaio** is a pi extension that gives your agent eyes on the web. It registers six tools that let pi search, fetch, discover, and archive web content — all without API keys or paid services.
+
+The big idea: **don't trust a single source**. When you search, pi-webaio queries 5 engines in parallel (DuckDuckGo, Brave, Yahoo, Bing, and Google via headless Chrome). Results that show up across multiple engines rank higher — consensus is a signal of quality. When you fetch a page, it tries 14 different extraction backends in order, stripping cookie banners and anti-bot noise along the way, so you get clean markdown instead of raw HTML soup.
+
+It's built for agents that need to:
+- **Research** — find current information, documentation, or references
+- **Read** — pull articles, docs, GitHub repos, PDFs, or YouTube transcripts into markdown
+- **Explore** — map out a website's pages before pulling them all
+- **Remember** — cached results survive restarts and can be retrieved by URL or ID
+
+No API keys. No subscriptions. No brittle scraping scripts. Just `pi install npm:pi-webaio` and go.
+
 ## Installation
 
 ```bash
@@ -20,7 +34,7 @@ pi install git:github.com/apmantza/pi-webaio
 
 | Tool             | Description                                                                                                                                                                                                                                                             |
 | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `aio-websearch`  | Search the web using DuckDuckGo, Brave, and Google in parallel (no API keys required). Returns compact results with title, URL, and snippet. 7s cap — returns whatever is ready. Google runs via headless Chrome CDP (auto-launched). 10-minute cache.                  |
+| `aio-websearch`  | Search the web using DuckDuckGo, Brave, Yahoo, Bing, and Google in parallel (no API keys required). Returns compact results with title, URL, and snippet. Results are ranked by cross-engine consensus — URLs returned by multiple engines rank higher. 7s cap. Google runs via headless Chrome CDP (auto-launched). 10-minute cache. |
 | `aio-webfetch`   | Fetch a single URL (or batch of URLs) and convert to markdown with anti-bot TLS fingerprinting. Long content is **AI-summarized** via Google AI Mode; full file always saved. Detects PDFs, GitHub repos, and Next.js RSC. Supports auto escalation.                    |
 | `aio-webcontent` | Retrieve previously fetched content from session storage by URL. Returns **full untruncated content** — no data loss.                                                                                                                                                   |
 | `aio-webmap`     | Discovery-only tool — finds pages via robots.txt, sitemaps, navigation links, and llms.txt without fetching content. Returns structured URL list.                                                                                                                       |
@@ -34,7 +48,7 @@ pi install git:github.com/apmantza/pi-webaio
 | Parameter | Type      | Default | Description                                                                       |
 | --------- | --------- | ------- | --------------------------------------------------------------------------------- |
 | `query`   | `string`  | —       | Search query (e.g. 'React Server Components RFC')                                 |
-| `max`     | `number`  | `10`    | Max results per engine. Up to 25 total after dedup across all engines.            |
+| `max`     | `number`  | `15`    | Max results per engine. Up to 25 total after dedup across all engines.            |
 | `google`  | `boolean` | `true`  | Also search Google via headless Chrome CDP. Set to `false` to use only DDG/Brave. |
 
 #### `aio-webfetch`
@@ -99,7 +113,7 @@ pi install git:github.com/apmantza/pi-webaio
 - **Cloudflare challenge bypass** — Detects CF challenges via header + body markers, retries with alternate UA before falling through to fingerprint rotation
 - **Playwright fallback** — If `wreq-js` fails, dynamically imports Playwright to render JS-heavy pages (zero-config, optional dependency)
 - **Smart retry logic** — Exponential backoff (1s → 2s) for `429/500/502/503/504` and transient network errors. Non-retryable (`400/401/403/404`) fail fast.
-- **Provider cooldown system** — Search engines (DDG, Brave, Google) track failures with TTL cooldowns (10min quota / 2min network). Skipped engines don't waste time.
+- **Provider cooldown system** — Search engines (DDG, Brave, Yahoo, Bing, Google) track per-session health: successes, failures, consecutive failures, latency. Auto-cooldown after 2 consecutive failures (10 min). Skipped engines don't waste time.
 - **HTTP→HTTPS auto-upgrade** — Normalizes `http://` requests and responses
 - **Cross-host redirect detection** — Surfaces a warning notice when a fetch redirects to a different domain
 - **GitHub-aware fetch** — Detects repos, trees, blobs; clones repos or uses API. Special handling for GitHub Actions run URLs — fetches job details, step-by-step status, and failed job log excerpts
@@ -171,9 +185,15 @@ Alternate link fallback: at every stage, if content is thin, `<link rel="alterna
 
 ### Google CDP Search
 
-- **Parallel search** — `aio-websearch` runs DuckDuckGo, Brave, and Google in parallel. Google uses a headless Chrome instance (auto-launched) with locale-agnostic `textarea[name="q"]` selectors.
+- **4-engine HTTP search** — `aio-websearch` runs DuckDuckGo, Brave, Yahoo, and Bing in parallel over HTTP. Yahoo bypasses EU GDPR consent walls via `region=us` params.
+- **Google CDP search** — Google runs via headless Chrome CDP (auto-launched) as a 5th engine with locale-agnostic selectors.
 - **7-second cap** — Returns whatever results are ready by the deadline. No waiting for slow engines.
-- **Result deduplication** — Merges and deduplicates results across all engines by URL.
+- **Cross-engine consensus ranking** — Results are scored by engine authority + agreement count:
+  - Engine weights: Google 5, Bing 3, DDG 2, Brave 2, Yahoo 1
+  - Consensus bonus: +2 per additional engine agreeing on the same URL
+  - Metadata (title/snippet) taken from the highest-weight engine for each URL
+  - High-confidence results (returned by multiple engines) bubble to the top
+- **Result deduplication** — Merges and deduplicates results across all 5 engines by URL.
 
 ## Usage Examples
 
@@ -183,7 +203,7 @@ Alternate link fallback: at every stage, if content is thin, `<link rel="alterna
 Use aio-websearch to find the latest React documentation
 ```
 
-Google search is on by default (via headless Chrome). To skip it:
+Google search is on by default (via headless Chrome CDP). To skip it:
 
 ```
 Use aio-websearch to search for "Rust serde" (google: false)
