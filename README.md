@@ -104,97 +104,14 @@ pi install git:github.com/apmantza/pi-webaio
 | `proxy`   | `string`  | —            | Proxy URL (`http://user:pass@host:port` or `socks5://host:port`). Supports HTTP, HTTPS, SOCKS5.                                   |
 | `compile` | `boolean` | `false`      | Compile pulled pages into a single context package                                                                                |
 
-## Features
+## How search ranking works
 
-### Fetching & Extraction
+When you search, pi-webaio queries 5 engines in parallel: DuckDuckGo, Brave, Yahoo, Bing, and Google (via headless Chrome). Results are scored by two signals:
 
-- **Anti-bot TLS fingerprinting** — `wreq-js` with dynamic browser profiles (auto-selects latest Chrome, with fallbacks to `firefox_147`, `safari_26`, `edge_145`)
-- **Auto escalation pipeline** — `mode: "auto"` escalates from fast fetch → fingerprint rotation → Cloudflare UA bypass → Playwright rendering when bot protection is detected
-- **Bot-block detection** — Structured detection of Cloudflare, Anubis, PerimeterX, DataDome, Incapsula, Akamai with confidence scoring and retry advice
-- **Cloudflare challenge bypass** — Detects CF challenges via header + body markers, retries with alternate UA before falling through to fingerprint rotation
-- **Playwright fallback** — If `wreq-js` fails, dynamically imports Playwright to render JS-heavy pages (zero-config, optional dependency)
-- **Smart retry logic** — Exponential backoff (1s → 2s) for `429/500/502/503/504` and transient network errors. Non-retryable (`400/401/403/404`) fail fast.
-- **Provider cooldown system** — Search engines (DDG, Brave, Yahoo, Bing, Google) track per-session health: successes, failures, consecutive failures, latency. Auto-cooldown after 2 consecutive failures (10 min). Skipped engines don't waste time.
-- **HTTP→HTTPS auto-upgrade** — Normalizes `http://` requests and responses
-- **Cross-host redirect detection** — Surfaces a warning notice when a fetch redirects to a different domain
-- **GitHub-aware fetch** — Detects repos, trees, blobs; clones repos or uses API. Special handling for GitHub Actions run URLs — fetches job details, step-by-step status, and failed job log excerpts
-- **Architecture detection** — Analyzes cloned repos for Docker, CI/CD platforms, test frameworks, monorepo tooling, package managers, and security signals
-- **PDF extraction** — Extracts text from PDFs (`pdf-parse`)
-- **RSC extraction** — Extracts Next.js React Server Components flight data
-- **JSON auto-detection** — Detects `application/json` content-type or body starting with `{`/`[`, returns pretty-printed
-- **Plain text handling** — Detects `text/plain`, wraps in code block (unless already markdown)
-- **Binary download detection** — Detects null bytes or >30% non-ASCII, streams to temp with filename from Content-Disposition
-- **Vertical extractors** — 7 API-first extractors for npm, PyPI, Hacker News, Reddit, arXiv, YouTube, and docs sites — hit structured APIs instead of scraping HTML. The YouTube extractor fetches video transcripts + metadata via `youtube-transcript-plus` (Innertube API, no API key required). Supports standard URLs, `youtu.be`, Shorts, and embeds. Returns title, channel, duration, views, tags, description, and full transcript with configurable format (`text`, `vtt`, or `segments` with timestamps). Language selection with auto-fallback.
-- **SPA data-island recovery** — Extracts JSON hydration data from `<script>` tags and framework globals for JS-rendered pages
-- **Client-side meta redirect** — Follows `<meta http-equiv="refresh">` up to 5 hops recursively
-- **Proxy support** — Routes all requests through HTTP, HTTPS, or SOCKS5 proxy
-- **Structured error info** — Failed fetches include `errorCode`, `phase`, `retryable` flag, and `statusCode`
+- **Engine authority** — Google (5), Bing (3), DDG (2), Brave (2), Yahoo (1)
+- **Cross-engine consensus** — +2 for each additional engine that agrees on the same URL
 
-### Cookie Consent Banner Stripping
-
-Cookie consent / CMP banners are stripped server-side during HTML pre-cleaning (`preCleanHtml()`). 80+ selectors covering 17+ named CMPs (OneTrust, Cookiebot, Didomi, Quantcast, Usercentrics, TrustArc, Klaro, Sourcepoint, CookieYes, Osano, CookieFirst, Adobe PMC, SmartConsent, CookieHub, TermsFeed, Google, YouTube, BBC, Amazon) plus generic class/id patterns (`[class*="cookie-banner"]`, `[class*="consent-modal"]`, `[class*="gdpr-banner"]`, `[class*="privacy-notice"]`) and ARIA/data-attribute patterns. Runs before Readability/Defuddle extraction so banner noise never reaches content heuristics.
-
-### Content Extraction Pipeline
-
-When fetching a page, pi-webaio tries the following backends **in order**, falling through until one returns clean content. HTML is **pre-cleaned** (nav/footer/header/svg/cookie consent banners removed via DOM) before entering the extraction pipeline. At every stage, if extracted content is <30 words or <1% of original HTML, the pipeline falls through to the next backend.
-
-0. **Vertical extractors** — API-first: npm registry, PyPI JSON, Hacker News Firebase, Reddit .json, arXiv Atom, platform docs-sites
-1. **GitHub special-case** — Clones repos or fetches via GitHub API
-2. **Binary download** — Detects non-text content before attempting text fetch
-3. **PDF** — Extracts text from PDF files (by URL or content-type)
-4. **JSON** — Detects `application/json` content-type, pretty-prints in code block
-5. **Plain text** — Wraps `.txt`, configs, logs in code block (unless already markdown)
-6. **Client-side meta redirect** — Follows `<meta http-equiv="refresh">` up to 5 hops
-7. **Cloudflare challenge bypass** — Detects CF 403, retries with OpenCode UA
-8. **Jina AI Reader** (`r.jina.ai`) — Re-fetches via Jina's proxy
-9. **Mozilla Readability** — Local article extraction. If <30 words or <1% of original → skip
-10. **Next.js RSC** — Extracts React Server Components flight data
-11. **SPA data-island recovery** — Extracts hydration JSON from `<script>` tags
-12. **Defuddle** — Local HTML→markdown conversion (extractor comments stripped, whitespace normalized)
-13. **Fallback** — Bare-minimum title + text extraction
-
-Alternate link fallback: at every stage, if content is thin, `<link rel="alternate" type="application/json">` is tried.
-
-### Security & Safety
-
-- **DNS-based SSRF protection** — Resolves hostnames and validates all returned IPs against full RFC 1918/RFC 6598/RFC 3927 private ranges, blocks cloud metadata endpoints (`169.254.169.254`, `metadata.google.internal`)
-- **Redirect-hop SSRF re-validation** — Validates every redirect target (up to 5 hops) — prevents `302 → internal IP` bypass attacks
-- **IPv6 tunnel detection** — Blocks tunneled private IPv4 inside IPv6 addresses (::ffff, IPv4-compatible, 6to4, Teredo)
-- **Content trust boundaries** — All fetched content wrapped in `[UNTRUSTED WEB CONTENT]` markers
-- **Secret scanning** — Blocks requests containing API keys, tokens, or passwords in URLs
-- **Prompt injection detection** — Categorizes and warns/redacts/tags suspicious content
-- **Provider cooldown system** — Search engines track failures with TTL cooldowns to skip dead providers
-
-### Metadata & Frontmatter
-
-- **Rich YAML frontmatter** — Saved markdown files include `title`, `url`, `author`, `published`, `site`, `language`, and `word_count` in the frontmatter when available from extraction (Defuddle)
-- **Stored in session cache** — Metadata is captured alongside content in the session store for retrieval via `aio-webcontent`
-
-### Caching & Performance
-
-- **Session cache** — 30-minute TTL, LRU eviction (max 100 entries). Keys normalized for consistency (`http://` → `https://`, root trailing slashes deduplicated).
-- **Persistent disk cache** — On startup, all previously fetched `.md` files under `BASE_TEMP` are scanned and registered in the session store. Content is lazy-loaded from disk on first access — survives restarts.
-- **Search cache** — 10-minute TTL, persisted to disk for cross-session reuse
-- **Preview truncation** — `aio-webfetch` tool results show ~500 tokens in-context; **full file is always written to disk** for inspection via the `read` tool
-- **Rate limiter** — Token-bucket per domain (5 req/s, burst 10) in `smartFetch`. All tools are throttled politely.
-
-### AI-Powered Summarization
-
-- **Google AI Mode (udm=50)** — Long fetched content is auto-summarized by Google AI via headless Chrome CDP (15s timeout). The AI reads the URL directly and returns a concise bullet-point summary.
-- **Search context bridging** — When `aio-webfetch` follows a recent `aio-websearch` (within 5 min), the original query is injected into the summarization prompt for more focused summaries.
-- **Graceful fallback** — If Google AI is unavailable (Chrome not installed, CDP files missing), falls back to truncation.
-
-### Google CDP Search
-
-- **4-engine HTTP search** — `aio-websearch` runs DuckDuckGo, Brave, Yahoo, and Bing in parallel over HTTP. Yahoo bypasses EU GDPR consent walls via `region=us` params.
-- **Google CDP search** — Google runs via headless Chrome CDP (auto-launched) as a 5th engine with locale-agnostic selectors.
-- **7-second cap** — Returns whatever results are ready by the deadline. No waiting for slow engines.
-- **Cross-engine consensus ranking** — Results are scored by engine authority + agreement count:
-  - Engine weights: Google 5, Bing 3, DDG 2, Brave 2, Yahoo 1
-  - Consensus bonus: +2 per additional engine agreeing on the same URL
-  - Metadata (title/snippet) taken from the highest-weight engine for each URL
-  - High-confidence results (returned by multiple engines) bubble to the top
-- **Result deduplication** — Merges and deduplicates results across all 5 engines by URL.
+A result returned by all 5 engines outranks a Google-only result. Metadata (title/snippet) comes from the highest-weight engine for each URL.
 
 ## Usage Examples
 
