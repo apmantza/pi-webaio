@@ -2392,6 +2392,17 @@ async function pullSonarCloud(url: string): Promise<PullResult | null> {
 	}
 }
 
+/** Parse a raw.githubusercontent.com URL into owner/repo/branch/path. */
+function parseRawGitHubUrl(
+	url: string,
+): { owner: string; repo: string; branch: string; path: string } | null {
+	const m = url.match(
+		/^https?:\/\/raw\.githubusercontent\.com\/([^/]+)\/([^/]+)\/([^/]+)\/(.+)/i,
+	);
+	if (!m) return null;
+	return { owner: m[1]!, repo: m[2]!, branch: m[3]!, path: m[4]! };
+}
+
 async function pullGitHub(url: string): Promise<PullResult | null> {
 	// Try standard GitHub pipeline (tree/blob/repo)
 	const ref = parseGitHubUrl(url);
@@ -2402,6 +2413,28 @@ async function pullGitHub(url: string): Promise<PullResult | null> {
 	// Feature page? Try GitHub API (works unauthenticated for public repos)
 	const featureResult = await pullGitHubFeature(url);
 	if (featureResult) return featureResult;
+
+	// raw.githubusercontent.com URLs — route directly to raw file fetch
+	const rawRef = parseRawGitHubUrl(url);
+	if (rawRef) {
+		const { owner, repo, branch, path } = rawRef;
+		// fetchGitHubRaw expects a GitHubRef-like object, but we can call smartFetch directly
+		const res = await smartFetch(url);
+		if (res?.status && res.status < 400) {
+			return {
+				ok: true,
+				url,
+				title: path.split("/").pop() || path,
+				content: "> via GitHub\n\n" + res.text,
+			};
+		}
+		// Fallback: try normal fetch pipeline — will include source
+		const fallback = await fetchGitHubRaw(owner, repo, branch, path);
+		if (fallback.ok) {
+			fallback.content = "> via GitHub\n\n" + (fallback.content ?? "");
+			return fallback;
+		}
+	}
 
 	return null;
 }
@@ -4251,10 +4284,21 @@ export default function (pi: ExtensionAPI) {
 				// ── Google AI summarization (skip for API-sourced content) ──
 				let summary: string | null = null;
 				let summarized = false;
-				const skipSummary =
-					preview.includes("> via gh api") ||
-					preview.includes("> via GitHub") ||
-					preview.includes("> via SonarCloud API");
+				// Skip AI summarization for:
+				//   1. Any GitHub URL (github.com, raw.githubusercontent.com, gist.github.com)
+				//      — catches cases where pullGitHub returns ok:false and content has no marker
+				//   2. Any content with "> via " prefix (GitHub, SonarCloud, and ALL vertical extractors)
+				//      — catches YouTube, npm, PyPI, Reddit, HN, arXiv, docs sites
+				//   3. Legacy explicit markers (backward compat)
+				const ghHostnames = [
+					"github.com",
+					"raw.githubusercontent.com",
+					"gist.github.com",
+				];
+				const isGitHubUrl = ghHostnames.some((h) => r.url?.includes(h));
+				// "? via " prefix is set by all pipeline interceptors: GitHub ("? via GitHub"),
+				// SonarCloud ("? via SonarCloud API"), and all vertical extractors ("? via youtube", etc.)
+				const skipSummary = isGitHubUrl || preview.includes("> via ");
 
 				const searchCtx = getSearchContext()?.query;
 

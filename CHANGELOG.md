@@ -23,11 +23,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Per-session engine health tracking** (`EngineHealthRecord`, `recordEngineSuccess/Failure`, `isEngineAvailable` in `index.ts`) — Tracks successes, failures, consecutive failures, latency per engine. Auto-cooldown after 2 consecutive failures (10 min). Failed engines are skipped on subsequent searches until cooldown expires. Replaces the simpler `providerCooldowns` map.
 - **Login-redirect detection** (`detectLoginRedirect()` in `src/bot-detection.ts`) — Detects auth-wall redirects (accounts.google.com, login.microsoftonline.com, auth0.com, okta.com, etc.) and content pages that redirect to login forms. Returns structured reason string. Integrated into `smartFetch()` — login redirects return `null` instead of passing through the login page as content.
 - **Default search results cap raised** — `max` parameter default increased from 10 to 15. Final output cap remains 25 (after HTTP + Google merge and dedup).
+- **raw.githubusercontent.com pipeline** (`parseRawGitHubUrl()` in `index.ts`) — GitHub raw file URLs now parsed and routed through `pullGitHub()` with `> via GitHub` marker, preventing AI summarization on raw code content. Previously these fell through to the normal HTML pipeline with no skip marker.
+- **URL hostname-based AI summarization skip** — `aio-webfetch` now checks `r.url` against `github.com`, `raw.githubusercontent.com`, and `gist.github.com` hostnames before attempting summarization, catching GitHub URLs that fail pipeline extraction.
+- **Catch-all `> via ` summarization skip** — Replaced fragile per-provider marker checks with a single `preview.includes("> via ")` test. All pipeline interceptors (GitHub, SonarCloud, vertical extractors) prepend this prefix, automatically excluding YouTube, npm, PyPI, Reddit, HN, arXiv, and docs-site content from AI summarization.
 
 ### Changed
 
 - **Search tool description** — Updated from "DuckDuckGo, Brave, and Google" to "DuckDuckGo, Brave, Yahoo, Bing, and Google" to reflect the 4 HTTP engines + 1 CDP engine architecture.
 - **Engine labels in output** — Now dynamic: only shows engines that actually contributed results (e.g. "DDG + Bing" or "DDG + Brave + Bing + Google"), replacing the static "DDG + Brave" label.
+- **README restructured** — "What is this?" renamed to "What does pi-webaio do?" with AI summarization mention. Added "How AI summarization works" section with skip rules table. Added "Special pipelines: GitHub, YouTube, and more" section covering all vertical extractors, auto-escalation, and detailed GitHub URL pattern table. Tools section moved to last.
 
 ## [0.3.2] - 2026-05-09
 
