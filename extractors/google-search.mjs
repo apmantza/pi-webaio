@@ -97,8 +97,8 @@ async function extractResults(tab, maxResults = 10) {
         if (!a) continue;
         
         var url = a.href;
-        // Skip google.com internal links
-        if (url.includes('google.com') && !url.includes('/search?')) continue;
+        // Skip google.com internal links (check hostname not raw substring)
+        try { var u2 = new URL(url); var isGoogleHost = u2.hostname === 'google.com' || u2.hostname.endsWith('.google.com'); if (isGoogleHost && !u2.pathname.startsWith('/search')) continue; } catch(e) {}
         if (seen.has(url)) continue;
         seen.add(url);
         

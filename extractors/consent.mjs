@@ -254,7 +254,8 @@ const VERIFY_DETECT_JS = `
   if (url.includes('/sorry/') || url.includes('sorry.google')) return 'sorry-page';
 
   // --- Microsoft account verification page ---
-  if (url.includes('login.microsoftonline.com') || url.includes('login.live.com') || url.includes('account.microsoft.com')) {
+  function hostMatches(u, h) { try { var p = new URL(u); return p.hostname === h || p.hostname.endsWith('.' + h); } catch(e) { return false; } }
+  if (hostMatches(url, 'login.microsoftonline.com') || hostMatches(url, 'login.live.com') || hostMatches(url, 'account.microsoft.com')) {
     var msBtns = Array.from(document.querySelectorAll('button, input[type=submit], a'));
     var msVerify = msBtns.find(b => /verify|continue|next/i.test(b.innerText?.trim() || b.value || ''));
     if (msVerify) { msVerify.setAttribute('data-gs-verify','1'); return JSON.stringify({t:'sel',s:'[data-gs-verify="1"]',txt:msVerify.innerText?.trim()||msVerify.value}); }
@@ -307,9 +308,10 @@ const VERIFY_DETECT_JS = `
 const VERIFY_RETRY_JS = `
 (function() {
   var url = document.location.href;
+  function hostMatches(u, h) { try { var p = new URL(u); return p.hostname === h || p.hostname.endsWith('.' + h); } catch(e) { return false; } }
   var isVerifyPage = url.includes('/sorry/') ||
-                     url.includes('challenges.cloudflare.com') ||
-                     url.includes('login.microsoftonline.com') ||
+                     hostMatches(url, 'challenges.cloudflare.com') ||
+                     hostMatches(url, 'login.microsoftonline.com') ||
                      document.querySelector('#challenge-running, #challenge-stage, .cf-turnstile, [role="dialog"]');
   if (!isVerifyPage) return 'cleared';
 

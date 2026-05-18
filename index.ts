@@ -3697,7 +3697,8 @@ async function pullPage(
 			res.status === 403 &&
 			(res.headers.get("cf-mitigated") === "challenge" ||
 				// Use string includes instead of regex alternation (avoids backtracking)
-				snippet4096.includes("just a moment") || snippet4096.includes("cf-chl-bypass"));
+				snippet4096.includes("just a moment") ||
+				snippet4096.includes("cf-chl-bypass"));
 		if (isCf403) {
 			const cfRes = await smartFetch(url, {
 				...opts,
@@ -3996,31 +3997,34 @@ function rewriteLinks(
 
 	// Match markdown links [text](url) with bounded repetition to prevent
 	// catastrophic backtracking on malformed input (unmatched opening paren).
-	return markdown.replace(/\[([^\]]{0,5000})\]\(([^)\s]{1,5000})\)/g, (match, text, url) => {
-		// Skip anchor-only, mailto, javascript, data links
-		if (/^(#|mailto:|javascript:|data:)/.test(url)) return match;
+	return markdown.replace(
+		/\[([^\]]{0,5000})\]\(([^)\s]{1,5000})\)/g,
+		(match, text, url) => {
+			// Skip anchor-only, mailto, javascript, data links
+			if (/^(#|mailto:|javascript:|data:)/.test(url)) return match;
 
-		const key = urlStem(url);
-		const target = stemToPath.get(key);
+			const key = urlStem(url);
+			const target = stemToPath.get(key);
 
-		if (target && target !== currentPath) {
-			const fromDir = dirname(currentPath);
-			let relPath = relative(fromDir, target).replace(/\\/g, "/");
-			if (!relPath.startsWith(".")) relPath = "./" + relPath;
+			if (target && target !== currentPath) {
+				const fromDir = dirname(currentPath);
+				let relPath = relative(fromDir, target).replace(/\\/g, "/");
+				if (!relPath.startsWith(".")) relPath = "./" + relPath;
 
-			// Preserve fragment from the original link
-			try {
-				const hash = new URL(url, "https://x").hash;
-				if (hash) relPath += hash;
-			} catch {
-				/* ignore */
+				// Preserve fragment from the original link
+				try {
+					const hash = new URL(url, "https://x").hash;
+					if (hash) relPath += hash;
+				} catch {
+					/* ignore */
+				}
+
+				return `[${text}](${relPath})`;
 			}
 
-			return `[${text}](${relPath})`;
-		}
-
-		return match;
-	});
+			return match;
+		},
+	);
 }
 
 async function writePage(page: Page, outDir: string): Promise<string> {
@@ -4299,12 +4303,24 @@ export default function (pi: ExtensionAPI) {
 				//   2. Any content with "> via " prefix (GitHub, SonarCloud, and ALL vertical extractors)
 				//      — catches YouTube, npm, PyPI, Reddit, HN, arXiv, docs sites
 				//   3. Legacy explicit markers (backward compat)
-				const ghHostnames = [
-					"github.com",
-					"raw.githubusercontent.com",
-					"gist.github.com",
-				];
-				const isGitHubUrl = ghHostnames.some((h) => r.url?.includes(h));
+				// Check hostname instead of raw substring to avoid
+				// false matches (e.g. github.com.evil.com)
+				const isGitHubUrl = (() => {
+					if (!r.url) return false;
+					try {
+						const host = new URL(r.url).hostname;
+						return (
+							host === "github.com" ||
+							host === "raw.githubusercontent.com" ||
+							host === "gist.github.com" ||
+							host.endsWith(".github.com") ||
+							host.endsWith(".raw.githubusercontent.com") ||
+							host.endsWith(".gist.github.com")
+						);
+					} catch {
+						return false;
+					}
+				})();
 				// "? via " prefix is set by all pipeline interceptors: GitHub ("? via GitHub"),
 				// SonarCloud ("? via SonarCloud API"), and all vertical extractors ("? via youtube", etc.)
 				const skipSummary = isGitHubUrl || preview.includes("> via ");

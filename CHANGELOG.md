@@ -14,7 +14,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Comprehensive cookie consent dismissal** (`extractors/consent.mjs`) — Rewrote CDP-based cookie dismissal with 17+ named CMPs, shadow DOM support (Usercentrics), multi-language accept/reject patterns (EN, DE, FR, IT, ES, PT), text-based fallbacks, and iframe consent dialog handling. Replaced the original 4-handler script (Google, OneTrust, generic) with a production-grade dismissal covering the same CMPs as the server-side stripper.
 - **Consent banner stripping tests** (`tests/lib.mjs`, `tests/unit.test.mjs`) — 21 new unit tests: 10 named CMPs (OneTrust through Osano), 4 generic patterns, 5 false-positive protections (cookie recipes, GDPR articles, parental consent content, dialog stripping with sibling preservation, nested banners), 2 edge cases (empty HTML, no banners).
 
-## [Unreleased]
+## [0.3.4] - 2026-05-18
+
+### Fixed
+
+- **CodeQL alerts #44-#47: Incomplete URL substring sanitization** — Replaced 7 `url.includes(hostname)` calls with proper hostname-based checks across 4 files, preventing false matches on attacker-controlled URLs (e.g. `evil.github.com` or `github.com.evil.com`):
+  - `extractors/consent.mjs` — Microsoft/Cloudflare verification page detection uses `new URL(url).hostname` comparisons
+  - `extractors/google-ai.mjs` — Google search page detection uses hostname + pathname parsing
+  - `extractors/google-search.mjs` — Google internal link filtering uses hostname + pathname parsing
+  - `index.ts` — Yahoo/Bing search result filtering and GitHub URL detection uses `new URL(url).hostname` with exact matching
 
 ### Added
 

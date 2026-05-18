@@ -82,7 +82,19 @@ async function main() {
 		const currentUrl = await cdp(["eval", tab, "document.location.href"]).catch(
 			() => "",
 		);
-		if (!currentUrl.includes("google.com/search")) {
+		// Check hostname + pathname instead of raw substring to avoid
+		// false matches on attacker-controlled URLs (e.g. google.com.evil.com/search)
+		let isGoogleSearch = false;
+		try {
+			const u = new URL(currentUrl);
+			isGoogleSearch =
+				(u.hostname === "google.com" || u.hostname.endsWith(".google.com")) &&
+				u.pathname.startsWith("/search");
+		} catch {
+			/* invalid URL — proceed with navigation */
+		}
+
+		if (!isGoogleSearch) {
 			await cdp(["nav", tab, url], 20000);
 			await new Promise((r) => setTimeout(r, jitter(TIMING.postNav)));
 		}
