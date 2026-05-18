@@ -3,7 +3,7 @@
 // Uses a JSON metadata index + content-addressed blobs under os.tmpdir().
 
 import { mkdir, readFile, writeFile, unlink } from "node:fs/promises";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -80,7 +80,7 @@ function hashContent(content: string): string {
 
 function makeId(): string {
 	const ts = Date.now().toString(36);
-	const rand = Math.random().toString(36).slice(2, 8);
+	const rand = randomUUID().split("-")[0]!;
 	return `${ts}-${rand}`;
 }
 

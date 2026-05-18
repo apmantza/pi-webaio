@@ -260,12 +260,17 @@ function preCleanHtml(html: string): string {
  * strip carriage returns, collapse 3+ newlines to 2.
  */
 function cleanText(value: string): string {
-	return value
-		.replace(/\r/g, "")
-		.replace(/[^\S\n]+/g, " ")
-		.replace(/ *\n */g, "\n")
-		.replace(/\n{3,}/g, "\n\n")
-		.trim();
+	// Collapse runs of horizontal whitespace around newlines.
+	// Uses split/join instead of regex with unbounded quantifiers (*)
+	// to avoid backtracking on long non-matching input.
+	let s = value.replace(/\r/g, "");
+	s = s.replace(/[^\S\n]+/g, " ");
+	const lines = s.split("\n");
+	s = lines
+		.map((l) => l.trim())
+		.filter((l) => l !== "")
+		.join("\n");
+	return s;
 }
 
 /**
@@ -3687,10 +3692,12 @@ async function pullPage(
 	if (res.status >= 400) {
 		// Cloudflare challenge detection: retry with alternate UA before giving up.
 		// CF challenges return 403 with distinctive markers in the first ~4KB.
+		const snippet4096 = res.text.slice(0, 4096).toLowerCase();
 		const isCf403 =
 			res.status === 403 &&
 			(res.headers.get("cf-mitigated") === "challenge" ||
-				/just a moment|cf-chl-bypass/i.test(res.text.slice(0, 4096)));
+				// Use string includes instead of regex alternation (avoids backtracking)
+				snippet4096.includes("just a moment") || snippet4096.includes("cf-chl-bypass"));
 		if (isCf403) {
 			const cfRes = await smartFetch(url, {
 				...opts,
@@ -3987,7 +3994,9 @@ function rewriteLinks(
 		stemToPath.set(urlStem(url), path);
 	}
 
-	return markdown.replace(/\[([^\]]*)\]\(([^)\s]+)\)/g, (match, text, url) => {
+	// Match markdown links [text](url) with bounded repetition to prevent
+	// catastrophic backtracking on malformed input (unmatched opening paren).
+	return markdown.replace(/\[([^\]]{0,5000})\]\(([^)\s]{1,5000})\)/g, (match, text, url) => {
 		// Skip anchor-only, mailto, javascript, data links
 		if (/^(#|mailto:|javascript:|data:)/.test(url)) return match;
 
@@ -4001,7 +4010,7 @@ function rewriteLinks(
 
 			// Preserve fragment from the original link
 			try {
-				const hash = new URL(url, "http://x").hash;
+				const hash = new URL(url, "https://x").hash;
 				if (hash) relPath += hash;
 			} catch {
 				/* ignore */

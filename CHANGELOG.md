@@ -33,6 +33,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Engine labels in output** — Now dynamic: only shows engines that actually contributed results (e.g. "DDG + Bing" or "DDG + Brave + Bing + Google"), replacing the static "DDG + Brave" label.
 - **README restructured** — "What is this?" renamed to "What does pi-webaio do?" with AI summarization mention. Added "How AI summarization works" section with skip rules table. Added "Special pipelines: GitHub, YouTube, and more" section covering all vertical extractors, auto-escalation, and detailed GitHub URL pattern table. Tools section moved to last.
 
+### Fixed
+
+- **SonarCloud security hotspots** — Resolved 6 hotspots across 4 files:
+  - `extractors/selectors.mjs:52` — Bounded `citationNameRegex` capture group to `{1,200}` to prevent backtracking on long citation labels
+  - `index.ts:266` — Replaced `/ *\n */g` regex in `cleanText()` with split/join/trim pipeline, removing unbounded `*` quantifiers
+  - `index.ts:3693` — Replaced `/just a moment|cf-chl-bypass/i` regex alternation with simple `.includes()` calls on a pre-computed lowercase slice
+  - `index.ts:3989` — Bounded `cleanText` markdown link regex quantifiers to `{0,5000}` and `{1,5000}` to prevent catastrophic backtracking on malformed input
+  - `index.ts:4004` — Changed `new URL(url, "http://x")` to `"https://x"` to avoid plain HTTP in code
+  - `src/storage.ts:83` — Replaced `Math.random()` in `makeId()` with `randomUUID()` from `node:crypto`
+
 ## [0.3.2] - 2026-05-09
 
 ### Added
