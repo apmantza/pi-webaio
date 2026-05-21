@@ -14,6 +14,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Comprehensive cookie consent dismissal** (`extractors/consent.mjs`) — Rewrote CDP-based cookie dismissal with 17+ named CMPs, shadow DOM support (Usercentrics), multi-language accept/reject patterns (EN, DE, FR, IT, ES, PT), text-based fallbacks, and iframe consent dialog handling. Replaced the original 4-handler script (Google, OneTrust, generic) with a production-grade dismissal covering the same CMPs as the server-side stripper.
 - **Consent banner stripping tests** (`tests/lib.mjs`, `tests/unit.test.mjs`) — 21 new unit tests: 10 named CMPs (OneTrust through Osano), 4 generic patterns, 5 false-positive protections (cookie recipes, GDPR articles, parental consent content, dialog stripping with sibling preservation, nested banners), 2 edge cases (empty HTML, no banners).
 
+
+## [0.3.5] - 2026-05-22
+
+### Fixed
+
+- **CodeQL alerts #44-#47: Incomplete URL substring sanitization in index.ts** — Replaced `url.includes("search.yahoo.com")`, `url.includes("video.search.yahoo.com")`, `url.includes("r.search.yahoo.com")`, and `url.includes("bing.com")` in `parseYahooResults()` and `parseBingResults()` with `new URL(url).hostname` exact/suffix matching. Prevents bypass via path or query string (e.g. `https://evil.com/bing.com`).
+
+### Performance
+
+- **AI summarization gated on content length** — `aio-webfetch` no longer spawns a Google AI subprocess for pages whose markdown already fits within the `MAX_PREVIEW_CHARS` (1800 char) tool-result preview. Short pages are returned verbatim with no extra round-trip.
+- **Session-scoped summary cache** — Introduced `summaryCache` (`Map<url, summary>`). Fetching the same URL more than once in a session reuses the existing AI summary instead of re-running the full Google AI extraction pipeline.
+
+### Changed
+
+- **Dependency bumps** — `ws` 8.20.0 → 8.20.1, `protobufjs` 7.5.6 → 7.6.0, `brace-expansion` 5.0.5 → 5.0.6.
+- **CDP extractor sync** — Synced `extractors/` from GreedySearch-Pi @ 18abe97.
+
 ## [0.3.4] - 2026-05-18
 
 ### Fixed
