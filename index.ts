@@ -496,6 +496,7 @@ const searchCache = new Map<
 	string,
 	{ query: string; results: SearchResult[]; timestamp: number }
 >();
+const summaryCache = new Map<string, string>(); // url -> AI summary, session-scoped
 
 const SESSION_CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
 const MAX_SESSION_CACHE_ENTRIES = 100;
@@ -4332,21 +4333,31 @@ export default function (pi: ExtensionAPI) {
 
 				const searchCtx = getSearchContext()?.query;
 
-				if (!skipSummary && cdpAvailableGA()) {
-					try {
-						await ensureChrome(true);
-						summary = await summarizeUrl(r.url as string, {
-							headless: true,
-							timeoutMs: 15000,
-							context: searchCtx,
-						});
-						if (summary) summarized = true;
-					} catch {
-						// Google AI failed — fall through to direct/truncated display
+				const isShort = preview.length <= MAX_PREVIEW_CHARS;
+				if (!skipSummary && !isShort && cdpAvailableGA()) {
+					const cacheKey = normalizeCacheKey(r.url as string);
+					const cached = summaryCache.get(cacheKey);
+					if (cached) {
+						summary = cached;
+						summarized = true;
+					} else {
+						try {
+							await ensureChrome(true);
+							summary = await summarizeUrl(r.url as string, {
+								headless: true,
+								timeoutMs: 15000,
+								context: searchCtx,
+							});
+							if (summary) {
+								summarized = true;
+								summaryCache.set(cacheKey, summary);
+							}
+						} catch {
+							// Google AI failed — fall through to direct/truncated display
+						}
 					}
 				}
 
-				const isShort = preview.length <= MAX_PREVIEW_CHARS;
 				let summaryNotice: string;
 				let displayContent: string;
 
