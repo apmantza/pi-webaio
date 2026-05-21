@@ -1807,13 +1807,13 @@ function parseYahooResults(html: string): SearchResult[] {
 		}
 
 		if (!url || !/^https?:/i.test(url)) continue;
-		if (
-			url.includes("search.yahoo.com") ||
-			url.includes("video.search.yahoo.com") ||
-			url.includes("r.search.yahoo.com")
-		)
+		try {
+			const { hostname } = new URL(url);
+			if (hostname === "search.yahoo.com" || hostname === "video.search.yahoo.com" || hostname === "r.search.yahoo.com")
+				continue;
+		} catch {
 			continue;
-
+		}
 		const snippet = el.querySelector(".compText, p")?.textContent?.trim() || "";
 		results.push({ title, url, snippet });
 	}
@@ -1851,7 +1851,12 @@ function parseBingResults(html: string): SearchResult[] {
 		}
 
 		if (!url || !/^https?:/i.test(url)) continue;
-		if (url.includes("bing.com")) continue;
+		try {
+			const { hostname: bingHost } = new URL(url);
+			if (bingHost === "bing.com" || bingHost.endsWith(".bing.com")) continue;
+		} catch {
+			continue;
+		}
 
 		const snippet = el.querySelector(".b_caption p")?.textContent?.trim() || "";
 		results.push({ title, url, snippet });
