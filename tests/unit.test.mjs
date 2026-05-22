@@ -1151,3 +1151,64 @@ test("stripConsentBanners strips nested banner elements", () => {
 	assert.ok(!result.includes("onetrust"));
 	assert.ok(result.includes("Content"));
 });
+
+// ─── arXiv vertical extractor matching ────────────────────────────
+
+test("matchesArxiv matches abs URL", () => {
+	const re = /^https?:\/\/arxiv\.org\/abs\/\d+\.\d+/i;
+	assert.ok(re.test("https://arxiv.org/abs/2312.10997"));
+	assert.ok(re.test("http://arxiv.org/abs/1706.03762v7"));
+	assert.ok(!re.test("https://arxiv.org/"));
+	assert.ok(!re.test("https://export.arxiv.org/api/query?id_list=2312.10997"));
+});
+
+test("matchesArxiv matches api/query URL", () => {
+	const re = /^https?:\/\/export\.arxiv\.org\/api\/query/i;
+	assert.ok(re.test("https://export.arxiv.org/api/query?id_list=2312.10997"));
+	assert.ok(
+		re.test(
+			"https://export.arxiv.org/api/query?search_query=cat&start=0&max_results=10",
+		),
+	);
+	assert.ok(!re.test("https://arxiv.org/abs/2312.10997"));
+});
+
+test("matchesArxiv matches pdf URL", () => {
+	const re = /^https?:\/\/arxiv\.org\/pdf\/\d+\.\d+/i;
+	assert.ok(re.test("https://arxiv.org/pdf/2312.10997.pdf"));
+	assert.ok(re.test("https://arxiv.org/pdf/2312.10997"));
+	assert.ok(!re.test("https://arxiv.org/abs/2312.10997"));
+});
+
+test("extractArxiv extracts id from abs URL", () => {
+	const match = "https://arxiv.org/abs/2312.10997".match(
+		/arxiv\.org\/abs\/(\d+\.\d+(?:v\d+)?)/i,
+	);
+	assert.ok(match);
+	assert.strictEqual(match[1], "2312.10997");
+});
+
+test("extractArxiv extracts id from pdf URL", () => {
+	const match = "https://arxiv.org/pdf/2312.10997.pdf".match(
+		/arxiv\.org\/pdf\/(\d+\.\d+(?:v\d+)?)/i,
+	);
+	assert.ok(match);
+	assert.strictEqual(match[1], "2312.10997");
+});
+
+test("extractArxiv extracts id from api/query URL", () => {
+	const match = "https://export.arxiv.org/api/query?id_list=2312.10997".match(
+		/[?&]id_list=([^&]+)/i,
+	);
+	assert.ok(match);
+	assert.strictEqual(decodeURIComponent(match[1]), "2312.10997");
+});
+
+test("extractArxiv extracts id from api/query URL (encoded)", () => {
+	const match =
+		"https://export.arxiv.org/api/query?search_query=cat&id_list=2312.10997".match(
+			/[?&]id_list=([^&]+)/i,
+		);
+	assert.ok(match);
+	assert.strictEqual(match[1], "2312.10997");
+});

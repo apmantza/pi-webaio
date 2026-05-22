@@ -4,20 +4,37 @@
 import type { VerticalResult } from "./types.js";
 
 export function matchesArxiv(url: string): boolean {
-	return /^https?:\/\/arxiv\.org\/abs\/\d+\.\d+/i.test(url);
+	return (
+		/^https?:\/\/arxiv\.org\/abs\/\d+\.\d+/i.test(url) ||
+		/^https?:\/\/export\.arxiv\.org\/api\/query/i.test(url) ||
+		/^https?:\/\/arxiv\.org\/pdf\/\d+\.\d+/i.test(url)
+	);
 }
 
 export async function extractArxiv(
 	url: string,
 	fetchText: (url: string) => Promise<string | null>,
 ): Promise<VerticalResult | null> {
-	const match = url.match(/arxiv\.org\/abs\/(\d+\.\d+(?:v\d+)?)/i);
-	if (!match) return null;
-	const id = match[1]!;
+	// Extract paper ID from abs URL, pdf URL, or api/query URL
+	let id: string | undefined;
+	const absMatch = url.match(/arxiv\.org\/abs\/(\d+\.\d+(?:v\d+)?)/i);
+	const pdfMatch = url.match(/arxiv\.org\/pdf\/(\d+\.\d+(?:v\d+)?)/i);
+	const apiMatch = url.match(/[?&]id_list=([^&]+)/i);
+	if (absMatch) id = absMatch[1];
+	else if (pdfMatch) id = pdfMatch[1];
+	else if (apiMatch) id = decodeURIComponent(apiMatch[1]!);
+	if (!id) return null;
 
 	// Use the Atom API
 	const atomUrl = `https://export.arxiv.org/api/query?id_list=${encodeURIComponent(id)}`;
-	const xml = await fetchText(atomUrl);
+
+	// If the original URL is already the api/query endpoint, use its response directly
+	let xml: string | null;
+	if (apiMatch) {
+		xml = await fetchText(url);
+	} else {
+		xml = await fetchText(atomUrl);
+	}
 	if (!xml) return null;
 
 	// Quick XML extraction (no XML parser dependency, string-based)

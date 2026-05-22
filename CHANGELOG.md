@@ -5,7 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.7] - 2026-05-22
+
+### Fixed
+
+- **arXiv vertical extractor URL coverage** — `matchesArxiv()` now matches `export.arxiv.org/api/query?...` and `arxiv.org/pdf/...` URLs in addition to the previously-only-matched `arxiv.org/abs/...` pattern. `extractArxiv()` extracts paper IDs from all three URL formats and reuses the original API response when the input is already the query endpoint (avoids a redundant second HTTP request). Previously, `api/query` URLs fell through to generic XML extraction, producing garbled results. Added 7 unit tests for the new patterns.
 
 ### Added
 
@@ -15,6 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`MIN_USEFUL_CONTENT` threshold** — Constant (500 chars) defined for future extraction quality checks.
 - **`buildDeterministicSummary()` fallback** — When Google AI summarization fails, extracts headings and lead sentences from markdown content as a structured excerpt (up to `MAX_PREVIEW_CHARS`). Replaces raw truncation with a readable overview.
 - **Content-Length pre-check in `readResponseText()`** — Checks `Content-Length` header before streaming. Oversized responses fail instantly instead of allocating a reader and hitting the byte cap mid-stream.
+
+## [Unreleased]
+
 ## [0.3.3] - 2026-05-12
 
 ### Added
