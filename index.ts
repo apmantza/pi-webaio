@@ -864,26 +864,27 @@ function buildHeaders(): Record<string, string> {
 		"Sec-Fetch-Site": "none",
 		"Sec-Fetch-User": "?1",
 		"Upgrade-Insecure-Requests": "1",
-		"Sec-Ch-Ua": "\"Not_A Brand\";v=\"8\", \"Chromium\";v=\"120\", \"Google Chrome\";v=\"120\"",
+		"Sec-Ch-Ua":
+			'"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
 		"Sec-Ch-Ua-Mobile": "?0",
-		"Sec-Ch-Ua-Platform": "\"Windows\"",
+		"Sec-Ch-Ua-Platform": '"Windows"',
 	};
 }
 
 // ─── Bot protection detection ──────────────────────────────────────
 
 function isLikelyJSRendered(html: string): boolean {
-	const bodyMatch = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
-	if (!bodyMatch) return false;
-	const bodyHtml = bodyMatch[1];
-	const textContent = bodyHtml
-		.replace(/<script[\s\S]*?<\/script>/gi, "")
-		.replace(/<style[\s\S]*?<\/style>/gi, "")
-		.replace(/<[^>]+>/g, "")
-		.replace(/\s+/g, " ")
-		.trim();
-	const scriptCount = (html.match(/<script/gi) || []).length;
-	return textContent.length < 500 && scriptCount > 3;
+	try {
+		const { document } = parseHTML(html);
+		const body = document.querySelector("body");
+		if (!body) return false;
+		body.querySelectorAll("script, style").forEach((el) => el.remove());
+		const textContent = (body.textContent || "").replace(/\s+/g, " ").trim();
+		const scriptCount = document.querySelectorAll("script").length;
+		return textContent.length < 500 && scriptCount > 3;
+	} catch {
+		return false;
+	}
 }
 
 function isLikelyBotProtection(text: string): boolean {
@@ -1283,7 +1284,8 @@ async function readResponseText(response: any): Promise<string> {
 		const len = parseInt(contentLength, 10);
 		if (!isNaN(len) && len > MAX_RESPONSE_BYTES) {
 			throw new Error(
-				`Response exceeds ${MAX_RESPONSE_BYTES} byte limit (Content-Length: ${(len / 1024 / 1024).toFixed(1)}MB)`,);
+				`Response exceeds ${MAX_RESPONSE_BYTES} byte limit (Content-Length: ${(len / 1024 / 1024).toFixed(1)}MB)`,
+			);
 		}
 	}
 	const reader = response.body.getReader();
@@ -3218,7 +3220,8 @@ function extractReadability(
 		const article = reader.parse();
 		if (!article || (article.textContent?.length ?? 0) < 200) return null;
 		return {
-			title: article.title || extractHeadingTitle(article.textContent || "") || "",
+			title:
+				article.title || extractHeadingTitle(article.textContent || "") || "",
 			content: article.textContent || "",
 		};
 	} catch {
