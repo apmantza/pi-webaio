@@ -261,6 +261,13 @@ function preCleanHtml(html: string): string {
  * Normalize whitespace: collapse runs of spaces (but preserve newlines),
  * strip carriage returns, collapse 3+ newlines to 2.
  */
+function extractHeadingTitle(text: string): string | null {
+	const match = text.match(/^#{1,2}\s+(.+)/m);
+	if (!match) return null;
+	const cleaned = match[1].replace(/\*+/g, "").trim();
+	return cleaned || null;
+}
+
 function cleanText(value: string): string {
 	// Collapse runs of horizontal whitespace around newlines.
 	// Uses split/join instead of regex with unbounded quantifiers (*)
@@ -331,6 +338,7 @@ const MARKDOWN_SIGNAL = /^(#{1,6}\s|[-*]\s|\d+\.\s|```|>\s|\[.+\]\(.+\))/m;
 const DEFUDDLE_TIMEOUT = 8000;
 const MAX_PREVIEW_CHARS = 1800; // ~500 tokens for tool result preview
 const MAX_RESPONSE_BYTES = 10 * 1024 * 1024; // 10 MB — streaming cap to prevent memory exhaustion
+const MIN_USEFUL_CONTENT = 500; // minimum chars for a useful extraction
 
 const DEFAULT_BROWSER = "chrome_145";
 const DEFAULT_OS = "windows";
@@ -856,10 +864,27 @@ function buildHeaders(): Record<string, string> {
 		"Sec-Fetch-Site": "none",
 		"Sec-Fetch-User": "?1",
 		"Upgrade-Insecure-Requests": "1",
+		"Sec-Ch-Ua": "\"Not_A Brand\";v=\"8\", \"Chromium\";v=\"120\", \"Google Chrome\";v=\"120\"",
+		"Sec-Ch-Ua-Mobile": "?0",
+		"Sec-Ch-Ua-Platform": "\"Windows\"",
 	};
 }
 
 // ─── Bot protection detection ──────────────────────────────────────
+
+function isLikelyJSRendered(html: string): boolean {
+	const bodyMatch = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+	if (!bodyMatch) return false;
+	const bodyHtml = bodyMatch[1];
+	const textContent = bodyHtml
+		.replace(/<script[\s\S]*?<\/script>/gi, "")
+		.replace(/<style[\s\S]*?<\/style>/gi, "")
+		.replace(/<[^>]+>/g, "")
+		.replace(/\s+/g, " ")
+		.trim();
+	const scriptCount = (html.match(/<script/gi) || []).length;
+	return textContent.length < 500 && scriptCount > 3;
+}
 
 function isLikelyBotProtection(text: string): boolean {
 	const t = String(text || "")
@@ -1252,6 +1277,15 @@ async function fetchWithPlaywright(url: string): Promise<string | null> {
  */
 async function readResponseText(response: any): Promise<string> {
 	if (!response.body) return response.text();
+	// Fast-fail oversized responses before streaming
+	const contentLength = response.headers?.get("content-length");
+	if (contentLength) {
+		const len = parseInt(contentLength, 10);
+		if (!isNaN(len) && len > MAX_RESPONSE_BYTES) {
+			throw new Error(
+				`Response exceeds ${MAX_RESPONSE_BYTES} byte limit (Content-Length: ${(len / 1024 / 1024).toFixed(1)}MB)`,);
+		}
+	}
 	const reader = response.body.getReader();
 	const decoder = new TextDecoder();
 	let result = "";
@@ -3184,7 +3218,7 @@ function extractReadability(
 		const article = reader.parse();
 		if (!article || (article.textContent?.length ?? 0) < 200) return null;
 		return {
-			title: article.title || "",
+			title: article.title || extractHeadingTitle(article.textContent || "") || "",
 			content: article.textContent || "",
 		};
 	} catch {
@@ -4316,6 +4350,28 @@ export default function (pi: ExtensionAPI) {
 				if (!r.ok) throw new Error(r.error ?? "Fetch failed");
 				const preview = await readFile(r.outPath!, "utf8");
 
+				// Deterministic fallback: extract headings + lead sentences when AI fails
+				function buildDeterministicSummary(content: string): string {
+					const lines = content.split("\n");
+					const out = [];
+					for (const line of lines) {
+						const trimmed = line.trim();
+						if (!trimmed) continue;
+						if (/^#{1,3}\s/.test(trimmed)) {
+							out.push(trimmed);
+							continue;
+						}
+						if (out.length > 0 && !/^#{1,3}\s/.test(out[out.length - 1])) {
+							continue;
+						}
+						const firstSentence = trimmed.match(/^(.{20,120}?)[.!?](\s|$)/);
+						if (firstSentence) {
+							out.push(firstSentence[1] + ".");
+						}
+					}
+					return out.join("\n\n").slice(0, MAX_PREVIEW_CHARS);
+				}
+
 				// ── Google AI summarization (skip for API-sourced content) ──
 				let summary: string | null = null;
 				let summarized = false;
@@ -4369,7 +4425,11 @@ export default function (pi: ExtensionAPI) {
 								summaryCache.set(cacheKey, summary);
 							}
 						} catch {
-							// Google AI failed — fall through to direct/truncated display
+							// Google AI failed — try deterministic structured fallback
+							summary = buildDeterministicSummary(preview);
+							if (summary) {
+								summarized = true;
+							}
 						}
 					}
 				}

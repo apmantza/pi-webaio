@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`Sec-Ch-Ua` client hint headers** — `buildHeaders()` now includes User-Agent Client Hints (`Sec-Ch-Ua`, `Sec-Ch-Ua-Mobile`, `Sec-Ch-Ua-Platform`) alongside existing Fetch Metadata headers. Completes the Chrome 120 browser fingerprint for better anti-bot resistance.
+- **`isLikelyJSRendered()` heuristic** — Detects SPA shell pages by checking if body text is <500 chars but has >3 `<script>` tags. Available for future use in fallback prioritization.
+- **`extractHeadingTitle()` helper** — Extracts first H1/H2 from markdown text as a title fallback. Wired into the Readability pipeline when `article.title` is empty.
+- **`MIN_USEFUL_CONTENT` threshold** — Constant (500 chars) defined for future extraction quality checks.
+- **`buildDeterministicSummary()` fallback** — When Google AI summarization fails, extracts headings and lead sentences from markdown content as a structured excerpt (up to `MAX_PREVIEW_CHARS`). Replaces raw truncation with a readable overview.
+- **Content-Length pre-check in `readResponseText()`** — Checks `Content-Length` header before streaming. Oversized responses fail instantly instead of allocating a reader and hitting the byte cap mid-stream.
 ## [0.3.3] - 2026-05-12
 
 ### Added
