@@ -9,6 +9,11 @@ import { matchesReddit, extractReddit } from "./reddit.js";
 import { matchesArxiv, extractArxiv } from "./arxiv.js";
 import { matchesDocsSite, extractDocsSite } from "./docs-site.js";
 import { matchesYouTube, extractYouTube } from "./youtube.js";
+import { matchesWikipedia, extractWikipedia } from "./wikipedia.js";
+import { matchesStackExchange, extractStackExchange } from "./stackexchange.js";
+import { matchesOpenLibrary, extractOpenLibrary } from "./openlibrary.js";
+import { matchesDevTo, extractDevTo } from "./devto.js";
+import { matchesSonarCloud, extractSonarCloud } from "./sonarcloud.js";
 
 export interface ExtractorMatch {
 	name: string;
@@ -23,6 +28,11 @@ export const VERTICAL_EXTRACTORS: ExtractorMatch[] = [
 	{ name: "arxiv", matcher: matchesArxiv },
 	{ name: "youtube", matcher: matchesYouTube },
 	{ name: "docsite", matcher: matchesDocsSite },
+	{ name: "wikipedia", matcher: matchesWikipedia },
+	{ name: "stackexchange", matcher: matchesStackExchange },
+	{ name: "openlibrary", matcher: matchesOpenLibrary },
+	{ name: "devto", matcher: matchesDevTo },
+	{ name: "sonarcloud", matcher: matchesSonarCloud },
 ];
 
 /**
@@ -66,6 +76,21 @@ export async function runVerticalExtractor(
 	if (matchesDocsSite(url)) {
 		const html = await fetchHtml(url);
 		if (html) return extractDocsSite(html, url);
+	}
+	if (matchesWikipedia(url)) {
+		return extractWikipedia(url, fetchJson);
+	}
+	if (matchesStackExchange(url)) {
+		return extractStackExchange(url, fetchJson);
+	}
+	if (matchesOpenLibrary(url)) {
+		return extractOpenLibrary(url, fetchJson);
+	}
+	if (matchesDevTo(url)) {
+		return extractDevTo(url, fetchJson);
+	}
+	if (matchesSonarCloud(url)) {
+		return extractSonarCloud(url, fetchJson);
 	}
 	return null;
 }
