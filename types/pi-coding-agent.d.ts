@@ -7,6 +7,9 @@
  *
  * The key interface is ExtensionAPI.registerTool(), which all 4 tools use.
  */
+
+export {};
+
 declare module "@earendil-works/pi-coding-agent" {
 	export interface ExtensionAPI {
 		/** Register a tool that the LLM can call. */
@@ -23,6 +26,10 @@ declare module "@earendil-works/pi-coding-agent" {
 				signal?: AbortSignal,
 				onUpdate?: (update: any) => void,
 			) => Promise<unknown>;
+			/** Custom rendering for tool call display in TUI */
+			renderCall?: (args: any, theme: any) => any;
+			/** Custom rendering for tool result display in TUI */
+			renderResult?: (result: any, options: any, theme: any) => any;
 		}): void;
 
 		/** Register a slash command. */

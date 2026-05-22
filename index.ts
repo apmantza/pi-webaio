@@ -14,6 +14,8 @@ import { isIP } from "node:net";
 import { cpus, tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { Theme } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { Readability } from "@mozilla/readability";
 import { Defuddle } from "defuddle/node";
 import { parseHTML } from "linkedom";
@@ -1745,6 +1747,8 @@ interface SearchResult {
 	title: string;
 	url: string;
 	snippet: string;
+	domain?: string;
+	sources?: string[];
 }
 
 function extractDdgUrl(href: string): string {
@@ -1756,6 +1760,14 @@ function extractDdgUrl(href: string): string {
 		/* ignore */
 	}
 	return href;
+}
+
+function extractDomain(url: string): string | undefined {
+	try {
+		return new URL(url).hostname;
+	} catch {
+		return undefined;
+	}
 }
 
 function parseDuckDuckGoResults(html: string): SearchResult[] {
@@ -1771,7 +1783,7 @@ function parseDuckDuckGoResults(html: string): SearchResult[] {
 		const title = a.textContent?.trim() || "";
 		const text = snippet?.textContent?.trim() || "";
 		if (url && title) {
-			results.push({ title, url, snippet: text });
+			results.push({ title, url, snippet: text, domain: extractDomain(url) });
 		}
 	}
 	return results;
@@ -1810,13 +1822,17 @@ function parseYahooResults(html: string): SearchResult[] {
 		if (!url || !/^https?:/i.test(url)) continue;
 		try {
 			const { hostname } = new URL(url);
-			if (hostname === "search.yahoo.com" || hostname === "video.search.yahoo.com" || hostname === "r.search.yahoo.com")
+			if (
+				hostname === "search.yahoo.com" ||
+				hostname === "video.search.yahoo.com" ||
+				hostname === "r.search.yahoo.com"
+			)
 				continue;
 		} catch {
 			continue;
 		}
 		const snippet = el.querySelector(".compText, p")?.textContent?.trim() || "";
-		results.push({ title, url, snippet });
+		results.push({ title, url, snippet, domain: extractDomain(url) });
 	}
 	return results;
 }
@@ -1860,7 +1876,7 @@ function parseBingResults(html: string): SearchResult[] {
 		}
 
 		const snippet = el.querySelector(".b_caption p")?.textContent?.trim() || "";
-		results.push({ title, url, snippet });
+		results.push({ title, url, snippet, domain: extractDomain(url) });
 	}
 	return results;
 }
@@ -1940,7 +1956,7 @@ function parseBraveResults(html: string): SearchResult[] {
 			: "";
 
 		if (url && title) {
-			results.push({ title, url, snippet });
+			results.push({ title, url, snippet, domain: extractDomain(url) });
 		}
 
 		pos = divEnd + 1;
@@ -2103,7 +2119,7 @@ function scoreAndRankResults(
 		entries.sort((a, b) => b.weight - a.weight);
 		const best = entries[0].result;
 
-		scored.push({ result: { ...best, url }, score, sources });
+		scored.push({ result: { ...best, url, sources }, score, sources });
 	}
 
 	scored.sort((a, b) => b.score - a.score);
@@ -4581,14 +4597,26 @@ export default function (pi: ExtensionAPI) {
 			),
 		}) as any,
 
-		async execute(_toolCallId, params) {
+		async execute(_toolCallId, params, _signal, onUpdate) {
 			const query = params.query;
 			setSearchContext(query);
 			const max = params.max ?? 15;
 			const useGoogle = params.google ?? true;
+			const startedAt = Date.now();
 
 			// ── Run 4 HTTP engines + Google CDP in parallel with 7s cap ──
 			const SEARCH_TIMEOUT = 7000;
+
+			const engineNames = ["DDG", "Brave", "Yahoo", "Bing"];
+			if (useGoogle) engineNames.push("Google");
+			onUpdate?.({
+				content: [
+					{
+						type: "text",
+						text: `Searching "${query}" via ${engineNames.join(", ")}...`,
+					},
+				],
+			});
 
 			const httpPromise = searchWeb(query).then(
 				(r) => ({
@@ -4627,6 +4655,7 @@ export default function (pi: ExtensionAPI) {
 								title: r.title,
 								url: r.url,
 								snippet: r.snippet,
+								domain: extractDomain(r.url),
 							})),
 						};
 					} catch (err) {
@@ -4699,21 +4728,27 @@ export default function (pi: ExtensionAPI) {
 			const MAX_TOTAL = 25;
 			const limited = merged.slice(0, MAX_TOTAL);
 
-			// Determine which engines contributed
+			// Determine which engines contributed (with result counts)
 			const engineLabel: string[] = [];
-			if (httpCounts.ddg) engineLabel.push("DDG");
-			if (httpCounts.brave) engineLabel.push("Brave");
-			if (httpCounts.yahoo) engineLabel.push("Yahoo");
-			if (httpCounts.bing) engineLabel.push("Bing");
-			if (googleResults.length) engineLabel.push("Google");
+			if (httpCounts.ddg) engineLabel.push(`DDG:${httpCounts.ddg}`);
+			if (httpCounts.brave) engineLabel.push(`Brave:${httpCounts.brave}`);
+			if (httpCounts.yahoo) engineLabel.push(`Yahoo:${httpCounts.yahoo}`);
+			if (httpCounts.bing) engineLabel.push(`Bing:${httpCounts.bing}`);
+			if (googleResults.length)
+				engineLabel.push(`Google:${googleResults.length}`);
 			if (!engineLabel.length) engineLabel.push("HTTP");
 
 			const text = [
 				`Search results for "${query}" (${engineLabel.join(" + ")}):`,
 				"",
-				...limited.map(
-					(r, i) => `${i + 1}. **${r.title}**\n   ${r.url}\n   ${r.snippet}`,
-				),
+				...limited.map((r, i) => {
+					const domainTag = r.domain ? ` *(${r.domain})*` : "";
+					const srcTag =
+						r.sources && r.sources.length > 1
+							? ` — ${r.sources.join("+")}`
+							: "";
+					return `${i + 1}. **${r.title}**${domainTag}${srcTag}\n   ${r.url}\n   ${r.snippet}`;
+				}),
 			].join("\n");
 
 			return {
@@ -4723,8 +4758,65 @@ export default function (pi: ExtensionAPI) {
 					results: limited,
 					...httpCounts,
 					googleCount: googleResults.length,
+					durationMs: Date.now() - startedAt,
 				},
 			};
+		},
+		renderCall(args, theme: Theme) {
+			const head = theme.fg("toolTitle", theme.bold("aio-websearch "));
+			const query = theme.fg(
+				"accent",
+				`"${args.query.slice(0, 90)}${args.query.length > 90 ? "…" : ""}"`,
+			);
+			return new Text(head + query);
+		},
+		renderResult(result, options, theme: Theme) {
+			const details = result.details as any;
+
+			if (options.isPartial) {
+				return new Text(theme.fg("warning", `Searching "${details.query}"...`));
+			}
+
+			const count = details.results?.length ?? 0;
+			const engines: string[] = [];
+			if (details.ddgCount) engines.push(`DDG:${details.ddgCount}`);
+			if (details.braveCount) engines.push(`Brave:${details.braveCount}`);
+			if (details.yahooCount) engines.push(`Yahoo:${details.yahooCount}`);
+			if (details.bingCount) engines.push(`Bing:${details.bingCount}`);
+			if (details.googleCount) engines.push(`Google:${details.googleCount}`);
+			const engineStr = engines.join("+") || "HTTP";
+
+			const dur = details.durationMs ?? 0;
+			const durText = dur >= 1000 ? `${Math.round(dur / 1000)}s` : `${dur}ms`;
+
+			const summary =
+				theme.fg("success", `${count} result${count === 1 ? "" : "s"}`) +
+				theme.fg("muted", ` via ${engineStr} in ${durText}`);
+
+			if (count === 0) return new Text(summary);
+			if (!options.expanded) return new Text(summary);
+
+			const rows = [summary];
+			const visibleLimit = 8;
+			for (const item of details.results.slice(0, visibleLimit)) {
+				const domainTag = item.domain ? ` (${item.domain})` : "";
+				const srcTag =
+					item.sources && item.sources.length > 1
+						? ` — ${item.sources.join("+")}`
+						: "";
+				rows.push(
+					`${theme.fg("accent", item.title?.slice(0, 80) ?? "")}${theme.fg("dim", domainTag + srcTag)}`,
+				);
+				rows.push(theme.fg("dim", `  ${item.url?.slice(0, 100) ?? ""}`));
+				if (item.snippet)
+					rows.push(theme.fg("muted", `  ${item.snippet.slice(0, 140)}`));
+			}
+			if (details.results.length > visibleLimit) {
+				rows.push(
+					theme.fg("dim", `… ${details.results.length - visibleLimit} more`),
+				);
+			}
+			return new Text(rows.join("\n"));
 		},
 	});
 

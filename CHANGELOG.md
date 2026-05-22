@@ -15,6 +15,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Consent banner stripping tests** (`tests/lib.mjs`, `tests/unit.test.mjs`) — 21 new unit tests: 10 named CMPs (OneTrust through Osano), 4 generic patterns, 5 false-positive protections (cookie recipes, GDPR articles, parental consent content, dialog stripping with sibling preservation, nested banners), 2 edge cases (empty HTML, no banners).
 
 
+## [0.3.6] - 2026-05-22
+
+### Added
+
+- **`domain` and `sources` on every search result** — `SearchResult` interface expanded with `domain?: string` (URL hostname) and `sources?: string[]` (which engines found this URL). All 5 search parsers (DDG, Yahoo, Bing, Brave, Google CDP) now populate `domain` via `extractDomain()`. `scoreAndRankResults()` threads the `sources` array through to final output instead of dropping it.
+- **Domain + consensus tags in result text** — Each result line now renders as `**Title** *(github.com)* — DDG+Bing+Google\n   url\n   snippet`. Domain shown when available; consensus tag shown only when 2+ engines agree, making cross-engine agreement visible to the agent.
+- **`onUpdate` progress streaming** — `aio-websearch` `execute()` now accepts `onUpdate` and fires `Searching "query" via DDG, Brave, Yahoo, Bing, Google...` immediately while engines run in parallel. Eliminates the 7-second blank stall.
+- **Per-engine result counts in header** — Engine labels changed from binary presence (`DDG + Brave + Bing`) to actual counts (`DDG:8 + Brave:12 + Bing:10 + Google:5`). Makes silent failures visible and gives the agent a volume signal per source.
+- **Custom TUI `renderCall` / `renderResult`** — `aio-websearch` now has polished TUI rendering:
+  - *Call view:* `aio-websearch "query"` in `toolTitle` + `accent` colors.
+  - *Collapsed result:* `12 results via DDG:8+Brave:12+Bing:10+Google:5 in 2.3s` in `success` + `muted`.
+  - *Expanded result* (Ctrl+O): shows up to 8 results with title (`accent`), domain/consensus (`dim`), URL (`dim`), snippet (`muted`), and `… N more` truncation.
+  - *Partial state:* yellow `Searching "query"...` while in flight.
+- **Type augmentation updated** (`types/pi-coding-agent.d.ts`) — Added `renderCall` and `renderResult` fields to the `registerTool` signature, plus `export {}` to ensure TypeScript treats it as a module augmentation (not a script). Previously these renderer hooks were absent, which would have shadowed the real package's richer `ToolDefinition` type.
+
 ## [0.3.5] - 2026-05-22
 
 ### Fixed
