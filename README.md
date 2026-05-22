@@ -48,7 +48,7 @@ When you fetch a single URL with `aio-webfetch`, long pages are automatically su
 | **GitHub** (repos, blobs, issues, PRs, raw files)          | Clean structured data from git clone / REST API — no HTML noise to summarize |
 | **YouTube**                                                | Transcript + metadata via Innertube API — the transcript IS the content      |
 | **SonarCloud**                                             | Quality metrics fetched via API — structured data in table form              |
-| **npm / PyPI / Reddit / Hacker News / arXiv / docs sites** | API-first extractors return clean markdown directly                          |
+| **npm / PyPI / Reddit / Hacker News / arXiv / Wikipedia / Stack Exchange / Open Library / DEV.to / docs sites** | API-first extractors return clean markdown directly                          |
 
 Skipping is enforced by both a **content marker** (`> via <source>`) and a **URL hostname check** (covers `github.com`, `raw.githubusercontent.com`, `gist.github.com`), so even if an extractor fails and falls through to the HTML pipeline, GitHub URLs never get AI-summarized.
 
@@ -94,16 +94,20 @@ SonarCloud URLs (`sonarcloud.io/project/...`) are fetched via the SonarCloud RES
 
 ### API-first extractors (vertical registry)
 
-These sites are handled by [dedicated extractors](src/verticals/) that use their public APIs:
+These 10 sites are handled by [dedicated extractors](src/verticals/) that use their public APIs:
 
-| Site            | Extractor                     | API                                            |
-| --------------- | ----------------------------- | ---------------------------------------------- |
-| **npm**         | `src/verticals/npm.ts`        | npm registry JSON API                          |
-| **PyPI**        | `src/verticals/pypi.ts`       | PyPI JSON API                                  |
-| **Hacker News** | `src/verticals/hackernews.ts` | Firebase API                                   |
-| **Reddit**      | `src/verticals/reddit.ts`     | `.json` endpoint                               |
-| **arXiv**       | `src/verticals/arxiv.ts`      | Atom export API                                |
-| **Docs sites**  | `src/verticals/docs-site.ts`  | Docusaurus, GitBook, MDN, VitePress extraction |
+| Site               | Extractor                        | API                                              |
+| ------------------ | -------------------------------- | ------------------------------------------------ |
+| **npm**            | `src/verticals/npm.ts`           | npm registry JSON API                            |
+| **PyPI**           | `src/verticals/pypi.ts`          | PyPI JSON API                                    |
+| **Hacker News**    | `src/verticals/hackernews.ts`    | Firebase API                                     |
+| **Reddit**         | `src/verticals/reddit.ts`        | `.json` endpoint                                 |
+| **arXiv**          | `src/verticals/arxiv.ts`         | Atom export API                                  |
+| **Wikipedia**      | `src/verticals/wikipedia.ts`     | MediaWiki REST API (all editions)                |
+| **Stack Exchange** | `src/verticals/stackexchange.ts` | Stack Exchange API v2.3                          |
+| **Open Library**   | `src/verticals/openlibrary.ts`   | Open Library REST API                            |
+| **DEV.to**         | `src/verticals/devto.ts`         | DEV.to public REST API                           |
+| **Docs sites**     | `src/verticals/docs-site.ts`     | Docusaurus, GitBook, MDN, VitePress extraction   |
 
 All vertical extractors tag their output with `> via <name>`, which automatically skips AI summarization.
 

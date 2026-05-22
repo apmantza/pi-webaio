@@ -22,15 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.3.3] - 2026-05-12
+### Fixed
 
-### Added
-
-- **YouTube vertical extractor** (`src/verticals/youtube.ts`) — Fetches YouTube video transcripts + metadata via `youtube-transcript-plus` (Innertube API, no API key required). Supports standard URLs, `youtu.be`, Shorts, and embeds. Returns title, channel, duration, views, tags, description, and full transcript with configurable format (`text`, `vtt`, `segments` with timestamps). Language selection with auto-fallback. Registered in `src/verticals/registry.ts`.
-- **Consent banner stripping** (`preCleanHtml()` in `index.ts`) — Cookie consent / CMP banner removal during server-side HTML pre-cleaning. 80+ selectors covering 17+ named CMPs (OneTrust, Cookiebot, Didomi, Quantcast, Usercentrics, TrustArc, Klaro, Sourcepoint, CookieYes, Osano, CookieFirst, Adobe PMC, SmartConsent, CookieHub, TermsFeed, Google, YouTube, BBC, Amazon) plus generic class/id patterns (`[class*="cookie-banner"]`, `[class*="consent-modal"]`, `[class*="gdpr-banner"]`, `[class*="privacy-notice"]`) and ARIA/data-attribute patterns. Merged with existing noise selectors into `ALL_NOISE_SELECTORS` — runs before Readability/Defuddle extraction, so banner noise never reaches content heuristics.
-- **Comprehensive cookie consent dismissal** (`extractors/consent.mjs`) — Rewrote CDP-based cookie dismissal with 17+ named CMPs, shadow DOM support (Usercentrics), multi-language accept/reject patterns (EN, DE, FR, IT, ES, PT), text-based fallbacks, and iframe consent dialog handling. Replaced the original 4-handler script (Google, OneTrust, generic) with a production-grade dismissal covering the same CMPs as the server-side stripper.
-- **Consent banner stripping tests** (`tests/lib.mjs`, `tests/unit.test.mjs`) — 21 new unit tests: 10 named CMPs (OneTrust through Osano), 4 generic patterns, 5 false-positive protections (cookie recipes, GDPR articles, parental consent content, dialog stripping with sibling preservation, nested banners), 2 edge cases (empty HTML, no banners).
-
+- **CodeQL #52 — incomplete multi-character sanitization in `stripTags`** (`src/verticals/wikipedia.ts`) — Replaced single-pass `.replace(/<[^>]*>/g, "")` with a do-while loop that runs until the string stabilizes, preventing crafted input like `<<script>script>` from re-forming a `<script>` tag after the first pass.
 
 ## [0.3.6] - 2026-05-22
 
@@ -99,6 +93,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `index.ts:3989` — Bounded `cleanText` markdown link regex quantifiers to `{0,5000}` and `{1,5000}` to prevent catastrophic backtracking on malformed input
   - `index.ts:4004` — Changed `new URL(url, "http://x")` to `"https://x"` to avoid plain HTTP in code
   - `src/storage.ts:83` — Replaced `Math.random()` in `makeId()` with `randomUUID()` from `node:crypto`
+
+## [0.3.3] - 2026-05-12
+
+### Added
+
+- **YouTube vertical extractor** (`src/verticals/youtube.ts`) — Fetches YouTube video transcripts + metadata via `youtube-transcript-plus` (Innertube API, no API key required). Supports standard URLs, `youtu.be`, Shorts, and embeds. Returns title, channel, duration, views, tags, description, and full transcript with configurable format (`text`, `vtt`, `segments` with timestamps). Language selection with auto-fallback. Registered in `src/verticals/registry.ts`.
+- **Consent banner stripping** (`preCleanHtml()` in `index.ts`) — Cookie consent / CMP banner removal during server-side HTML pre-cleaning. 80+ selectors covering 17+ named CMPs (OneTrust, Cookiebot, Didomi, Quantcast, Usercentrics, TrustArc, Klaro, Sourcepoint, CookieYes, Osano, CookieFirst, Adobe PMC, SmartConsent, CookieHub, TermsFeed, Google, YouTube, BBC, Amazon) plus generic class/id patterns (`[class*="cookie-banner"]`, `[class*="consent-modal"]`, `[class*="gdpr-banner"]`, `[class*="privacy-notice"]`) and ARIA/data-attribute patterns. Merged with existing noise selectors into `ALL_NOISE_SELECTORS` — runs before Readability/Defuddle extraction, so banner noise never reaches content heuristics.
+- **Comprehensive cookie consent dismissal** (`extractors/consent.mjs`) — Rewrote CDP-based cookie dismissal with 17+ named CMPs, shadow DOM support (Usercentrics), multi-language accept/reject patterns (EN, DE, FR, IT, ES, PT), text-based fallbacks, and iframe consent dialog handling. Replaced the original 4-handler script (Google, OneTrust, generic) with a production-grade dismissal covering the same CMPs as the server-side stripper.
+- **Consent banner stripping tests** (`tests/lib.mjs`, `tests/unit.test.mjs`) — 21 new unit tests: 10 named CMPs (OneTrust through Osano), 4 generic patterns, 5 false-positive protections (cookie recipes, GDPR articles, parental consent content, dialog stripping with sibling preservation, nested banners), 2 edge cases (empty HTML, no banners).
 
 ## [0.3.2] - 2026-05-09
 
