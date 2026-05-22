@@ -252,5 +252,11 @@ function cleanHtmlToMarkdown(html: string): string {
 }
 
 function stripTags(s: string): string {
-	return s.replace(/<[^>]*>/g, "");
+	// Loop until stable to prevent incomplete multi-character sanitization
+	let prev: string;
+	do {
+		prev = s;
+		s = s.replace(/<[^>]*>/g, "");
+	} while (s !== prev);
+	return s;
 }
