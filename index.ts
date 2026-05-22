@@ -81,6 +81,46 @@ interface FetchErrorInfo {
 	statusCode?: number;
 }
 
+/**
+ * Build a human-readable, actionable error message from FetchErrorInfo.
+ */
+function formatErrorInfo(info: FetchErrorInfo): string {
+	const phaseLabels: Record<string, string> = {
+		validation: "during validation",
+		connecting: "while connecting",
+		waiting: "while waiting for response",
+		loading: "during download",
+		processing: "during processing",
+	};
+	const codeLabels: Record<string, string> = {
+		invalid_url: "Invalid URL",
+		http_error: "HTTP error",
+		timeout: "Timed out",
+		network_error: "Network error",
+		no_content: "No content",
+		blocked: "Blocked",
+		processing_error: "Processing error",
+		download_error: "Download error",
+		too_many_redirects: "Too many redirects",
+		unknown: "Unknown error",
+	};
+
+	const parts: string[] = [];
+	const codeLabel = codeLabels[info.code ?? "unknown"] ?? "Error";
+	parts.push(codeLabel);
+	if (info.statusCode) parts.push(`(HTTP ${info.statusCode})`);
+	if (info.phase) parts.push(phaseLabels[info.phase] ?? info.phase);
+	if (
+		info.message &&
+		info.message !== codeLabel &&
+		info.message !== "Request failed"
+	) {
+		parts.push(`— ${info.message}`);
+	}
+	if (info.retryable) parts.push("— retry may help");
+	return parts.join(" ");
+}
+
 interface PullResult {
 	ok: boolean;
 	url: string;
@@ -1197,9 +1237,9 @@ async function fetchWithRetry(
 				}
 			}
 
-			// Non-retryable status: fail immediately
+			// Non-retryable status (400-404): return response so caller sees status code
 			if (NON_RETRYABLE_STATUS_CODES.has(res.status)) {
-				return null;
+				return res;
 			}
 
 			// Retryable status: wait and retry
@@ -3714,16 +3754,17 @@ async function pullPage(
 			return finalizePullResult(dl, redirectNotice);
 		}
 	} else if (!binPeek) {
+		const info: FetchErrorInfo = {
+			message: "Could not reach server",
+			code: "network_error",
+			phase: "connecting",
+			retryable: true,
+		};
 		return {
 			ok: false,
 			url,
-			error: "Request failed",
-			errorInfo: {
-				message: "Request failed",
-				code: "network_error",
-				phase: "connecting",
-				retryable: true,
-			},
+			error: formatErrorInfo(info),
+			errorInfo: info,
 		};
 	}
 
@@ -3736,18 +3777,20 @@ async function pullPage(
 			...opts?.headers,
 		},
 	});
-	if (!res)
+	if (!res) {
+		const info: FetchErrorInfo = {
+			message: "Server unreachable or request failed after retries",
+			code: "network_error",
+			phase: "loading",
+			retryable: true,
+		};
 		return {
 			ok: false,
 			url,
-			error: "Request failed",
-			errorInfo: {
-				message: "Request failed",
-				code: "network_error",
-				phase: "loading",
-				retryable: true,
-			},
+			error: formatErrorInfo(info),
+			errorInfo: info,
 		};
+	}
 	if (res.status >= 400) {
 		// Cloudflare challenge detection: retry with alternate UA before giving up.
 		// CF challenges return 403 with distinctive markers in the first ~4KB.
@@ -3774,17 +3817,18 @@ async function pullPage(
 				res = cfRes;
 			}
 		}
+		const httpInfo: FetchErrorInfo = {
+			message: `Server responded with HTTP ${res.status}`,
+			code: "http_error",
+			phase: "loading",
+			retryable: res.status >= 500 || res.status === 429,
+			statusCode: res.status,
+		};
 		return {
 			ok: false,
 			url,
-			error: `HTTP ${res.status}`,
-			errorInfo: {
-				message: `Server responded with HTTP ${res.status}`,
-				code: "http_error",
-				phase: "loading",
-				retryable: res.status >= 500 || res.status === 429,
-				statusCode: res.status,
-			},
+			error: formatErrorInfo(httpInfo),
+			errorInfo: httpInfo,
 		};
 	}
 
@@ -3944,7 +3988,7 @@ async function pullPageEnhanced(
 				return {
 					ok: false,
 					url,
-					error: `[BLOCKED] ${botCheck.message} (type: ${botCheck.blockerType}, confidence: ${Math.round(botCheck.confidence * 100)}%)`,
+					error: `Blocked (${botCheck.blockerType}, ${Math.round(botCheck.confidence * 100)}% confidence) — ${botCheck.message}`,
 					errorInfo: {
 						message: botCheck.message,
 						code: "blocked",
@@ -3976,17 +4020,17 @@ async function pullPageEnhanced(
 			// Feed Playwright HTML through the normal pipeline
 			return pullPage(url, opts, _redirectCount, pwHtml);
 		}
+		const pwInfo: FetchErrorInfo = {
+			message: "Playwright browser rendering failed",
+			code: "processing_error",
+			phase: "loading",
+			retryable: false,
+		};
 		return {
 			ok: false,
 			url,
-			error:
-				"Browser mode failed: Playwright not available or page load failed",
-			errorInfo: {
-				message: "Playwright browser rendering failed",
-				code: "processing_error",
-				phase: "loading",
-				retryable: false,
-			},
+			error: formatErrorInfo(pwInfo),
+			errorInfo: pwInfo,
 		};
 	}
 
@@ -4264,6 +4308,7 @@ export default function (pi: ExtensionAPI) {
 						return {
 							ok: false,
 							error: result.error ?? "Fetch failed",
+							errorInfo: result.errorInfo,
 							url: url.href,
 						};
 					}
@@ -4512,7 +4557,19 @@ export default function (pi: ExtensionAPI) {
 						`✓ ${r.title} — ${r.url}\n  → ${r.outPath} (${r.length} chars)${(r as any).responseId ? `\n  ID: ${(r as any).responseId}` : ""}`,
 				),
 				...(errResults.length
-					? ["", "Errors:", ...errResults.map((r) => `✗ ${r.url}: ${r.error}`)]
+					? [
+							"",
+							"Errors:",
+							...errResults.map((r) => {
+								const code = (r as any).errorInfo?.code;
+								const sc = (r as any).errorInfo?.statusCode;
+								const tag = [code, sc ? `HTTP ${sc}` : null]
+									.filter(Boolean)
+									.join(", ");
+								const suffix = tag ? ` [${tag}]` : "";
+								return `✗ ${r.url}: ${r.error}${suffix}`;
+							}),
+						]
 					: []),
 			];
 			return {
