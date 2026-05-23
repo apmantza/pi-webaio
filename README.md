@@ -94,7 +94,7 @@ SonarCloud URLs (`sonarcloud.io/project/...`) are fetched via the SonarCloud RES
 
 ### API-first extractors (vertical registry)
 
-These 18 sites are handled by [dedicated extractors](src/verticals/) that use their public APIs:
+These 19 sites are handled by [dedicated extractors](src/verticals/) that use their public APIs:
 
 | Site               | Extractor                        | API                                              |
 | ------------------ | -------------------------------- | ------------------------------------------------ |
@@ -113,6 +113,7 @@ These 18 sites are handled by [dedicated extractors](src/verticals/) that use th
 | **pub.dev**        | `src/verticals/pubdev.ts`        | pub.dev API (Dart/Flutter)                       |
 | **Go packages**    | `src/verticals/gopackages.ts`    | Go module proxy (proxy.golang.org)               |
 | **NuGet**          | `src/verticals/nuget.ts`         | NuGet Search API v3                              |
+| **GitLab**         | `src/verticals/gitlab.ts`        | GitLab REST API v4 (gitlab.com + self-hosted)    |
 | **Docs sites**     | `src/verticals/docs-site.ts`     | Docusaurus, GitBook, MDN, VitePress extraction   |
 
 All vertical extractors tag their output with `> via <name>`, which automatically skips AI summarization.
