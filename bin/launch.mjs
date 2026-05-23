@@ -109,7 +109,6 @@ function buildChromeFlags(chromePath) {
 		flags.push(
 			`--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${major}.0.0.0 Safari/537.36`,
 		);
-		if (platform() === "win32") flags.push("--disable-software-rasterizer");
 	}
 	flags.push("about:blank");
 	return flags;
