@@ -115,9 +115,8 @@ export async function extractGoPackages(
 			const docMatch = docHtml.match(
 				/<div[^>]*class="Documentation[^"]*"[^>]*>[\s\S]*?<p>([\s\S]*?)<\/p>/i,
 			);
-			if (docMatch && docMatch[1]) {
-				const desc = docMatch[1]
-					.replace(/<[^>]+>/g, "")
+            if (docMatch && docMatch[1]) {
+				const desc = stripTags(docMatch[1])
 					.replace(/\s+/g, " ")
 					.trim();
 				if (desc.length > 20) {
@@ -133,4 +132,15 @@ export async function extractGoPackages(
 		title: modulePath,
 		content: md,
 	};
+}
+
+// Loop until stable to prevent incomplete multi-character sanitization
+// (CodeQL S5852).
+function stripTags(s: string): string {
+	let prev: string;
+	do {
+		prev = s;
+		s = s.replace(/<[^>]*>/g, "");
+	} while (s !== prev);
+	return s;
 }
