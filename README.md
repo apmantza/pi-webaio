@@ -10,7 +10,7 @@ All-in-one web access tools for [pi](https://pi.dev) with search, fetch, crawl, 
 
 When you search, pi-webaio queries 5 engines in parallel (DuckDuckGo, Brave, Yahoo, Bing, and Google via headless Chrome). Results that show up across multiple engines rank higher — consensus is a signal of quality. When you fetch a page, it tries 14 different extraction backends in order, stripping cookie banners and anti-bot noise along the way, so you get clean markdown instead of raw HTML soup.
 
-Long pages are automatically **AI-summarized** via Google AI Mode (headless Chrome) — you get a concise overview instantly, while the full content is always saved to disk for later inspection. For sites with API-first extractors (GitHub, YouTube, npm, PyPI, Reddit, Hacker News, arXiv), pi-webaio bypasses HTML scraping entirely and pulls structured data directly.
+Long pages are automatically **AI-summarized** via Google AI Mode (headless Chrome) — you get a concise overview instantly, while the full content is always saved to disk for later inspection. For sites with API-first extractors (GitHub, YouTube, npm, PyPI, crates.io, RubyGems, Packagist, pub.dev, Go, NuGet, Reddit, Hacker News, arXiv, Stack Exchange, Wikipedia, Open Library, DEV.to, SonarCloud, docs sites), pi-webaio bypasses HTML scraping entirely and pulls structured data directly.
 
 It's built for agents that need to:
 
@@ -48,7 +48,7 @@ When you fetch a single URL with `aio-webfetch`, long pages are automatically su
 | **GitHub** (repos, blobs, issues, PRs, raw files)          | Clean structured data from git clone / REST API — no HTML noise to summarize |
 | **YouTube**                                                | Transcript + metadata via Innertube API — the transcript IS the content      |
 | **SonarCloud**                                             | Quality metrics fetched via API — structured data in table form              |
-| **npm / PyPI / Reddit / Hacker News / arXiv / Wikipedia / Stack Exchange / Open Library / DEV.to / docs sites** | API-first extractors return clean markdown directly                          |
+| **npm / PyPI / crates.io / RubyGems / Packagist / pub.dev / Go / NuGet / Reddit / Hacker News / arXiv / Wikipedia / Stack Exchange / Open Library / DEV.to / SonarCloud / docs sites** | API-first extractors return clean markdown directly                          |
 
 Skipping is enforced by both a **content marker** (`> via <source>`) and a **URL hostname check** (covers `github.com`, `raw.githubusercontent.com`, `gist.github.com`), so even if an extractor fails and falls through to the HTML pipeline, GitHub URLs never get AI-summarized.
 
@@ -94,7 +94,7 @@ SonarCloud URLs (`sonarcloud.io/project/...`) are fetched via the SonarCloud RES
 
 ### API-first extractors (vertical registry)
 
-These 10 sites are handled by [dedicated extractors](src/verticals/) that use their public APIs:
+These 18 sites are handled by [dedicated extractors](src/verticals/) that use their public APIs:
 
 | Site               | Extractor                        | API                                              |
 | ------------------ | -------------------------------- | ------------------------------------------------ |
@@ -107,6 +107,12 @@ These 10 sites are handled by [dedicated extractors](src/verticals/) that use th
 | **Stack Exchange** | `src/verticals/stackexchange.ts` | Stack Exchange API v2.3                          |
 | **Open Library**   | `src/verticals/openlibrary.ts`   | Open Library REST API                            |
 | **DEV.to**         | `src/verticals/devto.ts`         | DEV.to public REST API                           |
+| **crates.io**      | `src/verticals/cratesio.ts`      | crates.io registry JSON API                      |
+| **RubyGems**       | `src/verticals/rubygems.ts`      | RubyGems.org JSON API                            |
+| **Packagist**      | `src/verticals/packagist.ts`     | Packagist JSON API (PHP)                         |
+| **pub.dev**        | `src/verticals/pubdev.ts`        | pub.dev API (Dart/Flutter)                       |
+| **Go packages**    | `src/verticals/gopackages.ts`    | Go module proxy (proxy.golang.org)               |
+| **NuGet**          | `src/verticals/nuget.ts`         | NuGet Search API v3                              |
 | **Docs sites**     | `src/verticals/docs-site.ts`     | Docusaurus, GitBook, MDN, VitePress extraction   |
 
 All vertical extractors tag their output with `> via <name>`, which automatically skips AI summarization.

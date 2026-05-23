@@ -20,6 +20,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`buildDeterministicSummary()` fallback** — When Google AI summarization fails, extracts headings and lead sentences from markdown content as a structured excerpt (up to `MAX_PREVIEW_CHARS`). Replaces raw truncation with a readable overview.
 - **Content-Length pre-check in `readResponseText()`** — Checks `Content-Length` header before streaming. Oversized responses fail instantly instead of allocating a reader and hitting the byte cap mid-stream.
 
+## [0.4.0] - 2026-05-23
+
+### Added
+
+- **7 new package registry vertical extractors** — expanding from 12 to 19 vertical extractors:
+  - **crates.io** (`src/verticals/cratesio.ts`) — Rust crate metadata via `crates.io/api/v1/crates/{crate}`. Returns name, description, latest version, download stats, license, homepage, repository, docs, keywords, categories, dependencies, and version history.
+  - **RubyGems** (`src/verticals/rubygems.ts`) — Ruby gem metadata via `rubygems.org/api/v1/gems/{gem}.json`. Returns name, version, description, author, license, downloads, homepage, repository, docs, runtime & dev dependencies.
+  - **Packagist** (`src/verticals/packagist.ts`) — PHP package metadata via `packagist.org/packages/{vendor}/{package}.json`. Returns name, description, latest version, PHP version constraint, extensions, dependencies, dev dependencies, maintainers, and version history.
+  - **pub.dev** (`src/verticals/pubdev.ts`) — Dart/Flutter package metadata via `pub.dev/api/packages/{package}`. Returns name, version, description, SDK/Flutter constraints, repository, topics, dependencies, dev dependencies, and version history.
+  - **Go packages** (`src/verticals/gopackages.ts`) — Go module metadata via `proxy.golang.org`. Returns module path, latest version, publish time, VCS, repository, commit hash, version list, and `go get` command. Falls back to HTML description extraction when proxy data is unavailable.
+  - **NuGet** (`src/verticals/nuget.ts`) — .NET package metadata via NuGet Search API v3 (`azuresearch-usnc.nuget.org/query`). Returns package ID, version, description, verified badge, downloads, authors, owners, project/license URLs, tags, and version history with per-version download counts.
+  - **GitLab** (`src/verticals/gitlab.ts`) — GitLab project/repo metadata via REST API v4. Supports gitlab.com and self-hosted instances. Handles repo roots (`/namespace/project`), blob files (`/-/blob/branch/path`), and directory trees (`/-/tree/branch/path`). Returns project metadata, README content, file listings, or raw file content with syntax highlighting.
+- **Vertical extractor count updated** — `AGENTS.md`, `README.md`, and `package.json` updated to reflect 19 total vertical extractors (was 10–12).
+- **Unit tests for new extractors** — 9 new unit tests covering URL matching regexes for all 7 new vertical extractors (crates.io, RubyGems, Packagist, pub.dev, Go, NuGet, GitLab).
+
+### Changed
+
+- **README vertical extractor table** — expanded from 10 rows to 19, now includes all package registries and GitLab with their API endpoints.
+- **AI summarization skip list** — updated to include all new vertical extractors (crates.io, RubyGems, Packagist, pub.dev, Go, NuGet, GitLab) so structured API data is never passed through AI summarization.
+
 ## [Unreleased]
 
 ### Fixed

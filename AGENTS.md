@@ -139,7 +139,7 @@ pi-webaio/
 | `src/data-islands.ts`    | SPA hydration recovery — JSON from `<script>` tags, 16 framework globals, Next.js RSC chunks  |
 | `src/storage.ts`         | Persistent result storage — content-addressed blobs, 500 max, 24h TTL, LRU eviction           |
 | `src/context-package.ts` | Compile pulled pages into single Markdown with YAML index                                     |
-| `src/verticals/`         | 6 API-first extractors: npm, PyPI, Hacker News, Reddit, arXiv, docs sites                     |
+| `src/verticals/`         | 18 API-first extractors: npm, PyPI, crates.io, RubyGems, Packagist, pub.dev, Go, NuGet, Hacker News, Reddit, arXiv, Stack Exchange, YouTube, Wikipedia, Open Library, DEV.to, SonarCloud, docs sites |
 
 ### Caching
 

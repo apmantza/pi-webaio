@@ -14,6 +14,13 @@ import { matchesStackExchange, extractStackExchange } from "./stackexchange.js";
 import { matchesOpenLibrary, extractOpenLibrary } from "./openlibrary.js";
 import { matchesDevTo, extractDevTo } from "./devto.js";
 import { matchesSonarCloud, extractSonarCloud } from "./sonarcloud.js";
+import { matchesCratesIo, extractCratesIo } from "./cratesio.js";
+import { matchesRubyGems, extractRubyGems } from "./rubygems.js";
+import { matchesPackagist, extractPackagist } from "./packagist.js";
+import { matchesPubDev, extractPubDev } from "./pubdev.js";
+import { matchesGoPackages, extractGoPackages } from "./gopackages.js";
+import { matchesNuGet, extractNuGet } from "./nuget.js";
+import { matchesGitLab, extractGitLab } from "./gitlab.js";
 
 export interface ExtractorMatch {
 	name: string;
@@ -33,6 +40,13 @@ export const VERTICAL_EXTRACTORS: ExtractorMatch[] = [
 	{ name: "openlibrary", matcher: matchesOpenLibrary },
 	{ name: "devto", matcher: matchesDevTo },
 	{ name: "sonarcloud", matcher: matchesSonarCloud },
+	{ name: "cratesio", matcher: matchesCratesIo },
+	{ name: "rubygems", matcher: matchesRubyGems },
+	{ name: "packagist", matcher: matchesPackagist },
+	{ name: "pubdev", matcher: matchesPubDev },
+	{ name: "gopackages", matcher: matchesGoPackages },
+	{ name: "nuget", matcher: matchesNuGet },
+	{ name: "gitlab", matcher: matchesGitLab },
 ];
 
 /**
@@ -91,6 +105,27 @@ export async function runVerticalExtractor(
 	}
 	if (matchesSonarCloud(url)) {
 		return extractSonarCloud(url, fetchJson);
+	}
+	if (matchesCratesIo(url)) {
+		return extractCratesIo(url, fetchJson);
+	}
+	if (matchesRubyGems(url)) {
+		return extractRubyGems(url, fetchJson);
+	}
+	if (matchesPackagist(url)) {
+		return extractPackagist(url, fetchJson);
+	}
+	if (matchesPubDev(url)) {
+		return extractPubDev(url, fetchJson);
+	}
+	if (matchesGoPackages(url)) {
+		return extractGoPackages(url, fetchJson, fetchText);
+	}
+	if (matchesNuGet(url)) {
+		return extractNuGet(url, fetchJson);
+	}
+	if (matchesGitLab(url)) {
+		return extractGitLab(url, fetchJson, fetchText);
 	}
 	return null;
 }

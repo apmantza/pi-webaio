@@ -1212,3 +1212,84 @@ test("extractArxiv extracts id from api/query URL (encoded)", () => {
 	assert.ok(match);
 	assert.strictEqual(match[1], "2312.10997");
 });
+
+// ─── Package registry vertical extractor matching ────────────────
+
+test("matchesCratesIo matches crate URLs", () => {
+	const re = /^https?:\/\/crates\.io\/crates\/[^/]+/i;
+	assert.ok(re.test("https://crates.io/crates/serde"));
+	assert.ok(re.test("https://crates.io/crates/tokio"));
+	assert.ok(!re.test("https://crates.io/"));
+	assert.ok(!re.test("https://example.com/crates/serde"));
+});
+
+test("matchesRubyGems matches gem URLs", () => {
+	const re = /^https?:\/\/rubygems\.org\/gems\/[^/]+/i;
+	assert.ok(re.test("https://rubygems.org/gems/rails"));
+	assert.ok(re.test("https://rubygems.org/gems/devise"));
+	assert.ok(!re.test("https://rubygems.org/"));
+	assert.ok(!re.test("https://example.com/gems/rails"));
+});
+
+test("matchesPackagist matches package URLs", () => {
+	const re = /^https?:\/\/packagist\.org\/packages\/[^/]+\/[^/]+/i;
+	assert.ok(re.test("https://packagist.org/packages/laravel/framework"));
+	assert.ok(re.test("https://packagist.org/packages/symfony/console"));
+	assert.ok(!re.test("https://packagist.org/"));
+	assert.ok(!re.test("https://packagist.org/packages/laravel"));
+});
+
+test("matchesPubDev matches package URLs", () => {
+	const re = /^https?:\/\/pub\.dev\/packages\/[^/]+/i;
+	assert.ok(re.test("https://pub.dev/packages/flutter_bloc"));
+	assert.ok(re.test("https://pub.dev/packages/http"));
+	assert.ok(!re.test("https://pub.dev/"));
+	assert.ok(!re.test("https://example.com/packages/http"));
+});
+
+test("matchesGoPackages matches pkg.go.dev URLs", () => {
+	const re = /^https?:\/\/pkg\.go\.dev\/[^/]+/i;
+	assert.ok(re.test("https://pkg.go.dev/github.com/gin-gonic/gin"));
+	assert.ok(re.test("https://pkg.go.dev/net/http"));
+	assert.ok(!re.test("https://pkg.go.dev/"));
+	assert.ok(!re.test("https://example.com/github.com/gin-gonic/gin"));
+});
+
+test("matchesNuGet matches package URLs", () => {
+	const re = /^https?:\/\/www\.nuget\.org\/packages\/[^/]+/i;
+	assert.ok(re.test("https://www.nuget.org/packages/Newtonsoft.Json"));
+	assert.ok(re.test("https://www.nuget.org/packages/Microsoft.NET.Test.Sdk"));
+	assert.ok(!re.test("https://www.nuget.org/"));
+	assert.ok(!re.test("https://example.com/packages/Newtonsoft.Json"));
+});
+
+// ─── GitLab vertical extractor matching ──────────────────────────
+
+test("matchesGitLab matches repo root URL", () => {
+	const re =
+		/^https?:\/\/([^/]+)\/([^/]+(?:\/[^/]+)*)\/([^/]+)(?:\/(-\/blob\/|-\/tree\/)([^/]+)(?:\/(.+))?)?/i;
+	assert.ok(re.test("https://gitlab.com/gitlab-org/gitlab-foss"));
+	assert.ok(re.test("https://gitlab.com/user/project"));
+	assert.ok(!re.test("https://gitlab.com/"));
+	// Self-hosted GitLab instances match the pattern too
+	assert.ok(re.test("https://git.example.com/user/project"));
+	// Rejects paths with too few segments
+	assert.ok(!re.test("https://example.com/blog"));
+	assert.ok(!re.test("https://example.com/"));
+});
+
+test("matchesGitLab matches blob URL", () => {
+	assert.ok(
+		/^https?:\/\/([^/]+)\/([^/]+(?:\/[^/]+)*)\/([^/]+)(?:\/(-\/blob\/|-\/tree\/)([^/]+)(?:\/(.+))?)?/i.test(
+			"https://gitlab.com/gitlab-org/gitlab-foss/-/blob/master/README.md",
+		),
+	);
+});
+
+test("matchesGitLab matches tree URL", () => {
+	assert.ok(
+		/^https?:\/\/([^/]+)\/([^/]+(?:\/[^/]+)*)\/([^/]+)(?:\/(-\/blob\/|-\/tree\/)([^/]+)(?:\/(.+))?)?/i.test(
+			"https://gitlab.com/gitlab-org/gitlab-foss/-/tree/master/app",
+		),
+	);
+});
