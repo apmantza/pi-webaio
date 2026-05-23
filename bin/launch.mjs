@@ -83,7 +83,9 @@ function getChromeVersion(chromePath) {
 	try {
 		const appDir = join(chromePath, "..");
 		const entries = readdirSync(appDir);
-		const ver = entries.find((e) => /^\d+\.\d+\.\d+\.\d+$/.test(e));
+		const ver = entries.find((e) =>
+			/^\d{1,10}\.\d{1,10}\.\d{1,10}\.\d{1,10}$/.test(e),
+		);
 		if (ver) return ver.split(".")[0];
 	} catch {}
 
@@ -104,12 +106,10 @@ function buildChromeFlags(chromePath) {
 	const flags = [...BASE_CHROME_FLAGS];
 	if (isHeadless()) {
 		flags.push("--headless=new");
-		flags.push("--disable-gpu");
 		const major = getChromeVersion(chromePath) || "136";
 		flags.push(
 			`--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${major}.0.0.0 Safari/537.36`,
 		);
-		if (platform() === "win32") flags.push("--disable-software-rasterizer");
 	}
 	flags.push("about:blank");
 	return flags;
@@ -132,10 +132,7 @@ function isModeFileHeadless() {
 // ---------------------------------------------------------------------------
 
 async function minimizeViaCDP() {
-	if (isVisible()) return;
-
-	// Wait for Chrome to be ready
-	await new Promise((r) => setTimeout(r, 1000));
+	if (isHeadless()) return;
 
 	try {
 		// Get browser WebSocket URL
@@ -149,12 +146,12 @@ async function minimizeViaCDP() {
 				.on("error", reject);
 		});
 
-		const wsUrl = version.webSocketDebuggerUrl;
+		const wsPath = new URL(version.webSocketDebuggerUrl).pathname;
 
 		const WebSocket = globalThis.WebSocket;
 		if (!WebSocket) return;
 
-		const ws = new WebSocket(wsUrl);
+		const ws = new WebSocket(`ws://localhost:${PORT}${wsPath}`);
 		let requestId = 0;
 		const pending = new Map();
 
