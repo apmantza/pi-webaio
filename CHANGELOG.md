@@ -42,8 +42,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Request queue with checkpoint/resume** (`src/request-queue.ts`) — Persistent disk-backed URL queue for `aio-webpull`. Tracks queued / in-progress / completed / failed states. Auto-saves every 5s. Max 3 retries per URL. Resumes mid-pull after crashes by scanning existing `.md` files for frontmatter URLs. New `resume` parameter (default: auto-detect). 298 lines, 7 unit tests.
+- **Browser pool** (`src/browser-pool.ts`) — Reusable Playwright browser pool for same-domain pulls. Acquire/release lifecycle, auto-recycle after 50 navigations (memory leak defense), crash recovery with automatic replacement, configurable max browsers (default 2). Saves ~2-3s overhead per page vs. launch/close. Active when `mode` is `browser` or `auto`. 278 lines.
+- **Session router for multi-fetcher routing** (`src/session-router.ts`) — URL pattern → fetcher mode/extractor routing. Supports substring paths (`/api/`), glob patterns (`*/protected/*`), and regex patterns (`/^\\/api\\/v\\d+/`). Per-route overrides for mode, browser, OS, and extractor. First match wins. New `routes` parameter on `aio-webpull`. 177 lines, 11 unit tests.
+- **Adaptive content selector** (`src/adaptive-selector.ts`) — Structural DOM fingerprinting for element relocation. Captures tag path, depth, text density, link density, child tag signature, attribute patterns, and sibling position. Weighted similarity scoring (0-1) with configurable threshold (default 0.45). Survives CSS class and ID changes. New `adaptive` parameter on `aio-webpull`. 445 lines, 8 unit tests.
+- **New feature test suite** (`tests/new-features.test.mjs`) — 31 unit tests covering request queue lifecycle and persistence, session router pattern matching and parsing, adaptive selector fingerprint capture and relocation, and browser pool lifecycle. Imported from TypeScript modules directly (Node 24 native strip-types).
+
+### Changed
+
+- **`aio-webpull` now uses `runPullFromQueue()`** — replaces `runInBatches()` with a queue-driven worker loop. Workers pull URLs from `RequestQueue` and mark them complete/failed with retry support. Supports checkpoint resume, browser pooling, and per-URL route resolution via `SessionRouter`. New parameters: `resume` (boolean), `routes` (Route[]), `adaptive` (boolean).
+- **`tsconfig.json` include expanded** — `src/**/*.ts` added to `include` array so new modules are picked up by the LSP.
+
 ### Fixed
 
+- **Markdown frontmatter URL detection in queue resume** — `RequestQueue.resume()` now strips surrounding quotes from `url:` frontmatter values, matching the unquoted URLs stored in the queue.
 - **CodeQL #52 — incomplete multi-character sanitization in `stripTags`** (`src/verticals/wikipedia.ts`) — Replaced single-pass `.replace(/<[^>]*>/g, "")` with a do-while loop that runs until the string stabilizes, preventing crafted input like `<<script>script>` from re-forming a `<script>` tag after the first pass.
 
 ## [0.3.6] - 2026-05-22
