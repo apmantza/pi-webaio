@@ -12,5 +12,5 @@
     "allowJs": true,
     "types": ["node"]
   },
-  "include": ["index.ts", "types/**/*.d.ts"]
+  "include": ["index.ts", "src/**/*.ts", "types/**/*.d.ts"]
 }

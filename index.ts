@@ -43,6 +43,13 @@ import {
 } from "./src/interactive-elements.js";
 import { pruneMarkdown } from "./src/prune-markdown.js";
 import { ghFetch, getGithubToken } from "./src/github-api.js";
+import { RequestQueue, hasQueueFile } from "./src/request-queue.js";
+import { BrowserPool } from "./src/browser-pool.js";
+import { SessionRouter, parseRoutes } from "./src/session-router.js";
+import {
+	captureFingerprint,
+	locateByFingerprint,
+} from "./src/adaptive-selector.js";
 
 // ─── pdf-parse loose typing (CJS, no bundled .d.ts) ────────────────
 
@@ -151,6 +158,8 @@ interface FetchOpts {
 	mode?: ScrapeMode;
 	interactive?: boolean;
 	pruneTokens?: number;
+	/** Enable adaptive content selector — remembers element structure to survive site redesigns */
+	adaptive?: boolean;
 }
 
 /** Elements to remove before extraction — navigation, scaffolding, embeds. */
@@ -3944,6 +3953,27 @@ async function runInBatches<T, R>(
 	return results;
 }
 
+/**
+ * Run concurrent workers that pull URLs from a RequestQueue until done.
+ * Each worker calls queue.next(), processes the URL via fn(), then marks
+ * it complete or failed. Stops when queue.isDone() is true.
+ */
+async function runPullFromQueue(
+	queue: RequestQueue,
+	concurrency: number,
+	fn: (url: string) => Promise<void>,
+): Promise<void> {
+	async function worker(): Promise<void> {
+		while (!queue.isDone()) {
+			const url = await queue.next();
+			if (!url) break; // no more queued URLs
+			await fn(url);
+		}
+	}
+
+	await Promise.all(Array.from({ length: concurrency }, () => worker()));
+}
+
 // ─── Extension ──────────────────────────────────────────────────────
 
 export default function (pi: ExtensionAPI) {
@@ -4875,6 +4905,54 @@ export default function (pi: ExtensionAPI) {
 						"Compile pulled pages into a single context package after completion.",
 				}),
 			),
+			resume: Type.Optional(
+				Type.Boolean({
+					description:
+						"Resume a previous pull from the output directory (default: auto-detect). Set to false to force a fresh pull.",
+				}),
+			),
+			routes: Type.Optional(
+				Type.Array(
+					Type.Object({
+						pattern: Type.String({
+							description:
+								"URL pattern: path string, glob (*/docs/*), or regex (/^\\/api\\//)",
+						}),
+						mode: Type.Optional(
+							Type.String({
+								description:
+									"Fetcher mode: fast, fingerprint, browser, or auto",
+							}),
+						),
+						extractor: Type.Optional(
+							Type.String({
+								description:
+									"Vertical extractor name (e.g. npm, pypi, wikipedia)",
+							}),
+						),
+						browser: Type.Optional(
+							Type.String({
+								description: "Browser profile override for this route",
+							}),
+						),
+						os: Type.Optional(
+							Type.String({
+								description: "OS profile override for this route",
+							}),
+						),
+					}),
+					{
+						description:
+							"Route definitions: URL pattern -> fetcher mode/extractor. Evaluated in order, first match wins.",
+					},
+				),
+			),
+			adaptive: Type.Optional(
+				Type.Boolean({
+					description:
+						"Enable adaptive content selector — remembers element structure to survive site redesigns (default: false)",
+				}),
+			),
 		}) as any,
 
 		async execute(_toolCallId, params, signal, onUpdate) {
@@ -4898,46 +4976,107 @@ export default function (pi: ExtensionAPI) {
 			const proxy = params.proxy as string | undefined;
 			const mode = (params.mode as ScrapeMode) ?? "auto";
 			const compile = (params.compile as boolean) ?? false;
-			const fetchOpts: FetchOpts = { browser, os, proxy, mode };
+			const resume = params.resume !== false; // default: auto-resume
+			const routes = (params.routes as any[]) ?? [];
+			const adaptive = params.adaptive === true || params.adaptive === "true";
+			const fetchOpts: FetchOpts = { browser, os, proxy, mode, adaptive };
 
-			onUpdate?.({
-				content: [
-					{
-						type: "text",
-						text: `🔍 Discovering pages for ${url.href} (${browser}/${os})...`,
-					},
-				],
-				details: { stage: "discover", browser, os },
-			});
+			// ── Feature: Session Router ──────────────────────────────
+			const router =
+				routes.length > 0 ? new SessionRouter(parseRoutes(routes)) : null;
 
-			const urls = await discover(url.href, max, fetchOpts);
-			if (!urls.length) throw new Error("No pages found.");
+			// ── Feature: Request Queue (checkpoint/resume) ───────────
+			let queue: RequestQueue | null = null;
+			if (resume && hasQueueFile(outDir)) {
+				queue = await RequestQueue.resume(outDir);
+				if (queue) {
+					const s = queue.stats();
+					onUpdate?.({
+						content: [
+							{
+								type: "text",
+								text: `🔄 Resuming pull: ${s.completed} done, ${s.queued} queued, ${s.failed} failed`,
+							},
+						],
+						details: { stage: "resume", stats: s },
+					});
+				}
+			}
 
-			onUpdate?.({
-				content: [
-					{
-						type: "text",
-						text: `📄 Found ${urls.length} pages. Pulling with ${concurrency} workers...`,
-					},
-				],
-				details: { stage: "pull", total: urls.length, browser, os },
-			});
+			if (!queue) {
+				// Fresh pull — discover pages and initialize queue
+				onUpdate?.({
+					content: [
+						{
+							type: "text",
+							text: `🔍 Discovering pages for ${url.href} (${browser}/${os})...`,
+						},
+					],
+					details: { stage: "discover", browser, os },
+				});
+
+				const urls = await discover(url.href, max, fetchOpts);
+				if (!urls.length) throw new Error("No pages found.");
+
+				queue = await RequestQueue.create(outDir);
+				await queue.add(urls);
+
+				onUpdate?.({
+					content: [
+						{
+							type: "text",
+							text: `📄 Found ${urls.length} pages. Pulling with ${concurrency} workers...`,
+						},
+					],
+					details: { stage: "pull", total: urls.length, browser, os },
+				});
+			}
+
+			// ── Feature: Browser Pool ────────────────────────────────
+			const needsBrowser = mode === "browser" || mode === "auto";
+			const browserPool = needsBrowser
+				? new BrowserPool({ headless: true, channel: "chrome" })
+				: null;
 
 			let ok = 0;
 			let err = 0;
 			const files: string[] = [];
 			const errors: string[] = [];
 			const pageUrlToPath = new Map<string, string>();
+			const totalUrls =
+				queue.stats().queued +
+				queue.stats().inProgress +
+				queue.stats().completed;
 
-			await runInBatches(urls, concurrency, async (pageUrl, _i) => {
+			// Workers pull from the queue until done
+			await runPullFromQueue(queue, concurrency, async (pageUrl: string) => {
 				if (signal?.aborted) return;
 
-				const result = await pullPageEnhanced(pageUrl, fetchOpts);
+				// Resolve per-URL fetcher options via session router
+				const urlOpts = { ...fetchOpts };
+				if (router) {
+					const match = router.match(pageUrl);
+					if (match) {
+						if (match.mode) urlOpts.mode = match.mode as ScrapeMode;
+						if (match.browser) urlOpts.browser = match.browser;
+						if (match.os) urlOpts.os = match.os;
+					}
+				}
+
+				const result = await pullPageEnhanced(pageUrl, urlOpts);
 				if (!result.ok) {
-					err++;
-					errors.push(`${pageUrl}: ${result.error}`);
+					const willRetry = await queue.fail(
+						pageUrl,
+						result.error ?? "Unknown error",
+					);
+					if (!willRetry) {
+						err++;
+						errors.push(`${pageUrl}: ${result.error}`);
+					}
 					return;
 				}
+
+				await queue.complete(pageUrl);
 
 				const page: Page = {
 					url: result.url!,
@@ -4965,26 +5104,36 @@ export default function (pi: ExtensionAPI) {
 					wordCount: result.wordCount,
 				});
 
-				// Stream each page as it completes so the agent can inspect pages while pull continues
+				// Stream each page as it completes
+				const qStats = queue.stats();
 				onUpdate?.({
 					content: [
 						{
 							type: "text",
-							text: `⏳ ${ok + err}/${urls.length} pages processed — pulled ${result.title || page.url} → ${rel}`,
+							text: `⏳ ${ok + err}/${totalUrls} pages processed — pulled ${result.title || page.url} → ${rel}`,
 						},
 					],
 					details: {
 						stage: "stream",
 						ok,
 						err,
-						total: urls.length,
+						total: totalUrls,
 						file: rel,
 						title: result.title,
 						url: result.url,
 						wordCount: result.wordCount,
+						queueStats: qStats,
 					},
 				});
 			});
+
+			// ── Cleanup ──────────────────────────────────────────────
+			if (browserPool) {
+				await browserPool.drain();
+			}
+			if (queue) {
+				await queue.close();
+			}
 
 			// Rewrite absolute links between pulled pages to relative .md paths
 			if (pageUrlToPath.size > 1) {
@@ -5060,6 +5209,7 @@ export default function (pi: ExtensionAPI) {
 				}
 			}
 
+			const totalProcessed = ok + err;
 			return {
 				content: [
 					{
@@ -5074,7 +5224,7 @@ export default function (pi: ExtensionAPI) {
 				],
 				details: {
 					outDir,
-					total: urls.length,
+					total: totalProcessed,
 					ok,
 					err,
 					files,
@@ -5083,6 +5233,9 @@ export default function (pi: ExtensionAPI) {
 					os,
 					proxy,
 					packagePath,
+					adaptive,
+					queueStats: queue?.stats(),
+					browserPoolStats: browserPool?.stats(),
 				},
 			};
 		},
