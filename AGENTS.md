@@ -15,6 +15,10 @@ pi-webaio/
 │   ├── data-islands.ts       ← SPA hydration data recovery from <script> JSON
 │   ├── storage.ts            ← Persistent result storage with response IDs (JSON + blobs)
 │   ├── context-package.ts    ← Compile multiple pages into a single Markdown package
+│   ├── request-queue.ts      ← Persistent disk-backed queue with checkpoint/resume
+│   ├── browser-pool.ts       ← Reusable Playwright browser instance pool
+│   ├── session-router.ts     ← Multi-fetcher URL routing (pattern → mode/extractor)
+│   ├── adaptive-selector.ts  ← Structural DOM fingerprinting for element relocation
 │   ├── verticals/            ← API-first extractors for known sites
 │   │   ├── registry.ts       ← Pattern-matching registry
 │   │   ├── types.ts          ← Shared types
@@ -42,7 +46,8 @@ pi-webaio/
 │   ├── pi-coding-agent.d.ts  ← Minimal ExtensionAPI type declaration
 │   └── playwright.d.ts       ← Playwright type stub (optional dep)
 ├── tests/
-│   ├── unit.test.mjs         ← 76+ unit tests (parsers, sitemap, discovery)
+│   ├── unit.test.mjs         ← 144 unit tests (parsers, sitemap, discovery, caching)
+│   ├── new-features.test.mjs ← 31 unit tests (queue, router, adaptive selector, pool)
 │   ├── integration.test.mjs  ← Integration tests
 │   └── lib.mjs               ← Test helpers and fixtures
 ├── tsconfig.json
@@ -97,11 +102,13 @@ pi-webaio/
 - Pulls entire websites into local markdown files
 - Discovers pages via sitemap, navigation links, or crawling
 - Writes files preserving URL structure with YAML frontmatter
-- Parameters: `url`, `out` (optional output dir), `max` (default 100), `browser`, `os`, `proxy`
 - Concurrent workers (4 × CPU cores)
-- Parameters: `url`, `out` (optional output dir), `max` (default 100), `mode`, `browser`, `os`, `proxy`, `compile`
-- New: `mode` param enables auto escalation (fast → fingerprint → browser)
-- New: `compile` param compiles pulled pages into a context package
+- Parameters: `url`, `out`, `max` (default 100), `mode`, `browser`, `os`, `proxy`, `compile`
+- **Request queue**: persistent checkpoint/resume via `resume` param (default: auto-detect). Survives crashes and resumes mid-pull from last checkpoint.
+- **Session router**: route different URL patterns to different fetcher modes/extractors via `routes` param. Supports substring, glob (`*/docs/*`), and regex (`/^\/api\//`) patterns. First match wins.
+- **Browser pool**: when mode is `browser` or `auto`, Playwright instances are pooled and reused across pages (saves ~2-3s overhead per page). Auto-recycles after 50 navigations.
+- **Adaptive selectors**: `adaptive` flag enables structural fingerprinting — remembers element position to survive site redesigns.
+- New in v0.4.0: `resume`, `routes`, `adaptive` parameters
 
 ### 5. `aio-webmap`
 
@@ -130,6 +137,15 @@ pi-webaio/
 | Markdown conversion | `defuddle` ^0.18.1            | HTML → markdown (extractor comments stripped)         |
 | PDF                 | `pdf-parse` ^2.4.5            | Text extraction from PDFs                             |
 | Image processing    | `sharp` ^0.34.5               | Image ops (resize, format conversion)                 |
+
+### New Modules (v0.4.0)
+
+| Module                    | Role                                                                                           |
+| ------------------------- | ---------------------------------------------------------------------------------------------- |
+| `src/request-queue.ts`    | Persistent disk-backed URL queue with checkpoint/resume. Tracks queued/in_progress/completed/failed states. Auto-saves every 5s. Max 3 retries per URL. |
+| `src/browser-pool.ts`     | Reusable Playwright browser pool. Acquire/release lifecycle, auto-recycle after N navigations, crash recovery, configurable max browsers. |
+| `src/session-router.ts`   | URL pattern → fetcher mode routing. Supports substring, glob, and regex patterns. Per-route overrides for mode, extractor, browser, OS. |
+| `src/adaptive-selector.ts` | Structural DOM fingerprinting (tag path, text density, child signatures, attributes, sibling position). Weighted similarity scoring (0-1) with 0.45 threshold. Survives class/ID changes. |
 
 ### New Modules (v0.3.0)
 
@@ -191,10 +207,12 @@ pi-webaio/
 
 ## Testing
 
-- `npm test` → runs unit tests
+- `npm test` → runs existing unit tests (144 tests)
+- `npm run test:new` → runs new feature tests (31 tests)
 - `npm run test:integration` → runs integration tests
-- `npm run test:all` → runs both
+- `npm run test:all` → runs all 3 suites (181+ tests)
 - Tests use `node` directly (no test runner dependency)
+- New feature tests import TypeScript modules directly (Node 24 native strip-types)
 - Playwright tests gracefully handle both installed/uninstalled
 
 ## Dependencies
