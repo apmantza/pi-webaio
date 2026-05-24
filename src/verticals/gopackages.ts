@@ -115,10 +115,8 @@ export async function extractGoPackages(
 			const docMatch = docHtml.match(
 				/<div[^>]*class="Documentation[^"]*"[^>]*>[\s\S]*?<p>([\s\S]*?)<\/p>/i,
 			);
-            if (docMatch && docMatch[1]) {
-				const desc = stripTags(docMatch[1])
-					.replace(/\s+/g, " ")
-					.trim();
+			if (docMatch && docMatch[1]) {
+				const desc = stripTags(docMatch[1]).replace(/\s+/g, " ").trim();
 				if (desc.length > 20) {
 					md += `\n## Description\n\n${desc.slice(0, 500)}\n`;
 				}
