@@ -56,6 +56,7 @@
     "test:new": "npx tsx tests/new-features.test.mjs"
   },
   "dependencies": {
+    "@earendil-works/pi-tui": "^0.74.2",
     "@mozilla/readability": "^0.6.0",
     "defuddle": "^0.18.1",
     "linkedom": "^0.18.12",

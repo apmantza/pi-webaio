@@ -44,7 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **CI dependency installation with `--omit=optional`** — Promoted Defuddle's runtime-used optional packages (`mathml-to-latex`, `temml`, `turndown`) to direct dependencies so unit tests and extension import checks pass when optional dependencies are omitted.
+- **CI dependency installation with `--omit=optional`** — Promoted Defuddle's runtime-used optional packages (`mathml-to-latex`, `temml`, `turndown`) and the directly imported TUI package (`@earendil-works/pi-tui`) to direct dependencies so unit tests, packaged installs, and extension import checks pass when optional/peer dependencies are omitted.
 - **Extension import resilience for PDF support** — Lazy-load `pdf-parse` only when PDF extraction is needed, preventing optional native canvas binding failures from breaking non-PDF fetches or extension startup. If PDF text extraction is unavailable, PDF URLs now fall back to saved downloads instead of failing the fetch.
 - **Linkedom TypeScript diagnostics** — Added a local `linkedom` module declaration and explicit DOM callback types in `src/content.ts` to clear stale LSP diagnostics under strict TypeScript settings.
 
