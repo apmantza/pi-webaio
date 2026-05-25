@@ -1,7 +1,9 @@
+.pi/
+pi/
+.DS_Store
 node_modules/
 *.tgz
 *.log
-.DS_Store
 temp/
 dist/
 .env
