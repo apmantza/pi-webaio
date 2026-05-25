@@ -169,11 +169,18 @@ async function browserLevelClick(x, y) {
 			let body = "";
 			res.on("data", (d) => (body += d));
 			res.on("end", () => {
-				try { resolve(JSON.parse(body)); } catch { reject(new Error("bad JSON")); }
+				try {
+					resolve(JSON.parse(body));
+				} catch {
+					reject(new Error("bad JSON"));
+				}
 			});
 		});
 		req.on("error", reject);
-		req.setTimeout(1000, () => { req.destroy(); reject(new Error("timeout")); });
+		req.setTimeout(1000, () => {
+			req.destroy();
+			reject(new Error("timeout"));
+		});
 	});
 
 	const ws = new globalThis.WebSocket(version.webSocketDebuggerUrl);
@@ -181,26 +188,47 @@ async function browserLevelClick(x, y) {
 
 	await new Promise((resolve) => {
 		ws.onopen = async () => {
-			const send = (method, params) => new Promise((r) => {
-				const id = ++msgId;
-				const handler = (evt) => {
-					if (JSON.parse(evt.data).id === id) {
-						ws.removeEventListener("message", handler);
-						r();
-					}
-				};
-				ws.addEventListener("message", handler);
-				ws.send(JSON.stringify({ id, method, params }));
-			});
+			const send = (method, params) =>
+				new Promise((r) => {
+					const id = ++msgId;
+					const handler = (evt) => {
+						if (JSON.parse(evt.data).id === id) {
+							ws.removeEventListener("message", handler);
+							r();
+						}
+					};
+					ws.addEventListener("message", handler);
+					ws.send(JSON.stringify({ id, method, params }));
+				});
 
 			const cx = x + rng(-2, 2);
 			const cy = y + rng(-2, 2);
-			await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: cx, y: cy, button: "none" });
+			await send("Input.dispatchMouseEvent", {
+				type: "mouseMoved",
+				x: cx,
+				y: cy,
+				button: "none",
+			});
 			await new Promise((r) => setTimeout(r, rng(80, 160)));
-			await send("Input.dispatchMouseEvent", { type: "mousePressed", x: cx, y: cy, button: "left", clickCount: 1 });
+			await send("Input.dispatchMouseEvent", {
+				type: "mousePressed",
+				x: cx,
+				y: cy,
+				button: "left",
+				clickCount: 1,
+			});
 			await new Promise((r) => setTimeout(r, rng(30, 80)));
-			await send("Input.dispatchMouseEvent", { type: "mouseReleased", x: cx + rng(-1, 1), y: cy + rng(-1, 1), button: "left", clickCount: 1 });
-			setTimeout(() => { ws.close(); resolve(); }, 200);
+			await send("Input.dispatchMouseEvent", {
+				type: "mouseReleased",
+				x: cx + rng(-1, 1),
+				y: cy + rng(-1, 1),
+				button: "left",
+				clickCount: 1,
+			});
+			setTimeout(() => {
+				ws.close();
+				resolve();
+			}, 200);
 		};
 		ws.onerror = () => resolve();
 		setTimeout(resolve, 3000);
@@ -334,11 +362,16 @@ async function tryHumanClick(tab, cdp, detectResult) {
 	return false;
 }
 
+export async function detectVerificationChallenge(tab, cdp) {
+	const result = await cdp(["eval", tab, VERIFY_DETECT_JS]).catch(() => null);
+	return result && result !== "null" ? result : null;
+}
+
 // Returns 'clear' | 'clicked' | 'needs-human'
 export async function handleVerification(tab, cdp, waitMs = 30000) {
-	const result = await cdp(["eval", tab, VERIFY_DETECT_JS]).catch(() => null);
+	const result = await detectVerificationChallenge(tab, cdp);
 
-	if (!result || result === "null") return "clear";
+	if (!result) return "clear";
 
 	// Hard CAPTCHA page — wait for user to solve it manually
 	if (result === "sorry-page") {
