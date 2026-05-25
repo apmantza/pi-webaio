@@ -7,7 +7,8 @@
  * Persists as a JSONL file alongside the output directory.
  */
 
-import { readFile, writeFile, mkdir, readdir } from "node:fs/promises";
+import { readFile, writeFile, mkdir, readdir, open } from "node:fs/promises";
+
 import { join } from "node:path";
 import type { Dirent } from "node:fs";
 import { existsSync } from "node:fs";
@@ -85,22 +86,16 @@ export class RequestQueue {
 			}
 		}
 
-		// Scan existing .md files to mark URLs as completed
+		// Scan existing .md files to mark URLs as completed. Only read the
+		// frontmatter window; pulled pages can be large and the URL is near the top.
 		const mdFiles = await scanMarkdownFiles(outDir);
 		for (const mdPath of mdFiles) {
-			try {
-				const content = await readFile(mdPath, "utf8");
-				const urlMatch = content.match(/^url: (.+)$/m);
-				if (urlMatch) {
-					const url = urlMatch[1]!.trim().replace(/^"|"$/g, "");
-					const existing = entries.get(url);
-					if (existing && existing.status !== "completed") {
-						existing.status = "completed";
-						existing.retries = 0;
-					}
-				}
-			} catch {
-				// best effort
+			const url = await readFrontmatterUrl(mdPath);
+			if (!url) continue;
+			const existing = entries.get(url);
+			if (existing && existing.status !== "completed") {
+				existing.status = "completed";
+				existing.retries = 0;
 			}
 		}
 
@@ -306,6 +301,22 @@ async function scanMarkdownFiles(dir: string): Promise<string[]> {
 		}
 	}
 	return results;
+}
+
+async function readFrontmatterUrl(path: string): Promise<string | null> {
+	let handle: Awaited<ReturnType<typeof open>> | null = null;
+	try {
+		handle = await open(path, "r");
+		const buf = Buffer.alloc(2048);
+		const { bytesRead } = await handle.read(buf, 0, buf.length, 0);
+		const head = buf.toString("utf8", 0, bytesRead);
+		const urlMatch = head.match(/^url:\s*(.+)$/m);
+		return urlMatch ? urlMatch[1]!.trim().replace(/^"|"$/g, "") : null;
+	} catch {
+		return null;
+	} finally {
+		await handle?.close().catch(() => {});
+	}
 }
 
 /**

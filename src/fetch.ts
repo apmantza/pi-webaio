@@ -141,12 +141,35 @@ export function getRateLimiter(host: string): TokenBucket {
 
 let _pwWarned = false;
 
-export async function fetchWithPlaywright(url: string): Promise<string | null> {
+export async function fetchWithPlaywright(
+	url: string,
+	pool?: FetchOpts["browserPool"],
+): Promise<string | null> {
+	if (pool) {
+		let pooled: Awaited<
+			ReturnType<NonNullable<FetchOpts["browserPool"]>["acquirePage"]>
+		> | null = null;
+
+		try {
+			pooled = await pool.acquirePage();
+			await pooled.page.goto(url, {
+				waitUntil: "domcontentloaded",
+				timeout: 15000,
+			});
+			return await pooled.page.content();
+		} catch {
+			/* fall through to per-request browser below */
+		} finally {
+			pooled?.release();
+		}
+	}
+
 	try {
 		const { chromium } = await import("playwright");
 		for (const opts of [{ channel: "chrome" as const }, {}]) {
+			let browser: any = null;
 			try {
-				const browser = await chromium.launch({
+				browser = await chromium.launch({
 					...opts,
 					headless: true,
 				});
@@ -155,11 +178,11 @@ export async function fetchWithPlaywright(url: string): Promise<string | null> {
 					waitUntil: "domcontentloaded",
 					timeout: 15000,
 				});
-				const content = await page.content();
-				await browser.close();
-				return content;
+				return await page.content();
 			} catch {
-				/* ignore */
+				/* try next launch option */
+			} finally {
+				await browser?.close().catch(() => {});
 			}
 		}
 	} catch {
@@ -298,7 +321,7 @@ export async function smartFetch(
 
 	const res = await fetchWithRetry(url, options);
 	if (!res) {
-		const pwHtml = await fetchWithPlaywright(url);
+		const pwHtml = await fetchWithPlaywright(url, options.browserPool);
 		if (pwHtml) {
 			return {
 				text: pwHtml,

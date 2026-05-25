@@ -92,6 +92,7 @@ export function storeContent(
 	},
 ) {
 	const key = normalizeCacheKey(url);
+	pruneExpiredSessionEntries();
 	// Enforce max size with simple LRU (delete oldest)
 	while (sessionStore.size >= MAX_SESSION_CACHE_ENTRIES) {
 		const first = sessionStore.keys().next().value;
@@ -135,13 +136,16 @@ export function parseFrontmatterUrl(raw: string): string | null {
 
 // ─── Session cache cleanup ─────────────────────────────────────────
 
-export function cleanupSessionCache(): void {
-	const now = Date.now();
+function pruneExpiredSessionEntries(now = Date.now()): void {
 	for (const [url, entry] of sessionStore) {
 		if (now - entry.timestamp > SESSION_CACHE_TTL_MS) {
 			sessionStore.delete(url);
 		}
 	}
+}
+
+export function cleanupSessionCache(): void {
+	pruneExpiredSessionEntries();
 }
 
 // ─── Disk persistence (content cache) ──────────────────────────────

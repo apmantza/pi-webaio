@@ -221,7 +221,11 @@ export function registerWebpullTool(pi: ExtensionAPI): void {
 			await runPullFromQueue(queue, concurrency, async (pageUrl: string) => {
 				if (signal?.aborted) return;
 
-				const urlOpts = { ...fetchOpts };
+				const urlOpts: FetchOpts = {
+					...fetchOpts,
+					...(browserPool ? { browserPool } : {}),
+				};
+
 				if (router) {
 					const match = router.match(pageUrl);
 					if (match) {

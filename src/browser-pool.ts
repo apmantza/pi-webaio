@@ -65,6 +65,7 @@ export class BrowserPool {
 	private totalLaunched = 0;
 	private totalCrashes = 0;
 	private _closed = false;
+	private waiters: Array<() => void> = [];
 
 	constructor(options: BrowserPoolOptions = {}) {
 		this.options = { ...DEFAULTS, ...options };
@@ -95,7 +96,7 @@ export class BrowserPool {
 			return this.createPooledPage(pb);
 		}
 
-		// All browsers at capacity — wait for a release by polling
+		// All browsers are recycling/capped — wait for a release or launch.
 		return this.waitForAvailable();
 	}
 
@@ -104,8 +105,10 @@ export class BrowserPool {
 	 */
 	async drain(): Promise<void> {
 		this._closed = true;
+		this.notifyWaiters();
 		const closePromises = this.browsers.map(async (pb) => {
 			pb.closed = true;
+
 			try {
 				await pb.browser.close();
 			} catch {
@@ -208,6 +211,7 @@ export class BrowserPool {
 			closed: false,
 		};
 		this.browsers.push(pb);
+		this.notifyWaiters();
 		return pb;
 	}
 
@@ -224,9 +228,11 @@ export class BrowserPool {
 			released = true;
 			pb.pagesInUse.delete(page);
 			page.close().catch(() => {});
+			this.notifyWaiters();
 		};
 
 		// Detect crashes: if the page (or its browser) dies, auto-release
+
 		page.on("crash", () => {
 			this.totalCrashes++;
 			release();
@@ -240,15 +246,22 @@ export class BrowserPool {
 	}
 
 	private async waitForAvailable(): Promise<PooledPage> {
-		// Poll every 500ms until a page is free or a browser is available
 		while (!this._closed) {
 			const available = this.findAvailableBrowser();
 			if (available) {
 				return this.createPooledPage(available);
 			}
-			await sleep(500);
+			await new Promise<void>((resolve) => {
+				this.waiters.push(resolve);
+			});
 		}
 		throw new Error("BrowserPool closed while waiting for page");
+	}
+
+	private notifyWaiters(): void {
+		const waiters = this.waiters;
+		this.waiters = [];
+		for (const wake of waiters) wake();
 	}
 
 	private async recycleBrowser(pb: PoolBrowser): Promise<void> {
@@ -269,10 +282,4 @@ export class BrowserPool {
 			this.launchBrowser().catch(() => {});
 		}
 	}
-}
-
-// ─── Helper ──────────────────────────────────────────────────────────
-
-function sleep(ms: number): Promise<void> {
-	return new Promise((resolve) => setTimeout(resolve, ms));
 }

@@ -69,8 +69,10 @@ test("pdf-parse extracts text from dummy PDF", {
 	const buf = Buffer.from(await res.arrayBuffer());
 	assert.ok(buf.length > 0);
 
-	const { PDFParse } = await import("pdf-parse");
+	const { loadPdfParseCtor } = await import("../src/types.ts");
+	const PDFParse = await loadPdfParseCtor();
 	const parser = new PDFParse({ data: new Uint8Array(buf) });
+
 	await parser.load();
 	const data = await parser.getText();
 	assert.ok(data.text.includes("Dummy PDF file"));

@@ -13,7 +13,49 @@ export type PdfParseCtor = new (opts: {
 	getText: () => Promise<{ text: string; total: number }>;
 };
 
+function ensurePdfDomPolyfills(): void {
+	const g = globalThis as Record<string, unknown>;
+	if (typeof g.DOMMatrix === "undefined") {
+		g.DOMMatrix = class DOMMatrix {
+			constructor(_init?: unknown) {}
+			multiplySelf() {
+				return this;
+			}
+			preMultiplySelf() {
+				return this;
+			}
+			translateSelf() {
+				return this;
+			}
+			scaleSelf() {
+				return this;
+			}
+			rotateSelf() {
+				return this;
+			}
+		};
+	}
+	if (typeof g.ImageData === "undefined") {
+		g.ImageData = class ImageData {
+			data?: unknown;
+			width?: number;
+			height?: number;
+			constructor(data?: unknown, width?: number, height?: number) {
+				this.data = data;
+				this.width = width;
+				this.height = height;
+			}
+		};
+	}
+	if (typeof g.Path2D === "undefined") {
+		g.Path2D = class Path2D {
+			constructor(_path?: unknown) {}
+		};
+	}
+}
+
 export async function loadPdfParseCtor(): Promise<PdfParseCtor> {
+	ensurePdfDomPolyfills();
 	const mod = (await import("pdf-parse")) as unknown as {
 		PDFParse?: PdfParseCtor;
 		default?: PdfParseCtor;
@@ -77,6 +119,9 @@ export interface FetchOpts {
 	interactive?: boolean;
 	pruneTokens?: number;
 	adaptive?: boolean;
+	browserPool?: {
+		acquirePage: () => Promise<{ page: any; release: () => void }>;
+	};
 }
 
 export interface StoredContent {

@@ -54,9 +54,24 @@ export interface ChromeStatus {
 	ready: boolean;
 }
 
+function collectProcessOutput(proc: ReturnType<typeof spawn>): {
+	stdout: () => string;
+	stderr: () => string;
+	combined: () => string;
+} {
+	const stdoutChunks: Buffer[] = [];
+	const stderrChunks: Buffer[] = [];
+	proc.stdout?.on("data", (d: Buffer) => stdoutChunks.push(d));
+	proc.stderr?.on("data", (d: Buffer) => stderrChunks.push(d));
+	const stdout = () => Buffer.concat(stdoutChunks).toString("utf8");
+	const stderr = () => Buffer.concat(stderrChunks).toString("utf8");
+	return { stdout, stderr, combined: () => stdout() + stderr() };
+}
+
 // ─── Chrome management ───────────────────────────────────────────────
 
 /**
+
  * Ensure the CDP Chrome instance is running.
  * Spawns bin/launch.mjs which handles auto-launch, PID tracking, and idle cleanup.
  */
@@ -86,35 +101,29 @@ export function ensureChrome(headless = true): Promise<ChromeStatus> {
 			stdio: ["ignore", "pipe", "pipe"],
 			env: env as Record<string, string>,
 		});
-
-		let stdout = "";
-		let stderr = "";
-
-		proc.stdout.on("data", (d: Buffer) => {
-			stdout += d.toString();
-		});
-		proc.stderr.on("data", (d: Buffer) => {
-			stderr += d.toString();
-		});
+		const output = collectProcessOutput(proc);
 
 		const timer = setTimeout(() => {
 			proc.kill();
+
 			reject(new Error("Chrome launch timed out after 30s"));
 		}, 30000);
 
 		proc.on("close", (code: number) => {
 			clearTimeout(timer);
-			const output = stdout + stderr;
+			const combined = output.combined();
 
 			if (code === 0) {
 				// Parse status from output
-				const ready = output.includes("Ready");
+				const ready = combined.includes("Ready");
 				resolve({ running: true, ready });
-			} else if (output.includes("already running")) {
+			} else if (combined.includes("already running")) {
 				resolve({ running: true, ready: true });
 			} else {
 				reject(
-					new Error(`Chrome launch failed (exit ${code}): ${stderr || stdout}`),
+					new Error(
+						`Chrome launch failed (exit ${code}): ${output.stderr() || output.stdout()}`,
+					),
 				);
 			}
 		});
@@ -137,14 +146,13 @@ export function checkChromeRunning(): Promise<ChromeStatus> {
 			stdio: ["ignore", "pipe", "pipe"],
 		});
 
-		let stdout = "";
-		proc.stdout.on("data", (d: Buffer) => {
-			stdout += d.toString();
-		});
+		const output = collectProcessOutput(proc);
 
 		proc.on("close", (code: number) => {
+			const stdout = output.stdout();
 			if (code === 0 && stdout.includes("Running")) {
 				const pidMatch = stdout.match(/pid (\d+)/);
+
 				resolve({
 					running: true,
 					ready: true,
@@ -209,15 +217,7 @@ export function googleAISearch(
 			env: env as Record<string, string>,
 		});
 
-		let stdout = "";
-		let stderr = "";
-
-		proc.stdout.on("data", (d: Buffer) => {
-			stdout += d.toString();
-		});
-		proc.stderr.on("data", (d: Buffer) => {
-			stderr += d.toString();
-		});
+		const output = collectProcessOutput(proc);
 
 		const timer = setTimeout(() => {
 			proc.kill();
@@ -228,6 +228,8 @@ export function googleAISearch(
 
 		proc.on("close", (code: number) => {
 			clearTimeout(timer);
+			const stdout = output.stdout();
+			const stderr = output.stderr();
 
 			if (code !== 0) {
 				const errMsg =
@@ -295,15 +297,7 @@ export function googleSearch(
 			env: env as Record<string, string>,
 		});
 
-		let stdout = "";
-		let stderr = "";
-
-		proc.stdout.on("data", (d: Buffer) => {
-			stdout += d.toString();
-		});
-		proc.stderr.on("data", (d: Buffer) => {
-			stderr += d.toString();
-		});
+		const output = collectProcessOutput(proc);
 
 		const timer = setTimeout(() => {
 			proc.kill();
@@ -312,6 +306,8 @@ export function googleSearch(
 
 		proc.on("close", (code: number) => {
 			clearTimeout(timer);
+			const stdout = output.stdout();
+			const stderr = output.stderr();
 
 			if (code !== 0) {
 				const errMsg =
@@ -386,15 +382,7 @@ export function summarizeUrl(
 			env: env as Record<string, string>,
 		});
 
-		let stdout = "";
-		let stderr = "";
-
-		proc.stdout.on("data", (d: Buffer) => {
-			stdout += d.toString();
-		});
-		proc.stderr.on("data", (d: Buffer) => {
-			stderr += d.toString();
-		});
+		const output = collectProcessOutput(proc);
 
 		const timer = setTimeout(() => {
 			proc.kill();
@@ -403,6 +391,8 @@ export function summarizeUrl(
 
 		proc.on("close", (code: number) => {
 			clearTimeout(timer);
+			const stdout = output.stdout();
+			const stderr = output.stderr();
 
 			if (code !== 0) {
 				const errMsg =

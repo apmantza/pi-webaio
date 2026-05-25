@@ -869,7 +869,7 @@ export async function pullPageEnhanced(
 							}
 						}
 					}
-					const pwHtml = await fetchWithPlaywright(url);
+					const pwHtml = await fetchWithPlaywright(url, opts?.browserPool);
 					if (pwHtml) {
 						const pwResult = await pullPage(url, opts, _redirectCount, pwHtml);
 						if (pwResult.ok && pwResult.content) {
@@ -908,7 +908,7 @@ export async function pullPageEnhanced(
 	}
 
 	if (mode === "browser") {
-		const pwHtml = await fetchWithPlaywright(url);
+		const pwHtml = await fetchWithPlaywright(url, opts?.browserPool);
 		if (pwHtml) {
 			return pullPage(url, opts, _redirectCount, pwHtml);
 		}
