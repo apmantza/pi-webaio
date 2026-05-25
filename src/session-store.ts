@@ -2,7 +2,14 @@
 // Extracted from index.ts. In-memory caches for fetched content, search
 // results, and AI summaries, with background persistence to disk.
 
-import { mkdir, open, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import {
+	mkdir,
+	open,
+	readFile,
+	readdir,
+	stat,
+	writeFile,
+} from "node:fs/promises";
 
 import { readFileSync } from "node:fs";
 
@@ -203,12 +210,10 @@ export function loadContentCacheFromDisk(): void {
 		return entries;
 	}
 
-
 	setImmediate(() => {
 		scan(root).catch(() => {});
 	});
 }
-
 
 // ─── Search context (bridging) ─────────────────────────────────────
 

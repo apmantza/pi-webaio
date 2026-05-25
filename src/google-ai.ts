@@ -74,7 +74,6 @@ const googleChildWaiters: Array<() => void> = [];
 let chromeLaunchPromise: Promise<ChromeStatus> | null = null;
 
 async function acquireGoogleChildSlot(): Promise<() => void> {
-
 	if (activeGoogleChildProcesses >= MAX_GOOGLE_CHILD_PROCESSES) {
 		await new Promise<void>((resolve) => googleChildWaiters.push(resolve));
 	}
@@ -220,7 +219,6 @@ export async function checkChromeRunning(): Promise<ChromeStatus> {
 
 // ─── Google AI Search ────────────────────────────────────────────────
 
-
 /**
  * Run a Google AI search query via CDP.
  * Automatically ensures Chrome is running before executing.
@@ -312,7 +310,8 @@ export async function googleSearch(
 
 	if (result.code !== 0) {
 		throw new Error(
-			result.stderr.trim() || `google-search.mjs exited with code ${result.code}`,
+			result.stderr.trim() ||
+				`google-search.mjs exited with code ${result.code}`,
 		);
 	}
 
