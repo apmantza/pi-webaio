@@ -4,7 +4,7 @@
 // Covers: Stack Overflow, Super User, Server Fault, Ask Ubuntu,
 // MathOverflow, and all *.stackexchange.com sites.
 
-import type { VerticalResult } from "./types.js";
+import type { VerticalResult } from "./types.ts";
 
 /**
  * Map known Stack Exchange domain to API site parameter.

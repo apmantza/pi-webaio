@@ -1,26 +1,26 @@
 // ─── Vertical extractor registry ───────────────────────────────────
 // Pattern-matches URLs and routes to API-first extractors for known sites.
 
-import type { VerticalResult } from "./types.js";
-import { matchesNpm, extractNpm } from "./npm.js";
-import { matchesPyPI, extractPyPI } from "./pypi.js";
-import { matchesHackerNews, extractHackerNews } from "./hackernews.js";
-import { matchesReddit, extractReddit } from "./reddit.js";
-import { matchesArxiv, extractArxiv } from "./arxiv.js";
-import { matchesDocsSite, extractDocsSite } from "./docs-site.js";
-import { matchesYouTube, extractYouTube } from "./youtube.js";
-import { matchesWikipedia, extractWikipedia } from "./wikipedia.js";
-import { matchesStackExchange, extractStackExchange } from "./stackexchange.js";
-import { matchesOpenLibrary, extractOpenLibrary } from "./openlibrary.js";
-import { matchesDevTo, extractDevTo } from "./devto.js";
-import { matchesSonarCloud, extractSonarCloud } from "./sonarcloud.js";
-import { matchesCratesIo, extractCratesIo } from "./cratesio.js";
-import { matchesRubyGems, extractRubyGems } from "./rubygems.js";
-import { matchesPackagist, extractPackagist } from "./packagist.js";
-import { matchesPubDev, extractPubDev } from "./pubdev.js";
-import { matchesGoPackages, extractGoPackages } from "./gopackages.js";
-import { matchesNuGet, extractNuGet } from "./nuget.js";
-import { matchesGitLab, extractGitLab } from "./gitlab.js";
+import type { VerticalResult } from "./types.ts";
+import { matchesNpm, extractNpm } from "./npm.ts";
+import { matchesPyPI, extractPyPI } from "./pypi.ts";
+import { matchesHackerNews, extractHackerNews } from "./hackernews.ts";
+import { matchesReddit, extractReddit } from "./reddit.ts";
+import { matchesArxiv, extractArxiv } from "./arxiv.ts";
+import { matchesDocsSite, extractDocsSite } from "./docs-site.ts";
+import { matchesYouTube, extractYouTube } from "./youtube.ts";
+import { matchesWikipedia, extractWikipedia } from "./wikipedia.ts";
+import { matchesStackExchange, extractStackExchange } from "./stackexchange.ts";
+import { matchesOpenLibrary, extractOpenLibrary } from "./openlibrary.ts";
+import { matchesDevTo, extractDevTo } from "./devto.ts";
+import { matchesSonarCloud, extractSonarCloud } from "./sonarcloud.ts";
+import { matchesCratesIo, extractCratesIo } from "./cratesio.ts";
+import { matchesRubyGems, extractRubyGems } from "./rubygems.ts";
+import { matchesPackagist, extractPackagist } from "./packagist.ts";
+import { matchesPubDev, extractPubDev } from "./pubdev.ts";
+import { matchesGoPackages, extractGoPackages } from "./gopackages.ts";
+import { matchesNuGet, extractNuGet } from "./nuget.ts";
+import { matchesGitLab, extractGitLab } from "./gitlab.ts";
 
 export interface ExtractorMatch {
 	name: string;

@@ -2,7 +2,7 @@
 // Uses the NuGet Search API (v3).
 // No API key required. Returns package metadata, versions, and dependencies.
 
-import type { VerticalResult } from "./types.js";
+import type { VerticalResult } from "./types.ts";
 
 export function matchesNuGet(url: string): boolean {
 	return /^https?:\/\/www\.nuget\.org\/packages\/[^/]+/i.test(url);

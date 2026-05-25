@@ -42,9 +42,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Test layer rewritten** — Deleted 788-line `tests/lib.mjs` duplication file. Tests now import directly from production `src/` modules via test-only `helpers.mjs`. All 180 tests pass (144 unit + 31 features + 5 integration). Test scripts updated to use `npx tsx` for TypeScript import support.
+- **Internal imports use `.ts` extensions** — All 99 internal module imports in `src/` changed from `.js` to `.ts` for Node 24 native TypeScript compatibility.
+- **`tsconfig.json`** — Added `allowImportingTsExtensions: true`, enabled `strict: true`.
+
 ### Added
 
-- **Request queue with checkpoint/resume** (`src/request-queue.ts`) — Persistent disk-backed URL queue for `aio-webpull`. Tracks queued / in-progress / completed / failed states. Auto-saves every 5s. Max 3 retries per URL. Resumes mid-pull after crashes by scanning existing `.md` files for frontmatter URLs. New `resume` parameter (default: auto-detect). 298 lines, 7 unit tests.
+- **Full GitHub extraction pipeline** (`src/github-pipeline.ts`, 787 lines) — Complete replacement of the old inline GitHub code. `pullGitHub()` with `parseGitHubUrl`, `parseRawGitHubUrl`, `pullGitHubRef`, `pullGitHubFeature`, `githubApiFetch`, `fetchGitHubRaw`, `fetchGitHubTree`, `cloneGitHubRepo`, `buildRepoMarkdown`, `fetchGitHubRepo`. Architecture detection, feature page extraction (issues/PRs/actions/releases/security alerts). Uses `resolveBinary` for `gh`/`git` CLI fallback with `GITHUB_TOKEN` auth.
 - **Browser pool** (`src/browser-pool.ts`) — Reusable Playwright browser pool for same-domain pulls. Acquire/release lifecycle, auto-recycle after 50 navigations (memory leak defense), crash recovery with automatic replacement, configurable max browsers (default 2). Saves ~2-3s overhead per page vs. launch/close. Active when `mode` is `browser` or `auto`. 278 lines.
 - **Session router for multi-fetcher routing** (`src/session-router.ts`) — URL pattern → fetcher mode/extractor routing. Supports substring paths (`/api/`), glob patterns (`*/protected/*`), and regex patterns (`/^\\/api\\/v\\d+/`). Per-route overrides for mode, browser, OS, and extractor. First match wins. New `routes` parameter on `aio-webpull`. 177 lines, 11 unit tests.
 - **Adaptive content selector** (`src/adaptive-selector.ts`) — Structural DOM fingerprinting for element relocation. Captures tag path, depth, text density, link density, child tag signature, attribute patterns, and sibling position. Weighted similarity scoring (0-1) with configurable threshold (default 0.45). Survives CSS class and ID changes. New `adaptive` parameter on `aio-webpull`. 445 lines, 8 unit tests.
@@ -52,11 +58,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Complete codebase refactor** — `index.ts` reduced from 5,243 to 31 lines (99.4% reduction). All logic extracted into modular `src/` modules:
+  - **Shared infrastructure** extracted to 10 `src/` modules: `types.ts`, `security.ts`, `injection.ts`, `fetch.ts`, `session-store.ts`, `discovery.ts`, `search.ts`, `content.ts`, `fetch-jina.ts`, `github-pipeline.ts`
+  - **6 tool handlers** extracted to `src/tools/`: `webfetch.ts`, `webcontent.ts`, `webresult.ts`, `websearch.ts`, `webmap.ts`, `webpull.ts` with shared `utils.ts`
+  - **Zero behavioral changes** — all function signatures, parameters, and return types preserved exactly
 - **`aio-webpull` now uses `runPullFromQueue()`** — replaces `runInBatches()` with a queue-driven worker loop. Workers pull URLs from `RequestQueue` and mark them complete/failed with retry support. Supports checkpoint resume, browser pooling, and per-URL route resolution via `SessionRouter`. New parameters: `resume` (boolean), `routes` (Route[]), `adaptive` (boolean).
 - **`tsconfig.json` include expanded** — `src/**/*.ts` added to `include` array so new modules are picked up by the LSP.
 
 ### Fixed
 
+- **Multiple bug fixes for stability**:
+  - Duplicate `BOT_PROTECTION_MARKERS` removed — `index.ts` had a stale copy; `smartFetch` now routes through `detectBotBlock()` from `src/bot-detection.ts`.
+  - Storage race condition — Added `Mutex` (promise-chain serialization) to `src/storage.ts`, wrapping all 4 public functions.
+  - Vertical extractor if-chain — Replaced with `EXTRACTOR_REGISTRY` array dispatch. Old `ExtractorMatch` / `VERTICAL_EXTRACTORS` removed.
+  - BrowserPool polling — Replaced `while + sleep(500)` with event-based `_releaseWaiters` array.
+  - `matchesDocsSite()` false matches — `"docs."` prefix now requires full subdomain label, eliminating false matches on `undocs.example.com`.
+- **Strict mode type errors** (2) — Fixed `Record<string, string>` → `Record<string, string | undefined>` in `src/google-ai.ts` and added explicit parameter type in `src/verticals/youtube.ts`. Strict mode now enabled.
 - **Markdown frontmatter URL detection in queue resume** — `RequestQueue.resume()` now strips surrounding quotes from `url:` frontmatter values, matching the unquoted URLs stored in the queue.
 - **CodeQL #52 — incomplete multi-character sanitization in `stripTags`** (`src/verticals/wikipedia.ts`) — Replaced single-pass `.replace(/<[^>]*>/g, "")` with a do-while loop that runs until the string stabilizes, preventing crafted input like `<<script>script>` from re-forming a `<script>` tag after the first pass.
 

@@ -72,7 +72,7 @@ export function ensureChrome(headless = true): Promise<ChromeStatus> {
 			return;
 		}
 
-		const env: Record<string, string> = {
+		const env: Record<string, string | undefined> = {
 			...process.env,
 			GREEDY_SEARCH_HEADLESS: headless ? "1" : "0",
 			GREEDY_SEARCH_VISIBLE: headless ? undefined : "1",

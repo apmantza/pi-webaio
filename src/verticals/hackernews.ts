@@ -1,7 +1,7 @@
 // ─── Hacker News extractor ─────────────────────────────────────────
 // Uses the official Firebase API: https://github.com/HackerNews/API
 
-import type { VerticalResult } from "./types.js";
+import type { VerticalResult } from "./types.ts";
 
 export function matchesHackerNews(url: string): boolean {
 	return /^https?:\/\/news\.ycombinator\.com\/item\?id=\d+/i.test(url);

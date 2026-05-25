@@ -9,6 +9,7 @@
 
 import { readFile, writeFile, mkdir, readdir } from "node:fs/promises";
 import { join } from "node:path";
+import type { Dirent } from "node:fs";
 import { existsSync } from "node:fs";
 
 // ─── Types ───────────────────────────────────────────────────────────
@@ -291,7 +292,7 @@ async function scanMarkdownFiles(dir: string): Promise<string[]> {
 	let items: { name: string; isDirectory(): boolean; isFile(): boolean }[];
 	try {
 		const dirents = await readdir(dir, { withFileTypes: true });
-		items = dirents as any;
+		items = dirents as Dirent[];
 	} catch {
 		return results;
 	}

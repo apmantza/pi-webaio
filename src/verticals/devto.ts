@@ -3,7 +3,7 @@
 // No API key required for read-only access. Returns article content,
 // tags, reactions, and comments.
 
-import type { VerticalResult } from "./types.js";
+import type { VerticalResult } from "./types.ts";
 
 /**
  * Match DEV.to article URLs.

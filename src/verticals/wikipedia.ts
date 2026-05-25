@@ -2,7 +2,7 @@
 // Uses the MediaWiki REST API (action=parse + action=query).
 // No API key required. Works for all language editions.
 
-import type { VerticalResult } from "./types.js";
+import type { VerticalResult } from "./types.ts";
 
 /**
  * Match any Wikipedia article URL across all language editions.

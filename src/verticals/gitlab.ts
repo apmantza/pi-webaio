@@ -3,7 +3,7 @@
 // No API key required for public repos. Returns project metadata,
 // file content, or directory listings.
 
-import type { VerticalResult } from "./types.js";
+import type { VerticalResult } from "./types.ts";
 
 // ─── URL parsing ────────────────────────────────────────────────────
 

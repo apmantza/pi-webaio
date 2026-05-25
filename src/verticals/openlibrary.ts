@@ -2,7 +2,7 @@
 // Uses the Open Library REST API (openlibrary.org).
 // Free, no API key required. Provides structured book metadata.
 
-import type { VerticalResult } from "./types.js";
+import type { VerticalResult } from "./types.ts";
 
 /**
  * Match Open Library book/works URLs.

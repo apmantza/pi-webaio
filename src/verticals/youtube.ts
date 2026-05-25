@@ -2,7 +2,7 @@
 // Uses youtube-transcript-plus (Innertube API) for transcripts + metadata.
 // No API key required. Supports videos, shorts, and playlist URLs.
 
-import type { VerticalResult } from "./types.js";
+import type { VerticalResult } from "./types.ts";
 import {
 	fetchTranscript,
 	toPlainText,
@@ -141,7 +141,10 @@ export async function extractYouTube(
 			break;
 		case "segments":
 			transcriptText = segments
-				.map((s) => `[${formatDuration(s.offset)}] ${s.text}`)
+				.map(
+					(s: { offset: number; text: string }) =>
+						`[${formatDuration(s.offset)}] ${s.text}`,
+				)
 				.join("\n");
 			break;
 		default:

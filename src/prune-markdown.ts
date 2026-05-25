@@ -4,7 +4,7 @@
 // Inspired by Retio-pagemap's rule-based pruner but operating on
 // markdown text instead of HTML chunks.
 
-import { estimateTokens } from "./token-count.js";
+import { estimateTokens } from "./token-count.ts";
 
 /** Default target token budget. */
 const DEFAULT_PRUNE_TOKENS = 3000;

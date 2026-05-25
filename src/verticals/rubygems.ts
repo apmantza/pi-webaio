@@ -2,7 +2,7 @@
 // Uses the RubyGems.org public API.
 // No API key required. Returns gem metadata, dependencies, and links.
 
-import type { VerticalResult } from "./types.js";
+import type { VerticalResult } from "./types.ts";
 
 export function matchesRubyGems(url: string): boolean {
 	return /^https?:\/\/rubygems\.org\/gems\/[^/]+/i.test(url);

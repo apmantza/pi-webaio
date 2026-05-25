@@ -3,7 +3,7 @@
 // Docusaurus, GitBook, ReadTheDocs, MDN, VitePress, MkDocs.
 
 import { parseHTML } from "linkedom";
-import type { VerticalResult } from "./types.js";
+import type { VerticalResult } from "./types.ts";
 
 /** Check if a URL's hostname equals or ends with the given host (with dot). */
 function isHostMatch(url: string, host: string): boolean {

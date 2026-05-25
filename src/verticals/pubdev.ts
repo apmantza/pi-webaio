@@ -2,7 +2,7 @@
 // Uses the pub.dev public API for Dart/Flutter packages.
 // No API key required. Returns package metadata, versions, and dependencies.
 
-import type { VerticalResult } from "./types.js";
+import type { VerticalResult } from "./types.ts";
 
 export function matchesPubDev(url: string): boolean {
 	return /^https?:\/\/pub\.dev\/packages\/[^/]+/i.test(url);

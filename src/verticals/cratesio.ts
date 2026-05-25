@@ -2,7 +2,7 @@
 // Uses the crates.io public API.
 // No API key required. Returns crate metadata, versions, and dependencies.
 
-import type { VerticalResult } from "./types.js";
+import type { VerticalResult } from "./types.ts";
 
 export function matchesCratesIo(url: string): boolean {
 	return /^https?:\/\/crates\.io\/crates\/[^/]+/i.test(url);

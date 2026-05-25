@@ -1,6 +1,6 @@
 // ─── npm registry extractor ────────────────────────────────────────
 
-import type { VerticalResult } from "./types.js";
+import type { VerticalResult } from "./types.ts";
 
 export function matchesNpm(url: string): boolean {
 	return /^https?:\/\/www\.npmjs\.com\/package\/[^/]+/i.test(url);

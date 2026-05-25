@@ -1,6 +1,6 @@
 // ─── PyPI extractor ────────────────────────────────────────────────
 
-import type { VerticalResult } from "./types.js";
+import type { VerticalResult } from "./types.ts";
 
 export function matchesPyPI(url: string): boolean {
 	return /^https?:\/\/pypi\.org\/project\/[^/]+/i.test(url);

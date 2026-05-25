@@ -2,7 +2,7 @@
 // Uses the Packagist public API for PHP packages.
 // No API key required. Returns package metadata, versions, and dependencies.
 
-import type { VerticalResult } from "./types.js";
+import type { VerticalResult } from "./types.ts";
 
 export function matchesPackagist(url: string): boolean {
 	return /^https?:\/\/packagist\.org\/packages\/[^/]+\/[^/]+/i.test(url);

@@ -3,7 +3,7 @@
 // No API key required for publicly accessible projects.
 // Covers security_hotspots, issues, overview, and activity pages.
 
-import type { VerticalResult } from "./types.js";
+import type { VerticalResult } from "./types.ts";
 
 /**
  * Match SonarCloud project URLs.

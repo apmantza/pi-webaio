@@ -57,11 +57,14 @@ function extractName(el: Element): { name: string; source: string } {
 
 	// For inputs, prefer placeholder over text content
 	const tag = el.tagName.toLowerCase();
-	if (tag === "input") {
+	if (tag === "input" || tag === "textarea") {
 		const placeholder = el.getAttribute("placeholder")?.trim();
 		if (placeholder) return { name: placeholder, source: "placeholder" };
 		const value =
-			(el as any).value?.trim?.() || el.getAttribute("value")?.trim();
+			tag === "input"
+				? (el as HTMLInputElement).value?.trim()
+				: (el as HTMLTextAreaElement).value?.trim() ||
+					el.getAttribute("value")?.trim();
 		if (value) return { name: value, source: "value" };
 	}
 
@@ -230,7 +233,10 @@ export function extractInteractables(html: string): InteractableElement[] {
 		const tag = el.tagName.toLowerCase();
 		if (tag === "input" || tag === "textarea") {
 			const val =
-				(el as any).value?.trim?.() || el.getAttribute("value")?.trim();
+				tag === "input"
+					? (el as HTMLInputElement).value?.trim()
+					: (el as HTMLTextAreaElement).value?.trim() ||
+						el.getAttribute("value")?.trim();
 			if (val) entry.value = val;
 		}
 

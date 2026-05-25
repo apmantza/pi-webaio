@@ -3,7 +3,7 @@
 // Returns structured errors for blocked/rate-limited posts instead of
 // bypassing anti-bot controls.
 
-import type { VerticalResult } from "./types.js";
+import type { VerticalResult } from "./types.ts";
 
 export function matchesReddit(url: string): boolean {
 	return /^https?:\/\/(www\.)?reddit\.com\/r\/[^/]+\/comments\/[^/]+/i.test(

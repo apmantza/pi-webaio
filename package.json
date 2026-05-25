@@ -50,10 +50,10 @@
     "tsconfig.json"
   ],
   "scripts": {
-    "test": "node tests/unit.test.mjs",
-    "test:integration": "node tests/integration.test.mjs",
-    "test:all": "node tests/unit.test.mjs && node tests/new-features.test.mjs && node tests/integration.test.mjs",
-    "test:new": "node tests/new-features.test.mjs"
+    "test": "npx tsx tests/unit.test.mjs",
+    "test:integration": "npx tsx tests/integration.test.mjs",
+    "test:all": "npx tsx tests/unit.test.mjs && npx tsx tests/new-features.test.mjs && npx tsx tests/integration.test.mjs",
+    "test:new": "npx tsx tests/new-features.test.mjs"
   },
   "dependencies": {
     "@mozilla/readability": "^0.6.0",

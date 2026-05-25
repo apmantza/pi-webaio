@@ -1,7 +1,7 @@
 // ─── arXiv extractor ───────────────────────────────────────────────
 // Uses the Atom export feed API.
 
-import type { VerticalResult } from "./types.js";
+import type { VerticalResult } from "./types.ts";
 
 export function matchesArxiv(url: string): boolean {
 	return (

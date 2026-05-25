@@ -2,7 +2,7 @@
 // Uses the Go module proxy (proxy.golang.org) for metadata.
 // No API key required. Returns module info, versions, and origin details.
 
-import type { VerticalResult } from "./types.js";
+import type { VerticalResult } from "./types.ts";
 
 export function matchesGoPackages(url: string): boolean {
 	return /^https?:\/\/pkg\.go\.dev\/[^/]+/i.test(url);
