@@ -2,15 +2,10 @@
 // Extracted from index.ts. In-memory caches for fetched content, search
 // results, and AI summaries, with background persistence to disk.
 
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import {
-	readFileSync,
-	readdirSync,
-	statSync,
-	openSync,
-	readSync,
-	closeSync,
-} from "node:fs";
+import { mkdir, open, readFile, readdir, stat, writeFile } from "node:fs/promises";
+
+import { readFileSync } from "node:fs";
+
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { StoredContent, SearchResult } from "./types.ts";
@@ -153,54 +148,67 @@ export function cleanupSessionCache(): void {
 export function loadContentCacheFromDisk(): void {
 	const root = BASE_TEMP;
 
-	function scan(dir: string): number {
+	async function readFrontmatterHead(path: string): Promise<string | null> {
+		let handle: Awaited<ReturnType<typeof open>> | null = null;
+		try {
+			handle = await open(path, "r");
+			const buf = Buffer.alloc(512);
+			const { bytesRead } = await handle.read(buf, 0, buf.length, 0);
+			return buf.toString("utf8", 0, bytesRead);
+		} catch {
+			return null;
+		} finally {
+			await handle?.close().catch(() => {});
+		}
+	}
+
+	async function scan(dir: string): Promise<number> {
 		let items: string[];
 		try {
-			items = readdirSync(dir);
+			items = await readdir(dir, { encoding: "utf8" });
 		} catch {
 			return 0;
 		}
+
 		let entries = 0;
 		for (const name of items) {
 			const full = join(dir, name);
+			let st: Awaited<ReturnType<typeof stat>>;
 			try {
-				const st = statSync(full);
-				if (st.isDirectory()) {
-					entries += scan(full);
-				} else if (name.endsWith(".md")) {
-					const fd = openSync(full, "r");
-					try {
-						const buf = Buffer.alloc(512);
-						const bytesRead = readSync(fd, buf, 0, 512, 0);
-						const head = buf.toString("utf8", 0, bytesRead);
-						const fmUrl = parseFrontmatterUrl(head);
-						if (fmUrl) {
-							const key = normalizeCacheKey(fmUrl);
-							if (!sessionStore.has(key)) {
-								sessionStore.set(key, {
-									url: fmUrl,
-									content: "",
-									filePath: full,
-									timestamp: Date.now(),
-								});
-								entries++;
-							}
-						}
-					} finally {
-						closeSync(fd);
-					}
-				}
+				st = await stat(full);
 			} catch {
-				// skip files we can't read
+				continue;
+			}
+
+			if (st.isDirectory()) {
+				entries += await scan(full);
+			} else if (st.isFile() && name.endsWith(".md")) {
+				const head = await readFrontmatterHead(full);
+				if (!head) continue;
+				const fmUrl = parseFrontmatterUrl(head);
+				if (!fmUrl) continue;
+
+				const key = normalizeCacheKey(fmUrl);
+				if (!sessionStore.has(key)) {
+					sessionStore.set(key, {
+						url: fmUrl,
+						content: "",
+						filePath: full,
+						timestamp: Date.now(),
+					});
+					entries++;
+				}
 			}
 		}
 		return entries;
 	}
 
+
 	setImmediate(() => {
-		scan(root);
+		scan(root).catch(() => {});
 	});
 }
+
 
 // ─── Search context (bridging) ─────────────────────────────────────
 

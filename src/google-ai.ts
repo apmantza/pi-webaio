@@ -68,23 +68,97 @@ function collectProcessOutput(proc: ReturnType<typeof spawn>): {
 	return { stdout, stderr, combined: () => stdout() + stderr() };
 }
 
+const MAX_GOOGLE_CHILD_PROCESSES = 2;
+let activeGoogleChildProcesses = 0;
+const googleChildWaiters: Array<() => void> = [];
+let chromeLaunchPromise: Promise<ChromeStatus> | null = null;
+
+async function acquireGoogleChildSlot(): Promise<() => void> {
+
+	if (activeGoogleChildProcesses >= MAX_GOOGLE_CHILD_PROCESSES) {
+		await new Promise<void>((resolve) => googleChildWaiters.push(resolve));
+	}
+	activeGoogleChildProcesses++;
+	let released = false;
+	return () => {
+		if (released) return;
+		released = true;
+		activeGoogleChildProcesses--;
+		googleChildWaiters.shift()?.();
+	};
+}
+
+async function runNodeChild(
+	args: string[],
+	options: {
+		env?: Record<string, string>;
+		timeoutMs?: number;
+		timeoutMessage?: string;
+	} = {},
+): Promise<{ code: number; stdout: string; stderr: string; combined: string }> {
+	const release = await acquireGoogleChildSlot();
+	return new Promise((resolve, reject) => {
+		const proc = spawn(process.execPath, args, {
+			stdio: ["ignore", "pipe", "pipe"],
+			...(options.env ? { env: options.env } : {}),
+		});
+		const output = collectProcessOutput(proc);
+		let settled = false;
+		let timer: ReturnType<typeof setTimeout> | null = null;
+
+		function finish(fn: () => void): void {
+			if (settled) return;
+			settled = true;
+			if (timer) clearTimeout(timer);
+			release();
+			fn();
+		}
+
+		if (options.timeoutMs) {
+			timer = setTimeout(() => {
+				proc.kill();
+				finish(() =>
+					reject(
+						new Error(
+							options.timeoutMessage ??
+								`Child process timed out after ${options.timeoutMs! / 1000}s`,
+						),
+					),
+				);
+			}, options.timeoutMs);
+		}
+
+		proc.on("close", (code) => {
+			const stdout = output.stdout();
+			const stderr = output.stderr();
+			finish(() =>
+				resolve({
+					code: code ?? -1,
+					stdout,
+					stderr,
+					combined: stdout + stderr,
+				}),
+			);
+		});
+		proc.on("error", (err) => finish(() => reject(err)));
+	});
+}
+
 // ─── Chrome management ───────────────────────────────────────────────
 
 /**
-
  * Ensure the CDP Chrome instance is running.
  * Spawns bin/launch.mjs which handles auto-launch, PID tracking, and idle cleanup.
  */
-export function ensureChrome(headless = true): Promise<ChromeStatus> {
-	return new Promise((resolve, reject) => {
+export async function ensureChrome(headless = true): Promise<ChromeStatus> {
+	if (chromeLaunchPromise) return chromeLaunchPromise;
+
+	chromeLaunchPromise = (async () => {
 		const launchBin = resolvePath("bin", "launch.mjs");
 		if (!existsSync(launchBin)) {
-			reject(
-				new Error(
-					"Chrome CDP launcher not found (bin/launch.mjs is missing). AI summarization and Google search are unavailable without the CDP infrastructure.",
-				),
+			throw new Error(
+				"Chrome CDP launcher not found (bin/launch.mjs is missing). AI summarization and Google search are unavailable without the CDP infrastructure.",
 			);
-			return;
 		}
 
 		const env: Record<string, string | undefined> = {
@@ -92,90 +166,66 @@ export function ensureChrome(headless = true): Promise<ChromeStatus> {
 			GREEDY_SEARCH_HEADLESS: headless ? "1" : "0",
 			GREEDY_SEARCH_VISIBLE: headless ? undefined : "1",
 		};
-		// Remove undefined values
 		Object.keys(env).forEach((k) => {
 			if (env[k] === undefined) delete env[k];
 		});
 
-		const proc = spawn(process.execPath, [launchBin], {
-			stdio: ["ignore", "pipe", "pipe"],
+		const result = await runNodeChild([launchBin], {
 			env: env as Record<string, string>,
-		});
-		const output = collectProcessOutput(proc);
-
-		const timer = setTimeout(() => {
-			proc.kill();
-
-			reject(new Error("Chrome launch timed out after 30s"));
-		}, 30000);
-
-		proc.on("close", (code: number) => {
-			clearTimeout(timer);
-			const combined = output.combined();
-
-			if (code === 0) {
-				// Parse status from output
-				const ready = combined.includes("Ready");
-				resolve({ running: true, ready });
-			} else if (combined.includes("already running")) {
-				resolve({ running: true, ready: true });
-			} else {
-				reject(
-					new Error(
-						`Chrome launch failed (exit ${code}): ${output.stderr() || output.stdout()}`,
-					),
-				);
-			}
+			timeoutMs: 30000,
+			timeoutMessage: "Chrome launch timed out after 30s",
 		});
 
-		proc.on("error", (err) => {
-			clearTimeout(timer);
-			reject(err);
-		});
-	});
+		if (result.code === 0) {
+			return { running: true, ready: result.combined.includes("Ready") };
+		}
+		if (result.combined.includes("already running")) {
+			return { running: true, ready: true };
+		}
+		throw new Error(
+			`Chrome launch failed (exit ${result.code}): ${result.stderr || result.stdout}`,
+		);
+	})();
+
+	try {
+		return await chromeLaunchPromise;
+	} finally {
+		chromeLaunchPromise = null;
+	}
 }
 
 /**
  * Check if Chrome CDP is available without launching it.
  */
-export function checkChromeRunning(): Promise<ChromeStatus> {
-	return new Promise((resolve) => {
-		const launchBin = resolvePath("bin", "launch.mjs");
-
-		const proc = spawn(process.execPath, [launchBin, "--status"], {
-			stdio: ["ignore", "pipe", "pipe"],
+export async function checkChromeRunning(): Promise<ChromeStatus> {
+	const launchBin = resolvePath("bin", "launch.mjs");
+	try {
+		const result = await runNodeChild([launchBin, "--status"], {
+			timeoutMs: 10000,
+			timeoutMessage: "Chrome status check timed out after 10s",
 		});
-
-		const output = collectProcessOutput(proc);
-
-		proc.on("close", (code: number) => {
-			const stdout = output.stdout();
-			if (code === 0 && stdout.includes("Running")) {
-				const pidMatch = stdout.match(/pid (\d+)/);
-
-				resolve({
-					running: true,
-					ready: true,
-					pid: pidMatch ? Number.parseInt(pidMatch[1], 10) : undefined,
-				});
-			} else {
-				resolve({ running: false, ready: false });
-			}
-		});
-
-		proc.on("error", () => {
-			resolve({ running: false, ready: false });
-		});
-	});
+		if (result.code === 0 && result.stdout.includes("Running")) {
+			const pidMatch = result.stdout.match(/pid (\d+)/);
+			return {
+				running: true,
+				ready: true,
+				pid: pidMatch ? Number.parseInt(pidMatch[1], 10) : undefined,
+			};
+		}
+	} catch {
+		// status checks should never throw to callers
+	}
+	return { running: false, ready: false };
 }
 
 // ─── Google AI Search ────────────────────────────────────────────────
+
 
 /**
  * Run a Google AI search query via CDP.
  * Automatically ensures Chrome is running before executing.
  */
-export function googleAISearch(
+export async function googleAISearch(
 	query: string,
 	options: {
 		short?: boolean;
@@ -185,82 +235,51 @@ export function googleAISearch(
 	} = {},
 ): Promise<GoogleAIResult> {
 	const { short = false, headless = true, locale, timeoutMs = 60000 } = options;
+	const extractorBin = resolvePath("extractors", "google-ai.mjs");
 
-	return new Promise((resolve, reject) => {
-		const extractorBin = resolvePath("extractors", "google-ai.mjs");
+	if (!existsSync(extractorBin)) {
+		throw new Error(
+			"Google AI extractor not found (extractors/google-ai.mjs is missing). AI summarization unavailable without this file.",
+		);
+	}
 
-		if (!existsSync(extractorBin)) {
-			reject(
-				new Error(
-					"Google AI extractor not found (extractors/google-ai.mjs is missing). AI summarization unavailable without this file.",
-				),
-			);
-			return;
-		}
+	const args: string[] = [extractorBin, query];
+	if (short) args.push("--short");
+	if (locale) args.push("--locale", locale);
 
-		const args: string[] = [extractorBin, query];
-		if (short) args.push("--short");
-		if (locale) args.push("--locale", locale);
-
-		// Set CDP_PROFILE_DIR so cdp.mjs targets the GreedySearch Chrome profile.
-		// constants.mjs uses tmpdir(), so we set it to match what launch.mjs uses.
-		const greedyProfileDir = `${tmpdir().replace(/\\/g, "/")}/greedysearch-chrome-profile`;
-
-		const env: Record<string, string> = {
+	const greedyProfileDir = `${tmpdir().replace(/\\/g, "/")}/greedysearch-chrome-profile`;
+	const result = await runNodeChild(args, {
+		env: {
 			...process.env,
 			CDP_PROFILE_DIR: greedyProfileDir,
 			GREEDY_SEARCH_HEADLESS: headless ? "1" : "0",
-		};
-
-		const proc = spawn(process.execPath, args, {
-			stdio: ["ignore", "pipe", "pipe"],
-			env: env as Record<string, string>,
-		});
-
-		const output = collectProcessOutput(proc);
-
-		const timer = setTimeout(() => {
-			proc.kill();
-			reject(
-				new Error(`Google AI search timed out after ${timeoutMs / 1000}s`),
-			);
-		}, timeoutMs);
-
-		proc.on("close", (code: number) => {
-			clearTimeout(timer);
-			const stdout = output.stdout();
-			const stderr = output.stderr();
-
-			if (code !== 0) {
-				const errMsg =
-					stderr.trim() || `google-ai.mjs exited with code ${code}`;
-				reject(new Error(errMsg));
-				return;
-			}
-
-			try {
-				const result = JSON.parse(stdout.trim()) as GoogleAIResult;
-				resolve(result);
-			} catch {
-				reject(
-					new Error(`Invalid JSON from google-ai.mjs: ${stdout.slice(0, 200)}`),
-				);
-			}
-		});
-
-		proc.on("error", (err) => {
-			clearTimeout(timer);
-			reject(err);
-		});
+		} as Record<string, string>,
+		timeoutMs,
+		timeoutMessage: `Google AI search timed out after ${timeoutMs / 1000}s`,
 	});
+
+	if (result.code !== 0) {
+		throw new Error(
+			result.stderr.trim() || `google-ai.mjs exited with code ${result.code}`,
+		);
+	}
+
+	try {
+		return JSON.parse(result.stdout.trim()) as GoogleAIResult;
+	} catch {
+		throw new Error(
+			`Invalid JSON from google-ai.mjs: ${result.stdout.slice(0, 200)}`,
+		);
+	}
 }
 
 /**
  * Run a plain Google search via CDP (traditional 10 blue links).
  * Locale-agnostic — uses textarea[name="q"] which works across all Google locales.
+
  * Complements DDG/Brave as a third search engine.
  */
-export function googleSearch(
+export async function googleSearch(
 	query: string,
 	options: {
 		headless?: boolean;
@@ -269,153 +288,97 @@ export function googleSearch(
 	} = {},
 ): Promise<GoogleSearchOutput> {
 	const { headless = true, timeoutMs = 45000, maxResults = 10 } = options;
+	const extractorBin = resolvePath("extractors", "google-search.mjs");
 
-	return new Promise((resolve, reject) => {
-		const extractorBin = resolvePath("extractors", "google-search.mjs");
+	if (!existsSync(extractorBin)) {
+		throw new Error(
+			"Google search extractor not found (extractors/google-search.mjs is missing). Google search unavailable without this file.",
+		);
+	}
 
-		if (!existsSync(extractorBin)) {
-			reject(
-				new Error(
-					"Google search extractor not found (extractors/google-search.mjs is missing). Google search unavailable without this file.",
-				),
-			);
-			return;
-		}
+	const greedyProfileDir = `${tmpdir().replace(/\\/g, "/")}/greedysearch-chrome-profile`;
+	const result = await runNodeChild(
+		[extractorBin, query, "--max", String(maxResults)],
+		{
+			env: {
+				...process.env,
+				CDP_PROFILE_DIR: greedyProfileDir,
+				GREEDY_SEARCH_HEADLESS: headless ? "1" : "0",
+			} as Record<string, string>,
+			timeoutMs,
+			timeoutMessage: `Google search timed out after ${timeoutMs / 1000}s`,
+		},
+	);
 
-		const greedyProfileDir = `${tmpdir().replace(/\\/g, "/")}/greedysearch-chrome-profile`;
+	if (result.code !== 0) {
+		throw new Error(
+			result.stderr.trim() || `google-search.mjs exited with code ${result.code}`,
+		);
+	}
 
-		const args: string[] = [extractorBin, query, "--max", String(maxResults)];
-
-		const env: Record<string, string> = {
-			...process.env,
-			CDP_PROFILE_DIR: greedyProfileDir,
-			GREEDY_SEARCH_HEADLESS: headless ? "1" : "0",
-		};
-
-		const proc = spawn(process.execPath, args, {
-			stdio: ["ignore", "pipe", "pipe"],
-			env: env as Record<string, string>,
-		});
-
-		const output = collectProcessOutput(proc);
-
-		const timer = setTimeout(() => {
-			proc.kill();
-			reject(new Error(`Google search timed out after ${timeoutMs / 1000}s`));
-		}, timeoutMs);
-
-		proc.on("close", (code: number) => {
-			clearTimeout(timer);
-			const stdout = output.stdout();
-			const stderr = output.stderr();
-
-			if (code !== 0) {
-				const errMsg =
-					stderr.trim() || `google-search.mjs exited with code ${code}`;
-				reject(new Error(errMsg));
-				return;
-			}
-
-			try {
-				const result = JSON.parse(stdout.trim()) as GoogleSearchOutput;
-				resolve(result);
-			} catch {
-				reject(
-					new Error(
-						`Invalid JSON from google-search.mjs: ${stdout.slice(0, 200)}`,
-					),
-				);
-			}
-		});
-
-		proc.on("error", (err) => {
-			clearTimeout(timer);
-			reject(err);
-		});
-	});
+	try {
+		return JSON.parse(result.stdout.trim()) as GoogleSearchOutput;
+	} catch {
+		throw new Error(
+			`Invalid JSON from google-search.mjs: ${result.stdout.slice(0, 200)}`,
+		);
+	}
 }
 
 /**
  * Summarize a URL's content using Google AI Mode via CDP.
  * Passes the URL directly to Google AI (udm=50) — no need to fetch first.
+
  * Used by webfetch to replace the 1800-char truncation with an AI summary.
  */
-export function summarizeUrl(
+export async function summarizeUrl(
 	url: string,
 	options: {
 		headless?: boolean;
 		timeoutMs?: number;
 		/** The original search query that led to this URL — included for focused summarization */
+
 		context?: string;
 	} = {},
 ): Promise<string> {
 	const { headless = true, timeoutMs = 15000, context } = options;
+	const extractorBin = resolvePath("extractors", "google-ai.mjs");
 
-	return new Promise((resolve, reject) => {
-		const extractorBin = resolvePath("extractors", "google-ai.mjs");
+	if (!existsSync(extractorBin)) {
+		throw new Error(
+			"Google AI extractor not found (extractors/google-ai.mjs is missing). AI summarization unavailable.",
+		);
+	}
 
-		if (!existsSync(extractorBin)) {
-			reject(
-				new Error(
-					"Google AI extractor not found (extractors/google-ai.mjs is missing). AI summarization unavailable.",
-				),
-			);
-			return;
-		}
+	const query = context
+		? `The user searched for: "${context}". Give a concise summary of this page focusing on the user's search topic (use bullet points, ~500 tokens max): ${url}`
+		: `Give a concise summary (~500 tokens max, use bullet points) of this page: ${url}`;
 
-		const prompt = context
-			? `The user searched for: "${context}". Give a concise summary of this page focusing on the user's search topic (use bullet points, ~500 tokens max): ${url}`
-			: `Give a concise summary (~500 tokens max, use bullet points) of this page: ${url}`;
-
-		const query = prompt;
-
-		const greedyProfileDir = `${tmpdir().replace(/\\/g, "/")}/greedysearch-chrome-profile`;
-
-		const env: Record<string, string> = {
+	const greedyProfileDir = `${tmpdir().replace(/\\/g, "/")}/greedysearch-chrome-profile`;
+	const result = await runNodeChild([extractorBin, query], {
+		env: {
 			...process.env,
 			CDP_PROFILE_DIR: greedyProfileDir,
 			GREEDY_SEARCH_HEADLESS: headless ? "1" : "0",
-		};
-
-		const proc = spawn(process.execPath, [extractorBin, query], {
-			stdio: ["ignore", "pipe", "pipe"],
-			env: env as Record<string, string>,
-		});
-
-		const output = collectProcessOutput(proc);
-
-		const timer = setTimeout(() => {
-			proc.kill();
-			reject(new Error(`Summarization timed out after ${timeoutMs / 1000}s`));
-		}, timeoutMs);
-
-		proc.on("close", (code: number) => {
-			clearTimeout(timer);
-			const stdout = output.stdout();
-			const stderr = output.stderr();
-
-			if (code !== 0) {
-				const errMsg =
-					stderr.trim() || `google-ai.mjs exited with code ${code}`;
-				reject(new Error(errMsg));
-				return;
-			}
-
-			try {
-				const result = JSON.parse(stdout.trim()) as { answer: string };
-				resolve(result.answer || "");
-			} catch {
-				reject(
-					new Error(`Invalid JSON from google-ai.mjs: ${stdout.slice(0, 200)}`),
-				);
-			}
-		});
-
-		proc.on("error", (err) => {
-			clearTimeout(timer);
-			reject(err);
-		});
+		} as Record<string, string>,
+		timeoutMs,
+		timeoutMessage: `Summarization timed out after ${timeoutMs / 1000}s`,
 	});
+
+	if (result.code !== 0) {
+		throw new Error(
+			result.stderr.trim() || `google-ai.mjs exited with code ${result.code}`,
+		);
+	}
+
+	try {
+		const parsed = JSON.parse(result.stdout.trim()) as { answer: string };
+		return parsed.answer || "";
+	} catch {
+		throw new Error(
+			`Invalid JSON from google-ai.mjs: ${result.stdout.slice(0, 200)}`,
+		);
+	}
 }
 
 /**
