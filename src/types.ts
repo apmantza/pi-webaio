@@ -1,14 +1,27 @@
 // ─── Shared types ───────────────────────────────────────────────────
 // Extracted from index.ts for use across all pi-webaio modules.
 
-import { createRequire } from "node:module";
+// ─── pdf-parse lazy loading ───────────────────────────────────────
+// Importing pdf-parse at module load can throw when optional native canvas
+// bindings are omitted (for example in CI with npm --omit=optional). Keep the
+// extension importable for non-PDF pages and only load pdf-parse for PDF input.
 
-// ─── pdf-parse loose typing (CJS, no bundled .d.ts) ────────────────
+export type PdfParseCtor = new (opts: {
+	data: Uint8Array;
+}) => {
+	load: () => Promise<void>;
+	getText: () => Promise<{ text: string; total: number }>;
+};
 
-const nodeRequire = createRequire(import.meta.url);
-export const pdfParse: (
-	buf: Buffer,
-) => Promise<{ text: string; numpages: number }> = nodeRequire("pdf-parse");
+export async function loadPdfParseCtor(): Promise<PdfParseCtor> {
+	const mod = (await import("pdf-parse")) as unknown as {
+		PDFParse?: PdfParseCtor;
+		default?: PdfParseCtor;
+	};
+	const ctor = mod.PDFParse ?? mod.default;
+	if (!ctor) throw new Error("pdf-parse did not export PDFParse");
+	return ctor;
+}
 
 // ─── Core interfaces ───────────────────────────────────────────────
 

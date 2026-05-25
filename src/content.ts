@@ -18,7 +18,7 @@ import { detectPromptInjection, applyInjectionAction } from "./injection.ts";
 import { compressHtml } from "./html-compress.ts";
 import { isDangerousUrl } from "./security.ts";
 import { BASE_TEMP } from "./session-store.ts";
-import { pdfParse } from "./types.ts";
+import { loadPdfParseCtor } from "./types.ts";
 import type { PullResult, FetchOpts, FetchErrorInfo } from "./types.ts";
 import { formatErrorInfo } from "./types.ts";
 
@@ -135,7 +135,9 @@ const ALL_NOISE_SELECTORS = `${NOISE_SELECTORS},${CONSENT_SELECTORS}`;
 export function preCleanHtml(html: string): string {
 	try {
 		const { document } = parseHTML(html);
-		document.querySelectorAll(ALL_NOISE_SELECTORS).forEach((el) => el.remove());
+		document
+			.querySelectorAll(ALL_NOISE_SELECTORS)
+			.forEach((el: Element) => el.remove());
 		return document.documentElement.outerHTML;
 	} catch {
 		return html;
@@ -171,7 +173,9 @@ export function isLikelyJSRendered(html: string): boolean {
 		const { document } = parseHTML(html);
 		const body = document.querySelector("body");
 		if (!body) return false;
-		body.querySelectorAll("script, style").forEach((el) => el.remove());
+		body
+			.querySelectorAll("script, style")
+			.forEach((el: Element) => el.remove());
 		const textContent = (body.textContent || "").replace(/\s+/g, " ").trim();
 		const scriptCount = document.querySelectorAll("script").length;
 		return textContent.length < 500 && scriptCount > 3;
@@ -240,14 +244,7 @@ export async function extractPDF(
 	url: string,
 ): Promise<PullResult | null> {
 	try {
-		// pdf-parse has both CJS default (function) and ESM named export (class).
-		// The ESM class needs to be constructable, the CJS function is called directly.
-		const PDFParseCtor = pdfParse as unknown as new (opts: {
-			data: Uint8Array;
-		}) => {
-			load: () => Promise<void>;
-			getText: () => Promise<{ text: string; total: number }>;
-		};
+		const PDFParseCtor = await loadPdfParseCtor();
 		const parser = new PDFParseCtor({ data: new Uint8Array(buffer) });
 		await parser.load();
 		const data = await parser.getText();
@@ -646,6 +643,13 @@ export async function pullPage(
 		if (url.toLowerCase().endsWith(".pdf")) {
 			const pdf = await extractPDF(binPeek.buffer, url);
 			if (pdf) return finalizePullResult(pdf, redirectNotice);
+			const dl = await downloadToTemp(
+				binPeek.buffer,
+				"application/pdf",
+				"",
+				url,
+			);
+			return finalizePullResult(dl, redirectNotice);
 		}
 
 		const headBytes = binPeek.buffer.subarray(0, 1024);
@@ -750,6 +754,13 @@ export async function pullPage(
 		if (bin) {
 			const pdf = await extractPDF(bin.buffer, url);
 			if (pdf) return finalizePullResult(pdf);
+			const dl = await downloadToTemp(
+				bin.buffer,
+				ct,
+				res.headers.get("content-disposition") ?? "",
+				url,
+			);
+			return finalizePullResult(dl, redirectNotice);
 		}
 	}
 

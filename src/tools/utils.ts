@@ -1,15 +1,8 @@
-import { createRequire } from "node:module";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 import { spawnSync } from "node:child_process";
 import type { Page } from "../types.ts";
 import type { RequestQueue } from "../request-queue.ts";
-
-// ─── pdf-parse loose typing (CJS, no bundled .d.ts) ────────────────
-const nodeRequire = createRequire(import.meta.url);
-export const pdfParse: (
-	buf: Buffer,
-) => Promise<{ text: string; numpages: number }> = nodeRequire("pdf-parse");
 
 // ─── Resolve CLI binary helper (used by cloneGitHubRepo) ────────────
 const _resolvedBinaries = new Map<string, string | null>();
