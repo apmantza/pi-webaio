@@ -1,197 +1,198 @@
-# Proposed New Features for pi-webaio
+# Proposed Future Features for pi-webaio
 
-> Inspired by analysis of Scrapy, Crawlee, Scrapling, and you-get.
-> Each feature includes rationale, target tools, and implementation sketch.
-
----
-
-## 1. Request Queue with Checkpoint / Resume
-
-**Source**: Crawlee (`RequestQueue`)
-
-**Target tools**: `aio-webpull`
-
-**Problem**: `aio-webpull` currently fetches pages from a flat URL list. If interrupted mid-pull (crash, Ctrl+C, timeout), the entire pull must restart from scratch. For sites with 100+ pages, this wastes significant time and bandwidth.
-
-**Proposed solution**: A persistent, disk-backed request queue that tracks:
-- Queued URLs (not yet fetched)
-- In-progress URLs (currently being fetched)
-- Completed URLs (with status — success/failed)
-- Failed URLs (with retry count and last error)
-
-On restart with the same output directory, the queue resumes from where it left off — completed pages are skipped, failed pages are retried (up to a configurable max).
-
-```typescript
-// src/request-queue.ts — sketch
-interface QueueEntry {
-  url: string;
-  status: "queued" | "in_progress" | "completed" | "failed";
-  retries: number;
-  lastError?: string;
-  depth?: number;
-}
-
-class RequestQueue {
-  constructor(outDir: string);  // persists as JSONL next to output
-
-  async add(urls: string[]): Promise<void>;
-  async next(): Promise<string | null>;         // dequeue next
-  async complete(url: string): Promise<void>;
-  async fail(url: string, error: string): Promise<void>;
-  async pending(): Promise<number>;             // still to fetch
-  async total(): Promise<number>;
-
-  // On resume: scan existing output markdown files, mark as completed
-  static async resume(outDir: string): Promise<RequestQueue>;
-}
-```
-
-**Integration into `aio-webpull`**: The `doPull` loop iterates over `queue.next()` instead of a static array. On SIGINT/SIGTERM (graceful shutdown), in-progress entries are re-queued.
-
-**Prior art**: Scrapy's `JOBDIR` scheduler persistence, Crawlee's `RequestQueue`.
+> Next-wave feature ideas after v0.4.0. Earlier proposals such as request queue/resume, browser pool, multi-session routing, and adaptive selectors are now implemented and should be treated as shipped foundations.
 
 ---
 
-## 2. Browser Pool for Same-Domain Site Pulls
+## 1. Schema-Based Structured Extraction
 
-**Source**: Crawlee (`browser-pool`)
+**Target tools:** `aio-webfetch`, `aio-webpull`
 
-**Target tools**: `aio-webpull`, `aio-webfetch` (browser mode)
+Allow callers to provide a JSON schema or natural-language extraction goal and receive structured JSON instead of only markdown.
 
-**Problem**: When `aio-webpull` escalates to browser mode (or `mode: "browser"` is explicit), it currently launches a new Playwright browser instance for each page, navigates, extracts content, and closes it. That's ~2-3 seconds of overhead per page for browser launch + teardown alone. For a 100-page site pull, that's 200-300 seconds wasted.
-
-**Proposed solution**: A browser pool that keeps 1-N browser instances alive and reuses them across pages.
-
-```typescript
-// src/browser-pool.ts — sketch  
-interface BrowserPoolOptions {
-  maxBrowsers?: number;      // default: 2
-  maxPagesPerBrowser?: number;  // default: 50, then recycle
-  headless?: boolean;
-  channel?: string;          // "chrome" for system Chrome
-}
-
-class BrowserPool {
-  constructor(options: BrowserPoolOptions);
-
-  async acquirePage(): Promise<{ browser: Browser, page: Page, release: () => void }>;
-  async drain(): Promise<void>;  // close all
-
-  // Health metrics
-  stats(): { active: number; idle: number; totalLaunched: number; crashes: number };
+```json
+{
+  "url": "https://example.com/product",
+  "schema": {
+    "name": "string",
+    "price": "number",
+    "availability": "string"
+  }
 }
 ```
 
-**Behavior**:
-- Acquire a page → navigate → extract → release page back to pool
-- If a page crashes (navigation timeout, tab crash), it's retired and a new one is spawned
-- After `maxPagesPerBrowser` navigations, the browser is recycled (memory leak defense)
-- Browsers are pre-warmed: launch once, reuse across many requests to the same domain
+**Why:** Markdown is good for human/agent reading, but JSON is better for downstream automation, datasets, monitoring, and workflows.
 
-**Integration into `aio-webpull`**: The `pullPages` worker pool acquires a page from `BrowserPool` instead of `chromium.launch()`. On drain, all browsers are closed.
+**Potential params:**
 
-**Prior art**: Crawlee's `browser-pool` (Playwright + Puppeteer), Scrapling's tab pool in `DynamicSession`.
+```ts
+schema?: object;
+extract?: string;
+structured?: boolean;
+```
 
 ---
 
-## 3. Multi-Session / Multi-Fetcher Routing
+## 2. User-Facing Cache Controls
 
-**Source**: Scrapling (multi-session spiders), Crawlee (different crawler classes per use case)
+**Target tools:** `aio-webfetch`, `aio-webpull`, `aio-websearch`
 
-**Target tools**: `aio-webpull`
+Expose cache behavior to callers instead of relying only on internal TTLs.
 
-**Problem**: Many sites mix HTTP-friendly pages (APIs, listing pages, sitemaps) with JS-heavy pages (detail pages with dynamic content, login walls, Cloudflare-protected pages). Currently, `aio-webpull` uses a single mode for the entire site — either all fast HTTP or all headless browser. There's no way to route different URLs through different fetcher strategies.
-
-**Proposed solution**: A URL routing system that maps URL patterns to fetcher modes (fast, fingerprint, browser, or even vertical extractors).
-
-```typescript
-// Concept: extend webpull options
-interface WebPullOptions {
-  // ...
-  routes?: Array<{
-    pattern: string | RegExp;   // URL pattern to match
-    mode: ScrapeMode;            // "fast" | "fingerprint" | "browser"
-    extractor?: string;          // optional: "npm", "pypi", "wikipedia", etc.
-  }>;
-}
+```ts
+cacheTtlSeconds?: number;
+fresh?: boolean;
+storeInCache?: boolean;
 ```
 
-Example usage:
-```
-aio-webpull https://docs.example.com \
-  --routes '[{"pattern":"/api/","mode":"fast"},{"pattern":".*","mode":"browser"}]'
-```
-
-**Implementation**:
-- Routes are evaluated in order; first match wins
-- Default route (implicit): uses the pull's global `mode`
-- Each route can also specify extractors for known site patterns
-- Session state (cookies) can be shared across routes of the same type
-
-**Benefits**:
-- Listing pages (simple HTML) fetched at HTTP speed
-- Detail pages (JS-rendered) fetched via browser
-- API endpoints fetched directly
-- Known-site vertical extractors (npm, PyPI, etc.) invoked automatically
-
-**Prior art**: Scrapling's `Spider` with `sid` (session ID) routing, Crawlee's `Router` class.
+**Why:** Some tasks need fresh content; others prefer speed and can tolerate stale cached pages.
 
 ---
 
-## 4. Adaptive Element Tracking & Similarity-Based Relocation
+## 3. Crawl Controls: Depth, Include/Exclude, Strategy
 
-**Source**: Scrapling (`auto_save` / `adaptive` mode)
+**Target tools:** `aio-webpull`, `aio-webmap`
 
-**Target tools**: `aio-webpull`, `aio-webfetch` (docs sites, structured content extraction)
+Add precise crawl scoping controls.
 
-**Problem**: When pulling docs sites or structured pages, the main content selector (e.g., `article`, `main`, `.content`) is often hardcoded. If the site redesigns and changes its CSS classes or HTML structure mid-pull (or between pulls), the extraction breaks silently — returning empty or garbage data.
-
-Scrapling solves this with an **adaptive element tracking** system:
-1. On first fetch, the user's selector finds element(s)
-2. The system computes a **structural fingerprint** of those elements: tag path, attribute patterns, text density, sibling structure, position in DOM tree
-3. On subsequent fetches (or after a site change), it uses that fingerprint to **relocate** the elements even if CSS classes or IDs changed
-4. A similarity scoring algorithm ranks candidate elements and picks the best match
-
-**Proposed solution**: A lightweight adaptive selector module for pi-webaio.
-
-```typescript
-// src/adaptive-selector.ts — sketch
-
-interface ElementFingerprint {
-  // Structural signature of the selected element(s)
-  tagPath: string[];               // e.g. ["html", "body", "div", "main", "article"]
-  depth: number;                   // DOM depth
-  textDensity: number;             // text length / HTML length
-  linkDensity: number;             // <a> text / total text
-  childTagSignature: string;       // sorted child tag frequency hash
-  attributePatterns: Record<string, string>;  // e.g. {"class": "*-content", "data-*": ".*"}
-  siblingPosition: { index: number; total: number };
-}
-
-class AdaptiveSelector {
-  constructor(fingerprint?: ElementFingerprint);
-
-  // Save the current selection as the reference fingerprint
-  static capture(element: Element): ElementFingerprint;
-
-  // Given a page, find the best-matching element using the saved fingerprint
-  locate(page: Document, threshold?: number): Element | null;
-
-  // Score a candidate against the fingerprint (0-1)
-  private score(candidate: Element, fingerprint: ElementFingerprint): number;
-}
+```ts
+maxDepth?: number;
+includePaths?: string[];
+excludePaths?: string[];
+strategy?: "same-origin" | "same-hostname" | "same-domain" | "all";
 ```
 
-**Integration into webpull**: When pulling docs sites, the main content selector can optionally be set to "adaptive". On the first page, the system captures the element fingerprint. On subsequent pages (or across multiple pulls), it uses the fingerprint to locate the content — automatically surviving minor redesigns.
-
-**Scope**: This could start simple — just `tagPath + depth + attributePatterns` — and be extended later with full text-density and child-signature analysis.
-
-**Prior art**: Scrapling's `auto_save` / `adaptive` parsing, AutoScraper (similar but slower).
+**Why:** Real site pulls need more than a page limit. Agents often need “only docs/api/*”, “same origin only”, or “crawl depth 2”.
 
 ---
 
-## Additional Notes
+## 4. Incremental Recrawl / Change Detection
 
-- **Priority order**: 1 (Request Queue) > 2 (Browser Pool) > 3 (Multi-Session Routing) > 4 (Adaptive Selectors)
-- **Dependencies**: Feature 2 (Browser Pool) has no new deps — uses existing Playwright. Feature 3 and 4 are pure TypeScript. Feature 1 uses only `node:fs`.
-- **Risk**: Feature 4 (adaptive selectors) has the highest algorithmic complexity and the hardest-to-validate correctness. Start with fingerprint capture + tag-path matching, iterate.
+**Target tools:** `aio-webpull`, `aio-webmap`
+
+Track previous crawl state using `ETag`, `Last-Modified`, content hash, output path, and extraction metadata. Skip unchanged pages and optionally report changed/added/removed URLs.
+
+**Why:** Useful for docs monitoring, recurring research, changelog discovery, and avoiding repeated bandwidth/work.
+
+**Potential outputs:**
+
+```json
+{
+  "changed": ["https://example.com/docs/new"],
+  "unchanged": ["https://example.com/docs/intro"],
+  "removed": ["https://example.com/docs/old"],
+  "added": ["https://example.com/docs/api"]
+}
+```
+
+---
+
+## 5. Extraction Trace / Debug Bundle
+
+**Target tools:** `aio-webfetch`, `aio-webpull`
+
+Add a debug mode that records how extraction happened.
+
+**Trace fields:**
+
+- fetch mode used
+- redirects
+- response headers summary
+- bot detection result
+- selected vertical extractor, if any
+- extraction pipeline path
+- Readability/Defuddle scores or quality signals
+- fallback reason
+- final content length
+- warnings and prompt-injection findings
+
+**Why:** Failed or low-quality extractions are hard to diagnose without knowing which path the pipeline took.
+
+---
+
+## 6. Shadow DOM and Iframe Flattening
+
+**Target tools:** `aio-webfetch`, `aio-webpull` in browser mode
+
+Before Readability/Defuddle, flatten content from:
+
+- open shadow roots
+- same-origin iframes
+- embedded article/content frames
+
+Use bounded recursion, e.g. max depth 3 or 4.
+
+**Why:** Modern sites hide meaningful text inside web components and embedded frames. Current extraction can miss that content.
+
+---
+
+## 7. Output Format Controls
+
+**Target tools:** `aio-webfetch`, `aio-webpull`
+
+Allow callers to choose the desired representation.
+
+```ts
+format?: "markdown" | "json" | "html" | "text" | "jsonl";
+manifest?: boolean;
+```
+
+For `aio-webpull`, a manifest could include URL, title, status, output path, content hash, extraction metadata, and warnings.
+
+**Why:** Different consumers need different formats: agent context wants markdown, datasets want JSONL, debugging may need HTML/text.
+
+---
+
+## 8. Proxy Health Tracking
+
+**Target tools:** `aio-webfetch`, `aio-webpull`, `aio-websearch`
+
+Track proxy status across requests:
+
+- healthy
+- blocked
+- rate-limited
+- failed
+- unknown
+- optional geo/country metadata
+
+**Why:** Proxy support exists, but large pulls/searches need memory of which proxies are bad for which domains.
+
+---
+
+## 9. Link Graph Output
+
+**Target tools:** `aio-webmap`, `aio-webpull`
+
+Produce a graph of discovered links.
+
+```json
+{
+  "from": "https://site/a",
+  "to": "https://site/b",
+  "anchor": "API Reference",
+  "rel": "internal"
+}
+```
+
+**Why:** Useful for docs comprehension, dead-link detection, sitemap generation, crawl visualization, and agent context building.
+
+---
+
+## 10. Extraction Quality Benchmark Suite
+
+**Target area:** tests/CI
+
+Create a benchmark fixture set of real-world pages with expected title, description, main content, image, date, and extraction quality checks.
+
+**Why:** The extraction pipeline is complex and regression-prone. A benchmark protects quality when changing extractor order, fallbacks, or bot-handling behavior.
+
+**Possible metrics:**
+
+- title exact/near match
+- description presence
+- main content length range
+- boilerplate ratio
+- image/date detection
+- markdown cleanliness
+- extractor fallback rate

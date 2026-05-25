@@ -1,4 +1,7 @@
 import assert from "node:assert";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import {
 	extractAlternateLinks,
@@ -32,6 +35,7 @@ import { scanForSecrets } from "../src/security.ts";
 import { normalizeCacheKey } from "../src/session-store.ts";
 import { frontmatter } from "../src/tools/utils.ts";
 import { isLikelyBotProtection } from "../src/bot-detection.ts";
+import { compileContextPackage } from "../src/context-package.ts";
 import {
 	createSessionCache,
 	isLocalOrPrivateUrl,
@@ -1213,6 +1217,35 @@ test("extractArxiv extracts id from api/query URL (encoded)", () => {
 		);
 	assert.ok(match);
 	assert.strictEqual(match[1], "2312.10997");
+});
+
+// ─── Context package compilation ────────────────────────────────
+
+test("compileContextPackage writes valid YAML frontmatter", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "pi-webaio-package-"));
+	try {
+		const pkg = await compileContextPackage(
+			[
+				{
+					url: "https://example.com/",
+					title: "Example Domain",
+					content: "Example content",
+					relPath: "index.md",
+				},
+			],
+			dir,
+			{ packageName: "example-package" },
+		);
+
+		const content = await readFile(pkg.packagePath, "utf8");
+		assert.ok(content.startsWith("---\npackage: example-package\n"));
+		assert.ok(content.includes("\npages: 1\n---\n"));
+		assert.ok(content.includes("# Example Domain"));
+		assert.ok(content.includes("<!-- source: https://example.com/ -->"));
+		assert.ok(content.includes("- [Example Domain](https://example.com/)"));
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
 });
 
 // ─── Package registry vertical extractor matching ────────────────

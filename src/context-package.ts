@@ -55,10 +55,10 @@ export async function compileContextPackage(
 	}> = [];
 
 	const chunks: string[] = [];
-	chunks.push("---");
-	chunks.push(`package: ${name}`);
-	chunks.push(`compiled_at: ${new Date().toISOString()}`);
-	chunks.push(`pages: ${pages.length}`);
+	chunks.push("---\n");
+	chunks.push(`package: ${name}\n`);
+	chunks.push(`compiled_at: ${new Date().toISOString()}\n`);
+	chunks.push(`pages: ${pages.length}\n`);
 	chunks.push("---\n");
 
 	for (const page of pages) {

@@ -213,6 +213,8 @@ export function registerWebpullTool(pi: ExtensionAPI): void {
 			const files: string[] = [];
 			const errors: string[] = [];
 			const pageUrlToPath = new Map<string, string>();
+			const pagePathToUrl = new Map<string, string>();
+			const pagePathToTitle = new Map<string, string>();
 			const totalUrls =
 				queue.stats().queued +
 				queue.stats().inProgress +
@@ -266,6 +268,8 @@ export function registerWebpullTool(pi: ExtensionAPI): void {
 				const rel = await writePage(page, outDir);
 				files.push(rel);
 				pageUrlToPath.set(page.url, rel);
+				pagePathToUrl.set(rel, page.url);
+				pagePathToTitle.set(rel, page.title || rel);
 				ok++;
 
 				storeContent(result.url!, result.title, page.markdown, undefined, {
@@ -355,7 +359,12 @@ export function registerWebpullTool(pi: ExtensionAPI): void {
 							const filePath = join(outDir, rel);
 							try {
 								const content = await readFile(filePath, "utf8");
-								return { url: rel, title: rel, content, relPath: rel };
+								return {
+									url: pagePathToUrl.get(rel) ?? rel,
+									title: pagePathToTitle.get(rel) ?? rel,
+									content,
+									relPath: rel,
+								};
 							} catch {
 								return null;
 							}

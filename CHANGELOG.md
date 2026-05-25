@@ -44,6 +44,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Context package frontmatter formatting** — `compileContextPackage()` now emits YAML frontmatter with proper newlines instead of concatenating `---package`, `compiled_at`, and `pages` onto one line. Added a regression test for package formatting.
+- **`aio-webpull` compiled package source metadata** — Compiled packages created from pulls now use the original page URL and title for each page instead of the output filename (`index.md`) as the source/title.
 - **CI dependency installation with `--omit=optional`** — Promoted Defuddle's runtime-used optional packages (`mathml-to-latex`, `temml`, `turndown`) and the directly imported TUI package (`@earendil-works/pi-tui`) to direct dependencies so unit tests, packaged installs, and extension import checks pass when optional/peer dependencies are omitted.
 - **Extension import resilience for PDF support** — Lazy-load `pdf-parse` only when PDF extraction is needed, preventing optional native canvas binding failures from breaking non-PDF fetches or extension startup. If PDF text extraction is unavailable, PDF URLs now fall back to saved downloads instead of failing the fetch.
 - **Linkedom TypeScript diagnostics** — Added a local `linkedom` module declaration and explicit DOM callback types in `src/content.ts` to clear stale LSP diagnostics under strict TypeScript settings.
@@ -56,6 +58,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Future feature roadmap docs** — Replaced `newfeatures.md` with next-wave proposals covering structured extraction, cache controls, crawl controls, incremental recrawl, debug traces, output formats, proxy health, link graphs, and extraction quality benchmarks. Added `implementationplan.md` with a staged implementation roadmap.
 - **Full GitHub extraction pipeline** (`src/github-pipeline.ts`, 787 lines) — Complete replacement of the old inline GitHub code. `pullGitHub()` with `parseGitHubUrl`, `parseRawGitHubUrl`, `pullGitHubRef`, `pullGitHubFeature`, `githubApiFetch`, `fetchGitHubRaw`, `fetchGitHubTree`, `cloneGitHubRepo`, `buildRepoMarkdown`, `fetchGitHubRepo`. Architecture detection, feature page extraction (issues/PRs/actions/releases/security alerts). Uses `resolveBinary` for `gh`/`git` CLI fallback with `GITHUB_TOKEN` auth.
 - **Browser pool** (`src/browser-pool.ts`) — Reusable Playwright browser pool for same-domain pulls. Acquire/release lifecycle, auto-recycle after 50 navigations (memory leak defense), crash recovery with automatic replacement, configurable max browsers (default 2). Saves ~2-3s overhead per page vs. launch/close. Active when `mode` is `browser` or `auto`. 278 lines.
 - **Session router for multi-fetcher routing** (`src/session-router.ts`) — URL pattern → fetcher mode/extractor routing. Supports substring paths (`/api/`), glob patterns (`*/protected/*`), and regex patterns (`/^\\/api\\/v\\d+/`). Per-route overrides for mode, browser, OS, and extractor. First match wins. New `routes` parameter on `aio-webpull`. 177 lines, 11 unit tests.
