@@ -149,12 +149,23 @@ async function runNodeChild(
  * Determine whether Chrome should run headless.
  * Respects the GREEDY_SEARCH_VISIBLE environment variable and DISPLAY
  * auto-detection before falling back to the caller's preference.
+ *
+ * DISPLAY detection requires both the env var to match a local display
+ * (`:N` or `:N.M`) AND the X11 socket at /tmp/.X11-unix/X<N> to exist.
+ * The env var alone can be stale — exporting DISPLAY=:0 in a shell
+ * profile persists after the X session ends, so without the socket
+ * check we would launch non-headless against a dead display and
+ * silently break Google search.
  */
 function shouldUseHeadless(explicit?: boolean): boolean {
 	if (explicit !== undefined) return explicit;
 	if (process.env.GREEDY_SEARCH_VISIBLE === "1") return false;
-	if (process.env.DISPLAY && process.env.DISPLAY.startsWith(":")) {
-		return false;
+	const display = process.env.DISPLAY;
+	if (display) {
+		const match = display.match(/^:(\d+)(?:\.\d+)?$/);
+		if (match && existsSync(`/tmp/.X11-unix/X${match[1]}`)) {
+			return false;
+		}
 	}
 	return true;
 }
