@@ -39,8 +39,8 @@ export function isRetryableNetworkError(err: unknown): boolean {
 	);
 }
 
-export function buildHeaders(): Record<string, string> {
-	return {
+export function buildHeaders(browser?: string): Record<string, string> {
+	const headers: Record<string, string> = {
 		Accept:
 			"text/html,application/xhtml+xml,application/xml;q=0.9,text/markdown,*/*;q=0.8",
 		"Accept-Language": "en-US,en;q=0.9",
@@ -50,11 +50,21 @@ export function buildHeaders(): Record<string, string> {
 		"Sec-Fetch-Site": "none",
 		"Sec-Fetch-User": "?1",
 		"Upgrade-Insecure-Requests": "1",
-		"Sec-Ch-Ua":
-			'"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
 		"Sec-Ch-Ua-Mobile": "?0",
 		"Sec-Ch-Ua-Platform": '"Windows"',
 	};
+
+	const version = (browser ?? DEFAULT_BROWSER).split("_").pop() || "145";
+	if (!browser || browser.startsWith("chrome_")) {
+		headers["Sec-Ch-Ua"] =
+			`"Not_A Brand";v="8", "Chromium";v="${version}", "Google Chrome";v="${version}"`;
+	} else if (browser.startsWith("edge_")) {
+		headers["Sec-Ch-Ua"] =
+			`"Not_A Brand";v="8", "Chromium";v="${version}", "Microsoft Edge";v="${version}"`;
+	}
+	// Firefox / Safari do not send Sec-Ch-Ua — omit it
+
+	return headers;
 }
 
 // ─── Chrome profile discovery ──────────────────────────────────────
@@ -141,9 +151,110 @@ export function getRateLimiter(host: string): TokenBucket {
 
 let _pwWarned = false;
 
+// ─── Essential stealth patches for Playwright fallback ─────────────
+// Injected before page scripts run to mask headless automation signals.
+const PLAYWRIGHT_STEALTH_SCRIPT = `
+(function() {
+  try { delete window.__REBROWSER_RUNTIME_ENABLE; } catch(_) {}
+  try { delete window.__REBROWSER_DEVTOOLS; } catch(_) {}
+  try { delete window.__nightmare; } catch(_) {}
+  try { delete window.__phantom; } catch(_) {}
+  try { delete window.callPhantom; } catch(_) {}
+  try { delete window._phantom; } catch(_) {}
+
+  Object.defineProperty(navigator, 'webdriver', { get: () => undefined, configurable: true });
+  Object.defineProperty(navigator, 'vendor', { get: () => 'Google Inc.', configurable: true });
+  Object.defineProperty(navigator, 'platform', { get: () => 'Win32', configurable: true });
+  Object.defineProperty(navigator, 'maxTouchPoints', { get: () => 0, configurable: true });
+  Object.defineProperty(navigator, 'plugins', {
+    get: () => {
+      var p = [
+        { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
+        { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '' },
+        { name: 'Native Client', filename: 'internal-nacl-plugin', description: '' },
+      ];
+      p.length = 3;
+      return p;
+    },
+  });
+  Object.defineProperty(navigator, 'mimeTypes', {
+    get: () => {
+      var m = [
+        { type: 'application/pdf', suffixes: 'pdf', description: 'Portable Document Format', enabledPlugin: null },
+        { type: 'text/pdf', suffixes: 'pdf', description: 'Portable Document Format', enabledPlugin: null },
+      ];
+      m.item = function(i) { return m[i] || null; };
+      m.namedItem = function(name) { return m.find(function(x) { return x.type === name; }) || null; };
+      return m;
+    },
+    configurable: true,
+  });
+  Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'], configurable: true });
+
+  if (!window.chrome) {
+    window.chrome = {
+      app: { isInstalled: false, InstallState: {}, RunningState: {} },
+      runtime: { OnInstalledReason: {}, OnRestartRequiredReason: {}, PlatformArch: {}, PlatformNaclArch: {}, PlatformOs: {}, RequestUpdateCheckStatus: {}, connect: () => ({}), sendMessage: () => {}, onMessage: { addListener: () => {} } },
+      loadTimes: () => ({}),
+      csi: () => ({}),
+    };
+  }
+
+  try {
+    var getParam = WebGLRenderingContext.prototype.getParameter;
+    WebGLRenderingContext.prototype.getParameter = function(p) {
+      if (p === 37445) return 'Intel Inc.';
+      if (p === 37446) return 'Intel Iris OpenGL Engine';
+      return getParam.call(this, p);
+    };
+  } catch(_) {}
+  Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8, configurable: true });
+  Object.defineProperty(navigator, 'deviceMemory', { get: () => 8, configurable: true });
+
+  try {
+    if (!window.outerWidth)  Object.defineProperty(window, 'outerWidth',  { get: () => window.innerWidth  || 1920, configurable: true });
+    if (!window.outerHeight) Object.defineProperty(window, 'outerHeight', { get: () => window.innerHeight || 1080, configurable: true });
+  } catch(_) {}
+
+  try {
+    if (!screen.colorDepth) Object.defineProperty(screen, 'colorDepth', { get: () => 24, configurable: true });
+    if (!screen.pixelDepth) Object.defineProperty(screen, 'pixelDepth', { get: () => 24, configurable: true });
+  } catch(_) {}
+})();
+`;
+
+async function applyStealth(page: any) {
+	try {
+		await page.addInitScript(PLAYWRIGHT_STEALTH_SCRIPT);
+	} catch {
+		/* best-effort */
+	}
+}
+
+async function injectCookiesFromPlaywright(
+	page: any,
+	url: string,
+	wreqSession?: any,
+) {
+	if (!wreqSession || !page.context) return;
+	try {
+		const cookies = await page.context().cookies([url]);
+		for (const c of cookies) {
+			try {
+				wreqSession.setCookie(c.name, c.value, url);
+			} catch {
+				/* ignore individual cookie injection failures */
+			}
+		}
+	} catch {
+		/* best-effort */
+	}
+}
+
 export async function fetchWithPlaywright(
 	url: string,
 	pool?: FetchOpts["browserPool"],
+	wreqSession?: any,
 ): Promise<string | null> {
 	if (pool) {
 		let pooled: Awaited<
@@ -152,10 +263,12 @@ export async function fetchWithPlaywright(
 
 		try {
 			pooled = await pool.acquirePage();
+			await applyStealth(pooled.page);
 			await pooled.page.goto(url, {
 				waitUntil: "domcontentloaded",
 				timeout: 15000,
 			});
+			await injectCookiesFromPlaywright(pooled.page, url, wreqSession);
 			return await pooled.page.content();
 		} catch {
 			/* fall through to per-request browser below */
@@ -174,10 +287,12 @@ export async function fetchWithPlaywright(
 					headless: true,
 				});
 				const page = await browser.newPage();
+				await applyStealth(page);
 				await page.goto(url, {
 					waitUntil: "domcontentloaded",
 					timeout: 15000,
 				});
+				await injectCookiesFromPlaywright(page, url, wreqSession);
 				return await page.content();
 			} catch {
 				/* try next launch option */
@@ -253,9 +368,12 @@ export async function fetchWithRetry(
 
 	for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
 		try {
-			const res = await wreqFetch(url, {
+			const fetchFn = options.wreqSession
+				? (u: string, init: any) => options.wreqSession.fetch(u, init)
+				: wreqFetch;
+			const res = await fetchFn(url, {
 				redirect: "follow",
-				headers: { ...buildHeaders(), ...options.headers },
+				headers: { ...buildHeaders(options.browser), ...options.headers },
 				browser: (options.browser ?? DEFAULT_BROWSER) as BrowserProfile,
 				os: (options.os ?? DEFAULT_OS) as EmulationOS,
 				...(options.proxy ? { proxy: options.proxy } : {}),
@@ -275,14 +393,14 @@ export async function fetchWithRetry(
 			}
 
 			lastError = new Error(`HTTP ${res.status}`);
-			await sleep(RETRY_INITIAL_DELAY_MS * (attempt + 1));
+			await sleep(jitteredDelay(RETRY_INITIAL_DELAY_MS, attempt));
 		} catch (err) {
 			lastError = err instanceof Error ? err : new Error(String(err));
 			if (!isRetryableNetworkError(err)) {
 				throw err; // Non-retryable: fail fast
 			}
 			if (attempt < MAX_RETRIES) {
-				await sleep(RETRY_INITIAL_DELAY_MS * (attempt + 1));
+				await sleep(jitteredDelay(RETRY_INITIAL_DELAY_MS, attempt));
 			}
 		}
 	}
@@ -321,7 +439,11 @@ export async function smartFetch(
 
 	const res = await fetchWithRetry(url, options);
 	if (!res) {
-		const pwHtml = await fetchWithPlaywright(url, options.browserPool);
+		const pwHtml = await fetchWithPlaywright(
+			url,
+			options.browserPool,
+			options.wreqSession,
+		);
 		if (pwHtml) {
 			return {
 				text: pwHtml,
@@ -352,7 +474,10 @@ export async function smartFetch(
 		const fallbackBrowsers = ["firefox_147", "safari_26", "edge_145"];
 		const headers = { ...buildHeaders(), ...options.headers };
 		for (const fb of fallbackBrowsers) {
-			const fbRes = await wreqFetch(url, {
+			const fetchFn = options.wreqSession
+				? (u: string, init: any) => options.wreqSession.fetch(u, init)
+				: wreqFetch;
+			const fbRes = await fetchFn(url, {
 				redirect: "follow",
 				headers,
 				browser: fb as BrowserProfile,
@@ -411,6 +536,15 @@ export async function fetchBuffer(
 }
 
 // ─── Utility ───────────────────────────────────────────────────────
+
+function jitteredDelay(baseMs: number, attempt: number): number {
+	const delay = baseMs * (attempt + 1);
+	const variance = delay * 0.4;
+	return Math.max(
+		50,
+		Math.round(delay + (Math.random() * variance * 2 - variance)),
+	);
+}
 
 function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));

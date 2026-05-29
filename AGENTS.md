@@ -188,6 +188,33 @@ pi-webaio/
 
 ## Recent Changes
 
+### v0.4.1 — Anti-bot hardening & headless control (unreleased)
+
+**Issue #33 — Non-headless Chrome support**
+- `GREEDY_SEARCH_VISIBLE=1` env var now respected by Google Search & AI summary
+- `DISPLAY` env var auto-detected — if X11 is available, defaults to visible mode
+- Removed all hardcoded `headless: true` overrides in `src/tools/websearch.ts` and `src/tools/webfetch.ts`
+- `ensureChrome()` now uses `shouldUseHeadless()` helper that checks env vars before defaulting
+
+**Anti-bot hardening (4 critical fixes)**
+1. **Profile-aware `Sec-Ch-Ua` headers** — `buildHeaders()` derives version from browser profile (e.g. `chrome_145` → `v="145"`). Firefox/Safari omit the header entirely (they don't send it). Edge gets `"Microsoft Edge"` brand.
+2. **wreq-js session reuse** — batch fetches (`urls` param) and webpull now create a persistent `wreq-js` session, sharing cookies and TCP/TLS connections across requests. Sessions are closed after work completes.
+3. **Jittered retry delays** — replaced deterministic `sleep(1000 * attempt)` with `jitteredDelay()` adding ±40% random variance. Avoids bot-like regularity in retry timing.
+4. **Playwright stealth injection** — `fetchWithPlaywright()` now injects an anti-detection script before navigation: `navigator.webdriver`, plugins, mimeTypes, `window.chrome`, WebGL renderer spoofing, window outer dimensions, screen depth. Covers the most common headless detection vectors.
+
+**Cookie bridge — Playwright → wreq-js**
+- After a successful Playwright fallback fetch, clearance cookies (`cf_clearance`, datadome tokens, etc.) are extracted from the browser context and injected into the wreq-js session
+- Subsequent HTTP fetches to the same domain reuse these cookies, avoiding repeated browser escalation
+
+**Session warming — webpull**
+- Before pulling deep links, `aio-webpull` warms the session by fetching the root URL
+- Followed by an 800–1500ms jittered dwell to mimic human landing behavior
+- Reduces bot scores from anti-bot systems that flag "deep-link first" patterns
+
+**Auto-fallback — webfetch**
+- When `aio-webfetch` with `mode: "auto"` fails with a retryable or bot-block error, it automatically retries once with `mode: "browser"`
+- Applies to single-URL fetches; avoids requiring the user to make a second manual call
+
 ### pi Scope Migration (unreleased)
 
 - Pi moved from `@mariozechner/pi-*` to `@earendil-works/pi-*` package scope (pi 0.73.1+)

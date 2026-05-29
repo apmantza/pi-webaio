@@ -869,7 +869,11 @@ export async function pullPageEnhanced(
 							}
 						}
 					}
-					const pwHtml = await fetchWithPlaywright(url, opts?.browserPool);
+					const pwHtml = await fetchWithPlaywright(
+						url,
+						opts?.browserPool,
+						opts?.wreqSession,
+					);
 					if (pwHtml) {
 						const pwResult = await pullPage(url, opts, _redirectCount, pwHtml);
 						if (pwResult.ok && pwResult.content) {

@@ -153,7 +153,26 @@ export function registerWebpullTool(pi: ExtensionAPI): void {
 				os?: string;
 			}[];
 			const adaptive = params.adaptive === true || params.adaptive === "true";
-			const fetchOpts: FetchOpts = { browser, os, proxy, mode, adaptive };
+			let wreqSession: any = null;
+			try {
+				const { createSession } = await import("wreq-js");
+				wreqSession = await createSession({
+					browser: browser as any,
+					os: os as any,
+					...(proxy ? { proxy } : {}),
+				});
+			} catch {
+				/* session creation failed — fall back to isolated fetches */
+			}
+
+			const fetchOpts: FetchOpts = {
+				browser,
+				os,
+				proxy,
+				mode,
+				adaptive,
+				wreqSession,
+			};
 
 			const router =
 				routes.length > 0 ? new SessionRouter(parseRoutes(routes)) : null;
@@ -207,6 +226,21 @@ export function registerWebpullTool(pi: ExtensionAPI): void {
 			const browserPool = needsBrowser
 				? new BrowserPool({ headless: true, channel: "chrome" })
 				: null;
+
+			// Session warm-up: hit root URL before deep links to establish
+			// cookies, TLS state, and anti-bot clearance.
+			if (mode !== "fast") {
+				try {
+					await pullPageEnhanced(url.href, {
+						...fetchOpts,
+						...(browserPool ? { browserPool } : {}),
+					});
+					// Dwell: 800-1500ms jittered pause to mimic human behavior
+					await new Promise((r) => setTimeout(r, 800 + Math.random() * 700));
+				} catch {
+					/* warm-up failed, proceed anyway */
+				}
+			}
 
 			let ok = 0;
 			let err = 0;
@@ -307,6 +341,13 @@ export function registerWebpullTool(pi: ExtensionAPI): void {
 			}
 			if (queue) {
 				await queue.close();
+			}
+			if (wreqSession) {
+				try {
+					await wreqSession.close();
+				} catch {
+					/* best-effort */
+				}
 			}
 
 			if (pageUrlToPath.size > 1) {

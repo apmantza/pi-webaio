@@ -143,13 +143,30 @@ async function runNodeChild(
 	});
 }
 
+// ─── Headless resolution ─────────────────────────────────────────────
+
+/**
+ * Determine whether Chrome should run headless.
+ * Respects the GREEDY_SEARCH_VISIBLE environment variable and DISPLAY
+ * auto-detection before falling back to the caller's preference.
+ */
+function shouldUseHeadless(explicit?: boolean): boolean {
+	if (explicit !== undefined) return explicit;
+	if (process.env.GREEDY_SEARCH_VISIBLE === "1") return false;
+	if (process.env.DISPLAY && process.env.DISPLAY.startsWith(":")) {
+		return false;
+	}
+	return true;
+}
+
 // ─── Chrome management ───────────────────────────────────────────────
 
 /**
  * Ensure the CDP Chrome instance is running.
  * Spawns bin/launch.mjs which handles auto-launch, PID tracking, and idle cleanup.
  */
-export async function ensureChrome(headless = true): Promise<ChromeStatus> {
+export async function ensureChrome(headless?: boolean): Promise<ChromeStatus> {
+	const useHeadless = shouldUseHeadless(headless);
 	if (chromeLaunchPromise) return chromeLaunchPromise;
 
 	chromeLaunchPromise = (async () => {
@@ -162,8 +179,8 @@ export async function ensureChrome(headless = true): Promise<ChromeStatus> {
 
 		const env: Record<string, string | undefined> = {
 			...process.env,
-			GREEDY_SEARCH_HEADLESS: headless ? "1" : "0",
-			GREEDY_SEARCH_VISIBLE: headless ? undefined : "1",
+			GREEDY_SEARCH_HEADLESS: useHeadless ? "1" : "0",
+			GREEDY_SEARCH_VISIBLE: useHeadless ? undefined : "1",
 		};
 		Object.keys(env).forEach((k) => {
 			if (env[k] === undefined) delete env[k];
@@ -232,7 +249,8 @@ export async function googleAISearch(
 		timeoutMs?: number;
 	} = {},
 ): Promise<GoogleAIResult> {
-	const { short = false, headless = true, locale, timeoutMs = 60000 } = options;
+	const { short = false, headless, locale, timeoutMs = 60000 } = options;
+	const useHeadless = shouldUseHeadless(headless);
 	const extractorBin = resolvePath("extractors", "google-ai.mjs");
 
 	if (!existsSync(extractorBin)) {
@@ -250,7 +268,7 @@ export async function googleAISearch(
 		env: {
 			...process.env,
 			CDP_PROFILE_DIR: greedyProfileDir,
-			GREEDY_SEARCH_HEADLESS: headless ? "1" : "0",
+			GREEDY_SEARCH_HEADLESS: useHeadless ? "1" : "0",
 		} as Record<string, string>,
 		timeoutMs,
 		timeoutMessage: `Google AI search timed out after ${timeoutMs / 1000}s`,
@@ -285,7 +303,8 @@ export async function googleSearch(
 		maxResults?: number;
 	} = {},
 ): Promise<GoogleSearchOutput> {
-	const { headless = true, timeoutMs = 45000, maxResults = 10 } = options;
+	const { headless, timeoutMs = 45000, maxResults = 10 } = options;
+	const useHeadless = shouldUseHeadless(headless);
 	const extractorBin = resolvePath("extractors", "google-search.mjs");
 
 	if (!existsSync(extractorBin)) {
@@ -301,7 +320,7 @@ export async function googleSearch(
 			env: {
 				...process.env,
 				CDP_PROFILE_DIR: greedyProfileDir,
-				GREEDY_SEARCH_HEADLESS: headless ? "1" : "0",
+				GREEDY_SEARCH_HEADLESS: useHeadless ? "1" : "0",
 			} as Record<string, string>,
 			timeoutMs,
 			timeoutMessage: `Google search timed out after ${timeoutMs / 1000}s`,
@@ -340,7 +359,8 @@ export async function summarizeUrl(
 		context?: string;
 	} = {},
 ): Promise<string> {
-	const { headless = true, timeoutMs = 15000, context } = options;
+	const { headless, timeoutMs = 15000, context } = options;
+	const useHeadless = shouldUseHeadless(headless);
 	const extractorBin = resolvePath("extractors", "google-ai.mjs");
 
 	if (!existsSync(extractorBin)) {
@@ -358,7 +378,7 @@ export async function summarizeUrl(
 		env: {
 			...process.env,
 			CDP_PROFILE_DIR: greedyProfileDir,
-			GREEDY_SEARCH_HEADLESS: headless ? "1" : "0",
+			GREEDY_SEARCH_HEADLESS: useHeadless ? "1" : "0",
 		} as Record<string, string>,
 		timeoutMs,
 		timeoutMessage: `Summarization timed out after ${timeoutMs / 1000}s`,

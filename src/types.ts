@@ -122,6 +122,8 @@ export interface FetchOpts {
 	browserPool?: {
 		acquirePage: () => Promise<{ page: any; release: () => void }>;
 	};
+	/** wreq-js session for cookie persistence and connection reuse */
+	wreqSession?: any;
 }
 
 export interface StoredContent {

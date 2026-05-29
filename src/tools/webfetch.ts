@@ -122,6 +122,20 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 			const os = (params.os as string) ?? DEFAULT_OS;
 			const proxy = (params.proxy as string) ?? undefined;
 
+			let wreqSession: any = null;
+			if (targets.length > 1) {
+				try {
+					const { createSession } = await import("wreq-js");
+					wreqSession = await createSession({
+						browser: browser as any,
+						os: os as any,
+						...(proxy ? { proxy } : {}),
+					});
+				} catch {
+					/* session creation failed — fall back to isolated fetches */
+				}
+			}
+
 			const results = await runInBatches(
 				targets,
 				Math.min(4, targets.length),
@@ -155,12 +169,31 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 					const pruneTokens = params.prune as number | undefined;
 					const startIndex = params.start_index as number | undefined;
 					const maxLength = params.max_length as number | undefined;
-					const result = await pullPageEnhanced(url.href, {
+					let result = await pullPageEnhanced(url.href, {
 						browser,
 						os,
 						proxy,
 						mode,
+						wreqSession,
 					});
+					if (!result.ok) {
+						const shouldRetryBrowser =
+							mode !== "browser" &&
+							(result.errorInfo?.retryable ||
+								result.errorInfo?.code === "blocked");
+						if (shouldRetryBrowser) {
+							const browserResult = await pullPageEnhanced(url.href, {
+								browser,
+								os,
+								proxy,
+								mode: "browser",
+								wreqSession,
+							});
+							if (browserResult.ok) {
+								result = browserResult;
+							}
+						}
+					}
 					if (!result.ok) {
 						return {
 							ok: false,
@@ -245,6 +278,14 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 				},
 			);
 
+			if (wreqSession) {
+				try {
+					await wreqSession.close();
+				} catch {
+					/* best-effort */
+				}
+			}
+
 			const okResults = results.filter((r) => r.ok);
 			const errResults = results.filter((r) => !r.ok);
 
@@ -305,9 +346,8 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 						summarized = true;
 					} else {
 						try {
-							await ensureChrome(true);
+							await ensureChrome();
 							summary = await summarizeUrl(r.url as string, {
-								headless: true,
 								timeoutMs: 15000,
 								context: searchCtx,
 							});

@@ -44,7 +44,7 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 			google: Type.Optional(
 				Type.Boolean({
 					description:
-						"Also search Google via headless Chrome CDP. Default: true.",
+						"Also search Google via Chrome CDP (headless by default; set GREEDY_SEARCH_VISIBLE=1 for visible mode). Default: true.",
 					default: true,
 				}),
 			),
@@ -95,9 +95,8 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 			if (useGoogle && cdpAvailableGA() && isProviderAvailable("google")) {
 				googlePromise = (async () => {
 					try {
-						await ensureChrome(true);
+						await ensureChrome();
 						const g = await googleSearch(query, {
-							headless: true,
 							timeoutMs: SEARCH_TIMEOUT,
 							maxResults: max,
 						});
