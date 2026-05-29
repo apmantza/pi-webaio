@@ -11,6 +11,7 @@
  */
 
 import { spawnSync } from "node:child_process";
+import { isRetryableNetworkError } from "./fetch.ts";
 
 const API_BASE = "https://api.github.com";
 
@@ -140,19 +141,6 @@ export async function ghFetch<T = unknown>(path: string): Promise<T> {
 
 	// Should never reach here (last attempt throws above)
 	throw new Error("GitHub API: max retries exceeded");
-}
-
-export function isRetryableNetworkError(err: unknown): boolean {
-	if (!(err instanceof Error || err instanceof TypeError)) return false;
-	const msg = (err as Error).message || "";
-	return (
-		msg.includes("fetch failed") ||
-		msg.includes("ECONNRESET") ||
-		msg.includes("ETIMEDOUT") ||
-		msg.includes("ECONNREFUSED") ||
-		msg.includes("timeout") ||
-		msg.includes("ENOTFOUND")
-	);
 }
 
 /**

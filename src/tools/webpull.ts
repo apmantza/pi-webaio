@@ -254,99 +254,101 @@ export function registerWebpullTool(pi: ExtensionAPI): void {
 				queue.stats().inProgress +
 				queue.stats().completed;
 
-			await runPullFromQueue(queue, concurrency, async (pageUrl: string) => {
-				if (signal?.aborted) return;
+			try {
+				await runPullFromQueue(queue, concurrency, async (pageUrl: string) => {
+					if (signal?.aborted) return;
 
-				const urlOpts: FetchOpts = {
-					...fetchOpts,
-					...(browserPool ? { browserPool } : {}),
-				};
+					const urlOpts: FetchOpts = {
+						...fetchOpts,
+						...(browserPool ? { browserPool } : {}),
+					};
 
-				if (router) {
-					const match = router.match(pageUrl);
-					if (match) {
-						if (match.mode) urlOpts.mode = match.mode as ScrapeMode;
-						if (match.browser) urlOpts.browser = match.browser;
-						if (match.os) urlOpts.os = match.os;
+					if (router) {
+						const match = router.match(pageUrl);
+						if (match) {
+							if (match.mode) urlOpts.mode = match.mode as ScrapeMode;
+							if (match.browser) urlOpts.browser = match.browser;
+							if (match.os) urlOpts.os = match.os;
+						}
 					}
-				}
 
-				const result = await pullPageEnhanced(pageUrl, urlOpts);
-				if (!result.ok) {
-					const willRetry = await queue.fail(
-						pageUrl,
-						result.error ?? "Unknown error",
-					);
-					if (!willRetry) {
-						err++;
-						errors.push(`${pageUrl}: ${result.error}`);
+					const result = await pullPageEnhanced(pageUrl, urlOpts);
+					if (!result.ok) {
+						const willRetry = await queue.fail(
+							pageUrl,
+							result.error ?? "Unknown error",
+						);
+						if (!willRetry) {
+							err++;
+							errors.push(`${pageUrl}: ${result.error}`);
+						}
+						return;
 					}
-					return;
-				}
 
-				await queue.complete(pageUrl);
+					await queue.complete(pageUrl);
 
-				const page: Page = {
-					url: result.url!,
-					title: result.title || new URL(result.url!).pathname,
-					markdown:
-						frontmatter(result.title || "", result.url!, {
-							author: result.author,
-							published: result.published,
-							site: result.site,
-							language: result.language,
-							wordCount: result.wordCount,
-						}) + (result.content ?? ""),
-				};
+					const page: Page = {
+						url: result.url!,
+						title: result.title || new URL(result.url!).pathname,
+						markdown:
+							frontmatter(result.title || "", result.url!, {
+								author: result.author,
+								published: result.published,
+								site: result.site,
+								language: result.language,
+								wordCount: result.wordCount,
+							}) + (result.content ?? ""),
+					};
 
-				const rel = await writePage(page, outDir);
-				files.push(rel);
-				pageUrlToPath.set(page.url, rel);
-				pagePathToUrl.set(rel, page.url);
-				pagePathToTitle.set(rel, page.title || rel);
-				ok++;
+					const rel = await writePage(page, outDir);
+					files.push(rel);
+					pageUrlToPath.set(page.url, rel);
+					pagePathToUrl.set(rel, page.url);
+					pagePathToTitle.set(rel, page.title || rel);
+					ok++;
 
-				storeContent(result.url!, result.title, page.markdown, undefined, {
-					author: result.author,
-					published: result.published,
-					site: result.site,
-					language: result.language,
-					wordCount: result.wordCount,
-				});
-
-				const qStats = queue.stats();
-				onUpdate?.({
-					content: [
-						{
-							type: "text",
-							text: `⏳ ${ok + err}/${totalUrls} pages processed — pulled ${result.title || page.url} → ${rel}`,
-						},
-					],
-					details: {
-						stage: "stream",
-						ok,
-						err,
-						total: totalUrls,
-						file: rel,
-						title: result.title,
-						url: result.url,
+					storeContent(result.url!, result.title, page.markdown, undefined, {
+						author: result.author,
+						published: result.published,
+						site: result.site,
+						language: result.language,
 						wordCount: result.wordCount,
-						queueStats: qStats,
-					},
-				});
-			});
+					});
 
-			if (browserPool) {
-				await browserPool.drain();
-			}
-			if (queue) {
-				await queue.close();
-			}
-			if (wreqSession) {
-				try {
-					await wreqSession.close();
-				} catch {
-					/* best-effort */
+					const qStats = queue.stats();
+					onUpdate?.({
+						content: [
+							{
+								type: "text",
+								text: `⏳ ${ok + err}/${totalUrls} pages processed — pulled ${result.title || page.url} → ${rel}`,
+							},
+						],
+						details: {
+							stage: "stream",
+							ok,
+							err,
+							total: totalUrls,
+							file: rel,
+							title: result.title,
+							url: result.url,
+							wordCount: result.wordCount,
+							queueStats: qStats,
+						},
+					});
+				});
+			} finally {
+				if (browserPool) {
+					await browserPool.drain();
+				}
+				if (queue) {
+					await queue.close();
+				}
+				if (wreqSession) {
+					try {
+						await wreqSession.close();
+					} catch {
+						/* best-effort */
+					}
 				}
 			}
 

@@ -96,6 +96,8 @@ export function getLatestChromeProfile(): string {
 export class TokenBucket {
 	private tokens: number;
 	private lastRefill: number;
+	/** Simple lock to prevent concurrent acquire() corruption */
+	private lockPromise: Promise<void> = Promise.resolve();
 
 	constructor(
 		private maxTokens: number,
@@ -118,16 +120,27 @@ export class TokenBucket {
 	}
 
 	async acquire(): Promise<void> {
-		this.refill();
-		if (this.tokens < 1) {
-			const deficit = 1 - this.tokens;
-			const wait = Math.ceil(
-				(deficit / this.refillRate) * this.refillIntervalMs,
-			);
-			await new Promise((r) => setTimeout(r, wait));
+		// Acquire lock to prevent concurrent refill + decrement races
+		let releaseLock: () => void;
+		const lockAcquired = new Promise<void>((r) => (releaseLock = r));
+		const previousLock = this.lockPromise;
+		this.lockPromise = previousLock.then(() => lockAcquired);
+		await previousLock;
+
+		try {
 			this.refill();
+			if (this.tokens < 1) {
+				const deficit = 1 - this.tokens;
+				const wait = Math.ceil(
+					(deficit / this.refillRate) * this.refillIntervalMs,
+				);
+				await new Promise((r) => setTimeout(r, wait));
+				this.refill();
+			}
+			this.tokens--;
+		} finally {
+			releaseLock!();
 		}
-		this.tokens--;
 	}
 
 	reset(): void {

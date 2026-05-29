@@ -405,22 +405,6 @@ export async function summarizeUrl(
  * Takes existing search result snippets and feeds them to Google AI
  * for a unified summary with source attribution.
  */
-export function synthesizeWithGoogleAI(
-	query: string,
-	// We just re-run the search through Google AI — it handles synthesis natively
-	// by combining its own knowledge with the search context
-	options: {
-		headless?: boolean;
-		timeoutMs?: number;
-	} = {},
-): Promise<GoogleAIResult> {
-	// Google AI Mode (udm=50) already provides synthesized answers
-	// with source attribution, so we can just use it directly
-	return googleAISearch(query, {
-		headless: options.headless,
-		timeoutMs: options.timeoutMs,
-	});
-}
 
 // ─── CDP Availability Check ──────────────────────────────────────────
 

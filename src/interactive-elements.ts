@@ -56,15 +56,13 @@ function extractName(el: Element): { name: string; source: string } {
 	if (ariaLabel) return { name: ariaLabel, source: "aria-label" };
 
 	// For inputs, prefer placeholder over text content
+	// Note: Linkedom elements do not implement native DOM properties like
+	// HTMLInputElement.value — use getAttribute instead.
 	const tag = el.tagName.toLowerCase();
 	if (tag === "input" || tag === "textarea") {
 		const placeholder = el.getAttribute("placeholder")?.trim();
 		if (placeholder) return { name: placeholder, source: "placeholder" };
-		const value =
-			tag === "input"
-				? (el as HTMLInputElement).value?.trim()
-				: (el as HTMLTextAreaElement).value?.trim() ||
-					el.getAttribute("value")?.trim();
+		const value = el.getAttribute("value")?.trim();
 		if (value) return { name: value, source: "value" };
 	}
 
@@ -229,14 +227,10 @@ export function extractInteractables(html: string): InteractableElement[] {
 			path: buildPath(el),
 		};
 
-		// Value for inputs
+		// Value for inputs (Linkedom elements use getAttribute, not .value)
 		const tag = el.tagName.toLowerCase();
 		if (tag === "input" || tag === "textarea") {
-			const val =
-				tag === "input"
-					? (el as HTMLInputElement).value?.trim()
-					: (el as HTMLTextAreaElement).value?.trim() ||
-						el.getAttribute("value")?.trim();
+			const val = el.getAttribute("value")?.trim();
 			if (val) entry.value = val;
 		}
 

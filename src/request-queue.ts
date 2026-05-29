@@ -42,6 +42,8 @@ export class RequestQueue {
 	private queuePath: string;
 	private saveTimer: ReturnType<typeof setTimeout> | null = null;
 	private dirty = false;
+	/** Simple promise-based lock to prevent race conditions in next() */
+	private lockPromise: Promise<void> = Promise.resolve();
 
 	private constructor(outDir: string, entries: Map<string, QueueEntry>) {
 		this.queuePath = join(outDir, QUEUE_FILENAME);
@@ -127,18 +129,30 @@ export class RequestQueue {
 	/**
 	 * Dequeue the next available URL (queued → in_progress).
 	 * Returns null if no queued URLs remain.
+	 * Lock-protected to prevent concurrent workers from grabbing the same URL.
 	 */
 	async next(): Promise<string | null> {
-		const now = Date.now();
-		for (const [, entry] of this.entries) {
-			if (entry.status === "queued" && entry.retries < MAX_RETRIES) {
-				entry.status = "in_progress";
-				entry.timestamp = now;
-				this.dirty = true;
-				return entry.url;
+		// Acquire lock
+		let releaseLock: () => void;
+		const lockAcquired = new Promise<void>((r) => (releaseLock = r));
+		const previousLock = this.lockPromise;
+		this.lockPromise = previousLock.then(() => lockAcquired);
+		await previousLock;
+
+		try {
+			const now = Date.now();
+			for (const [, entry] of this.entries) {
+				if (entry.status === "queued" && entry.retries < MAX_RETRIES) {
+					entry.status = "in_progress";
+					entry.timestamp = now;
+					this.dirty = true;
+					return entry.url;
+				}
 			}
+			return null;
+		} finally {
+			releaseLock!();
 		}
-		return null;
 	}
 
 	/**

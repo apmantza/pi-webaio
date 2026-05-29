@@ -153,7 +153,13 @@ export async function runPullFromQueue(
 		while (!queue.isDone()) {
 			const url = await queue.next();
 			if (!url) break;
-			await fn(url);
+			try {
+				await fn(url);
+			} catch {
+				// If fn throws, mark as failed so the URL is retried
+				// rather than stuck in-progress forever
+				await queue.fail(url, "Worker threw unhandled error").catch(() => {});
+			}
 		}
 	}
 
