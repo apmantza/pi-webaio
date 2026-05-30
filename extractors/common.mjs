@@ -52,24 +52,13 @@ export function cdp(args, timeoutMs = 30000) {
  */
 export async function getOrOpenTab(tabPrefix) {
 	if (tabPrefix) return tabPrefix;
-	// Reuse an existing page tab to prevent memory buildup
+	// Always open a fresh tab for each request (caller is responsible for closing)
 	const list = await cdp(["list"]);
-	const lines = list.split("\n").filter(l => l.trim());
-	// Find an existing page tab (prefer about:blank or google.com)
-	for (const line of lines) {
-		const parts = line.split("\t");
-		if (parts.length >= 3 && parts[1] && parts[1].includes("page")) {
-			const tabId = parts[0]?.trim();
-			if (tabId) return tabId;
-		}
-	}
-	// Fallback: use the first available tab
-	const anchor = lines[0]?.slice(0, 8);
+	const anchor = list.split("\n")[0]?.slice(0, 8);
 	if (!anchor)
 		throw new Error(
 			"No Chrome tabs found. Is Chrome running with --remote-debugging-port=9222?",
 		);
-	// Create a new tab only if no existing page tab found
 	const raw = await cdp([
 		"evalraw",
 		anchor,
