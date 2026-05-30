@@ -133,17 +133,21 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 			let httpCounts = { ddg: 0, brave: 0, yahoo: 0, bing: 0 };
 
 			if (result) {
+				// Both completed within timeout
 				httpResults = result[0].results;
 				googleResults = result[1].results;
 				httpCounts = (result[0] as any).httpCounts ?? httpCounts;
 			} else {
-				const settled = await Promise.allSettled([httpPromise, googlePromise]);
-				if (settled[0].status === "fulfilled") {
-					httpResults = settled[0].value.results;
-					httpCounts = (settled[0].value as any).httpCounts ?? httpCounts;
-				}
-				if (settled[1].status === "fulfilled")
-					googleResults = settled[1].value.results;
+				// Timeout: return whatever is available immediately, don't wait
+				// http engines usually finish in 3-5s, so use their results
+				try {
+					const httpResult = await Promise.race([httpPromise, Promise.resolve()]);
+					if (httpResult) {
+						httpResults = httpResult.results;
+						httpCounts = (httpResult as any).httpCounts ?? httpCounts;
+					}
+				} catch {}
+				// google results will be empty (timeout)
 			}
 
 			const buckets = buildResultBuckets(httpResults, "http");
