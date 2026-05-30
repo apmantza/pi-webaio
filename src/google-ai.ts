@@ -239,8 +239,8 @@ export async function ensureChrome(headless?: boolean): Promise<ChromeStatus> {
 						} else {
 							console.error("[ensureChrome] No webSocketDebuggerUrl in version response");
 						}
-					} catch (e) {
-						console.error("[ensureChrome] Failed to write DevToolsActivePort:", e.message);
+					} catch (e: unknown) {
+						console.error("[ensureChrome] Failed to write DevToolsActivePort:", e instanceof Error ? e.message : String(e));
 					}
 					return { running: true, ready: true };
 				}

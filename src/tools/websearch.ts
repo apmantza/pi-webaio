@@ -57,7 +57,7 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 			const useGoogle = params.google ?? true;
 			const startedAt = Date.now();
 
-			const SEARCH_TIMEOUT = 7000;
+			const SEARCH_TIMEOUT = 60000;
 
 			const engineNames = ["DDG", "Brave", "Yahoo", "Bing"];
 			if (useGoogle) engineNames.push("Google");
@@ -95,7 +95,7 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 			if (useGoogle && cdpAvailableGA() && isProviderAvailable("google")) {
 				googlePromise = (async () => {
 					try {
-						await ensureChrome();
+						console.error("BEFORE ensureChrome"); await ensureChrome(); console.error("AFTER ensureChrome");
 						const g = await googleSearch(query, {
 							timeoutMs: SEARCH_TIMEOUT,
 							maxResults: max,
@@ -109,7 +109,7 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 								domain: extractDomain(r.url),
 							})),
 						};
-					} catch (err) {
+					} catch (err) { console.error("GOOGLE SEARCH ERROR:", err);
 						recordProviderNetworkFailure("google", String(err));
 						return { source: "google" as const, results: [] };
 					}
