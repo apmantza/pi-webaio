@@ -193,7 +193,7 @@ async function main() {
 		await dismissConsent(tab, cdp);
 
 		// Wait for search box to be ready
-		const deadline = Date.now() + 8000;
+		const deadline = Date.now() + 15000;
 		while (Date.now() < deadline) {
 			const ready = await cdp([
 				"eval",
@@ -226,6 +226,13 @@ async function main() {
 			url: finalUrl,
 			results,
 		});
+
+		// Close the tab we created to prevent memory buildup
+		try {
+			await cdp(["evalraw", tab, "Target.closeTarget", JSON.stringify({ targetId: tab })]);
+		} catch {
+			// Ignore close errors
+		}
 	} catch (e) {
 		handleError(e);
 	}
