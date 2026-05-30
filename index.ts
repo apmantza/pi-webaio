@@ -18,8 +18,12 @@ export default function (pi: ExtensionAPI) {
 	// Load persisted content cache from disk (lazy — contents loaded on first access)
 	loadContentCacheFromDisk();
 
-	// Start session cache cleanup
-	setInterval(cleanupSessionCache, SESSION_CACHE_CLEANUP_MS);
+	// Start session cache cleanup.
+	// .unref() so this recurring timer does not keep the Node.js event loop
+	// alive on its own. Without it, one-shot `pi -p` invocations never exit:
+	// the agent finishes and prints its answer, but the process hangs until
+	// killed because the ref'd interval keeps the loop running.
+	setInterval(cleanupSessionCache, SESSION_CACHE_CLEANUP_MS).unref();
 
 	// Register all 6 tools
 	registerWebfetchTool(pi);
