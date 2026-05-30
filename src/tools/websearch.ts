@@ -57,7 +57,7 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 			const useGoogle = params.google ?? true;
 			const startedAt = Date.now();
 
-			const SEARCH_TIMEOUT = 60000;
+			const SEARCH_TIMEOUT = 21000;
 
 			const engineNames = ["DDG", "Brave", "Yahoo", "Bing"];
 			if (useGoogle) engineNames.push("Google");
