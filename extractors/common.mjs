@@ -23,6 +23,7 @@ export function cdp(args, timeoutMs = 30000) {
 	return new Promise((resolve, reject) => {
 		const proc = spawn(process.execPath, [CDP, ...args], {
 			stdio: ["ignore", "pipe", "pipe"],
+			env: process.env,
 		});
 		let out = "";
 		let err = "";

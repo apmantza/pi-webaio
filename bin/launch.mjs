@@ -76,6 +76,7 @@ const BASE_CHROME_FLAGS = [
 	"--window-size=1920,1080",
 	"--lang=en-US",
 	"--force-color-profile=srgb",
+	"--no-sandbox",
 ];
 
 function getChromeVersion(chromePath) {
@@ -415,17 +416,17 @@ async function main() {
 	}
 
 	const proc = spawn(CHROME_EXE, buildChromeFlags(CHROME_EXE), {
-		detached: true,
-		stdio: "ignore",
+		env: process.env,
+		stdio: ["ignore", "pipe", "pipe"],
 	});
-	proc.unref();
+	proc.stderr.on("data", (d) => process.stderr.write(d));
 	writeFileSync(PID_FILE, String(proc.pid));
 	// Write mode marker so ensureChrome() can detect headless vs visible
 	writeFileSync(MODE_FILE, isHeadless() ? "headless" : "visible", "utf8");
 
 	const portFileReady = await writePortFile();
 	if (!portFileReady) {
-		console.error("Chrome did not become ready within 15s.");
+		console.error("Chrome did not become ready within 30s.");
 		process.exit(1);
 	}
 
