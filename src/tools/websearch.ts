@@ -138,10 +138,13 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 				googleResults = result[1].results;
 				httpCounts = (result[0] as any).httpCounts ?? httpCounts;
 			} else {
-				// Timeout: return whatever is available immediately, don't wait
-				// http engines usually finish in 3-5s, so use their results
+				// Timeout: http engines usually finish in 3-5s
+				// Give them a short grace period (3s) to complete, then give up
 				try {
-					const httpResult = await Promise.race([httpPromise, Promise.resolve()]);
+					const httpResult = await Promise.race([
+						httpPromise,
+						new Promise<undefined>(r => setTimeout(r, 3000))
+					]);
 					if (httpResult) {
 						httpResults = httpResult.results;
 						httpCounts = (httpResult as any).httpCounts ?? httpCounts;
