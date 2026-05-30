@@ -67,10 +67,9 @@ export async function getOrOpenTab(tabPrefix) {
 	]);
 	const { targetId } = JSON.parse(raw);
 	await cdp(["list"]); // refresh cache
-	const tid = targetId.slice(0, 8);
 	// Inject stealth patches for anti-detection coverage (both headless + visible)
-	injectHeadlessStealth(tid).catch(() => {});
-	return tid;
+	injectHeadlessStealth(targetId.slice(0, 8)).catch(() => {});
+	return targetId;
 }
 
 // ============================================================================

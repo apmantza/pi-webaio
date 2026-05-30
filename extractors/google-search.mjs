@@ -229,7 +229,7 @@ async function main() {
 
 		// Close the tab we created to prevent memory buildup
 		try {
-			await cdp(["evalraw", tab, "Target.closeTarget", JSON.stringify({ targetId: tab })]);
+			await cdp(["evalraw", tab.slice(0, 8), "Target.closeTarget", JSON.stringify({ targetId: tab })]);
 		} catch {
 			// Ignore close errors
 		}
