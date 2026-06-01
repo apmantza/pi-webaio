@@ -39,7 +39,18 @@ export function isRetryableNetworkError(err: unknown): boolean {
 	);
 }
 
-export function buildHeaders(browser?: string): Record<string, string> {
+const OS_PLATFORM: Record<string, string> = {
+	windows: "Windows",
+	macos: "macOS",
+	linux: "Linux",
+	android: "Android",
+	ios: "iOS",
+};
+
+export function buildHeaders(
+	browser?: string,
+	os?: string,
+): Record<string, string> {
 	const headers: Record<string, string> = {
 		Accept:
 			"text/html,application/xhtml+xml,application/xml;q=0.9,text/markdown,*/*;q=0.8",
@@ -51,7 +62,7 @@ export function buildHeaders(browser?: string): Record<string, string> {
 		"Sec-Fetch-User": "?1",
 		"Upgrade-Insecure-Requests": "1",
 		"Sec-Ch-Ua-Mobile": "?0",
-		"Sec-Ch-Ua-Platform": '"Windows"',
+		"Sec-Ch-Ua-Platform": `"${OS_PLATFORM[os ?? DEFAULT_OS] ?? "Windows"}"`,
 	};
 
 	const version = (browser ?? DEFAULT_BROWSER).split("_").pop() || "145";
@@ -386,7 +397,10 @@ export async function fetchWithRetry(
 				: wreqFetch;
 			const res = await fetchFn(url, {
 				redirect: "follow",
-				headers: { ...buildHeaders(options.browser), ...options.headers },
+				headers: {
+					...buildHeaders(options.browser, options.os),
+					...options.headers,
+				},
 				browser: (options.browser ?? DEFAULT_BROWSER) as BrowserProfile,
 				os: (options.os ?? DEFAULT_OS) as EmulationOS,
 				...(options.proxy ? { proxy: options.proxy } : {}),
@@ -485,7 +499,10 @@ export async function smartFetch(
 
 	if (detectBotBlock(text).blocked) {
 		const fallbackBrowsers = ["firefox_147", "safari_26", "edge_145"];
-		const headers = { ...buildHeaders(), ...options.headers };
+		const headers = {
+			...buildHeaders(undefined, options.os),
+			...options.headers,
+		};
 		for (const fb of fallbackBrowsers) {
 			const fetchFn = options.wreqSession
 				? (u: string, init: any) => options.wreqSession.fetch(u, init)
