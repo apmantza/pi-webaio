@@ -416,10 +416,11 @@ async function main() {
 	}
 
 	const proc = spawn(CHROME_EXE, buildChromeFlags(CHROME_EXE), {
+		detached: true,
+		stdio: "ignore",
 		env: process.env,
-		stdio: ["ignore", "pipe", "pipe"],
 	});
-	proc.stderr.on("data", (d) => process.stderr.write(d));
+	proc.unref();
 	writeFileSync(PID_FILE, String(proc.pid));
 	// Write mode marker so ensureChrome() can detect headless vs visible
 	writeFileSync(MODE_FILE, isHeadless() ? "headless" : "visible", "utf8");

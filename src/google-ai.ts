@@ -6,8 +6,8 @@
  * as child processes.
  */
 
-import { spawn, execFile } from "node:child_process";
-import { existsSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -181,77 +181,44 @@ export async function ensureChrome(headless?: boolean): Promise<ChromeStatus> {
 	if (chromeLaunchPromise) return chromeLaunchPromise;
 
 	chromeLaunchPromise = (async () => {
-		const env = {
-			...process.env,
-			GREEDY_SEARCH_VISIBLE: useHeadless ? undefined : "1",
-		};
-		const profileDir = `${tmpdir().replace(/\\/g, "/")}/greedysearch-chrome-profile`;
-		const flags = [
-			"--remote-debugging-port=9222",
-			"--disable-features=DevToolsPrivacyUI",
-			"--no-first-run",
-			"--no-default-browser-check",
-			"--disable-default-apps",
-			"--disable-blink-features=AutomationControlled",
-			`--user-data-dir=${profileDir}`,
-			"--profile-directory=Default",
-			"--window-size=1920,1080",
-			"--lang=en-US",
-			"--no-sandbox",
-		];
-		if (useHeadless) flags.push("--headless=new");
-
-		console.error("[ensureChrome] Launching Chrome directly...");
-
-		// Use spawn to launch Chrome (detached, don't block on stderr)
-		const chromeProc = spawn("/usr/bin/chromium", flags, {
-			env,
-			detached: true,
-			stdio: "ignore",
-		});
-		chromeProc.unref();
-		console.error("[ensureChrome] Chrome spawned, PID=" + chromeProc.pid);
-
-		// Wait for Chrome to be ready
-		const http = await import("node:http");
-		const deadline = Date.now() + 30000;
-		while (Date.now() < deadline) {
-			try {
-				const res = await new Promise<{ ok: boolean; body: string }>((resolve, reject) => {
-					const req = http.get("http://localhost:9222/json/version", (res) => {
-						let body = "";
-						res.on("data", (d) => (body += d));
-						res.on("end", () => resolve({ ok: res.statusCode === 200, body }));
-					});
-					req.on("error", reject);
-					req.setTimeout(2000, () => { req.destroy(); reject(new Error("timeout")); });
-				});
-				if (res.ok) {
-					const d = JSON.parse(res.body);
-					console.error("[ensureChrome] Chrome ready:", d.Browser);
-					// Write DevToolsActivePort file
-					try {
-						if (d.webSocketDebuggerUrl) {
-							const ws = new URL(d.webSocketDebuggerUrl);
-							const portFile = join(profileDir, "DevToolsActivePort");
-							writeFileSync(portFile, ws.port + "\n" + ws.pathname, "utf8");
-							console.error("[ensureChrome] DevToolsActivePort written:", ws.port, ws.pathname);
-						} else {
-							console.error("[ensureChrome] No webSocketDebuggerUrl in version response");
-						}
-					} catch (e: unknown) {
-						console.error("[ensureChrome] Failed to write DevToolsActivePort:", e instanceof Error ? e.message : String(e));
-					}
-					return { running: true, ready: true };
-				}
-			} catch {}
-			await new Promise((r) => setTimeout(r, 1000));
+		const launchBin = resolvePath("bin", "launch.mjs");
+		if (!existsSync(launchBin)) {
+			throw new Error(
+				"Chrome CDP launcher not found (bin/launch.mjs is missing). AI summarization and Google search are unavailable without the CDP infrastructure.",
+			);
 		}
 
-		throw new Error("Chrome did not become ready within 30s");
+		const env: Record<string, string | undefined> = {
+			...process.env,
+			GREEDY_SEARCH_HEADLESS: useHeadless ? "1" : "0",
+			GREEDY_SEARCH_VISIBLE: useHeadless ? undefined : "1",
+		};
+		Object.keys(env).forEach((k) => {
+			if (env[k] === undefined) delete env[k];
+		});
+
+		const result = await runNodeChild([launchBin], {
+			env: env as Record<string, string>,
+			timeoutMs: 30000,
+			timeoutMessage: "Chrome launch timed out after 30s",
+		});
+
+		if (result.code === 0) {
+			return { running: true, ready: result.combined.includes("Ready") };
+		}
+		if (result.combined.includes("already running")) {
+			return { running: true, ready: true };
+		}
+		throw new Error(
+			`Chrome launch failed (exit ${result.code}): ${result.stderr || result.stdout}`,
+		);
 	})();
 
-	return await chromeLaunchPromise;
+	try {
+		return await chromeLaunchPromise;
+	} finally {
+		chromeLaunchPromise = null;
+	}
 }
 
 /**

@@ -57,7 +57,13 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 			const useGoogle = params.google ?? true;
 			const startedAt = Date.now();
 
-			const SEARCH_TIMEOUT = 21000;
+			const SEARCH_TIMEOUT = 7000;
+			// Chrome cold-start can take up to 30s; fire it in parallel so startup
+			// time does not consume the search-race window.
+			const chromeReady =
+				useGoogle && cdpAvailableGA() && isProviderAvailable("google")
+					? ensureChrome().catch(() => null)
+					: null;
 
 			const engineNames = ["DDG", "Brave", "Yahoo", "Bing"];
 			if (useGoogle) engineNames.push("Google");
@@ -92,10 +98,10 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 				source: "google";
 				results: SearchResult[];
 			}>;
-			if (useGoogle && cdpAvailableGA() && isProviderAvailable("google")) {
+			if (chromeReady) {
 				googlePromise = (async () => {
 					try {
-						console.error("BEFORE ensureChrome"); await ensureChrome(); console.error("AFTER ensureChrome");
+						await chromeReady;
 						const g = await googleSearch(query, {
 							timeoutMs: SEARCH_TIMEOUT,
 							maxResults: max,
@@ -109,7 +115,7 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 								domain: extractDomain(r.url),
 							})),
 						};
-					} catch (err) { console.error("GOOGLE SEARCH ERROR:", err);
+					} catch (err) {
 						recordProviderNetworkFailure("google", String(err));
 						return { source: "google" as const, results: [] };
 					}
@@ -121,8 +127,10 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 				});
 			}
 
+			// Outer timeout must cover Chrome cold-start (≤30s) + actual search.
+			const OUTER_TIMEOUT = chromeReady ? 40000 : SEARCH_TIMEOUT;
 			const timeoutPromise = new Promise<null>((r) =>
-				setTimeout(() => r(null), SEARCH_TIMEOUT),
+				setTimeout(() => r(null), OUTER_TIMEOUT),
 			);
 
 			const allPromise = Promise.all([httpPromise, googlePromise]);
@@ -133,24 +141,17 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 			let httpCounts = { ddg: 0, brave: 0, yahoo: 0, bing: 0 };
 
 			if (result) {
-				// Both completed within timeout
 				httpResults = result[0].results;
 				googleResults = result[1].results;
 				httpCounts = (result[0] as any).httpCounts ?? httpCounts;
 			} else {
-				// Timeout: http engines usually finish in 3-5s
-				// Give them a short grace period (3s) to complete, then give up
-				try {
-					const httpResult = await Promise.race([
-						httpPromise,
-						new Promise<undefined>(r => setTimeout(r, 3000))
-					]);
-					if (httpResult) {
-						httpResults = httpResult.results;
-						httpCounts = (httpResult as any).httpCounts ?? httpCounts;
-					}
-				} catch {}
-				// google results will be empty (timeout)
+				const settled = await Promise.allSettled([httpPromise, googlePromise]);
+				if (settled[0].status === "fulfilled") {
+					httpResults = settled[0].value.results;
+					httpCounts = (settled[0].value as any).httpCounts ?? httpCounts;
+				}
+				if (settled[1].status === "fulfilled")
+					googleResults = settled[1].value.results;
 			}
 
 			const buckets = buildResultBuckets(httpResults, "http");
