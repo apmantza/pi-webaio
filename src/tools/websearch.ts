@@ -58,6 +58,12 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 			const startedAt = Date.now();
 
 			const SEARCH_TIMEOUT = 7000;
+			// Chrome cold-start can take up to 30s; fire it in parallel so startup
+			// time does not consume the search-race window.
+			const chromeReady =
+				useGoogle && cdpAvailableGA() && isProviderAvailable("google")
+					? ensureChrome().catch(() => null)
+					: null;
 
 			const engineNames = ["DDG", "Brave", "Yahoo", "Bing"];
 			if (useGoogle) engineNames.push("Google");
@@ -92,10 +98,10 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 				source: "google";
 				results: SearchResult[];
 			}>;
-			if (useGoogle && cdpAvailableGA() && isProviderAvailable("google")) {
+			if (chromeReady) {
 				googlePromise = (async () => {
 					try {
-						await ensureChrome();
+						await chromeReady;
 						const g = await googleSearch(query, {
 							timeoutMs: SEARCH_TIMEOUT,
 							maxResults: max,
@@ -121,8 +127,10 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 				});
 			}
 
+			// Outer timeout must cover Chrome cold-start (≤30s) + actual search.
+			const OUTER_TIMEOUT = chromeReady ? 40000 : SEARCH_TIMEOUT;
 			const timeoutPromise = new Promise<null>((r) =>
-				setTimeout(() => r(null), SEARCH_TIMEOUT),
+				setTimeout(() => r(null), OUTER_TIMEOUT),
 			);
 
 			const allPromise = Promise.all([httpPromise, googlePromise]);

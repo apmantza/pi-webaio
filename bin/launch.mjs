@@ -76,6 +76,7 @@ const BASE_CHROME_FLAGS = [
 	"--window-size=1920,1080",
 	"--lang=en-US",
 	"--force-color-profile=srgb",
+	"--no-sandbox",
 ];
 
 function getChromeVersion(chromePath) {
@@ -417,6 +418,7 @@ async function main() {
 	const proc = spawn(CHROME_EXE, buildChromeFlags(CHROME_EXE), {
 		detached: true,
 		stdio: "ignore",
+		env: process.env,
 	});
 	proc.unref();
 	writeFileSync(PID_FILE, String(proc.pid));
@@ -425,7 +427,7 @@ async function main() {
 
 	const portFileReady = await writePortFile();
 	if (!portFileReady) {
-		console.error("Chrome did not become ready within 15s.");
+		console.error("Chrome did not become ready within 30s.");
 		process.exit(1);
 	}
 
