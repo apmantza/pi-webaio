@@ -20,11 +20,18 @@ const CDP = join(__dir, "..", "bin", "cdp.mjs");
  * @returns {Promise<string>} Command output
  */
 export function cdp(args, timeoutMs = 30000) {
+	return cdpWithInput(args, null, timeoutMs);
+}
+
+export function cdpWithInput(args, input = null, timeoutMs = 30000) {
 	return new Promise((resolve, reject) => {
 		const proc = spawn(process.execPath, [CDP, ...args], {
-			stdio: ["ignore", "pipe", "pipe"],
-			env: process.env,
+			stdio: [input == null ? "ignore" : "pipe", "pipe", "pipe"],
 		});
+		if (input != null) {
+			proc.stdin.write(input);
+			proc.stdin.end();
+		}
 		let out = "";
 		let err = "";
 		proc.stdout.on("data", (d) => (out += d));
@@ -52,7 +59,7 @@ export function cdp(args, timeoutMs = 30000) {
  */
 export async function getOrOpenTab(tabPrefix) {
 	if (tabPrefix) return tabPrefix;
-	// Always open a fresh tab for each request (caller is responsible for closing)
+	// Always open a fresh tab to avoid SPA navigation issues
 	const list = await cdp(["list"]);
 	const anchor = list.split("\n")[0]?.slice(0, 8);
 	if (!anchor)
@@ -67,9 +74,10 @@ export async function getOrOpenTab(tabPrefix) {
 	]);
 	const { targetId } = JSON.parse(raw);
 	await cdp(["list"]); // refresh cache
+	const tid = targetId.slice(0, 8);
 	// Inject stealth patches for anti-detection coverage (both headless + visible)
-	injectHeadlessStealth(targetId.slice(0, 8)).catch(() => {});
-	return targetId;
+	injectHeadlessStealth(tid).catch(() => {});
+	return tid;
 }
 
 // ============================================================================

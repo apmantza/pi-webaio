@@ -120,13 +120,6 @@ async function main() {
 			answer: formatAnswer(answer, short),
 			sources,
 		});
-
-		// Close the tab we created to prevent memory buildup
-		try {
-			await cdp(["evalraw", tab.slice(0, 8), "Target.closeTarget", JSON.stringify({ targetId: tab })]);
-		} catch {
-			// Ignore close errors
-		}
 	} catch (e) {
 		handleError(e);
 	}
