@@ -209,10 +209,7 @@ function getStepNameFromLogLine(line: string): string | null {
  * next line with a different step name (or end of log). Returns the
  * original log unchanged if the step name isn't found.
  */
-export function filterLogByStepName(
-	logText: string,
-	stepName: string,
-): string {
+export function filterLogByStepName(logText: string, stepName: string): string {
 	if (!logText || !stepName) return logText;
 	const lines = logText.split("\n");
 	let startIdx = -1;
@@ -270,8 +267,7 @@ export function filterLogByGroupMarker(
 	const wantNum = parseInt(stepIndex, 10);
 	if (!Number.isFinite(wantNum) || wantNum <= 0) return logText;
 	const groupRegex = /^##\[group\](.+?)(?:\s|$)/;
-	const groupPositions: Array<{ idx: number; name: string; num: number }> =
-		[];
+	const groupPositions: Array<{ idx: number; name: string; num: number }> = [];
 	for (let i = 0; i < lines.length; i++) {
 		const m = lines[i]!.match(groupRegex);
 		if (m) {
@@ -443,7 +439,11 @@ async function pullGitHubCheckLog(
 				if (!filterSucceeded && stepIndex) {
 					const order = getStepNamesInOrder(logText);
 					const wantNum = parseInt(stepIndex, 10);
-					if (Number.isFinite(wantNum) && wantNum > 0 && wantNum <= order.length) {
+					if (
+						Number.isFinite(wantNum) &&
+						wantNum > 0 &&
+						wantNum <= order.length
+					) {
 						resolvedStepName = order[wantNum - 1] ?? null;
 						if (resolvedStepName) {
 							const section = filterLogByStepName(logText, resolvedStepName);
@@ -477,9 +477,7 @@ async function pullGitHubCheckLog(
 					const fs = await import("node:fs/promises");
 					await fs.mkdir(outDir, { recursive: true });
 					const suffix =
-						stepIndex && filterSucceeded
-							? `-step${stepIndex}`
-							: "";
+						stepIndex && filterSucceeded ? `-step${stepIndex}` : "";
 					const outFile = `${outDir}/check-${checkId}${suffix}.log`;
 					await fs.writeFile(outFile, filtered, "utf8");
 					md += `\n<details>\n<summary>📋 Log saved to disk</summary>\n\n\`${outFile}\` (${filtered.length.toLocaleString()} chars)\n</details>\n`;

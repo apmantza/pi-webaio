@@ -30,7 +30,9 @@ test("parseGitHubCheckLogUrl handles /checks/{id}/logs/{step}", async () => {
 test("parseGitHubCheckLogUrl rejects non-GitHub URLs", async () => {
 	const { parseGitHubCheckLogUrl } = await import("../src/github-pipeline.ts");
 	assert.strictEqual(
-		parseGitHubCheckLogUrl("https://gitlab.com/owner/repo/commit/abc/checks/1/logs"),
+		parseGitHubCheckLogUrl(
+			"https://gitlab.com/owner/repo/commit/abc/checks/1/logs",
+		),
 		null,
 	);
 	assert.strictEqual(
@@ -41,16 +43,15 @@ test("parseGitHubCheckLogUrl rejects non-GitHub URLs", async () => {
 		parseGitHubCheckLogUrl("https://github.com/owner/repo/commit/abc"),
 		null,
 	);
-	assert.strictEqual(
-		parseGitHubCheckLogUrl("not a url"),
-		null,
-	);
+	assert.strictEqual(parseGitHubCheckLogUrl("not a url"), null);
 });
 
 test("parseGitHubCheckLogUrl rejects non-numeric check_id", async () => {
 	const { parseGitHubCheckLogUrl } = await import("../src/github-pipeline.ts");
 	assert.strictEqual(
-		parseGitHubCheckLogUrl("https://github.com/owner/repo/commit/abc/checks/xyz/logs"),
+		parseGitHubCheckLogUrl(
+			"https://github.com/owner/repo/commit/abc/checks/xyz/logs",
+		),
 		null,
 	);
 });
@@ -212,12 +213,9 @@ test("filterLogByGroupMarker finds section by index", async () => {
 
 test("filterLogByGroupMarker returns the last group when no follow-up marker exists", async () => {
 	const { filterLogByGroupMarker } = await import("../src/github-pipeline.ts");
-	const log = [
-		"##[group]Step A",
-		"line 1",
-		"##[group]Step B",
-		"line 2",
-	].join("\n");
+	const log = ["##[group]Step A", "line 1", "##[group]Step B", "line 2"].join(
+		"\n",
+	);
 	const section = filterLogByGroupMarker(log, "2");
 	assert.ok(section.includes("Step B"));
 	assert.ok(section.includes("line 2"));
@@ -260,7 +258,8 @@ test("pullGitHub with check log URL routes to check log handler", async () => {
 	assert.match(r.title || "", /check/);
 	// The content should mention the check name, log unavailability, or external CI.
 	const hasCheckName = r.content?.includes("Type-check") ?? false;
-	const hasLogUnavailable = r.content?.includes("Log content unavailable") ?? false;
+	const hasLogUnavailable =
+		r.content?.includes("Log content unavailable") ?? false;
 	const hasExternalCINote = r.content?.includes("External CI check") ?? false;
 	const hasViewOnGitHub = r.content?.includes("View on GitHub") ?? false;
 	assert.ok(
@@ -303,7 +302,9 @@ test("ghFetchWithFallback still throws when gh fallback disabled", async () => {
 		// Make a request to a non-existent repo: should fail with 404
 		// and the gh fallback is disabled, so it throws.
 		await assert.rejects(async () =>
-			ghFetchWithFallback("/repos/this-org-definitely-does-not-exist-12345/repo"),
+			ghFetchWithFallback(
+				"/repos/this-org-definitely-does-not-exist-12345/repo",
+			),
 		);
 	} finally {
 		if (prev === undefined) delete process.env.PI_WEBAIO_GH_FALLBACK;
