@@ -2,7 +2,7 @@
 
 ## What is this?
 
-pi-webaio is an **all-in-one web tools extension** for [pi](https://pi.dev) (the coding agent) that provides search, fetch, crawl, extraction, discovery, storage, and compilation capabilities via 6 tools: `aio-websearch`, `aio-webfetch`, `aio-webcontent`, `aio-webpull`, `aio-webmap`, and `aio-webresult`. It's published as `npm:pi-webaio` and installable via `pi install npm:pi-webaio`.
+pi-webaio is an **all-in-one web tools extension** for [pi](https://pi.dev) (the coding agent) that provides search, fetch, crawl, extraction, discovery, storage, compilation, and (v0.4.1+) opt-in paywall bypass capabilities via 6 tools: `aio-websearch`, `aio-webfetch`, `aio-webcontent`, `aio-webpull`, `aio-webmap`, and `aio-webresult`. It's published as `npm:pi-webaio` and installable via `pi install npm:pi-webaio`.
 
 ## Architecture
 
@@ -19,6 +19,8 @@ pi-webaio/
 │   ├── browser-pool.ts       ← Reusable Playwright browser instance pool
 │   ├── session-router.ts     ← Multi-fetcher URL routing (pattern → mode/extractor)
 │   ├── adaptive-selector.ts  ← Structural DOM fingerprinting for element relocation
+│   ├── paywall.ts            ← Paywall bypass engine — detection, strategy chain, bot UA fetch, archive.org fetch, Playwright block_js (v0.4.1)
+│   ├── paywall-sites.ts      ← Top-50+ paywall site strategy catalog (v0.4.1)
 │   ├── verticals/            ← API-first extractors for known sites
 │   │   ├── registry.ts       ← Pattern-matching registry
 │   │   ├── types.ts          ← Shared types
@@ -46,8 +48,9 @@ pi-webaio/
 │   ├── pi-coding-agent.d.ts  ← Minimal ExtensionAPI type declaration
 │   └── playwright.d.ts       ← Playwright type stub (optional dep)
 ├── tests/
-│   ├── unit.test.mjs         ← 144 unit tests (parsers, sitemap, discovery, caching)
+│   ├── unit.test.mjs         ← 145 unit tests (parsers, sitemap, discovery, caching)
 │   ├── new-features.test.mjs ← 31 unit tests (queue, router, adaptive selector, pool)
+│   ├── paywall.test.mjs      ← 54 unit tests (paywall detection, strategy chain, text stripping, site DB)
 │   ├── integration.test.mjs  ← Integration tests
 │   └── lib.mjs               ← Test helpers and fixtures
 ├── tsconfig.json
@@ -89,6 +92,7 @@ pi-webaio/
 - Bot protection fallback cycles through alternate browser profiles
 - Secret scanning blocks URLs with API keys/tokens
 - Prompt injection detection (warn/redact/tag)
+- **Opt-in paywall bypass** (v0.4.1) — `bypass: true` runs a strategy chain (`archive` → bot UAs → `block_js` → `cookies`) after `detectPaywall()` finds paywall markers (confidence ≥ 0.45). `bypassStrategies: [...]` lets you override the chain order. Set `PI_WEBAIO_DEBUG=1` to log every attempt.
 
 ### 3. `aio-webcontent`
 
@@ -103,12 +107,14 @@ pi-webaio/
 - Discovers pages via sitemap, navigation links, or crawling
 - Writes files preserving URL structure with YAML frontmatter
 - Concurrent workers (4 × CPU cores)
-- Parameters: `url`, `out`, `max` (default 100), `mode`, `browser`, `os`, `proxy`, `compile`
+- Parameters: `url`, `out`, `max` (default 100), `mode`, `browser`, `os`, `proxy`, `compile`, `bypass`
 - **Request queue**: persistent checkpoint/resume via `resume` param (default: auto-detect). Survives crashes and resumes mid-pull from last checkpoint.
 - **Session router**: route different URL patterns to different fetcher modes/extractors via `routes` param. Supports substring, glob (`*/docs/*`), and regex (`/^\/api\//`) patterns. First match wins.
 - **Browser pool**: when mode is `browser` or `auto`, Playwright instances are pooled and reused across pages (saves ~2-3s overhead per page). Auto-recycles after 50 navigations.
 - **Adaptive selectors**: `adaptive` flag enables structural fingerprinting — remembers element position to survive site redesigns.
+- **Opt-in paywall bypass** (v0.4.1) — `bypass: true` runs the per-domain strategy chain on every page in the pull. Curated top-50 sites (NYT, WSJ, FT, etc.) get tuned strategies; unknown sites use the generic chain (`archive` → `ua:googlebot` → `block_js`).
 - New in v0.4.0: `resume`, `routes`, `adaptive` parameters
+- New in v0.4.1: `bypass` parameter
 
 ### 5. `aio-webmap`
 
@@ -146,6 +152,31 @@ pi-webaio/
 | `src/browser-pool.ts`     | Reusable Playwright browser pool. Acquire/release lifecycle, auto-recycle after N navigations, crash recovery, configurable max browsers. |
 | `src/session-router.ts`   | URL pattern → fetcher mode routing. Supports substring, glob, and regex patterns. Per-route overrides for mode, extractor, browser, OS. |
 | `src/adaptive-selector.ts` | Structural DOM fingerprinting (tag path, text density, child signatures, attributes, sibling position). Weighted similarity scoring (0-1) with 0.45 threshold. Survives class/ID changes. |
+
+### New Modules (v0.4.1 — paywall bypass)
+
+| Module                  | Role                                                                                                                                              |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/paywall.ts`        | Paywall bypass engine. `detectPaywall()` (vendor + text marker detection, confidence-scored), `findStrategy()` (curated → group → generic), `bypassUrl()` (orchestrates strategy chain), `stripPaywallText()` (removes residual tails). 1014 LOC. |
+| `src/paywall-sites.ts`  | Top-50+ paywall site strategy catalog (`PAYWALL_SITES`, `PAYWALL_GROUPS`, `GENERIC_STRATEGY`). Covers NYT, WSJ, FT, WaPo, The Economist, Le Monde, FAZ, SMH, etc. + group entries for Hearst, Gannett, Advance Local, DPG Media, Condé Nast. 235 LOC. |
+
+### Paywall Bypass — Strategy Chain (v0.4.1)
+
+When `bypass: true` is passed to `aio-webfetch` or `aio-webpull`, and `detectPaywall()` returns `paywalled: true` (confidence ≥ 0.45), `bypassUrl()` runs each step in order and returns the first response that no longer contains paywall markers:
+
+| Step | Mechanism | Cost | Bypasses ~ |
+|------|-----------|------|-----------|
+| `archive` | Wayback Machine (`web.archive.org/web/2/{url}`) then `archive.ph/newest/{url}` | ~1-2s, free | 80% (most articles have at least one snapshot) |
+| `ua:googlebot` | Fetch with `Googlebot/2.1` UA + no `Sec-Ch-Ua` | ~500ms, free | 40% (Google News partners + soft paywalls) |
+| `ua:bingbot` | Fetch with `Bingbot/2.0` UA | ~500ms, free | ~20% (sites that whitelist both) |
+| `ua:facebookbot` | Fetch with `facebookexternalhit/1.1` UA | ~500ms, free | ~5% (sites that whitelist FB crawler) |
+| `referer:google` | Fetch with `Referer: https://www.google.com/` | ~500ms, free | ~5% (sites that check referer only) |
+| `block_js` | Playwright + `route.abort()` for 21 known paywall vendors (Piano, Tinypass, Poool, Zephr, Sophi, Pelcro, etc.) + DOM override script (hides `[class*="paywall"]`, restores `body.overflow = auto`, unlocks article containers) | ~3-5s, needs Playwright | 60% (any vendor-paywalled site) |
+| `cookies` | Fetch with cookies dropped | ~500ms, free | 10% (sites that track returning readers) |
+
+The first response that passes `detectPaywall()` is re-rendered through the same HTML → markdown pipeline (defuddle, Readability, etc.) so output is uniform. Final markdown is run through `stripPaywallText` to remove residual "Subscribe to continue reading" tails.
+
+The bypass flag is **opt-in** — a normal `aio-webfetch(url)` still gets the regular auto-escalation pipeline. Users must explicitly pass `bypass: true` to trigger the strategy chain. This is intentional, since paywall circumvention is a deliberate user action.
 
 ### New Modules (v0.3.0)
 
@@ -188,7 +219,18 @@ pi-webaio/
 
 ## Recent Changes
 
-### v0.4.1 — Anti-bot hardening & headless control (unreleased)
+### v0.4.1 — Anti-bot hardening, headless control, and paywall bypass (unreleased)
+
+**New: opt-in paywall bypass (`bypass: true`)**
+
+- `aio-webfetch` and `aio-webpull` now accept `bypass: true`. When the normal fetch returns content with paywall markers (confidence ≥ 0.45), `bypassUrl()` runs a strategy chain: `archive` (Wayback Machine / archive.ph) → bot UAs (`ua:googlebot`, `ua:bingbot`, `ua:facebookbot`) → `referer:google` → `block_js` (Playwright with paywall vendor script blocking + DOM override) → `cookies`. The first response that no longer contains paywall markers wins.
+- New `src/paywall.ts` (1014 LOC) with `detectPaywall()`, `findStrategy()`, `bypassUrl()`, `stripPaywallText()`, and the `KNOWN_PAYWALL_VENDORS` block list.
+- New `src/paywall-sites.ts` (235 LOC) with the top-50+ paywall site strategy catalog — direct entries for NYT, WSJ, FT, WaPo, The Economist, Le Monde, FAZ, SMH, The Atlantic, Vanity Fair, etc., plus group strategies for newspaper chains (Hearst, Gannett, Advance Local, DPG Media, Condé Nast, Axel Springer, Schibsted, Vox Media).
+- 54 unit tests in `tests/paywall.test.mjs` covering detection, strategy resolution, text stripping, bot UA, site DB integrity, and DOM override script.
+- New `bypassStrategies` parameter on `aio-webfetch` for custom chain ordering.
+- Debug knob `PI_WEBAIO_DEBUG=1` logs every bypass attempt and confidence score.
+
+**Issue #33 — Non-headless Chrome support**
 
 **Issue #33 — Non-headless Chrome support**
 - `GREEDY_SEARCH_VISIBLE=1` env var now respected by Google Search & AI summary
@@ -234,12 +276,13 @@ pi-webaio/
 
 ## Testing
 
-- `npm test` → runs existing unit tests (144 tests)
+- `npm test` → runs existing unit tests (145 tests)
 - `npm run test:new` → runs new feature tests (31 tests)
-- `npm run test:integration` → runs integration tests
-- `npm run test:all` → runs all 3 suites (181+ tests)
+- `npm run test:paywall` → runs paywall bypass tests (54 tests)
+- `npm run test:integration` → runs integration tests (5 tests)
+- `npm run test:all` → runs all 4 suites (235 tests total)
 - Tests use `node` directly (no test runner dependency)
-- New feature tests import TypeScript modules directly (Node 24 native strip-types)
+- New feature + paywall tests import TypeScript modules directly (Node 24 native strip-types)
 - Playwright tests gracefully handle both installed/uninstalled
 
 ## Dependencies

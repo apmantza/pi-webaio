@@ -8,7 +8,7 @@ All-in-one web access tools for [pi](https://pi.dev) with search, fetch, crawl, 
 
 **pi-webaio** is a pi extension that gives your agent eyes on the web. It registers six tools that let pi search, fetch, discover, and archive web content — all without API keys or paid services.
 
-When you search, pi-webaio queries 5 engines in parallel (DuckDuckGo, Brave, Yahoo, Bing, and Google via headless Chrome). Results that show up across multiple engines rank higher — consensus is a signal of quality. When you fetch a page, it tries 14 different extraction backends in order, stripping cookie banners and anti-bot noise along the way, so you get clean markdown instead of raw HTML soup.
+When you search, pi-webaio queries 5 engines in parallel (DuckDuckGo, Brave, Yahoo, Bing, and Google via headless Chrome). Results that show up across multiple engines rank higher — consensus is a signal of quality. When you fetch a page, it tries 14 different extraction backends in order, stripping cookie banners and anti-bot noise along the way, so you get clean markdown instead of raw HTML soup. Paywalled news sites (NYT, WaPo, FT, WSJ, etc.) can be bypassed on opt-in with a strategy chain that tries archive.org, bot-UA impersonation, and Playwright with paywall-script blocking.
 
 Long pages are automatically **AI-summarized** via Google AI Mode (headless Chrome) — you get a concise overview instantly, while the full content is always saved to disk for later inspection. For sites with API-first extractors (GitHub, YouTube, npm, PyPI, crates.io, RubyGems, Packagist, pub.dev, Go, NuGet, Reddit, Hacker News, arXiv, Stack Exchange, Wikipedia, Open Library, DEV.to, SonarCloud, docs sites), pi-webaio bypasses HTML scraping entirely and pulls structured data directly.
 
@@ -18,6 +18,7 @@ It's built for agents that need to:
 - **Read** — pull articles, docs, GitHub repos, PDFs, or YouTube transcripts into markdown
 - **Explore** — map out a website's pages before pulling them all
 - **Remember** — cached results survive restarts and can be retrieved by URL or ID
+- **Bypass** — opt-in paywall bypass for news sites that block non-subscribers
 
 No API keys. No subscriptions. No brittle scraping scripts. Just `pi install npm:pi-webaio` and go.
 
@@ -127,6 +128,26 @@ When the normal fetch pipeline hits a bot wall (Cloudflare, Anubis, DataDome, Pe
 
 This is all transparent — the `mode` parameter controls escalation: `auto` (default, escalates on detection), `fast` (no escalation), `fingerprint` (alternate browsers only), or `browser` (Playwright always).
 
+### Paywall bypass: when the content itself is gated
+
+For paywalled news sites (NYT, WSJ, FT, WaPo, The Economist, Le Monde, etc.), the `bypass: true` flag runs a strategy chain after the normal fetch detects a paywall. The chain tries each step in order and returns the first response that no longer contains paywall markers:
+
+| Step | Mechanism | Cost | Effectiveness |
+|------|-----------|------|---------------|
+| `archive` | Wayback Machine (`web.archive.org/web/2/{url}`) then `archive.ph` | ~1-2s, free | ~80% of articles have at least one snapshot |
+| `ua:googlebot` | Fetch with `Googlebot/2.1` UA + no `Sec-Ch-Ua` | ~500ms, free | ~40% (Google News partners + soft paywalls) |
+| `ua:bingbot` | Fetch with `Bingbot/2.0` UA | ~500ms, free | Similar to Googlebot, useful for sites that whitelist both |
+| `ua:facebookbot` | Fetch with `facebookexternalhit/1.1` UA | ~500ms, free | Small share, useful for sites that whitelist FB |
+| `referer:google` | Fetch with `Referer: https://www.google.com/` | ~500ms, free | ~5% of sites that check referer only |
+| `block_js` | Playwright with `route.abort()` for 21 known paywall vendors (Piano, Tinypass, Poool, Zephr, Sophi) + DOM override | ~3-5s, needs Playwright | ~60% of vendor-paywalled sites |
+| `cookies` | Fetch with cookies dropped (rejects `cf_clearance` etc.) | ~500ms, free | ~10% of sites that track returning readers |
+
+Top-50 news sites have curated strategies in `src/paywall-sites.ts` (NYT = `block_js` → `archive`; WSJ = `block_js` → `archive`; FT = `block_js` → `archive`; unknown domain = `archive` → `ua:googlebot` → `block_js`). The same flags work on `aio-webpull` to apply bypass to every page in a pull.
+
+Set `PI_WEBAIO_DEBUG=1` to log every bypass attempt and confidence score — useful when triaging sites that still block.
+
+**Note:** The bypass flag is opt-in. A normal `aio-webfetch(url)` gets the regular auto-escalation pipeline. You must explicitly pass `bypass: true` to trigger the strategy chain — this is intentional, since paywall circumvention is a deliberate user action.
+
 ## How search ranking works
 
 When you search, pi-webaio queries 5 engines in parallel: DuckDuckGo, Brave, Yahoo, Bing, and Google (via headless Chrome). Results are scored by two signals:
@@ -191,12 +212,36 @@ Use aio-webpull to download https://docs.example.com (max: 50 pages)
 Use aio-webpull to download https://docs.example.com (max: 50, browser: "edge_145", os: "macos")
 ```
 
+### Bypass a paywall (single URL)
+
+```
+Use aio-webfetch to download https://www.nytimes.com/2024/01/01/some-article (bypass: true)
+```
+
+If the normal fetch hits a paywall, pi-webaio tries `archive` → `ua:googlebot` → `ua:bingbot` → `ua:facebookbot` → `referer:google` → `block_js` → `cookies` in order, returning the first response that doesn't contain paywall markers.
+
+### Bypass with a custom strategy chain
+
+```
+Use aio-webfetch to download https://example.com/paywalled (bypass: true, bypassStrategies: ["archive", "ua:googlebot"])
+```
+
+Only tries Wayback Machine and Googlebot impersonation. Useful when you know a site only responds to specific strategies.
+
+### Bypass on a whole pull (every page)
+
+```
+Use aio-webpull to download https://www.ft.com (max: 50, bypass: true)
+```
+
+Applies the per-domain strategy chain to every page in the pull. NYT pages use `block_js → archive`; FT pages use `block_js → archive`; unknown sites fall through to the generic chain.
+
 ## Tools
 
 | Tool             | Description                                                                                                                                                                                                                                                                                                                           |
 | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `aio-websearch`  | Search the web using DuckDuckGo, Brave, Yahoo, Bing, and Google in parallel (no API keys required). Returns compact results with title, URL, and snippet. Results are ranked by cross-engine consensus — URLs returned by multiple engines rank higher. 7s cap. Google runs via headless Chrome CDP (auto-launched). 10-minute cache. |
-| `aio-webfetch`   | Fetch a single URL (or batch of URLs) and convert to markdown with anti-bot TLS fingerprinting. Long content is **AI-summarized** via Google AI Mode; full file always saved. Detects PDFs, GitHub repos, and Next.js RSC. Supports auto escalation.                                                                                  |
+| `aio-webfetch`   | Fetch a single URL (or batch of URLs) and convert to markdown with anti-bot TLS fingerprinting. Long content is **AI-summarized** via Google AI Mode; full file always saved. Detects PDFs, GitHub repos, and Next.js RSC. Supports auto escalation. Optional `bypass: true` runs a strategy chain to get past paywalls.                                              |
 | `aio-webcontent` | Retrieve previously fetched content from session storage by URL. Returns **full untruncated content** — no data loss.                                                                                                                                                                                                                 |
 | `aio-webmap`     | Discovery-only tool — finds pages via robots.txt, sitemaps, navigation links, and llms.txt without fetching content. Returns structured URL list.                                                                                                                                                                                     |
 | `aio-webresult`  | Retrieve a previously fetched result by persistent response ID. Survives restarts. Shows recent results if ID not found.                                                                                                                                                                                                              |
@@ -229,6 +274,8 @@ Use aio-webpull to download https://docs.example.com (max: 50, browser: "edge_14
 | `interactive`     | `boolean`  | `false`      | Extract interactive elements as numbered refs                                                         |
 | `start_index`     | `number`   | `0`          | Return content starting from this character index (0-based). Use with `max_length` for pagination.    |
 | `max_length`      | `number`   | unlimited    | Maximum characters to return. Use with `start_index` for pagination.                                  |
+| `bypass`          | `boolean`  | `false`      | If a paywall is detected, run a strategy chain (`archive` → bot UAs → `block_js` → `cookies`) to bypass. Opt-in. |
+| `bypassStrategies`| `string[]` | —            | Custom strategy chain order. Options: `archive`, `ua:googlebot`, `ua:bingbot`, `ua:facebookbot`, `referer:google`, `block_js`, `cookies`. |
 
 #### `aio-webcontent`
 
@@ -263,6 +310,7 @@ Use aio-webpull to download https://docs.example.com (max: 50, browser: "edge_14
 | `os`      | `string`  | `windows`    | OS profile for fingerprinting. Options: `windows`, `macos`, `linux`, `android`, `ios`                 |
 | `proxy`   | `string`  | —            | Proxy URL (`http://user:pass@host:port` or `socks5://host:port`). Supports HTTP, HTTPS, SOCKS5.       |
 | `compile` | `boolean` | `false`      | Compile pulled pages into a single context package                                                    |
+| `bypass`  | `boolean` | `false`      | If a paywall is detected on any page, run the per-domain strategy chain to bypass. Opt-in.            |
 
 ## License
 
