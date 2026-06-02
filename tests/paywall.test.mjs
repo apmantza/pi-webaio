@@ -207,12 +207,17 @@ test("detectPaywall is case-insensitive", () => {
 	assert.strictEqual(r.paywalled, true);
 });
 
-test("detectPaywall only scans first 16KB of content", () => {
-	// 17KB of padding, then a paywall marker — should NOT be detected.
+test("detectPaywall scans past the 16KB head window (regression)", () => {
+	// 17KB of padding, then a paywall marker. Earlier versions limited
+	// the scan to the first 16KB and missed this, which meant the
+	// bypass engine treated the response as "clean" and returned a
+	// still-paywalled page (e.g. macropolis.gr Googlebot fetch has
+	// the curtain at position ~16,800). The scan now covers the
+	// whole text on pages > 20KB.
 	const padding = "a".repeat(17000);
 	const html = `<p>${padding}Subscribe to continue reading</p>`;
 	const r = detectPaywall(html);
-	assert.strictEqual(r.paywalled, false);
+	assert.strictEqual(r.paywalled, true);
 });
 
 // ─── findStrategy ──────────────────────────────────────────────────
@@ -617,4 +622,46 @@ test("isKnownPaywallSite returns false for non-paywall sites", async () => {
 	);
 	assert.strictEqual(isKnownPaywallSite("https://github.com/foo/bar"), false);
 	assert.strictEqual(isKnownPaywallSite("not a url"), false);
+});
+
+test("detectPaywall finds markers past the 16KB head window", async () => {
+	const { detectPaywall } = await import("../src/paywall.ts");
+	// Build a fake page with 17KB of legitimate HTML (header, nav, ads)
+	// followed by a paywall curtain. The old 16KB head-sample limit
+	// would have missed this; the new full-scan path catches it.
+	const pad = "<div>lorem ipsum dolor sit amet</div>\n".repeat(420); // ~17KB
+	const page =
+		pad +
+		'<p class="restricted-message">You need a subscription to access our analysis. Please choose one of the packages available.</p>';
+	const result = detectPaywall(page);
+	assert.strictEqual(result.paywalled, true, "should detect deep paywall");
+	assert.ok(
+		result.matchedMarkers.some((m) => m.includes("you need a subscription")),
+		`expected 'you need a subscription' marker, got: ${result.matchedMarkers.join(", ")}`,
+	);
+	assert.ok(
+		result.confidence >= 0.45,
+		`confidence should be >= 0.45, got ${result.confidence}`,
+	);
+});
+
+test("detectPaywall finds markers in the tail window", async () => {
+	const { detectPaywall } = await import("../src/paywall.ts");
+	// The curtain is at the very end of the rendered markdown (defuddle
+	// order is article-preview then paywall-curtain).
+	const page =
+		"# Some Article\n\n".repeat(800) +
+		"You need a subscription to access this content.\n";
+	const result = detectPaywall(page);
+	assert.strictEqual(result.paywalled, true);
+	assert.ok(result.matchedMarkers.length > 0);
+});
+
+test("detectPaywall does not match clean content >20KB", async () => {
+	const { detectPaywall } = await import("../src/paywall.ts");
+	// Large clean article — no paywall markers, no truncation tail.
+	const clean = "# Big Article\n\n" + "Lorem ipsum dolor sit amet. ".repeat(1500);
+	const result = detectPaywall(clean);
+	assert.strictEqual(result.paywalled, false);
+	assert.strictEqual(result.matchedMarkers.length, 0);
 });

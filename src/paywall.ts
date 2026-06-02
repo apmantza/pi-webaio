@@ -140,14 +140,29 @@ export const PAYWALL_MARKERS: Array<{
 
 // ─── Paywall detection ─────────────────────────────────────────────
 
-const PAYWALL_SAMPLE_SIZE = 16000; // first 16KB is enough — markers are near top
+// Markers are scanned in three windows so we can catch paywall
+// curtains that appear at any position in the page:
+//   - HEAD_WINDOW: opening paragraph, "this article is for subscribers"
+//   - TAIL_WINDOW: closing curtain, sign-in form, "you need a subscription"
+//   - FULL_SCAN: matches anywhere (the 16KB head limit used to miss
+//     markers that were buried under a long header/nav, e.g. raw HTML
+//     from a Googlebot fetch of macropolis.gr has the curtain at
+//     position ~16,800)
+const HEAD_WINDOW = 16_000;
+const TAIL_WINDOW = 4_000;
+// Only enable full-scan if the page is large enough that head+tail
+// coverage might miss. Short pages are covered by the head alone.
+const FULL_SCAN_THRESHOLD = 20_000;
 
 export function detectPaywall(text: string): PaywallDetection {
 	if (!text) {
 		return { paywalled: false, confidence: 0, matchedMarkers: [] };
 	}
 
-	const sample = text.slice(0, PAYWALL_SAMPLE_SIZE).toLowerCase();
+	const lower = text.toLowerCase();
+	const head = lower.slice(0, HEAD_WINDOW);
+	const tail = lower.slice(-TAIL_WINDOW);
+	const scan = text.length > FULL_SCAN_THRESHOLD ? lower : head;
 
 	// Truncation detection: if the article ends with a "..." or short
 	// paragraph after <article>, it's likely a soft paywall that
@@ -160,10 +175,26 @@ export function detectPaywall(text: string): PaywallDetection {
 	let confidence = 0;
 
 	for (const marker of PAYWALL_MARKERS) {
-		if (sample.includes(marker.text)) {
+		// Vendor markers (script src patterns) are rare and global —
+		// always check the full text.
+		// Text markers — check head, tail, and (for large pages) the
+		// full scan, so we don't miss curtains that sit between the
+		// head and tail windows.
+		if (marker.vendor) {
+			if (lower.includes(marker.text)) {
+				matchedMarkers.push(marker.text);
+				totalWeight += marker.weight;
+				if (marker.vendor && !vendor) vendor = marker.vendor;
+			}
+			continue;
+		}
+		if (
+			scan.includes(marker.text) ||
+			head.includes(marker.text) ||
+			tail.includes(marker.text)
+		) {
 			matchedMarkers.push(marker.text);
 			totalWeight += marker.weight;
-			if (marker.vendor && !vendor) vendor = marker.vendor;
 		}
 	}
 
