@@ -175,7 +175,10 @@ function ghFallbackEnabled(): boolean {
  * Run `gh <args>` and capture stdout. Rejects on non-zero exit.
  * Uses async execFile so it doesn't block the event loop.
  */
-function execGh(args: string[], opts: { stdin?: string } = {}): Promise<string> {
+function execGh(
+	args: string[],
+	opts: { stdin?: string } = {},
+): Promise<string> {
 	return new Promise((resolve, reject) => {
 		const ghPath = resolveGhBinary();
 		if (!ghPath) {
@@ -193,7 +196,10 @@ function execGh(args: string[], opts: { stdin?: string } = {}): Promise<string> 
 		proc.on("error", reject);
 		proc.on("close", (code: number) => {
 			if (code === 0) resolve(stdout);
-			else reject(new Error(`gh ${args[0]} exited ${code}: ${stderr.slice(0, 500)}`));
+			else
+				reject(
+					new Error(`gh ${args[0]} exited ${code}: ${stderr.slice(0, 500)}`),
+				);
 		});
 		if (opts.stdin) {
 			proc.stdin.write(opts.stdin);
@@ -279,7 +285,9 @@ export async function ghRunLogs(
  *   - The endpoint requires auth we don't have (e.g. private repos)
  *   - The endpoint returns 302 redirects we can't follow with auth
  */
-export async function ghFetchWithFallback<T = unknown>(path: string): Promise<T> {
+export async function ghFetchWithFallback<T = unknown>(
+	path: string,
+): Promise<T> {
 	try {
 		return await ghFetch<T>(path);
 	} catch (err: any) {

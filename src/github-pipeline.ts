@@ -189,36 +189,102 @@ function extractLogExcerpt(logText: string, maxLen = 3000): string {
 }
 
 /**
- * Optional step filter. GitHub CI logs are concatenated per-step with
- * `##[group]` markers. This finds the section between the matching step
- * name's group marker and the next one (or end of log).
+ * Extract the step name from a tab-separated log line. `gh run view --log`
+ * output prepends each line with `<step_name>\t` so the tool can identify
+ * which step produced each line. Returns null if the line doesn't have a
+ * tab-separated step prefix.
  */
-function filterLogByStep(logText: string, stepName: string | null, stepIndex: string | null): string {
-	if (!stepName && !stepIndex) return logText;
+function getStepNameFromLogLine(line: string): string | null {
+	if (!line) return null;
+	const tabIdx = line.indexOf("\t");
+	if (tabIdx <= 0) return null;
+	return line.slice(0, tabIdx);
+}
+
+/**
+ * Filter a tab-separated CI log to the section belonging to a specific step.
+ * `gh run view --log --job <id>` produces output where every line is
+ * `<step_name>\t<status>\t<timestamp>\t<log content>`. To find a step's
+ * section, we find the first line with that step name and slice up to the
+ * next line with a different step name (or end of log). Returns the
+ * original log unchanged if the step name isn't found.
+ */
+export function filterLogByStepName(
+	logText: string,
+	stepName: string,
+): string {
+	if (!logText || !stepName) return logText;
 	const lines = logText.split("\n");
-	const wantNum = stepIndex ? parseInt(stepIndex, 10) : -1;
-	// Find all group markers and their positions
+	let startIdx = -1;
+	for (let i = 0; i < lines.length; i++) {
+		if (getStepNameFromLogLine(lines[i]!) === stepName) {
+			startIdx = i;
+			break;
+		}
+	}
+	if (startIdx === -1) return logText;
+	let endIdx = lines.length;
+	for (let i = startIdx + 1; i < lines.length; i++) {
+		const name = getStepNameFromLogLine(lines[i]!);
+		if (name && name !== stepName) {
+			endIdx = i;
+			break;
+		}
+	}
+	return lines.slice(startIdx, endIdx).join("\n");
+}
+
+/**
+ * Get the ordered list of unique step names from a tab-separated log.
+ * Used as a final fallback when the API doesn't return step metadata.
+ * The 1-based index in the returned array corresponds to the URL's
+ * `/logs/{step}` index.
+ */
+export function getStepNamesInOrder(logText: string): string[] {
+	if (!logText) return [];
+	const lines = logText.split("\n");
+	const seen = new Set<string>();
+	const result: string[] = [];
+	for (const line of lines) {
+		const name = getStepNameFromLogLine(line);
+		if (name && !seen.has(name)) {
+			seen.add(name);
+			result.push(name);
+		}
+	}
+	return result;
+}
+
+/**
+ * Fallback step filter for logs that use `##[group]Run <step_name>`
+ * markers (older Actions format or the raw web UI rendering). Finds the
+ * section between the matching group marker and the next one. Returns
+ * the original log unchanged if no matching marker is found.
+ */
+export function filterLogByGroupMarker(
+	logText: string,
+	stepIndex: string | null,
+): string {
+	if (!logText || !stepIndex) return logText;
+	const lines = logText.split("\n");
+	const wantNum = parseInt(stepIndex, 10);
+	if (!Number.isFinite(wantNum) || wantNum <= 0) return logText;
 	const groupRegex = /^##\[group\](.+?)(?:\s|$)/;
-	const groupPositions: Array<{ idx: number; name: string; num: number }> = [];
+	const groupPositions: Array<{ idx: number; name: string; num: number }> =
+		[];
 	for (let i = 0; i < lines.length; i++) {
 		const m = lines[i]!.match(groupRegex);
 		if (m) {
-			groupPositions.push({ idx: i, name: m[1]!.trim(), num: groupPositions.length + 1 });
+			groupPositions.push({
+				idx: i,
+				name: m[1]!.trim(),
+				num: groupPositions.length + 1,
+			});
 		}
 	}
 	if (groupPositions.length === 0) return logText;
-
-	// Find target group
-	let target: { idx: number; num: number; name: string } | null = null;
-	if (stepName) {
-		target = groupPositions.find((g) => g.name === stepName) ?? null;
-	}
-	if (!target && wantNum > 0) {
-		target = groupPositions.find((g) => g.num === wantNum) ?? null;
-	}
+	const target = groupPositions.find((g) => g.num === wantNum);
 	if (!target) return logText;
-
-	// Slice from target to next group (or end)
 	const start = target.idx;
 	const nextGroup = groupPositions.find((g) => g.idx > start);
 	const end = nextGroup ? nextGroup.idx : lines.length;
@@ -273,8 +339,10 @@ async function pullGitHubCheckLog(
 		md += `${statusIcon} **${checkRun.name}** (${status} / ${conclusion || "pending"})\n`;
 		md += `- **Commit:** \`${sha.slice(0, 7)}\`\n`;
 		if (checkRun.started_at) md += `- **Started:** ${checkRun.started_at}\n`;
-		if (checkRun.completed_at) md += `- **Completed:** ${checkRun.completed_at}\n`;
-		if (checkRun.check_suite?.id) md += `- **Check suite:** #${checkRun.check_suite.id}\n`;
+		if (checkRun.completed_at)
+			md += `- **Completed:** ${checkRun.completed_at}\n`;
+		if (checkRun.check_suite?.id)
+			md += `- **Check suite:** #${checkRun.check_suite.id}\n`;
 		if (stepIndex) md += `- **Step:** #${stepIndex}\n`;
 		if (checkRun.html_url) md += `- [View on GitHub](${checkRun.html_url})\n`;
 
@@ -291,7 +359,10 @@ async function pullGitHubCheckLog(
 						const file = a.path || a.blob_href?.split("/").pop() || "?";
 						const line = a.start_line || a.end_line || "?";
 						const level = a.annotation_level || "?";
-						const msg = (a.message || "").slice(0, 200).replace(/\|/g, "\\|").replace(/\n/g, " ");
+						const msg = (a.message || "")
+							.slice(0, 200)
+							.replace(/\|/g, "\\|")
+							.replace(/\n/g, " ");
 						md += `\n| \`${file}\` | ${line} | ${level} | ${msg} |`;
 					}
 					if (annotations.length > 20) {
@@ -308,11 +379,21 @@ async function pullGitHubCheckLog(
 		if (isActions) {
 			const jobId = checkId; // Actions check_id == job_id
 			let runId: string | number | null = null;
+			let jobSteps: Array<{ number: number; name: string }> = [];
+			// Fetch the job once: gives us run_id and the canonical steps[] array
 			try {
 				const jobInfo = (await ghFetch<any>(
 					`/repos/${owner}/${repo}/actions/jobs/${jobId}`,
 				)) as any;
 				runId = jobInfo?.run_id ?? null;
+				if (Array.isArray(jobInfo?.steps)) {
+					jobSteps = jobInfo.steps
+						.map((s: any, i: number) => ({
+							number: typeof s?.number === "number" ? s.number : i + 1,
+							name: typeof s?.name === "string" ? s.name : `Step ${i + 1}`,
+						}))
+						.filter((s: { number: number; name: string }) => s.name);
+				}
 			} catch {
 				/* will try to get run_id from html_url */
 			}
@@ -328,30 +409,80 @@ async function pullGitHubCheckLog(
 			}
 
 			if (logText) {
-				// Optionally filter by step
-				const filtered = filterLogByStep(logText, null, stepIndex);
+				// Resolve step index -> step name via the API's steps[] array,
+				// then filter the tab-separated log to that step's section.
+				let filtered = logText;
+				let resolvedStepName: string | null = null;
+				let filterSucceeded = false;
+
+				if (stepIndex && jobSteps.length > 0) {
+					const wantNum = parseInt(stepIndex, 10);
+					if (Number.isFinite(wantNum) && wantNum > 0) {
+						const step = jobSteps.find((s) => s.number === wantNum);
+						if (step) {
+							resolvedStepName = step.name;
+							const section = filterLogByStepName(logText, step.name);
+							if (section !== logText) {
+								filtered = section;
+								filterSucceeded = true;
+							}
+						}
+					}
+				}
+
+				// Fallback 1: try `##[group]` marker format (older logs)
+				if (!filterSucceeded && stepIndex) {
+					const section = filterLogByGroupMarker(logText, stepIndex);
+					if (section !== logText) {
+						filtered = section;
+						filterSucceeded = true;
+					}
+				}
+
+				// Fallback 2: derive step order from the log itself
+				if (!filterSucceeded && stepIndex) {
+					const order = getStepNamesInOrder(logText);
+					const wantNum = parseInt(stepIndex, 10);
+					if (Number.isFinite(wantNum) && wantNum > 0 && wantNum <= order.length) {
+						resolvedStepName = order[wantNum - 1] ?? null;
+						if (resolvedStepName) {
+							const section = filterLogByStepName(logText, resolvedStepName);
+							if (section !== logText) {
+								filtered = section;
+								filterSucceeded = true;
+							}
+						}
+					}
+				}
+
 				const excerpt = extractLogExcerpt(filtered);
 
 				md += `\n## Log excerpt\n\n`;
-				if (stepIndex && filtered !== logText) {
+				if (stepIndex && filterSucceeded && resolvedStepName) {
+					md += `_Filtered to step #${stepIndex} (\u201c${resolvedStepName}\u201d)._\n\n`;
+				} else if (stepIndex && filterSucceeded) {
 					md += `_Filtered to step #${stepIndex}._\n\n`;
 				} else if (stepIndex) {
-					md += `_(step #${stepIndex} not found in log; showing tail)_\n\n`;
+					md += `_(step #${stepIndex} not found; showing tail)_\n\n`;
 				}
 				md += "```\n";
 				md += excerpt;
 				md += "\n```\n";
 
-				// Save full log to disk for reference
+				// Save the filtered (or full) log to disk for reference
 				try {
 					const safeOwner = owner.replace(/[^a-z0-9_-]/gi, "_");
 					const safeRepo = repo.replace(/[^a-z0-9_-]/gi, "_");
 					const outDir = `${BASE_TEMP}/github-logs/${safeOwner}-${safeRepo}`;
 					const fs = await import("node:fs/promises");
 					await fs.mkdir(outDir, { recursive: true });
-					const outFile = `${outDir}/check-${checkId}.log`;
+					const suffix =
+						stepIndex && filterSucceeded
+							? `-step${stepIndex}`
+							: "";
+					const outFile = `${outDir}/check-${checkId}${suffix}.log`;
 					await fs.writeFile(outFile, filtered, "utf8");
-					md += `\n<details>\n<summary>📋 Full log saved to disk</summary>\n\n\`${outFile}\` (${filtered.length.toLocaleString()} chars)\n</details>\n`;
+					md += `\n<details>\n<summary>📋 Log saved to disk</summary>\n\n\`${outFile}\` (${filtered.length.toLocaleString()} chars)\n</details>\n`;
 				} catch {
 					/* best effort */
 				}
@@ -395,12 +526,7 @@ async function pullGitHubFeature(url: string): Promise<PullResult | null> {
 		// ── Handle /commit/{sha}/checks/{check_id}/logs/{step?} ──
 		// Must come BEFORE the bare /commit/{sha} branch so the check
 		// log is fetched instead of the commit metadata.
-		if (
-			feature === "commit" &&
-			rest[0] &&
-			rest[1] === "checks" &&
-			rest[2]
-		) {
+		if (feature === "commit" && rest[0] && rest[1] === "checks" && rest[2]) {
 			return pullGitHubCheckLog(
 				url,
 				owner,

@@ -225,7 +225,7 @@ The bypass flag is **opt-in** — a normal `aio-webfetch(url)` still gets the re
 
 **New: GitHub check run log handler** (replaces silent fallthrough to commit metadata)
 
-- `aio-webfetch` (and `aio-webpull`) now handles `/commit/{sha}/checks/{check_id}/logs/{step?}` URLs. Previously, these silently returned commit metadata, dropping the check ID and logs entirely. The new `pullGitHubCheckLog()` function in `src/github-pipeline.ts` fetches check-runs metadata via the REST API, then for Actions jobs (`app.slug === "github-actions"`) calls `gh run view <id> --job <id> --log` via the gh CLI to get plain-text logs (handles 302→S3 zip redirect + auth internally). Rendered markdown includes status, conclusion, full annotations table, log excerpt (last 15 error lines or 50 tail lines), and a `<details>` block with the path to the full log saved to `os.tmpdir()/pi-webaio/github-logs/`. The step index in the URL is honored when log has `##[group]` markers. External CI apps return check metadata + annotations only with a "View on GitHub" link.
+- `aio-webfetch` (and `aio-webpull`) now handles `/commit/{sha}/checks/{check_id}/logs/{step?}` URLs. Previously, these silently returned commit metadata, dropping the check ID and logs entirely. The new `pullGitHubCheckLog()` function in `src/github-pipeline.ts` fetches check-runs metadata via the REST API, then for Actions jobs (`app.slug === "github-actions"`) calls `gh run view <id> --job <id> --log` via the gh CLI to get plain-text logs (handles 302→S3 zip redirect + auth internally). Rendered markdown includes status, conclusion, full annotations table, log excerpt (last 15 error lines or 50 tail lines), and a `<details>` block with the path to the filtered log saved to `os.tmpdir()/pi-webaio/github-logs/`. **The step index in the URL is honored**: the job's `steps[]` array from the API is used to resolve the index to a step name, then the tab-separated log is sliced to that step's section. Two fallback paths handle older log formats: `##[group]` markers and order derived from the log itself. Filtered logs are saved to a separate `check-{id}-step{N}.log` file. External CI apps return check metadata + annotations only with a "View on GitHub" link.
 
 **New: gh CLI fallback infrastructure** (3 new helpers in `src/github-api.ts`)
 
@@ -292,9 +292,9 @@ The bypass flag is **opt-in** — a normal `aio-webfetch(url)` still gets the re
 - `npm test` → runs existing unit tests (145 tests)
 - `npm run test:new` → runs new feature tests (31 tests)
 - `npm run test:paywall` → runs paywall bypass tests (54 tests)
-- `npm run test:check` → runs GitHub check log tests (11 tests)
+- `npm run test:check` → runs GitHub check log tests (22 tests)
 - `npm run test:integration` → runs integration tests (5 tests)
-- `npm run test:all` → runs all 5 suites (246 tests total)
+- `npm run test:all` → runs all 5 suites (257 tests total)
 - Tests use `node` directly (no test runner dependency)
 - New feature + paywall + check log tests import TypeScript modules directly (Node 24 native strip-types)
 - Playwright tests gracefully handle both installed/uninstalled
