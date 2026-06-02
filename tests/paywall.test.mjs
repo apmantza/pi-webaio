@@ -660,7 +660,8 @@ test("detectPaywall finds markers in the tail window", async () => {
 test("detectPaywall does not match clean content >20KB", async () => {
 	const { detectPaywall } = await import("../src/paywall.ts");
 	// Large clean article — no paywall markers, no truncation tail.
-	const clean = "# Big Article\n\n" + "Lorem ipsum dolor sit amet. ".repeat(1500);
+	const clean =
+		"# Big Article\n\n" + "Lorem ipsum dolor sit amet. ".repeat(1500);
 	const result = detectPaywall(clean);
 	assert.strictEqual(result.paywalled, false);
 	assert.strictEqual(result.matchedMarkers.length, 0);
