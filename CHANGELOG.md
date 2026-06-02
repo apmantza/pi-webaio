@@ -1,3 +1,16 @@
+## [0.4.2] - 2026-06-02
+
+### Fixed
+
+- **Paywall bypass on mid-page paywall markers** -- detectPaywall() 16KB head-sample was too small for raw HTML from the bypass chain (e.g. macropolis.gr Googlebot response has the paywall curtain at position ~16,800). Replaced with three-window scan: 16KB head + 4KB tail + full text on pages >20KB.
+- **Reject still-paywalled bypass results** -- pullPageEnhanced now checks bypassed.paywall.paywalled before accepting a bypassed response. When Googlebot still serves the paywall or Playwright is not installed, the user sees the honest bypass strategies exhausted notice instead of a misleading 100% clean success.
+- **B2B and analysis-site paywall markers** -- Added 19 new high-weight text markers covering macropolis.gr and similar EU-policy sites.
+
+### Added
+
+- **Chromium output detection** -- detectChromiumError() recognizes Chromium running without the --no-sandbox flag errors so they do not get mistaken for paywall markers.
+- **57 new unit tests** covering deep-marker detection, tail detection, bypass safety, and large-page scanning.
+
 # Changelog
 
 All notable changes to this project will be documented in this file.
