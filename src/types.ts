@@ -124,6 +124,30 @@ export interface FetchOpts {
 	};
 	/** wreq-js session for cookie persistence and connection reuse */
 	wreqSession?: any;
+	/**
+	 * Enable paywall bypass. When the primary fetch returns content
+	 * that looks paywalled, retry using a chain of bypass strategies
+	 * (bot UA, archive.org, JS script blocking) before giving up.
+	 * See src/paywall.ts for details.
+	 */
+	bypass?: boolean;
+	/**
+	 * Override the default paywall bypass strategy chain. Useful for
+	 * one-off fetches where you know exactly which trick works.
+	 * e.g. ["archive"] to skip UA spoofer and go straight to Wayback.
+	 */
+	bypassStrategies?: Array<
+		| "ua:googlebot"
+		| "ua:bingbot"
+		| "ua:facebookbot"
+		| "ua:custom"
+		| "referer:google"
+		| "block_js"
+		| "archive"
+		| "archive_first"
+		| "cookies"
+		| "auto"
+	>;
 }
 
 export interface StoredContent {

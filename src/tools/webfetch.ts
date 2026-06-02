@@ -110,6 +110,18 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 						"Maximum characters to return (default: unlimited). Use with start_index for pagination.",
 				}),
 			),
+			bypass: Type.Optional(
+				Type.Boolean({
+					description:
+						"Enable paywall bypass. If the fetched content looks paywalled, retry using a chain of strategies (Googlebot UA, archive.org Wayback, Playwright with paywall JS blocked) until one succeeds. Falls back gracefully if no strategy works.",
+				}),
+			),
+			bypassStrategies: Type.Optional(
+				Type.Array(Type.String(), {
+					description:
+						"Override the bypass strategy chain. Valid values: 'ua:googlebot', 'ua:bingbot', 'ua:facebookbot', 'referer:google', 'block_js', 'archive', 'archive_first', 'cookies'. Default is site-specific.",
+				}),
+			),
 		}),
 
 		async execute(_toolCallId: string, params: any): Promise<any> {
@@ -169,12 +181,18 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 					const pruneTokens = params.prune as number | undefined;
 					const startIndex = params.start_index as number | undefined;
 					const maxLength = params.max_length as number | undefined;
+					const bypass = params.bypass === true;
+					const bypassStrategies = params.bypassStrategies as
+						| string[]
+						| undefined;
 					let result = await pullPageEnhanced(url.href, {
 						browser,
 						os,
 						proxy,
 						mode,
 						wreqSession,
+						bypass,
+						bypassStrategies: bypassStrategies as any,
 					});
 					if (!result.ok) {
 						const shouldRetryBrowser =

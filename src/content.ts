@@ -14,6 +14,7 @@ import {
 	runVerticalExtractor,
 	findVerticalExtractor,
 } from "./verticals/registry.ts";
+import { detectPaywall, bypassUrl, stripPaywallText } from "./paywall.ts";
 import { detectPromptInjection, applyInjectionAction } from "./injection.ts";
 import { compressHtml } from "./html-compress.ts";
 import { isDangerousUrl } from "./security.ts";
@@ -401,6 +402,14 @@ export function finalizePullResult(
 	if (!result.ok || !result.content) return result;
 
 	let content = result.content;
+
+	// Always strip trailing paywall text from extracted markdown,
+	// even when bypass wasn't requested. Sites like Medium embed
+	// "Subscribe to read more" inline; this cleans them up.
+	if (!content.startsWith("> via ") && !content.startsWith("> Data islands")) {
+		content = stripPaywallText(content);
+	}
+
 	if (redirectNotice) {
 		content = redirectNotice + "\n\n" + content;
 	}
@@ -852,6 +861,56 @@ export async function pullPageEnhanced(
 		const result = await pullPage(url, opts, _redirectCount);
 
 		if (result.ok && result.content) {
+			// Paywall bypass — runs before bot-block detection since
+			// some paywall pages also trip generic bot markers
+			// (e.g. "checking your browser" from Cloudflare's
+			// metered paywall challenge).
+			if (opts?.bypass) {
+				const paywallCheck = detectPaywall(result.content);
+				if (paywallCheck.paywalled) {
+					if (process.env.PI_WEBAIO_DEBUG) {
+						console.warn(
+							`[paywall] ${new URL(url).hostname}: ${paywallCheck.matchedMarkers.length} markers (${Math.round(paywallCheck.confidence * 100)}% confidence, vendor=${paywallCheck.vendor ?? "?"})`,
+						);
+					}
+					const bypassed = await bypassUrl(url, {
+						browser: opts.browser,
+						os: opts.os,
+						proxy: opts.proxy,
+						wreqSession: opts.wreqSession,
+						browserPool: opts.browserPool,
+						strategies: opts.bypassStrategies,
+						onProgress: (msg) => {
+							if (process.env.PI_WEBAIO_DEBUG) console.warn(msg);
+						},
+					});
+					if (bypassed?.ok && bypassed.text) {
+						// Re-run the HTML pipeline with the bypassed
+						// text, but skip the network fetch (4th arg).
+						const bypassedResult = await pullPage(
+							url,
+							opts,
+							_redirectCount,
+							bypassed.text,
+						);
+						if (bypassedResult.ok) {
+							return finalizePullResult({
+								...bypassedResult,
+								content: bypassedResult.content
+									? `> Bypassed via ${bypassed.strategy} (${Math.round((1 - (bypassed.paywall?.confidence ?? 0)) * 100)}% clean)\n\n${bypassedResult.content}`
+									: bypassedResult.content,
+							});
+						}
+					}
+					// Bypass failed — fall through and return the
+					// paywalled result with a clear notice
+					return finalizePullResult({
+						...result,
+						content: `> ⚠️ Paywall detected (${paywallCheck.matchedMarkers.slice(0, 3).join(", ")}${paywallCheck.matchedMarkers.length > 3 ? "…" : ""}) — bypass strategies exhausted\n\n${result.content}`,
+					});
+				}
+			}
+
 			const botCheck = detectBotBlock(result.content);
 			if (botCheck.blocked) {
 				if (mode === "auto" && botCheck.retryable) {

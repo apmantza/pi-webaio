@@ -121,6 +121,12 @@ export function registerWebpullTool(pi: ExtensionAPI): void {
 						"Enable adaptive content selector — remembers element structure to survive site redesigns (default: false)",
 				}),
 			),
+			bypass: Type.Optional(
+				Type.Boolean({
+					description:
+						"Enable paywall bypass on every page in the pull. If a fetched page looks paywalled, retry using a chain of strategies (Googlebot UA, archive.org Wayback, Playwright with paywall JS blocked) before recording an error.",
+				}),
+			),
 		}),
 
 		async execute(_toolCallId, params, signal, onUpdate) {
@@ -172,6 +178,7 @@ export function registerWebpullTool(pi: ExtensionAPI): void {
 				mode,
 				adaptive,
 				wreqSession,
+				bypass: params.bypass === true,
 			};
 
 			const router =
