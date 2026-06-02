@@ -107,6 +107,26 @@ export const PAYWALL_MARKERS: Array<{
 	{ text: "enjoying our latest content?", weight: 0.6 },
 	{ text: "access the most recent journalism", weight: 0.6 },
 	{ text: "explore the latest features & opinion", weight: 0.5 },
+	// B2B / analysis-news sites (e.g. macropolis.gr, eegora.pt, cefriel.it)
+	{ text: "you need a subscription to access", weight: 0.95 },
+	{ text: "to access our analysis", weight: 0.85 },
+	{ text: "please choose one of the packages", weight: 0.7 },
+	{ text: "subscription required to access", weight: 0.95 },
+	{ text: "subscription required to read", weight: 0.95 },
+	{ text: "subscribe to access this", weight: 0.9 },
+	{ text: "subscribe to unlock this", weight: 0.9 },
+	{ text: "for subscribers only", weight: 0.85 },
+	{ text: "this content is for subscribers", weight: 0.9 },
+	{ text: "this story is for subscribers", weight: 0.9 },
+	{ text: "subscribers can read", weight: 0.7 },
+	{ text: "to read the rest of this", weight: 0.7 },
+	{ text: "please subscribe to read the full", weight: 0.9 },
+	{ text: "this is a subscriber-only", weight: 0.9 },
+	{ text: "paid subscribers only", weight: 0.9 },
+	{ text: "become a member to read", weight: 0.85 },
+	{ text: "to continue reading, sign in or subscribe", weight: 0.95 },
+	{ text: "read the full article requires a subscription", weight: 0.95 },
+	{ text: "to access this content, please subscribe", weight: 0.9 },
 
 	// Vendor-specific markers (very high confidence)
 	{ text: "piano.io", weight: 0.95, vendor: "piano" },
@@ -149,9 +169,18 @@ export function detectPaywall(text: string): PaywallDetection {
 
 	// A vendor-specific marker (e.g. "piano.io") is a hard signal
 	// even in very short content — the script tag alone is enough.
-	// General text markers (e.g. "subscribe to continue reading")
-	// still need enough content to be meaningful.
-	const hasContent = text.length >= 200 || !!vendor;
+	// High-weight text markers (>=0.85) are also extremely specific
+	// ("you need a subscription to access", "this article is for
+	// subscribers", "subscribe to continue reading") and are trusted
+	// even in short content. General low-weight markers ("premium
+	// content", "members only") still need enough content to be
+	// meaningful.
+	const hasHighWeightMarker =
+		matchedMarkers.length > 0 &&
+		PAYWALL_MARKERS.some(
+			(m) => matchedMarkers.includes(m.text) && m.weight >= 0.85,
+		);
+	const hasContent = text.length >= 200 || !!vendor || hasHighWeightMarker;
 
 	if (totalWeight === 0 && !truncated) {
 		return { paywalled: false, confidence: 0, matchedMarkers: [] };
@@ -176,7 +205,7 @@ export function detectPaywall(text: string): PaywallDetection {
 }
 
 function detectTruncation(text: string): boolean {
-	// Strong signal: the HTML ends with a paywall curtain element.
+	// Strong signal (raw HTML): the body ends with a paywall curtain.
 	const tail = text.slice(-2000).toLowerCase();
 	if (
 		tail.includes("</article>") &&
@@ -184,6 +213,28 @@ function detectTruncation(text: string): boolean {
 			tail.includes("subscribe") ||
 			tail.includes("sign in") ||
 			tail.includes("register"))
+	) {
+		return true;
+	}
+	// Strong signal (post-defuddle markdown): the article preview ends
+	// mid-word or mid-sentence with "..." and is immediately followed
+	// by a paywall curtain in the tail (sign in form, subscription
+	// cards, "you need a subscription" prompt, etc.).
+	if (
+		/(?:^|\n\n)\s*\S[\s\S]{0,400}\.\.\.\s*\n+/.test(text.slice(-4000)) &&
+		(tail.includes("you need a subscription") ||
+			tail.includes("subscribe to access") ||
+			tail.includes("subscribe to read") ||
+			tail.includes("subscribe to continue") ||
+			tail.includes("sign in to read") ||
+			tail.includes("register to read") ||
+			tail.includes("for subscribers only") ||
+			tail.includes("please choose one of the packages") ||
+			tail.includes("subscription required") ||
+			tail.includes("members only") ||
+			tail.includes("to read the rest of this") ||
+			tail.includes("unlock this article") ||
+			tail.includes("premium content"))
 	) {
 		return true;
 	}

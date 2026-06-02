@@ -54,6 +54,70 @@ test("detectPaywall returns false for clean article text", () => {
 	assert.strictEqual(r.confidence, 0);
 });
 
+test("detectPaywall detects 'you need a subscription to access' (B2B analysis sites)", () => {
+	// B2B analysis-news sites (e.g. macropolis.gr) phrase their paywall
+	// differently from consumer news: "You need a subscription to access
+	// our analysis. Please choose one of the packages available."
+	const text = `The reported preparation of new Turkish legislation has become a subject of intense discussion within the Greek government.
+
+The development comes despite the relative calm that has characterised relations, bo...
+
+You need a subscription to access our analysis. Please choose one of the packages available.
+
+If you are already registered, please sign in.`;
+	const r = detectPaywall(text);
+	assert.strictEqual(r.paywalled, true);
+	assert.ok(r.confidence >= 0.45, `confidence=${r.confidence}`);
+	assert.ok(
+		r.matchedMarkers.some((m) => m === "you need a subscription to access"),
+	);
+});
+
+test("detectPaywall detects short B2B paywall (<200 chars) via high-weight markers", () => {
+	// Even when the rendered content is shorter than the 200-char
+	// minimum, a high-weight marker (>=0.85) like "you need a
+	// subscription to access" is enough — these phrases are extremely
+	// specific and don't appear in normal content.
+	const text = `Article body that ends with ... the situation is...
+
+You need a subscription to access our analysis. Please choose one of the packages available.`;
+	const r = detectPaywall(text);
+	assert.strictEqual(r.paywalled, true, `confidence=${r.confidence}`);
+});
+
+test("detectPaywall detects truncation + paywall curtain in markdown (defuddle output)", () => {
+	// After defuddle/Readability strips HTML tags, the detector sees
+	// markdown. The article preview ends with "..." mid-sentence and
+	// is immediately followed by a paywall curtain.
+	const text = `The development comes despite the relative calm that has characterised relations, bo...
+
+You need a subscription to access our analysis. Please choose one of the packages available.
+
+If you are already registered, please sign in.`;
+	const r = detectPaywall(text);
+	assert.strictEqual(
+		r.paywalled,
+		true,
+		`truncated=${r.truncated} confidence=${r.confidence}`,
+	);
+});
+
+test("detectPaywall detects 'subscription required to read'", () => {
+	const text = `This is a long-form investigative report on climate change. It explores the impact of carbon emissions on global weather patterns over the past 50 years, drawing on data from over 1000 weather stations worldwide.
+
+Subscription required to read the full report. Please consider a monthly plan.`;
+	const r = detectPaywall(text);
+	assert.strictEqual(r.paywalled, true);
+});
+
+test("detectPaywall detects 'for subscribers only'", () => {
+	const text = `This is a long-form investigative report on the global economy. It covers inflation, employment, GDP growth, and the impact of monetary policy on consumer prices. The report draws on data from central banks, the IMF, and the World Bank.
+
+This article is for subscribers only. To access the full text, please subscribe to our monthly plan.`;
+	const r = detectPaywall(text);
+	assert.strictEqual(r.paywalled, true);
+});
+
 test("detectPaywall detects 'subscribe to continue reading'", () => {
 	const html = `
 		<html><body>
