@@ -2,7 +2,12 @@ import { spawn } from "node:child_process";
 import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { smartFetch } from "./fetch.ts";
-import { ghFetch, getGithubToken } from "./github-api.ts";
+import {
+	ghFetch,
+	getGithubToken,
+	ghRunLogs,
+	ghFetchWithFallback,
+} from "./github-api.ts";
 import { BASE_TEMP } from "./session-store.ts";
 import type { GitHubRef, PullResult } from "./types.ts";
 import { resolveBinary } from "./tools/utils.ts";
@@ -133,6 +138,251 @@ async function pullGitHubRef(ref: GitHubRef): Promise<PullResult | null> {
 	return result;
 }
 
+/**
+ * Parse a check run / job log URL into structured components.
+ * Handles:
+ *   /commit/{sha}/checks/{check_id}/logs
+ *   /commit/{sha}/checks/{check_id}/logs/{step_index}
+ */
+export function parseGitHubCheckLogUrl(url: string): {
+	owner: string;
+	repo: string;
+	sha: string;
+	checkId: string;
+	step: string | null;
+} | null {
+	try {
+		const u = new URL(url);
+		if (u.hostname !== "github.com") return null;
+		const m = u.pathname.match(
+			/^\/([^/]+)\/([^/]+)\/commit\/([^/]+)\/checks\/(\d+)(?:\/logs(?:\/(.+))?)?$/i,
+		);
+		if (!m) return null;
+		return {
+			owner: m[1]!,
+			repo: m[2]!,
+			sha: m[3]!,
+			checkId: m[4]!,
+			step: m[5] || null,
+		};
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Extract the last 15 error lines (or last 50 lines if no errors) from
+ * a CI log. Mirrors the behavior of the existing /actions/runs/{id}/job/{id}
+ * failed-job-log excerpt in pullGitHubFeature.
+ */
+function extractLogExcerpt(logText: string, maxLen = 3000): string {
+	if (!logText) return "";
+	const lines = logText.split("\n");
+	const errorLines = lines.filter((l) =>
+		/error|fail|exception|traceback|Error|FAIL|panic|undefined/i.test(l),
+	);
+	const tail = errorLines.length > 0 ? errorLines.slice(-15) : lines.slice(-50);
+	const excerpt = tail.join("\n");
+	return excerpt.length > maxLen
+		? excerpt.slice(0, maxLen) + "\n… (truncated)"
+		: excerpt;
+}
+
+/**
+ * Optional step filter. GitHub CI logs are concatenated per-step with
+ * `##[group]` markers. This finds the section between the matching step
+ * name's group marker and the next one (or end of log).
+ */
+function filterLogByStep(logText: string, stepName: string | null, stepIndex: string | null): string {
+	if (!stepName && !stepIndex) return logText;
+	const lines = logText.split("\n");
+	const wantNum = stepIndex ? parseInt(stepIndex, 10) : -1;
+	// Find all group markers and their positions
+	const groupRegex = /^##\[group\](.+?)(?:\s|$)/;
+	const groupPositions: Array<{ idx: number; name: string; num: number }> = [];
+	for (let i = 0; i < lines.length; i++) {
+		const m = lines[i]!.match(groupRegex);
+		if (m) {
+			groupPositions.push({ idx: i, name: m[1]!.trim(), num: groupPositions.length + 1 });
+		}
+	}
+	if (groupPositions.length === 0) return logText;
+
+	// Find target group
+	let target: { idx: number; num: number; name: string } | null = null;
+	if (stepName) {
+		target = groupPositions.find((g) => g.name === stepName) ?? null;
+	}
+	if (!target && wantNum > 0) {
+		target = groupPositions.find((g) => g.num === wantNum) ?? null;
+	}
+	if (!target) return logText;
+
+	// Slice from target to next group (or end)
+	const start = target.idx;
+	const nextGroup = groupPositions.find((g) => g.idx > start);
+	const end = nextGroup ? nextGroup.idx : lines.length;
+	return lines.slice(start, end).join("\n");
+}
+
+/**
+ * Fetch and render a GitHub check run log. Handles:
+ *   - Actions check runs (uses gh CLI for plain-text logs, falls back to API)
+ *   - External CI apps (renders check metadata + annotations, no log)
+ *
+ * URL pattern: /commit/{sha}/checks/{check_id}/logs/{step_index?}
+ */
+async function pullGitHubCheckLog(
+	url: string,
+	owner: string,
+	repo: string,
+	sha: string,
+	checkId: string,
+	stepIndex: string | null,
+): Promise<PullResult | null> {
+	try {
+		// 1. Fetch check run metadata (with fallback to gh API on auth issues)
+		let checkRun: any;
+		try {
+			checkRun = await ghFetchWithFallback<any>(
+				`/repos/${owner}/${repo}/check-runs/${checkId}`,
+			);
+		} catch {
+			return null;
+		}
+		if (!checkRun || checkRun.message) return null; // 404
+
+		// 2. Determine if this is an Actions job
+		const isActions = checkRun.app?.slug === "github-actions";
+		const conclusion = checkRun.conclusion;
+		const status = checkRun.status;
+
+		// 3. Build the markdown header
+		let md = `# ${owner}/${repo} — check/${checkId}\n\n`;
+		md += `> via GitHub API${isActions ? " + gh CLI" : ""}\n\n`;
+		const statusIcon =
+			conclusion === "success"
+				? "✅"
+				: conclusion === "failure"
+					? "❌"
+					: conclusion === "cancelled"
+						? "⏹️"
+						: status === "in_progress"
+							? "🔄"
+							: "⏳";
+		md += `${statusIcon} **${checkRun.name}** (${status} / ${conclusion || "pending"})\n`;
+		md += `- **Commit:** \`${sha.slice(0, 7)}\`\n`;
+		if (checkRun.started_at) md += `- **Started:** ${checkRun.started_at}\n`;
+		if (checkRun.completed_at) md += `- **Completed:** ${checkRun.completed_at}\n`;
+		if (checkRun.check_suite?.id) md += `- **Check suite:** #${checkRun.check_suite.id}\n`;
+		if (stepIndex) md += `- **Step:** #${stepIndex}\n`;
+		if (checkRun.html_url) md += `- [View on GitHub](${checkRun.html_url})\n`;
+
+		// 4. Annotations (if any)
+		if (checkRun.output?.annotations_count > 0) {
+			try {
+				const annotations = (await ghFetchWithFallback<any[]>(
+					`/repos/${owner}/${repo}/check-runs/${checkId}/annotations`,
+				)) as any[];
+				if (annotations?.length) {
+					md += `\n## Annotations (${annotations.length})\n\n`;
+					md += `| File | Line | Level | Message |\n|------|------|-------|---------|`;
+					for (const a of annotations.slice(0, 20)) {
+						const file = a.path || a.blob_href?.split("/").pop() || "?";
+						const line = a.start_line || a.end_line || "?";
+						const level = a.annotation_level || "?";
+						const msg = (a.message || "").slice(0, 200).replace(/\|/g, "\\|").replace(/\n/g, " ");
+						md += `\n| \`${file}\` | ${line} | ${level} | ${msg} |`;
+					}
+					if (annotations.length > 20) {
+						md += `\n\n_(showing 20 of ${annotations.length} annotations)_`;
+					}
+					md += `\n`;
+				}
+			} catch {
+				/* best effort */
+			}
+		}
+
+		// 5. Log content (Actions jobs only)
+		if (isActions) {
+			const jobId = checkId; // Actions check_id == job_id
+			let runId: string | number | null = null;
+			try {
+				const jobInfo = (await ghFetch<any>(
+					`/repos/${owner}/${repo}/actions/jobs/${jobId}`,
+				)) as any;
+				runId = jobInfo?.run_id ?? null;
+			} catch {
+				/* will try to get run_id from html_url */
+			}
+			// Fall back to parsing runId from html_url if API didn't return it
+			if (!runId && checkRun.html_url) {
+				const m = checkRun.html_url.match(/\/actions\/runs\/(\d+)\//);
+				if (m) runId = m[1]!;
+			}
+
+			let logText: string | null = null;
+			if (runId) {
+				logText = await ghRunLogs(owner, repo, runId, jobId);
+			}
+
+			if (logText) {
+				// Optionally filter by step
+				const filtered = filterLogByStep(logText, null, stepIndex);
+				const excerpt = extractLogExcerpt(filtered);
+
+				md += `\n## Log excerpt\n\n`;
+				if (stepIndex && filtered !== logText) {
+					md += `_Filtered to step #${stepIndex}._\n\n`;
+				} else if (stepIndex) {
+					md += `_(step #${stepIndex} not found in log; showing tail)_\n\n`;
+				}
+				md += "```\n";
+				md += excerpt;
+				md += "\n```\n";
+
+				// Save full log to disk for reference
+				try {
+					const safeOwner = owner.replace(/[^a-z0-9_-]/gi, "_");
+					const safeRepo = repo.replace(/[^a-z0-9_-]/gi, "_");
+					const outDir = `${BASE_TEMP}/github-logs/${safeOwner}-${safeRepo}`;
+					const fs = await import("node:fs/promises");
+					await fs.mkdir(outDir, { recursive: true });
+					const outFile = `${outDir}/check-${checkId}.log`;
+					await fs.writeFile(outFile, filtered, "utf8");
+					md += `\n<details>\n<summary>📋 Full log saved to disk</summary>\n\n\`${outFile}\` (${filtered.length.toLocaleString()} chars)\n</details>\n`;
+				} catch {
+					/* best effort */
+				}
+			} else {
+				md += `\n> Log content unavailable. `;
+				if (checkRun.html_url) {
+					md += `[View the full log on GitHub](${checkRun.html_url}).\n`;
+				} else {
+					md += `\n`;
+				}
+			}
+		} else {
+			// External CI app — log content lives behind the app's details_url
+			md += `\n<details>\n<summary>📋 External CI check\n</summary>\n\n`;
+			md += `This check was created by **${checkRun.app?.name || "an external app"}** `;
+			md += `(slug: \`${checkRun.app?.slug || "?"}\`). Logs are not accessible via the `;
+			md += `GitHub REST API — view the [full check on GitHub](${checkRun.html_url || checkRun.details_url || "#"}).\n`;
+			md += `</details>\n`;
+		}
+
+		return {
+			ok: true,
+			url: url,
+			title: `${owner}/${repo} — check/${checkRun.name || checkId}`,
+			content: md,
+		};
+	} catch {
+		return null;
+	}
+}
+
 async function pullGitHubFeature(url: string): Promise<PullResult | null> {
 	try {
 		const u = new URL(url);
@@ -141,6 +391,25 @@ async function pullGitHubFeature(url: string): Promise<PullResult | null> {
 
 		const [owner, repo, feature, ...rest] = parts;
 		const baseRepoPath = `/repos/${owner}/${repo}`;
+
+		// ── Handle /commit/{sha}/checks/{check_id}/logs/{step?} ──
+		// Must come BEFORE the bare /commit/{sha} branch so the check
+		// log is fetched instead of the commit metadata.
+		if (
+			feature === "commit" &&
+			rest[0] &&
+			rest[1] === "checks" &&
+			rest[2]
+		) {
+			return pullGitHubCheckLog(
+				url,
+				owner,
+				repo,
+				rest[0],
+				rest[2],
+				rest[4] && /^\d+$/.test(rest[4]) ? rest[4] : null,
+			);
+		}
 
 		let apiPath: string | null = null;
 		let featureLabel = feature;

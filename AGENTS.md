@@ -153,12 +153,14 @@ pi-webaio/
 | `src/session-router.ts`   | URL pattern → fetcher mode routing. Supports substring, glob, and regex patterns. Per-route overrides for mode, extractor, browser, OS. |
 | `src/adaptive-selector.ts` | Structural DOM fingerprinting (tag path, text density, child signatures, attributes, sibling position). Weighted similarity scoring (0-1) with 0.45 threshold. Survives class/ID changes. |
 
-### New Modules (v0.4.1 — paywall bypass)
+### New Modules (v0.4.1 — paywall bypass, gh CLI fallback, check log handler)
 
 | Module                  | Role                                                                                                                                              |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `src/paywall.ts`        | Paywall bypass engine. `detectPaywall()` (vendor + text marker detection, confidence-scored), `findStrategy()` (curated → group → generic), `bypassUrl()` (orchestrates strategy chain), `stripPaywallText()` (removes residual tails). 1014 LOC. |
 | `src/paywall-sites.ts`  | Top-50+ paywall site strategy catalog (`PAYWALL_SITES`, `PAYWALL_GROUPS`, `GENERIC_STRATEGY`). Covers NYT, WSJ, FT, WaPo, The Economist, Le Monde, FAZ, SMH, etc. + group entries for Hearst, Gannett, Advance Local, DPG Media, Condé Nast. 235 LOC. |
+| `src/github-api.ts` (extended) | Added `ghRunLogs()`, `ghApiCall()`, `ghFetchWithFallback()` for gh CLI invocation. `ghRunLogs()` is critical for Actions logs (handles 302→S3 zip redirect + auth internally). `ghApiCall()` is a generic `gh api <path>` wrapper. `ghFetchWithFallback()` wraps `ghFetch()` with a gh CLI fallback for 4xx/5xx errors. Set `PI_WEBAIO_GH_FALLBACK=0` to disable child-process spawning. |
+| `src/github-pipeline.ts` (extended) | Added `parseGitHubCheckLogUrl()` and `pullGitHubCheckLog()`. Handles `/commit/{sha}/checks/{check_id}/logs/{step?}` URLs (the legacy commit-checks view) that previously silently fell through to commit metadata. For Actions jobs, calls `ghRunLogs()` to get plain-text logs. Renders status, conclusion, full annotations table, log excerpt, and saves full log to `os.tmpdir()/pi-webaio/github-logs/`. |
 
 ### Paywall Bypass — Strategy Chain (v0.4.1)
 
@@ -219,7 +221,18 @@ The bypass flag is **opt-in** — a normal `aio-webfetch(url)` still gets the re
 
 ## Recent Changes
 
-### v0.4.1 — Anti-bot hardening, headless control, and paywall bypass (unreleased)
+### v0.4.1 — Anti-bot hardening, headless control, paywall bypass, and GitHub check log handler (unreleased)
+
+**New: GitHub check run log handler** (replaces silent fallthrough to commit metadata)
+
+- `aio-webfetch` (and `aio-webpull`) now handles `/commit/{sha}/checks/{check_id}/logs/{step?}` URLs. Previously, these silently returned commit metadata, dropping the check ID and logs entirely. The new `pullGitHubCheckLog()` function in `src/github-pipeline.ts` fetches check-runs metadata via the REST API, then for Actions jobs (`app.slug === "github-actions"`) calls `gh run view <id> --job <id> --log` via the gh CLI to get plain-text logs (handles 302→S3 zip redirect + auth internally). Rendered markdown includes status, conclusion, full annotations table, log excerpt (last 15 error lines or 50 tail lines), and a `<details>` block with the path to the full log saved to `os.tmpdir()/pi-webaio/github-logs/`. The step index in the URL is honored when log has `##[group]` markers. External CI apps return check metadata + annotations only with a "View on GitHub" link.
+
+**New: gh CLI fallback infrastructure** (3 new helpers in `src/github-api.ts`)
+
+- `ghRunLogs(owner, repo, runId, jobId?)` — runs `gh run view <id> --log [--job <id>]` to get plain-text workflow logs without needing a zip-extraction library. Returns null on failure.
+- `ghApiCall<T>(path, { raw? })` — runs `gh api <path> [--jq .]` and returns parsed JSON or raw bytes. Uses the user's pre-authenticated `gh` session (5000 req/hr vs 60/hr unauth) and follows 302 redirects with credentials.
+- `ghFetchWithFallback<T>(path)` — wraps `ghFetch()` with a gh CLI fallback for 4xx/5xx errors. Currently used in the check log handler; available as drop-in replacement for `ghFetch()` anywhere higher rate limits or private-repo access via `gh auth login` would help.
+- Set `PI_WEBAIO_GH_FALLBACK=0` to disable gh CLI child-process spawning entirely. Default: ON if `gh` is on `PATH`.
 
 **New: opt-in paywall bypass (`bypass: true`)**
 
@@ -279,10 +292,11 @@ The bypass flag is **opt-in** — a normal `aio-webfetch(url)` still gets the re
 - `npm test` → runs existing unit tests (145 tests)
 - `npm run test:new` → runs new feature tests (31 tests)
 - `npm run test:paywall` → runs paywall bypass tests (54 tests)
+- `npm run test:check` → runs GitHub check log tests (11 tests)
 - `npm run test:integration` → runs integration tests (5 tests)
-- `npm run test:all` → runs all 4 suites (235 tests total)
+- `npm run test:all` → runs all 5 suites (246 tests total)
 - Tests use `node` directly (no test runner dependency)
-- New feature + paywall tests import TypeScript modules directly (Node 24 native strip-types)
+- New feature + paywall + check log tests import TypeScript modules directly (Node 24 native strip-types)
 - Playwright tests gracefully handle both installed/uninstalled
 
 ## Dependencies

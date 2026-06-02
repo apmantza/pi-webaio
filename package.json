@@ -54,7 +54,8 @@
     "test:integration": "npx tsx tests/integration.test.mjs",
     "test:new": "npx tsx tests/new-features.test.mjs",
     "test:paywall": "npx tsx tests/paywall.test.mjs",
-    "test:all": "npx tsx tests/unit.test.mjs && npx tsx tests/new-features.test.mjs && npx tsx tests/paywall.test.mjs && npx tsx tests/integration.test.mjs"
+    "test:check": "npx tsx tests/github-check.test.mjs",
+    "test:all": "npx tsx tests/unit.test.mjs && npx tsx tests/new-features.test.mjs && npx tsx tests/paywall.test.mjs && npx tsx tests/github-check.test.mjs && npx tsx tests/integration.test.mjs"
   },
   "dependencies": {
     "@earendil-works/pi-tui": "^0.74.2",

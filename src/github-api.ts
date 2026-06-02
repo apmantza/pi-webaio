@@ -10,7 +10,7 @@
  * Never throws on missing auth. Degrades gracefully to unauthenticated access.
  */
 
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { isRetryableNetworkError } from "./fetch.ts";
 
 const API_BASE = "https://api.github.com";
@@ -158,3 +158,142 @@ export async function githubAuthenticated(): Promise<boolean> {
  * Cached after first call. Exported for cloneGitHubRepo to inject into clone URLs.
  */
 export { getToken as getGithubToken };
+
+// ─── gh CLI helpers (v0.4.1) ─────────────────────────────────────
+
+/**
+ * Check whether gh CLI fallback is enabled. Opt-in via env var to avoid
+ * unexpected child-process spawning on systems where gh is not installed.
+ * Default: ON if gh is on PATH (most devs have it).
+ */
+function ghFallbackEnabled(): boolean {
+	if (process.env.PI_WEBAIO_GH_FALLBACK === "0") return false;
+	return resolveGhBinary() !== null;
+}
+
+/**
+ * Run `gh <args>` and capture stdout. Rejects on non-zero exit.
+ * Uses async execFile so it doesn't block the event loop.
+ */
+function execGh(args: string[], opts: { stdin?: string } = {}): Promise<string> {
+	return new Promise((resolve, reject) => {
+		const ghPath = resolveGhBinary();
+		if (!ghPath) {
+			reject(new Error("gh CLI not found"));
+			return;
+		}
+		const proc = spawn(ghPath, args, {
+			stdio: ["pipe", "pipe", "pipe"],
+			env: process.env,
+		});
+		let stdout = "";
+		let stderr = "";
+		proc.stdout.on("data", (d: Buffer) => (stdout += d));
+		proc.stderr.on("data", (d: Buffer) => (stderr += d));
+		proc.on("error", reject);
+		proc.on("close", (code: number) => {
+			if (code === 0) resolve(stdout);
+			else reject(new Error(`gh ${args[0]} exited ${code}: ${stderr.slice(0, 500)}`));
+		});
+		if (opts.stdin) {
+			proc.stdin.write(opts.stdin);
+			proc.stdin.end();
+		}
+	});
+}
+
+/**
+ * Call `gh api <path>` and parse JSON. Uses the user's existing gh auth
+ * (which is 5000 req/hr vs 60/hr unauthenticated) and follows 302 redirects
+ * with credentials (essential for /actions/jobs/{id}/logs which redirects
+ * to an S3 archive zip).
+ *
+ * @param path — API path like "/repos/owner/repo/actions/runs/123"
+ * @param opts.raw — return raw bytes (for zip downloads)
+ */
+export async function ghApiCall<T = unknown>(
+	path: string,
+	opts: { raw?: boolean } = {},
+): Promise<T> {
+	if (!ghFallbackEnabled()) {
+		throw new Error("gh CLI fallback disabled or gh not installed");
+	}
+	const args = ["api", path];
+	if (opts.raw) {
+		// Don't parse JSON; return raw stdout
+		const out = await execGh(args);
+		return out as unknown as T;
+	}
+	// `--jq .` returns parsed JSON on success
+	const out = await execGh([...args, "--jq", "."]);
+	if (!out.trim()) return {} as T;
+	try {
+		return JSON.parse(out) as T;
+	} catch {
+		// Fall back to raw return (gh may have errored to stdout)
+		return out as unknown as T;
+	}
+}
+
+/**
+ * Fetch a workflow run's logs via the gh CLI. Returns plain text containing
+ * all job logs (or a specific job's log). Handles the 302→S3 zip redirect
+ * and zip extraction internally — no extra deps needed.
+ *
+ * @param owner — repo owner
+ * @param repo — repo name
+ * @param runId — workflow run ID
+ * @param jobId — optional specific job ID; if omitted, returns all jobs' logs
+ * @returns Plain text log content, or null on failure
+ */
+export async function ghRunLogs(
+	owner: string,
+	repo: string,
+	runId: string | number,
+	jobId?: string | number,
+): Promise<string | null> {
+	if (!ghFallbackEnabled()) return null;
+	const args = [
+		"run",
+		"view",
+		String(runId),
+		"--repo",
+		`${owner}/${repo}`,
+		"--log",
+	];
+	if (jobId !== undefined) {
+		args.push("--job", String(jobId));
+	}
+	try {
+		return await execGh(args);
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Fallback wrapper for ghFetch. Tries the direct API first; on persistent
+ * failure (4xx after auth, 5xx after retry) tries the gh CLI as a last
+ * resort. Useful when:
+ *   - The user has higher rate limits via `gh auth login` but no token set
+ *   - The endpoint requires auth we don't have (e.g. private repos)
+ *   - The endpoint returns 302 redirects we can't follow with auth
+ */
+export async function ghFetchWithFallback<T = unknown>(path: string): Promise<T> {
+	try {
+		return await ghFetch<T>(path);
+	} catch (err: any) {
+		// Don't fall back for 404 (not found) — gh will return the same
+		const msg = err?.message ?? "";
+		const is4xx = /GitHub API 4\d\d/.test(msg);
+		if (is4xx && !msg.includes("404") && !msg.includes("403")) {
+			// Auth/permission/rate issues — try gh CLI
+			try {
+				return await ghApiCall<T>(path);
+			} catch {
+				throw err; // Give up, throw original
+			}
+		}
+		throw err;
+	}
+}

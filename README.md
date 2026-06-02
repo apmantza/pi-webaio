@@ -70,6 +70,7 @@ GitHub URLs are intercepted **before any HTTP request** and handled by a dedicat
 | `github.com/owner/repo/pull/123`                   | GitHub REST API                                      | Single PR details                                     |
 | `github.com/owner/repo/commit/sha`                 | GitHub REST API                                      | Commit details                                        |
 | `github.com/owner/repo/actions/runs/123`           | GitHub REST API + logs                               | Run status, jobs, step results, error log excerpts    |
+| `github.com/owner/repo/commit/sha/checks/{id}/logs/{step?}` | GitHub REST API + `gh run view --log`        | Check status, conclusion, annotations, log excerpt (Actions jobs); metadata-only for external CI |
 | `github.com/owner/repo/security/*`                 | GitHub REST API                                      | Security advisories, code scanning, Dependabot alerts |
 | `raw.githubusercontent.com/owner/repo/branch/path` | Direct fetch + fallback to pipeline                  | Raw file content with source marker                   |
 
