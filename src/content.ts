@@ -894,7 +894,11 @@ export async function pullPageEnhanced(
 							if (process.env.PI_WEBAIO_DEBUG) console.warn(msg);
 						},
 					});
-					if (bypassed?.ok && bypassed.text) {
+					if (
+						bypassed?.ok &&
+						bypassed.text &&
+						!bypassed.paywall?.paywalled
+					) {
 						const bypassedResult = await pullPage(
 							url,
 							opts,
@@ -938,7 +942,11 @@ export async function pullPageEnhanced(
 							if (process.env.PI_WEBAIO_DEBUG) console.warn(msg);
 						},
 					});
-					if (bypassed?.ok && bypassed.text) {
+					if (
+						bypassed?.ok &&
+						bypassed.text &&
+						!bypassed.paywall?.paywalled
+					) {
 						// Re-run the HTML pipeline with the bypassed
 						// text, but skip the network fetch (4th arg).
 						const bypassedResult = await pullPage(
@@ -955,6 +963,11 @@ export async function pullPageEnhanced(
 									: bypassedResult.content,
 							});
 						}
+					}
+					if (process.env.PI_WEBAIO_DEBUG) {
+						console.warn(
+							`[paywall] ${new URL(url).hostname}: bypass via ${bypassed?.strategy ?? "?"} ${bypassed?.paywall?.paywalled ? "still paywalled" : "did not return text"} — strategies exhausted`,
+						);
 					}
 					// Bypass failed — fall through and return the
 					// paywalled result with a clear notice
