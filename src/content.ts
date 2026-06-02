@@ -14,7 +14,13 @@ import {
 	runVerticalExtractor,
 	findVerticalExtractor,
 } from "./verticals/registry.ts";
-import { detectPaywall, bypassUrl, stripPaywallText } from "./paywall.ts";
+import {
+	detectPaywall,
+	bypassUrl,
+	stripPaywallText,
+	findStrategy,
+	isKnownPaywallSite,
+} from "./paywall.ts";
 import { detectPromptInjection, applyInjectionAction } from "./injection.ts";
 import { compressHtml } from "./html-compress.ts";
 import { isDangerousUrl } from "./security.ts";
@@ -859,6 +865,54 @@ export async function pullPageEnhanced(
 
 	if (mode === "fast" || mode === "auto" || mode === "fingerprint") {
 		const result = await pullPage(url, opts, _redirectCount);
+
+		// Paywall bypass — also triggers on 403/401 from known paywall
+		// sites, even when the server returned no body for detectPaywall
+		// to analyze (hard paywalls like NYT, WSJ, FT block before any
+		// content is served). Generic 403s on unknown sites are NOT
+		// treated as paywalls — only sites with a known strategy.
+		if (opts?.bypass && !result.ok && result.errorInfo?.statusCode) {
+			const status = result.errorInfo.statusCode;
+			if (status === 403 || status === 401) {
+				const knownStrategy = isKnownPaywallSite(url)
+					? findStrategy(url)
+					: null;
+				if (knownStrategy) {
+					if (process.env.PI_WEBAIO_DEBUG) {
+						console.warn(
+							`[paywall] ${new URL(url).hostname}: hard ${status} from known paywall site, triggering bypass strategy chain: ${knownStrategy.steps.join(" → ")}`,
+						);
+					}
+					const bypassed = await bypassUrl(url, {
+						browser: opts.browser,
+						os: opts.os,
+						proxy: opts.proxy,
+						wreqSession: opts.wreqSession,
+						browserPool: opts.browserPool,
+						strategies: opts.bypassStrategies,
+						onProgress: (msg) => {
+							if (process.env.PI_WEBAIO_DEBUG) console.warn(msg);
+						},
+					});
+					if (bypassed?.ok && bypassed.text) {
+						const bypassedResult = await pullPage(
+							url,
+							opts,
+							_redirectCount,
+							bypassed.text,
+						);
+						if (bypassedResult.ok) {
+							return finalizePullResult({
+								...bypassedResult,
+								content: bypassedResult.content
+									? `> Hard paywall detected (HTTP ${status}) — bypassed via ${bypassed.strategy}\n\n${bypassedResult.content}`
+									: bypassedResult.content,
+							});
+						}
+					}
+				}
+			}
+		}
 
 		if (result.ok && result.content) {
 			// Paywall bypass — runs before bot-block detection since

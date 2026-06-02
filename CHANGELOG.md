@@ -40,7 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **README vertical extractor table** — expanded from 10 rows to 19, now includes all package registries and GitLab with their API endpoints.
 - **AI summarization skip list** — updated to include all new vertical extractors (crates.io, RubyGems, Packagist, pub.dev, Go, NuGet, GitLab) so structured API data is never passed through AI summarization.
 
-## [Unreleased]
+## [0.4.1] - 2026-06-02
 
 ### Added
 
@@ -77,7 +77,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   6. **Session warming in webpull** — before pulling deep links, `aio-webpull` warms the session by fetching the root URL, followed by an 800–1500 ms jittered dwell to mimic human landing behavior. Reduces bot scores from anti-bot systems that flag "deep-link first" patterns.
   7. **Auto-fallback in webfetch** — when `aio-webfetch` with `mode: "auto"` fails with a retryable or bot-block error, it automatically retries once with `mode: "browser"`. Applies to single-URL fetches; avoids requiring the user to make a second manual call.
   8. **Non-headless Chrome support** — `GREEDY_SEARCH_VISIBLE=1` env var now respected by Google Search & AI summary. `DISPLAY` env var auto-detected (with X11 socket existence check). Removed all hardcoded `headless: true` overrides in `src/tools/websearch.ts` and `src/tools/webfetch.ts`. `ensureChrome()` now uses `shouldUseHeadless()` helper that checks env vars before defaulting.
-- **Test layer expansion** — added `npm run test:paywall` and `npm run test:check` scripts and added both suites to `test:all`. Test count: 235 → 257 (145 unit + 31 new-features + 54 paywall + 22 github-check + 5 integration).
+- **Test layer expansion** — added `npm run test:paywall` and `npm run test:check` scripts and added both suites to `test:all`. Test count: 235 → 260 (145 unit + 31 new-features + 57 paywall + 22 github-check + 5 integration).
+
+### Fixed
+
+- **Hard paywall bypass on HTTP 403/401** — the bypass engine now triggers on 403/401 responses from sites in the `PAYWALL_SITES` or `PAYWALL_GROUPS` catalogs, not just on content-marker detection. Previously, NYT/WSJ/FT (which return 403/401 with no body for `detectPaywall` to analyze) fell through to the raw error response, leaving the user with a 403. New helper `isKnownPaywallSite(url)` distinguishes curated sites from the generic fallback (so we don't try to bypass non-paywall 403s from CDNs or geo-restrictions). Also handles mobile subdomains (e.g. `m.washingtonpost.com` matches `washingtonpost.com`). The strategy chain runs the same way as the soft-paywall path — archive first is the most reliable, then `ua:googlebot`, then `block_js`.
 
 ### Fixed
 

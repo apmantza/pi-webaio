@@ -221,7 +221,7 @@ The bypass flag is **opt-in** — a normal `aio-webfetch(url)` still gets the re
 
 ## Recent Changes
 
-### v0.4.1 — Anti-bot hardening, headless control, paywall bypass, and GitHub check log handler (unreleased)
+### v0.4.1 — Anti-bot hardening, headless control, paywall bypass, and GitHub check log handler
 
 **New: GitHub check run log handler** (replaces silent fallthrough to commit metadata)
 
@@ -233,6 +233,8 @@ The bypass flag is **opt-in** — a normal `aio-webfetch(url)` still gets the re
 - `ghApiCall<T>(path, { raw? })` — runs `gh api <path> [--jq .]` and returns parsed JSON or raw bytes. Uses the user's pre-authenticated `gh` session (5000 req/hr vs 60/hr unauth) and follows 302 redirects with credentials.
 - `ghFetchWithFallback<T>(path)` — wraps `ghFetch()` with a gh CLI fallback for 4xx/5xx errors. Currently used in the check log handler; available as drop-in replacement for `ghFetch()` anywhere higher rate limits or private-repo access via `gh auth login` would help.
 - Set `PI_WEBAIO_GH_FALLBACK=0` to disable gh CLI child-process spawning entirely. Default: ON if `gh` is on `PATH`.
+
+**Hard paywall bypass on HTTP 403/401** — the bypass engine now triggers on 403/401 responses from sites in the `PAYWALL_SITES` or `PAYWALL_GROUPS` catalogs, not just on content-marker detection. Previously, NYT/WSJ/FT (which return 403/401 with no body for `detectPaywall` to analyze) fell through to the raw error response. New helper `isKnownPaywallSite(url)` distinguishes curated sites from the generic fallback (so we don't try to bypass non-paywall 403s from CDNs or geo-restrictions). Also handles mobile subdomains (e.g. `m.washingtonpost.com` matches `washingtonpost.com`).
 
 **New: opt-in paywall bypass (`bypass: true`)**
 
@@ -291,10 +293,10 @@ The bypass flag is **opt-in** — a normal `aio-webfetch(url)` still gets the re
 
 - `npm test` → runs existing unit tests (145 tests)
 - `npm run test:new` → runs new feature tests (31 tests)
-- `npm run test:paywall` → runs paywall bypass tests (54 tests)
+- `npm run test:paywall` → runs paywall bypass tests (57 tests)
 - `npm run test:check` → runs GitHub check log tests (22 tests)
 - `npm run test:integration` → runs integration tests (5 tests)
-- `npm run test:all` → runs all 5 suites (257 tests total)
+- `npm run test:all` → runs all 5 suites (260 tests total)
 - Tests use `node` directly (no test runner dependency)
 - New feature + paywall + check log tests import TypeScript modules directly (Node 24 native strip-types)
 - Playwright tests gracefully handle both installed/uninstalled

@@ -237,6 +237,32 @@ export function findStrategy(url: string): PaywallStrategy | null {
 }
 
 /**
+ * Check if a URL has a SPECIFIC paywall strategy (curated or group
+ * member). Returns false for sites that would only get the GENERIC_STRATEGY
+ * fallback. Used to gate the 403/401 bypass trigger so we don't try to
+ * bypass non-paywall 403s (e.g. blocked by CDN, geo-restriction, etc.).
+ * Handles mobile subdomains (m.example.com, mobile.example.com, etc.) by
+ * matching the base domain in PAYWALL_SITES.
+ */
+export function isKnownPaywallSite(url: string): boolean {
+	let hostname: string;
+	try {
+		hostname = new URL(url).hostname.toLowerCase().replace(/^www\./, "");
+	} catch {
+		return false;
+	}
+	if (PAYWALL_SITES[hostname]) return true;
+	// Match mobile subdomains (m.example.com, mobile.example.com, etc.)
+	for (const site of Object.keys(PAYWALL_SITES)) {
+		if (hostname === site || hostname.endsWith(`.${site}`)) return true;
+	}
+	for (const suffix of Object.keys(PAYWALL_GROUPS as Record<string, unknown>)) {
+		if (hostname === suffix || hostname.endsWith(`.${suffix}`)) return true;
+	}
+	return false;
+}
+
+/**
  * Known paywall vendor script hosts. Aborted in Playwright when a
  * site uses `block_js` strategy. Declared before GENERIC_STRATEGY so
  * the constant can be referenced at module init time.

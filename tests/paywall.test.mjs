@@ -502,3 +502,55 @@ test("All strategies have a finite length (no infinite loops)", () => {
 		);
 	}
 });
+
+// ─── Hard paywall 403/401 detection ────────────────────────────────
+// For sites like NYT, WSJ, FT that return HTTP 403/401 before any
+// content is served (no body for detectPaywall to analyze), the bypass
+// engine should still recognize the site via findStrategy and trigger
+// the strategy chain.
+
+test("findStrategy returns a strategy for hard paywall sites that 403", () => {
+	// All these sites are known to return 403/401 without a body
+	const hardPaywallSites = [
+		"https://www.nytimes.com/2026/04/29/business/article.html",
+		"https://www.wsj.com/articles/some-article",
+		"https://www.ft.com/content/some-article",
+		"https://www.economist.com/finance-and-economics/2024/11/14/article",
+	];
+	for (const url of hardPaywallSites) {
+		const s = findStrategy(url);
+		assert.ok(s, `findStrategy should return non-null for ${url}`);
+		assert.ok(s.steps.length > 0, `strategy for ${url} should have steps`);
+		// Hard paywalls should include archive (most reliable bypass)
+		assert.ok(
+			s.steps.includes("archive"),
+			`strategy for ${url} should include archive`,
+		);
+	}
+});
+
+test("isKnownPaywallSite returns true for curated sites", async () => {
+	const { isKnownPaywallSite } = await import("../src/paywall.ts");
+	assert.strictEqual(
+		isKnownPaywallSite("https://www.nytimes.com/2026/article.html"),
+		true,
+	);
+	assert.strictEqual(
+		isKnownPaywallSite("https://www.wsj.com/articles/x"),
+		true,
+	);
+	assert.strictEqual(
+		isKnownPaywallSite("https://m.washingtonpost.com/news/x"),
+		true,
+	);
+});
+
+test("isKnownPaywallSite returns false for non-paywall sites", async () => {
+	const { isKnownPaywallSite } = await import("../src/paywall.ts");
+	assert.strictEqual(
+		isKnownPaywallSite("https://www.example.com/blocked"),
+		false,
+	);
+	assert.strictEqual(isKnownPaywallSite("https://github.com/foo/bar"), false);
+	assert.strictEqual(isKnownPaywallSite("not a url"), false);
+});

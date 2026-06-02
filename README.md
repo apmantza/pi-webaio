@@ -145,6 +145,8 @@ For paywalled news sites (NYT, WSJ, FT, WaPo, The Economist, Le Monde, etc.), th
 
 Top-50 news sites have curated strategies in `src/paywall-sites.ts` (NYT = `block_js` → `archive`; WSJ = `block_js` → `archive`; FT = `block_js` → `archive`; unknown domain = `archive` → `ua:googlebot` → `block_js`). The same flags work on `aio-webpull` to apply bypass to every page in a pull.
 
+The bypass engine also triggers on **HTTP 403/401 from known paywall sites** (NYT, WSJ, FT, etc. that block before any content is served) — not just on content-marker detection. So even when the server returns a bare 403 with no body for `detectPaywall` to analyze, the strategy chain still runs and the archive.org snapshot is returned.
+
 Set `PI_WEBAIO_DEBUG=1` to log every bypass attempt and confidence score — useful when triaging sites that still block.
 
 **Note:** The bypass flag is opt-in. A normal `aio-webfetch(url)` gets the regular auto-escalation pipeline. You must explicitly pass `bypass: true` to trigger the strategy chain — this is intentional, since paywall circumvention is a deliberate user action.
