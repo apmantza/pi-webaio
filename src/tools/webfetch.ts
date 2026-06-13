@@ -47,6 +47,50 @@ import {
 } from "./fetch-error.ts";
 import { frontmatter, runInBatches, safeResolveInBaseTemp } from "./utils.ts";
 
+/**
+ * Build a deterministic fallback summary from markdown content.
+ *
+ * Used when AI summarization (Google AI Mode) is unavailable or fails.
+ * Output is truncated to MAX_PREVIEW_CHARS.
+ *
+ * @internal Exported for unit tests only. Not part of the public API.
+ */
+
+// Cap the input size to avoid blocking the event loop on multi-MB
+// markdown pages. 50KB is plenty for a meaningful summary; anything
+// beyond that we'd be reading off-screen anyway.
+const MAX_SUMMARY_INPUT_CHARS = 50_000;
+
+// CommonMark headings H1-H6 with required space (e.g. "## Section").
+const HEADING_RE = /^#{1,6}\s/;
+
+// First sentence of a body line. Minimum 5 chars to skip labels like
+// "Hi." (3 chars) and "OK." (3 chars), while still capturing short
+// sentences like "Tap Continue." (13 chars) and "Done." (5 chars).
+const FIRST_SENTENCE_RE = /^(.{5,120}?)[.!?](\s|$)/;
+
+export function buildDeterministicSummary(content: string): string {
+	const trimmedInput = content.slice(0, MAX_SUMMARY_INPUT_CHARS);
+	const lines = trimmedInput.split("\n");
+	const out: string[] = [];
+	for (const line of lines) {
+		const trimmed = line.trim();
+		if (!trimmed) continue;
+		if (HEADING_RE.test(trimmed)) {
+			out.push(trimmed);
+			continue;
+		}
+		if (out.length > 0 && !HEADING_RE.test(out[out.length - 1])) {
+			continue;
+		}
+		const firstSentence = trimmed.match(FIRST_SENTENCE_RE);
+		if (firstSentence) {
+			out.push(firstSentence[1] + ".");
+		}
+	}
+	return out.join("\n\n").slice(0, MAX_PREVIEW_CHARS);
+}
+
 export function registerWebfetchTool(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: "aio-webfetch",
@@ -688,28 +732,7 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 					// so this works regardless of whether the result was saved
 					// to disk. For non-markdown (html/text/json/raw), `outPath`
 					// is undefined and a readFile would throw.
-					const preview: string = r.body ?? "";
-
-					function buildDeterministicSummary(content: string): string {
-						const lines = content.split("\n");
-						const out = [];
-						for (const line of lines) {
-							const trimmed = line.trim();
-							if (!trimmed) continue;
-							if (/^#{1,3}\s/.test(trimmed)) {
-								out.push(trimmed);
-								continue;
-							}
-							if (out.length > 0 && !/^#{1,3}\s/.test(out[out.length - 1])) {
-								continue;
-							}
-							const firstSentence = trimmed.match(/^(.{20,120}?)[.!?](\s|$)/);
-							if (firstSentence) {
-								out.push(firstSentence[1] + ".");
-							}
-						}
-						return out.join("\n\n").slice(0, MAX_PREVIEW_CHARS);
-					}
+					const preview = r.body ?? "";
 
 					let summary: string | null = null;
 					let summarized = false;
