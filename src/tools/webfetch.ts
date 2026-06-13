@@ -4,6 +4,12 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { MAX_PREVIEW_CHARS, pullPageEnhanced } from "../content.ts";
 import { compileContextPackage } from "../context-package.ts";
+import {
+	chunkMarkdown,
+	DEFAULT_OVERLAP_TOKENS,
+	formatChunksText,
+	type Chunk,
+} from "../chunker.ts";
 import { DEFAULT_OS, getLatestChromeProfile } from "../fetch.ts";
 import {
 	cdpAvailable as cdpAvailableGA,
@@ -89,6 +95,35 @@ export function buildDeterministicSummary(content: string): string {
 		}
 	}
 	return out.join("\n\n").slice(0, MAX_PREVIEW_CHARS);
+}
+
+/**
+ * Compute RAG chunks for a single markdown result, if requested.
+ * Returns undefined if chunks are not requested, the body is
+ * empty, or chunking fails. Errors are pushed to the caller-
+ * provided `errors` array as generic messages (no internal
+ * details leak to users). Full error is logged for debugging.
+ */
+export function maybeChunkMarkdown(
+	body: string | undefined,
+	params: { chunks?: boolean; maxTokens?: number; overlapTokens?: number },
+	errors: string[],
+): Chunk[] | undefined {
+	if (!params.chunks || !body) return undefined;
+	try {
+		const result = chunkMarkdown(body, {
+			maxTokens: params.maxTokens,
+			overlapTokens: params.overlapTokens,
+		});
+		return result.length > 0 ? result : undefined;
+	} catch (err) {
+		// Log full error for debugging, but only a generic
+		// message reaches the user (defense in depth — don't
+		// leak stack traces or body fragments).
+		console.error(`[aio-webfetch] chunking failed:`, err);
+		errors.push("chunking failed for this result");
+		return undefined;
+	}
 }
 
 export function registerWebfetchTool(pi: ExtensionAPI): void {
@@ -194,6 +229,26 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 					default: "markdown",
 				}),
 			),
+			chunks: Type.Optional(
+				Type.Boolean({
+					description:
+						"Return paragraph-bounded chunks alongside the full markdown. Useful for RAG workflows. Only applies to format: markdown (other formats return in-memory body; chunk those yourself).",
+				}),
+			),
+			maxTokens: Type.Optional(
+				Type.Number({
+					description:
+						"Max tokens per chunk. Default 512. Only used when chunks: true. Min 1.",
+					minimum: 1,
+				}),
+			),
+			overlapTokens: Type.Optional(
+				Type.Number({
+					description:
+						"Tokens of tail-overlap from the previous chunk prepended to each chunk after the first. Default 50. Only used when chunks: true. Min 0.",
+					minimum: 0,
+				}),
+			),
 		}),
 
 		async execute(
@@ -203,6 +258,9 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 			onUpdate: ((update: any) => void) | undefined,
 			_ctx: any,
 		): Promise<any> {
+			// Per-execution chunking error tracker (avoids module-level
+			// state contamination across concurrent requests).
+			const chunkingErrors: string[] = [];
 			const targets: string[] = params.urls ?? (params.url ? [params.url] : []);
 			if (!targets.length) {
 				throw new Error("Provide either 'url' or 'urls'");
@@ -807,14 +865,37 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 							? `✓ Fetched and saved to ${r.outPath}${summaryNotice}`
 							: `✓ Fetched as ${itemFormat} (${preview.length} chars, in-memory only)${summaryNotice}`;
 
+					// Compute RAG chunks if requested. Only meaningful for
+					// format: markdown (other formats are in-memory; caller
+					// can chunk them themselves).
+					const chunks =
+						itemFormat === "markdown"
+							? maybeChunkMarkdown((r as any).body, params, chunkingErrors)
+							: undefined;
+					const chunkFmt = formatChunksText(
+						chunks,
+						params.overlapTokens ?? DEFAULT_OVERLAP_TOKENS,
+					);
+
 					const text = [
 						formatLabel,
 						`\nTitle: ${r.title}`,
 						`URL: ${r.url}`,
 						`Format: ${itemFormat}`,
 						`Response ID: ${(r as any).responseId}`,
+						chunkFmt.header ? `\n${chunkFmt.header}` : "",
 						"\n---\n",
 						displayContent,
+						chunkFmt.body
+							? [
+									"\n\n---\n",
+									`## Chunks (${chunks!.length})\n`,
+									chunkFmt.body,
+								].join("\n")
+							: "",
+						chunkingErrors.length > 0
+							? `\n\n[WARN] Chunking failed: ${chunkingErrors.join("; ")}`
+							: "",
 					].join("\n");
 
 					return {
@@ -836,6 +917,7 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 							spinnerTick: details.spinnerTick,
 							content: (r as any).body ?? "",
 							format: itemFormat,
+							chunks,
 							items: details.items,
 						},
 					};
@@ -869,6 +951,25 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 					packagePath = pkg.packagePath;
 				}
 
+				// Compute RAG chunks for each markdown result, if requested.
+				// Other formats are in-memory; caller can chunk them.
+				// Use a local Map instead of mutating result objects to
+				// keep the data flow explicit.
+				const chunksByUrl = new Map<string, Chunk[]>();
+				if (params.chunks) {
+					for (const r of okResults) {
+						const itemFormat = (r as any).format ?? "markdown";
+						if (itemFormat === "markdown" && r.url) {
+							const c = maybeChunkMarkdown(
+								(r as any).body,
+								params,
+								chunkingErrors,
+							);
+							if (c) chunksByUrl.set(r.url, c);
+						}
+					}
+				}
+
 				const lines = [
 					`Fetched ${okResults.length}/${targets.length} URLs:`,
 					packagePath ? `\n📦 Compiled package: ${packagePath}` : "",
@@ -878,7 +979,13 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 						const dest = r.outPath
 							? `→ ${r.outPath} (${r.length} chars)`
 							: `→ ${itemFormat} (${r.length} chars, in-memory)`;
-						return `✓ ${r.title} — ${r.url}\n  ${dest}${(r as any).responseId ? `\n  ID: ${(r as any).responseId}` : ""}`;
+						const chunks = r.url ? chunksByUrl.get(r.url) : undefined;
+						const chunkFmt = formatChunksText(
+							chunks,
+							params.overlapTokens ?? DEFAULT_OVERLAP_TOKENS,
+							"  ",
+						);
+						return `✓ ${r.title} — ${r.url}\n  ${dest}${(r as any).responseId ? `\n  ID: ${(r as any).responseId}` : ""}${chunkFmt.header ? `\n${chunkFmt.header}` : ""}${chunkFmt.body}`;
 					}),
 					...(errResults.length
 						? [
@@ -895,6 +1002,13 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 								}),
 							]
 						: []),
+					chunkingErrors.length > 0
+						? [
+								"",
+								"[WARN] Chunking failed for some results:",
+								...chunkingErrors.map((e) => `  - ${e}`),
+							]
+						: [],
 				];
 				return {
 					content: [{ type: "text", text: lines.join("\n") }],
@@ -912,6 +1026,7 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 						succeeded: details.succeeded,
 						failed: details.failed,
 						format: "markdown",
+						chunks: Object.fromEntries(chunksByUrl),
 					},
 				};
 			} finally {

@@ -38,7 +38,11 @@ test("buildDeterministicSummary: keeps first sentence after a heading", () => {
 		"## Section Title\nThe opening sentence is between twenty and one hundred twenty chars. Tail we drop.",
 	);
 	assert.ok(out.includes("## Section Title"));
-	assert.ok(out.includes("The opening sentence is between twenty and one hundred twenty chars."));
+	assert.ok(
+		out.includes(
+			"The opening sentence is between twenty and one hundred twenty chars.",
+		),
+	);
 	assert.ok(!out.includes("Tail we drop"));
 });
 
@@ -48,7 +52,9 @@ test("buildDeterministicSummary: stops adding sentences after the first under a 
 	);
 	assert.ok(out.includes("First kept sentence under section heading."));
 	assert.ok(!out.includes("Second sentence dropped"));
-	assert.ok(out.includes("Third kept sentence under the next section heading."));
+	assert.ok(
+		out.includes("Third kept sentence under the next section heading."),
+	);
 	assert.ok(!out.includes("Fourth dropped"));
 });
 
@@ -61,7 +67,10 @@ test("buildDeterministicSummary: truncates to MAX_PREVIEW_CHARS", () => {
 	// Build a body that would exceed MAX_PREVIEW_CHARS if not truncated.
 	const longBody = "A".repeat(120) + ". " + "B".repeat(5000) + ".";
 	const out = buildDeterministicSummary(longBody);
-	assert.ok(out.length <= MAX_PREVIEW_CHARS, `output length ${out.length} > ${MAX_PREVIEW_CHARS}`);
+	assert.ok(
+		out.length <= MAX_PREVIEW_CHARS,
+		`output length ${out.length} > ${MAX_PREVIEW_CHARS}`,
+	);
 });
 
 // ─── Regression tests for the drykiss-flagged bugs ─────────────────
@@ -84,7 +93,10 @@ test("buildDeterministicSummary: keeps short body sentences (regression for find
 		"## Setup\nTap Continue. Then choose your region. Finally, sign in.",
 	);
 	assert.ok(out.includes("Tap Continue."), "13-char sentence should be kept");
-	assert.ok(!out.includes("Then choose"), "only the first sentence under the heading is kept");
+	assert.ok(
+		!out.includes("Then choose"),
+		"only the first sentence under the heading is kept",
+	);
 });
 
 test("buildDeterministicSummary: caps input to MAX_SUMMARY_INPUT_CHARS (regression for finding #5)", () => {
