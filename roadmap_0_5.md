@@ -2,7 +2,7 @@
 
 **Theme:** Polish the agent experience — better TUI, smarter errors, more output formats.
 
-Inspired by [Thinkscape/agent-smart-fetch](https://github.com/Thinkscape/agent-smart-fetch) and the gaps between their tight `web_fetch` core and our broader 6-tool surface.
+Inspired by [Thinkscape/agent-smart-fetch](https://github.com/Thinkscape/agent-smart-fetch) and [brandonkramer/pi-scraper](https://github.com/brandonkramer/pi-scraper) — both address similar UX gaps in the 6-tool scraping surface from different angles.
 
 **Status:** in progress
 **Target:** v0.5.0
@@ -242,6 +242,175 @@ Inspired by [Thinkscape/agent-smart-fetch](https://github.com/Thinkscape/agent-s
 
 ---
 
+## pi-scraper inspirations *(audit completed)*
+
+Source: [brandonkramer/pi-scraper](https://github.com/brandonkramer/pi-scraper) — a 6-tool, scraper-first pi extension by Brandon Kramer, organized around `web_scrape` / `web_crawl` / `web_map` / `web_batch` / `web_extract` / `web_get_result`. Different architecture (TypeScript monorepo, 200+ tests, Vitest, CloakBrowser-backed browser mode) but overlapping problem space with us.
+
+**Status of audit:** complete. Most valuable features have been triaged below. Some already overlap with our existing P1–P9.
+
+### Already covered (or partial overlap)
+
+| pi-scraper feature | Our equivalent | Notes |
+|---|---|---|
+| `mode: auto/fast/fingerprint/readable/browser` | `mode: auto/fast/fingerprint/browser` (no `readable`) | We could add `readable` as a synonym for our default extraction; not a priority |
+| `format: markdown/text/html/json/raw` | `format: markdown/html/text/json/raw` (P3, ✅) | We just shipped this |
+| `saveToFile: true \| {dir, filename, maxBytes}` | `params.out: string` (only works for text; no binary) | Validate the API shape when we do P4 — theirs is richer (`{dir, filename, maxBytes}` vs our single string) |
+| `sessionId` + `saveSession` + `clearSession` for browser | `wreqSession` (HTTP cookies only) | We persist cookies for wreq; for browser mode we don't persist a disk profile. pi-scraper uses CloakBrowser's `launchPersistentContext()` to write to `~/.pi/browser-sessions/<id>/`. We could do the equivalent with Playwright's `launchPersistentContext` — but only if we add a browser-session tool (P16 below) |
+| Resumable crawl with strategy + state | `resume: true` + `request-queue.ts` (P1 in earlier roadmap) | We have checkpoint/resume; they have SQLite-backed jobs; we use JSON blobs |
+| Tools provider hook (`web-tools-provider.test.ts`) | (P9 above) | Same idea, different API |
+| `followAlternates`, `followMetaRefresh` | (P5 above) | Identical scope |
+| Source-grounded LLM extraction | None | See P10 below — high value, deferred to 0.6.0 |
+| Crawl strategies (bfs/dfs/best-first) | BFS only | See P11 below — small addition, could fit 0.5.0 |
+| `chunks: true` for RAG | None | See P12 below — small addition, could fit 0.5.0 |
+| `/scrape-config` slash command | Env vars only | See P13 below — could fit 0.5.0 |
+| `respectRobots` config | Implicit (we just go) | See P14 below — small, could fit 0.5.0 |
+| Diff snapshots | None | See P15 below — medium, deferred to 0.6.0 |
+| YAML vertical manifests (user-extensible at `~/.pi/scraper/verticals/*.yaml`) | TypeScript-only verticals (locked-in) | See P16 below — large refactor, deferred to 0.6.0 |
+| Persistent browser sessions (CloakBrowser) | None | See P17 below — requires Playwright persistent context, deferred |
+
+### New priority items
+
+### Priority 10 — RAG `chunks` parameter
+
+**Why:** Right now `aio-webfetch` returns one big markdown blob. RAG workflows want paragraph-bounded chunks with token budgets and overlap. pi-scraper's `chunks: true` returns `chunks: [{text, tokenCount, index}]` alongside the full markdown. Cheap to add (we already have `estimateTokens`).
+
+**Scope:**
+- Add `chunks?: boolean`, `maxTokens?: number` (default ~512), `overlapTokens?: number` (default ~50) to `aio-webfetch`
+- New `chunkMarkdown(md, {maxTokens, overlapTokens})` in `src/tools/render-result.ts` or a new `src/chunker.ts`
+- Output: `chunks: Chunk[]` where `Chunk = {text, tokenCount, index}`
+- Only for `format: markdown` (other formats are in-memory; caller can chunk themselves)
+- Tests: 6+ in `tests/chunker.test.mjs` (paragraph split, token budget, overlap, empty input, single paragraph, multi-paragraph)
+
+**Reference:** `pi-scraper/src/parse/chunker.ts:chunkMarkdown`, `src/types.ts:Chunk`
+
+### Priority 11 — Crawl strategies: `dfs` and `best-first`
+
+**Why:** Our `aio-webpull` does pure BFS. DFS is useful for nested doc trees (drilling into `docs/v1/api/...`), and best-first prioritizes index pages and short paths (great for docs sites where the landing page points to the categories).
+
+**Scope:**
+- Add `strategy: "bfs" | "dfs" | "best-first"` to `aio-webpull` (default `bfs`, backward compatible)
+- BFS = current behavior (FIFO)
+- DFS = LIFO insert (`queue.splice(head, 0, item)`) — drill one branch before backtracking
+- best-first = priority score based on `(maxDepth - depth) * 10` + path-shape bonuses (root +5, short path +3, fragment +1)
+- TUI progress row shows the active strategy: `12/50 pages · 3 failed · depth 2 · strategy best-first`
+- Tests: 8+ in `tests/crawl-strategy.test.mjs` covering insertion order for each strategy + priority score for `best-first`
+
+**Reference:** `pi-scraper/src/crawl/frontier.ts:42-110`, `src/crawl/runner.ts:74-82`
+
+### Priority 12 — Content line filters: `include` / `exclude` / `linesMatching` / `contextLines`
+
+**Why:** When scraping logs, config dumps, or search results, the user often wants only the lines that match a pattern (e.g. "all `ERROR` lines with 2 lines of context"). pi-scraper has this; we don't.
+
+**Scope:**
+- Add 4 new params to `aio-webfetch`:
+  - `include?: string[]` — glob patterns; drop content that doesn't match
+  - `exclude?: string[]` — glob patterns; drop content that does
+  - `linesMatching?: string` — regex; keep only matching lines
+  - `contextLines?: number` — N lines of context around each match
+- `caseSensitive?: boolean` (default false)
+- Applied AFTER extraction, BEFORE `prune` / `max_length`
+- Tests: 10+ in `tests/line-filter.test.mjs` covering all 4 filters, case sensitivity, context lines, and combinations
+
+**Reference:** `pi-scraper/src/scrape/line-filter.ts`, `src/commands/scrape-config.ts`
+
+### Priority 13 — `/webaio-config` slash command
+
+**Why:** We have env vars and a few hardcoded defaults. Users want a single place to set their default mode, browser profile, bypass behavior, cache TTL — interactive via the TUI. pi-scraper does this with `/scrape-config`; the same idea transfers cleanly to us.
+
+**Scope:**
+- Register a `/webaio-config` command via `pi.registerCommand`
+- Sub-actions: `status`, `set mode=auto|fast|fingerprint|browser`, `set browser=<profile>`, `set os=...`, `set bypass=true|false`, `set cacheTtl=<seconds>`, `set tempDir=<path>`, `cache clear`, `cache stats`
+- Persist to `~/.pi/webaio-config.json` (settings-file style, see P6)
+- `status` shows current effective config (with source: env / file / default)
+- Tests: unit-test the parse/validate helpers; the slash command itself is hard to test in isolation
+
+**Reference:** `pi-scraper/src/commands/scrape-config.ts`, `src/commands/scrape-config-*.ts`
+
+### Priority 14 — `respectRobots` config option
+
+**Why:** We're polite enough to read `robots.txt` during `aio-webmap` and `aio-webpull` discovery (we follow sitemap exclusions), but during the actual crawl we just go. A site owner who blocks `/private/` in robots.txt is being ignored. This is a small, defensive change that costs us nothing and might save us a `User-Agent: *` ban.
+
+**Scope:**
+- Add `respectRobots?: boolean` to `aio-webfetch` and `aio-webpull` (default `true` for pull, `false` for fetch — fetch is a single URL where robots.txt is less meaningful)
+- When `true`, before each fetch:
+  - GET `/robots.txt` from the origin (cached for the pull)
+  - Check `Disallow` rules against the URL path
+  - Check `Crawl-delay` and pace requests accordingly
+- Use the cached `robots.txt` we already fetch for sitemap discovery (in `aio-webmap` and `aio-webpull`)
+- Tests: 8+ in `tests/respect-robots.test.mjs` covering allow/deny rules, crawl-delay pacing, missing robots (allow), wildcard `*`, multi-User-Agent rules
+
+**Reference:** `pi-scraper/src/http/robots.ts`, `src/crawl/__tests__/respect-robots.test.ts`
+
+### Priority 15 — Diff snapshots *(deferred to 0.6.0)*
+
+**Why:** A user scraping a docs site weekly wants to know what changed. pi-scraper has `web_scrape({snapshotName, snapshotTag, diff, compareTag})` with a `compareSnapshotText` engine that returns `added` / `removed` / `changed` / `unchanged` lines.
+
+**Scope:**
+- Add `snapshotName?: string` and `snapshotTag?: string` to `aio-webfetch`
+- When set, the result is also saved to `~/.pi/webaio/snapshots/<name>/<tag>.md`
+- Add `aio-webdiff` tool: `aio-webdiff({name, oldTag, newTag})` returns the diff
+- `compareSnapshotText(previous, current)` in `src/snapshot-compare.ts` with similarity threshold (0.55) and line-by-line alignment
+- Return shape: `{added: string[], removed: string[], changed: {previous, current, similarity}[], unchanged: number}`
+- TUI: red/green inline diff with 3 lines of context
+- Tests: 12+ in `tests/snapshot-compare.test.mjs`
+
+**Reference:** `pi-scraper/src/diff/compare.ts`, `src/diff/snapshots.ts`
+
+### Priority 16 — YAML-based vertical manifests *(deferred to 0.6.0)*
+
+**Why:** Our 18 verticals (`src/verticals/*.ts`) are baked in at compile time. Users can't add their own without forking the extension. pi-scraper solves this with a layered YAML manifest system: built-ins in `verticals/*.yaml`, user overrides at `~/.pi/scraper/verticals/*.yaml`, project overrides at `.pi/scraper/verticals/*.yaml`. The latter wins. A user can drop in a single YAML to teach the extractor a new site.
+
+**Scope:**
+- Define manifest v1 schema: `version`, `name`, `kind`, `urlPatterns`, `requirements`, `capabilities`, `request`, `extract`
+- `kind` values: `api-json`, `api-xml`, `api-json-aggregate`, `api-json-chain`, `http-workflow`, `html-extract`, `text-extract`, `code-extract`, `selector`, `pattern`, `recipe`
+- Migrate 5–10 of our most-used verticals to YAML (npm, PyPI, arXiv, GitHub, HackerNews, Reddit, crates.io, Docker Hub, YouTube oEmbed, OSS Insight) as proof of concept
+- Keep TypeScript verticals for the long tail (JSDoc extraction, manifest walking, GitIngest, etc.)
+- Layered loader: built-in → user → project, with project winning
+- New `aio-webextract` tool with `action: "vertical" | "list" | "reload"`
+- Tests: 20+ covering manifest loading order, JSONPath evaluation, http-workflow steps, url-pattern capture groups, recipe primitives
+
+**Reference:** `pi-scraper/verticals/*.yaml`, `src/extract/vertical/manifest-*.ts`, `src/extract/vertical/kinds/`
+
+### Priority 17 — Persistent browser sessions via Playwright `launchPersistentContext` *(deferred)*
+
+**Why:** When a user logs into a site and wants to scrape authenticated pages, they currently have to re-login every session. pi-scraper solves this with CloakBrowser's `launchPersistentContext()` writing to `~/.pi/browser-sessions/<id>/`. We can do the same with Playwright (no CloakBrowser dependency).
+
+**Scope:**
+- Add `sessionId?: string` + `saveSession?: boolean` + `clearSession?: boolean` to `aio-webfetch` (only for `mode: "browser"`)
+- New `src/browser-session.ts`:
+  - `getOrCreateSession(id)` returns a `BrowserContext` from `~/.pi/webaio/sessions/<id>/`
+  - `closeSession(id)` releases the context
+  - `clearSession(id)` removes the directory
+- Cookies / localStorage / IndexedDB persist across calls and Pi restarts
+- Replaces our current per-request `chromium.launch()` in `fetchWithPlaywright` when a sessionId is set
+- Tests: integration (Playwright is optional dep; skip if not installed)
+
+**Reference:** `pi-scraper/src/browser/session-pool.ts`, `src/browser/session.ts`
+
+### Won't adopt
+
+- **CloakBrowser binary** — adds 200MB+ to install and is a native C++ dep. Our `wreq-js` (static) + `playwright` (browser) + `paywall bypass` (content) cover the same ground with lighter tooling.
+- **SQLite index** (`~/.pi/scraper/index.db`) — our JSON-blob store with 24h TTL works fine for the cache scale. Would revisit if we need ACID transactions or cross-device sync.
+- **`pi:model-adapter/*` event protocol** — pi 0.77 may not have it; would need to coordinate with the pi core team.
+- **YAML vertical manifest for every existing site** — the long tail of TypeScript verticals (JSDoc extraction, manifest walking, GitIngest, etc.) doesn't translate cleanly to YAML's declarative model. Migrate only where it adds value (P16 above).
+
+### What we do that pi-scraper doesn't (our differentiators)
+
+Worth keeping in mind when we feel FOMO:
+
+- **Phase-aware `FetchError`** — 25 codes × 10 phases × 7 categories, with user-facing summaries and `suggestRetryTimeoutMs`. pi-scraper has a simpler `HttpError` model.
+- **Paywall bypass** — `bypass: true` with a 7-step strategy chain (`archive` → bot UAs → `block_js` → `cookies`) tuned for top-50+ sites. No equivalent in pi-scraper.
+- **Adaptive selectors** — `adaptive: true` fingerprints element structure to survive site redesigns. We have it; they have selector healing (text-anchor fallback), but not full structural fingerprinting.
+- **Inline AI summarization** — we summarize via Google AI Mode (headless Chrome) when content exceeds the preview budget. pi-scraper does it via a model adapter that requires the user to have a configured LLM.
+- **`wreq-js` for static TLS fingerprinting** — we use the `wreq-js` library for anti-bot TLS, which is much faster than CloakBrowser for static pages. pi-scraper uses `impit`.
+- **Search** — `aio-websearch` covers DDG, Brave, and Google (with a 7s cap + 10-min disk cache). pi-scraper doesn't have a search tool.
+- **Inline prompt-injection detection** — we scan fetched content for instruction-override, role-injection, jailbreak patterns and warn/redact/tag. pi-scraper doesn't.
+- **Secret scanning** — we block URLs with API keys/tokens before outbound request. pi-scraper doesn't.
+- **18 vertical extractors** — we have a wider list (npm, PyPI, crates.io, RubyGems, Packagist, pub.dev, Go, NuGet, HN, Reddit, arXiv, Stack Exchange, YouTube, Wikipedia, Open Library, DEV.to, SonarCloud, docs sites). pi-scraper has 25 but most are YAML and overlap.
+- **`aio-webmap` discovery** — separate tool for inventorying URLs without fetching. We have it; pi-scraper has it as `web_map` (same idea).
+
+---
+
 ## What we are NOT doing in 0.5.0
 
 - Search tool TUI (lower priority — `aio-websearch` already returns concise lists)
@@ -249,6 +418,10 @@ Inspired by [Thinkscape/agent-smart-fetch](https://github.com/Thinkscape/agent-s
 - Bun monorepo migration (we're a single-package extension)
 - Forking wreq-js (upstream works for our use cases)
 - Renaming our tools (`aio-webfetch` is our brand, smart-fetch uses `web_fetch`)
+- CloakBrowser binary (200MB+ native dep; we have wreq-js + Playwright + paywall bypass)
+- SQLite index (current JSON + blobs work fine at our cache scale)
+- Migrating ALL verticals to YAML (P16 only migrates the top 5-10)
+- Persistent browser sessions (P17 deferred to 0.6.0; needs Playwright persistent context work)
 
 ---
 
@@ -259,12 +432,21 @@ Inspired by [Thinkscape/agent-smart-fetch](https://github.com/Thinkscape/agent-s
 - [x] Multiple output formats (P3) — `format` parameter, 17 tests
 - [x] Security hardening (path traversal, SSRF, withTimeout) — 8 tests
 - [x] `readResponseTextWithProgress` + `SmartFetchResult` fields — 6 tests
+- [x] pi-scraper audit — 8 new priorities (P10–P17) triaged
 - [ ] `kind: "file"` result type (P4)
 - [ ] Alternate-link fallback (P5)
 - [ ] Settings file support (P6)
 - [ ] DI factory for `content.ts` (P7)
 - [ ] Soft-404 detector (P8)
 - [ ] WebFetch provider registration (P9)
+- [ ] RAG `chunks` parameter (P10) — pi-scraper inspiration
+- [ ] Crawl strategies `dfs` / `best-first` (P11) — pi-scraper inspiration
+- [ ] Content line filters (P12) — pi-scraper inspiration
+- [ ] `/webaio-config` slash command (P13) — pi-scraper inspiration
+- [ ] `respectRobots` config (P14) — pi-scraper inspiration
+- [ ] Diff snapshots (P15) — deferred to 0.6.0
+- [ ] YAML vertical manifests (P16) — deferred to 0.6.0
+- [ ] Persistent browser sessions (P17) — deferred
 - [ ] Update README with new `format` parameter
 - [ ] Update README with new `kind: file` result type
 - [x] Run all 357 existing tests to confirm no regressions (now 388: 145 unit + 31 new-features + 65 paywall + 22 github-check + 39 render + 50 fetch-error + 6 fetch-progress + 8 hardening + 17 format + 5 integration)
