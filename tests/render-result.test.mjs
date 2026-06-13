@@ -116,7 +116,7 @@ test("createProgressComponent: emits tool title for single URL", () => {
 	const text = lines.join("\n");
 	assert.ok(text.includes("aio-webfetch"), "should include tool name");
 	assert.ok(
-		text.includes("example.com") || text.includes("…"),
+		/example\.com|…/.test(text),
 		"should show URL",
 	);
 	// The status label is centered in the progress bar and may be split
@@ -399,7 +399,7 @@ test("createCallComponent: shows tool name + URL", () => {
 	const comp = createCallComponent({ url: "https://example.com" }, theme);
 	const text = comp.render(80).join("\n");
 	assert.ok(text.includes("aio-webfetch"));
-	assert.ok(text.includes("https://example.com"));
+	assert.ok(/https:\/\/example\.com/.test(text));
 });
 
 test("createCallComponent: shows count for batch URL", () => {

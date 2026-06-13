@@ -357,6 +357,7 @@ async function pullGitHubCheckLog(
 						const level = a.annotation_level || "?";
 						const msg = (a.message || "")
 							.slice(0, 200)
+							.replace(/\\/g, "\\\\")
 							.replace(/\|/g, "\\|")
 							.replace(/\n/g, " ");
 						md += `\n| \`${file}\` | ${line} | ${level} | ${msg} |`;

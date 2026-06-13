@@ -51,6 +51,13 @@ test("markdownToText: strips HTML tags", () => {
 	);
 });
 
+test("markdownToText: strips nested/overlapping HTML tags in repeated passes", () => {
+	// Regression for CodeQL js/incomplete-multi-character-sanitization:
+	// a single-pass regex leaves `<script>` when tags are nested.
+	assert.equal(markdownToText("<<script>script>alert(1)</script>"), "alert(1)");
+	assert.equal(markdownToText("<<b>b>bold</b>"), "bold");
+});
+
 test("markdownToText: collapses excessive newlines", () => {
 	assert.equal(markdownToText("a\n\n\n\n\nb"), "a\n\nb");
 });

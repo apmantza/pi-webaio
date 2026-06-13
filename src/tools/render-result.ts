@@ -164,8 +164,14 @@ export function markdownToText(md: string): string {
 	s = s.replace(/(\*|_)(.*?)\1/g, "$2");
 	// Strikethrough
 	s = s.replace(/~~(.*?)~~/g, "$1");
-	// Raw HTML tags
-	s = s.replace(/<[^>]+>/g, "");
+	// Raw HTML tags — strip tags without crossing nested `<` boundaries,
+	// and repeat until stable so nested/overlapping tags (e.g.
+	// `<<script>script>`) cannot survive sanitization.
+	let previous: string;
+	do {
+		previous = s;
+		s = s.replace(/<[^<>]*>/g, "");
+	} while (s !== previous);
 	// Collapse 3+ newlines to 2
 	s = s.replace(/\n{3,}/g, "\n\n");
 	// Trim trailing whitespace on each line

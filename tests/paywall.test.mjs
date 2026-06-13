@@ -239,7 +239,7 @@ test("findStrategy normalizes www. prefix", () => {
 test("findStrategy returns Piano-based strategy for nytimes", () => {
 	const r = findStrategy("https://www.nytimes.com/foo");
 	assert.ok(r);
-	assert.ok(r.blockScripts?.some((p) => p.includes("piano.io")));
+	assert.ok(r.blockScripts?.some((p) => /piano\.io/.test(p)));
 });
 
 test("findStrategy returns Poool-based strategy for lemonde", () => {
@@ -252,7 +252,7 @@ test("findStrategy matches group member by suffix", () => {
 	// al.com is in the Advance Local group (sophi.io)
 	const r = findStrategy("https://www.al.com/article");
 	assert.ok(r);
-	assert.ok(r.blockScripts?.some((p) => p.includes("sophi.io")));
+	assert.ok(r.blockScripts?.some((p) => /sophi\.io/.test(p)));
 });
 
 test("findStrategy returns generic strategy for unknown domains", () => {
