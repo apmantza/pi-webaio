@@ -28,6 +28,7 @@ import { BASE_TEMP } from "./session-store.ts";
 import { loadPdfParseCtor } from "./types.ts";
 import type { PullResult, FetchOpts, FetchErrorInfo } from "./types.ts";
 import { formatErrorInfo } from "./types.ts";
+import { createFetchError } from "./tools/fetch-error.ts";
 
 // ─── Constants ─────────────────────────────────────────────────────
 
@@ -269,13 +270,27 @@ export async function extractPDF(
 
 // ─── Timeout helper ────────────────────────────────────────────────
 
+/**
+ * Race a promise against a timeout, without leaving the loser promise
+ * dangling (which would cause an unhandled rejection in Node 15+ when
+ * the timeout wins and the original promise later rejects).
+ */
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
-	return Promise.race([
-		promise,
-		new Promise<never>((_, reject) =>
-			setTimeout(() => reject(new Error("timeout")), ms),
-		),
-	]);
+	return new Promise<T>((resolve, reject) => {
+		const timer = setTimeout(() => {
+			reject(new Error("timeout"));
+		}, ms);
+		promise.then(
+			(v) => {
+				clearTimeout(timer);
+				resolve(v);
+			},
+			(e) => {
+				clearTimeout(timer);
+				reject(e);
+			},
+		);
+	});
 }
 
 // ─── Smart content-type detection ──────────────────────────────────
@@ -683,11 +698,17 @@ export async function pullPage(
 			phase: "connecting",
 			retryable: true,
 		};
+		const fetchError = createFetchError("connect_error", info.message, {
+			url,
+			phase: "connecting",
+			mode: opts?.mode,
+		});
 		return {
 			ok: false,
 			url,
 			error: formatErrorInfo(info),
 			errorInfo: info,
+			fetchError,
 		};
 	}
 
@@ -706,11 +727,17 @@ export async function pullPage(
 			phase: "loading",
 			retryable: true,
 		};
+		const fetchError = createFetchError("connect_error", info.message, {
+			url,
+			phase: "downloading",
+			mode: opts?.mode,
+		});
 		return {
 			ok: false,
 			url,
 			error: formatErrorInfo(info),
 			errorInfo: info,
+			fetchError,
 		};
 	}
 	if (res.status >= 400) {
@@ -742,11 +769,23 @@ export async function pullPage(
 			retryable: res.status >= 500 || res.status === 429,
 			statusCode: res.status,
 		};
+		const fetchError = createFetchError("http_error", httpInfo.message, {
+			url,
+			finalUrl: res.url,
+			phase: "headers",
+			statusCode: res.status,
+			mimeType: res.headers.get("content-type") ?? undefined,
+			downloadedBytes: res.downloadedBytes,
+			contentLength: res.contentLength ?? undefined,
+			elapsedMs: res.elapsedMs,
+			mode: opts?.mode,
+		});
 		return {
 			ok: false,
 			url,
 			error: formatErrorInfo(httpInfo),
 			errorInfo: httpInfo,
+			fetchError,
 		};
 	}
 
@@ -894,11 +933,7 @@ export async function pullPageEnhanced(
 							if (process.env.PI_WEBAIO_DEBUG) console.warn(msg);
 						},
 					});
-					if (
-						bypassed?.ok &&
-						bypassed.text &&
-						!bypassed.paywall?.paywalled
-					) {
+					if (bypassed?.ok && bypassed.text && !bypassed.paywall?.paywalled) {
 						const bypassedResult = await pullPage(
 							url,
 							opts,
@@ -942,11 +977,7 @@ export async function pullPageEnhanced(
 							if (process.env.PI_WEBAIO_DEBUG) console.warn(msg);
 						},
 					});
-					if (
-						bypassed?.ok &&
-						bypassed.text &&
-						!bypassed.paywall?.paywalled
-					) {
+					if (bypassed?.ok && bypassed.text && !bypassed.paywall?.paywalled) {
 						// Re-run the HTML pipeline with the bypassed
 						// text, but skip the network fetch (4th arg).
 						const bypassedResult = await pullPage(

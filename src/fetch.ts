@@ -280,6 +280,13 @@ export async function fetchWithPlaywright(
 	pool?: FetchOpts["browserPool"],
 	wreqSession?: any,
 ): Promise<string | null> {
+	// SSRF guard: block requests to private IPs / loopback / cloud
+	// metadata endpoints. fetchWithRetry does this; fetchWithPlaywright
+	// was missing the check, so a malicious URL could pivot through
+	// the headless browser to internal networks.
+	if (await isDangerousUrl(url)) {
+		throw new Error(`Blocked unsafe URL: ${url}`);
+	}
 	if (pool) {
 		let pooled: Awaited<
 			ReturnType<NonNullable<FetchOpts["browserPool"]>["acquirePage"]>
@@ -340,15 +347,62 @@ export async function fetchWithPlaywright(
 // ─── Response body reader (byte-budget capped) ─────────────────────
 
 export async function readResponseText(response: any): Promise<string> {
-	if (!response.body) return response.text();
-	const contentLength = response.headers?.get("content-length");
-	if (contentLength) {
-		const len = parseInt(contentLength, 10);
-		if (!isNaN(len) && len > MAX_RESPONSE_BYTES) {
-			throw new Error(
-				`Response exceeds ${MAX_RESPONSE_BYTES} byte limit (Content-Length: ${(len / 1024 / 1024).toFixed(1)}MB)`,
-			);
-		}
+	const { text } = await readResponseTextWithProgress(response);
+	return text;
+}
+
+/**
+ * Stream the response body to a string, returning the actual bytes read
+ * and the server-declared `Content-Length` (or null if unknown). Throws
+ * if the response exceeds {@link MAX_RESPONSE_BYTES} — the error includes
+ * the bytes read so the caller can build a rich FetchError.
+ */
+/**
+ * Throw an "ERR_RESPONSE_TOO_LARGE" error annotated with progress so the
+ * caller's `classifyError` can produce a rich FetchError.
+ */
+function throwResponseTooLarge(
+	bytesRead: number,
+	declaredLen: number | null,
+	limit: number,
+): never {
+	const err: any = new Error(
+		`Response exceeds ${limit} byte limit (${
+			declaredLen !== null
+				? `Content-Length: ${(declaredLen / 1024 / 1024).toFixed(1)}MB`
+				: `${(bytesRead / 1024 / 1024).toFixed(1)}MB received`
+		})`,
+	);
+	err.code = "ERR_RESPONSE_TOO_LARGE";
+	err.bytesRead = bytesRead;
+	err.contentLength = declaredLen;
+	throw err;
+}
+
+export async function readResponseTextWithProgress(response: any): Promise<{
+	text: string;
+	bytesRead: number;
+	contentLength: number | null;
+}> {
+	if (!response.body) {
+		const t = await response.text();
+		// Use byte length, not char length, so the size shown in the
+		// TUI and used by `suggestRetryTimeoutMs` is accurate for
+		// multi-byte UTF-8 (CJK, emoji).
+		const byteLength =
+			typeof Buffer !== "undefined"
+				? Buffer.byteLength(t, "utf8")
+				: new TextEncoder().encode(t).length;
+		return { text: t, bytesRead: byteLength, contentLength: null };
+	}
+	const contentLengthHeader = response.headers?.get("content-length");
+	let declaredLen: number | null = null;
+	if (contentLengthHeader) {
+		const parsed = parseInt(contentLengthHeader, 10);
+		if (!isNaN(parsed) && parsed > 0) declaredLen = parsed;
+	}
+	if (declaredLen !== null && declaredLen > MAX_RESPONSE_BYTES) {
+		throwResponseTooLarge(0, declaredLen, MAX_RESPONSE_BYTES);
 	}
 	const reader = response.body.getReader();
 	const decoder = new TextDecoder();
@@ -361,16 +415,23 @@ export async function readResponseText(response: any): Promise<string> {
 			bytesRead += value.byteLength;
 			if (bytesRead > MAX_RESPONSE_BYTES) {
 				reader.cancel();
-				throw new Error(
-					`Response exceeds ${MAX_RESPONSE_BYTES} byte limit (${(MAX_RESPONSE_BYTES / 1024 / 1024).toFixed(1)}MB)`,
-				);
+				throwResponseTooLarge(bytesRead, declaredLen, MAX_RESPONSE_BYTES);
 			}
 			result += decoder.decode(value, { stream: true });
 		}
 		result += decoder.decode();
-		return result;
+		return { text: result, bytesRead, contentLength: declaredLen };
 	} catch (err) {
-		reader.cancel();
+		try {
+			reader.cancel();
+		} catch {
+			/* ignore */
+		}
+		// Annotate with progress so callers can build a FetchError
+		if (err && typeof err === "object" && !(err as any).bytesRead) {
+			(err as any).bytesRead = bytesRead;
+			(err as any).contentLength = declaredLen;
+		}
 		throw err;
 	}
 }
@@ -440,15 +501,24 @@ export async function fetchWithRetry(
 
 // ─── Smart fetch (bot protection fallback, secret scan) ────────────
 
-export async function smartFetch(
-	url: string,
-	options: FetchOpts = {},
-): Promise<{
+export type SmartFetchResult = {
 	text: string;
 	url: string;
 	status: number;
 	headers: { get(name: string): string | null };
-} | null> {
+	/** Bytes actually read from the body. */
+	downloadedBytes: number;
+	/** Server-declared `Content-Length`, or null if unknown. */
+	contentLength: number | null;
+	/** Total wall time of the fetch, including retries and fallbacks. */
+	elapsedMs: number;
+};
+
+export async function smartFetch(
+	url: string,
+	options: FetchOpts = {},
+): Promise<SmartFetchResult | null> {
+	const startedAt = Date.now();
 	const rlHost = new URL(url).hostname;
 	await getRateLimiter(rlHost).acquire();
 
@@ -480,12 +550,35 @@ export async function smartFetch(
 					get(name: string): string | null;
 					has?(name: string): boolean;
 				},
+				downloadedBytes: pwHtml.length,
+				contentLength: pwHtml.length,
+				elapsedMs: Date.now() - startedAt,
 			};
 		}
 		return null;
 	}
 
-	const text = await readResponseText(res);
+	let text: string;
+	let bytesRead: number;
+	let declaredLen: number | null;
+	try {
+		const result = await readResponseTextWithProgress(res);
+		text = result.text;
+		bytesRead = result.bytesRead;
+		declaredLen = result.contentLength;
+	} catch (err) {
+		// Bubble the underlying error enriched with progress so callers
+		// can build a FetchError with downloadedBytes/contentLength.
+		// readResponseTextWithProgress already attaches bytesRead +
+		// contentLength to its errors; we just add elapsedMs.
+		const enriched: any = err instanceof Error ? err : new Error(String(err));
+		if (typeof enriched === "object") {
+			if (enriched.elapsedMs === undefined) {
+				enriched.elapsedMs = Date.now() - startedAt;
+			}
+		}
+		throw enriched;
+	}
 
 	const loginRedirect = detectLoginRedirect(
 		url,
@@ -515,14 +608,21 @@ export async function smartFetch(
 				...(options.proxy ? { proxy: options.proxy } : {}),
 			});
 			if (fbRes?.ok) {
-				const fbText = await readResponseText(fbRes);
-				if (!detectBotBlock(fbText).blocked) {
-					return {
-						text: fbText,
-						url: normalizeFetchedUrl(fbRes.url),
-						status: fbRes.status,
-						headers: fbRes.headers,
-					};
+				try {
+					const fb = await readResponseTextWithProgress(fbRes);
+					if (!detectBotBlock(fb.text).blocked) {
+						return {
+							text: fb.text,
+							url: normalizeFetchedUrl(fbRes.url),
+							status: fbRes.status,
+							headers: fbRes.headers,
+							downloadedBytes: fb.bytesRead,
+							contentLength: fb.contentLength,
+							elapsedMs: Date.now() - startedAt,
+						};
+					}
+				} catch {
+					/* swallow — try next profile */
 				}
 			}
 		}
@@ -533,6 +633,9 @@ export async function smartFetch(
 		url: normalizeFetchedUrl(res.url),
 		status: res.status,
 		headers: res.headers,
+		downloadedBytes: bytesRead,
+		contentLength: declaredLen,
+		elapsedMs: Date.now() - startedAt,
 	};
 }
 

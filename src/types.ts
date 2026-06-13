@@ -98,6 +98,8 @@ export interface PullResult {
 	content?: string;
 	error?: string;
 	errorInfo?: FetchErrorInfo;
+	/** Rich, phase-aware error for renderer/TUI/metrics. */
+	fetchError?: import("./tools/fetch-error.ts").FetchError;
 	filePath?: string;
 	author?: string;
 	published?: string;

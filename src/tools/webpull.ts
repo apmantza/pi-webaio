@@ -1,4 +1,4 @@
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { cpus } from "node:os";
 import { readFile, writeFile } from "node:fs/promises";
 import { Type } from "typebox";
@@ -8,6 +8,7 @@ import { pullPageEnhanced } from "../content.ts";
 import { discover } from "../discovery.ts";
 import { storeContent, BASE_TEMP } from "../session-store.ts";
 import { compileContextPackage } from "../context-package.ts";
+import { safeResolveInBaseTemp } from "./utils.ts";
 import { RequestQueue, hasQueueFile } from "../request-queue.ts";
 import { BrowserPool } from "../browser-pool.ts";
 import { SessionRouter, parseRoutes } from "../session-router.ts";
@@ -141,7 +142,7 @@ export function registerWebpullTool(pi: ExtensionAPI): void {
 			}
 
 			const outDir = params.out
-				? resolve(BASE_TEMP, params.out)
+				? safeResolveInBaseTemp(params.out)
 				: join(BASE_TEMP, url.hostname);
 			const max = params.max ?? 100;
 			const concurrency = Math.max(4, cpus().length * 2);

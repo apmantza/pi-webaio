@@ -1,8 +1,31 @@
 import { mkdir, writeFile } from "node:fs/promises";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { spawnSync } from "node:child_process";
 import type { Page } from "../types.ts";
 import type { RequestQueue } from "../request-queue.ts";
+import { BASE_TEMP } from "../session-store.ts";
+
+// ─── Safe path resolution under BASE_TEMP ────────────────────────────
+// Resolves `userInput` against `BASE_TEMP` and verifies the result
+// stays within the temp directory. Rejects absolute paths, ".."
+// traversal, and any path that escapes via symlink-free checks.
+//
+// Throws an Error if the resolved path would escape BASE_TEMP.
+export function safeResolveInBaseTemp(userInput: string): string {
+	if (typeof userInput !== "string" || !userInput) {
+		throw new Error("Path must be a non-empty string");
+	}
+	const baseTempWithSep = BASE_TEMP.endsWith(sep) ? BASE_TEMP : BASE_TEMP + sep;
+	const resolved = resolve(BASE_TEMP, userInput);
+	// Use strict prefix check: the resolved path must start with
+	// BASE_TEMP + sep (or be exactly BASE_TEMP, which we also accept).
+	if (resolved !== BASE_TEMP && !resolved.startsWith(baseTempWithSep)) {
+		throw new Error(
+			`Refusing to write outside temp dir: ${userInput} → ${resolved}`,
+		);
+	}
+	return resolved;
+}
 
 // ─── Resolve CLI binary helper (used by cloneGitHubRepo) ────────────
 const _resolvedBinaries = new Map<string, string | null>();
