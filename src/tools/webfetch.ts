@@ -683,7 +683,12 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 						progress: 1,
 						elapsedMs: Date.now() - singleStartedAt,
 					});
-					const preview = await readFile(r.outPath!, "utf8");
+					// Use the in-memory body for the preview, not a disk read.
+					// Markdown and non-markdown formats both populate `r.body`,
+					// so this works regardless of whether the result was saved
+					// to disk. For non-markdown (html/text/json/raw), `outPath`
+					// is undefined and a readFile would throw.
+					const preview: string = r.body ?? "";
 
 					function buildDeterministicSummary(content: string): string {
 						const lines = content.split("\n");
@@ -759,7 +764,9 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 					let displayContent: string;
 
 					if (summarized && summary) {
-						summaryNotice = `\n[AI-summarized by Google AI. Full content (${preview.length} chars) saved to ${r.outPath}. Use the read tool for full text.]`;
+						summaryNotice = r.outPath
+							? `\n[AI-summarized by Google AI. Full content (${preview.length} chars) saved to ${r.outPath}. Use the read tool for full text.]`
+							: `\n[AI-summarized by Google AI. Full content (${preview.length} chars, in-memory only).]`;
 						displayContent = summary;
 					} else if (isShort) {
 						summaryNotice = "";
