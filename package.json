@@ -1,6 +1,6 @@
 {
   "name": "pi-webaio",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "description": "All-in-one web tools for pi with search (Google, Brave, DDG) and fetch with headless browser AI summarization",
   "license": "MIT",
   "repository": {
@@ -62,7 +62,8 @@
     "test:format": "npx tsx tests/format.test.mjs",
     "test:webfetch-summary": "npx tsx tests/webfetch-summary.test.mjs",
     "test:chunker": "npx tsx tests/chunker.test.mjs",
-    "test:all": "npx tsx tests/unit.test.mjs && npx tsx tests/new-features.test.mjs && npx tsx tests/paywall.test.mjs && npx tsx tests/github-check.test.mjs && npx tsx tests/render-result.test.mjs && npx tsx tests/fetch-error.test.mjs && npx tsx tests/fetch-progress.test.mjs && npx tsx tests/hardening.test.mjs && npx tsx tests/format.test.mjs && npx tsx tests/webfetch-summary.test.mjs && npx tsx tests/chunker.test.mjs && npx tsx tests/integration.test.mjs"
+    "test:all": "npx tsx tests/unit.test.mjs && npx tsx tests/new-features.test.mjs && npx tsx tests/paywall.test.mjs && npx tsx tests/github-check.test.mjs && npx tsx tests/render-result.test.mjs && npx tsx tests/fetch-error.test.mjs && npx tsx tests/fetch-progress.test.mjs && npx tsx tests/hardening.test.mjs && npx tsx tests/format.test.mjs && npx tsx tests/webfetch-summary.test.mjs && npx tsx tests/chunker.test.mjs && npx tsx tests/integration.test.mjs",
+    "check:lockfile": "node scripts/check-lockfile-sync.mjs"
   },
   "dependencies": {
     "@earendil-works/pi-tui": "^0.74.2",

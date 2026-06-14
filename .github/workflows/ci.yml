@@ -23,6 +23,9 @@ jobs:
       - name: Install dependencies
         run: npm install --no-audit --no-fund
 
+      - name: Lockfile in sync with package.json
+        run: npm run check:lockfile
+
       # Fail on known-vulnerable PRODUCTION deps (what actually ships to users via
       # `npm install --omit=dev`). Scoped to high/critical to avoid blocking PRs on
       # fix-less moderate advisories; transitive moderate ones are handled by
