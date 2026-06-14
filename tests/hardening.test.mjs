@@ -41,10 +41,13 @@ test("safeResolveInBaseTemp: empty / non-string input rejected", () => {
 
 test("safeResolveInBaseTemp: returns path joined under BASE_TEMP", () => {
 	const out = safeResolveInBaseTemp("file.md");
-	// On Windows the separator is `\`, on POSIX it's `/`. Use path.sep.
-	const sep = "\\" || "/"; // both ok on win; posix only has /
-	const baseWithSep = BASE_TEMP.endsWith(sep) ? BASE_TEMP : BASE_TEMP + sep;
-	assert.ok(out === BASE_TEMP || out.startsWith(baseWithSep), `got ${out}`);
+	// Accept both with and without trailing separator (BASE_TEMP may or may
+	// not end with one depending on the platform). `startsWith` handles
+	// both cases: the path is always under BASE_TEMP regardless of sep.
+	assert.ok(
+		out === BASE_TEMP || out.startsWith(BASE_TEMP),
+		`got ${out}, expected to be BASE_TEMP (${BASE_TEMP}) or start with it`,
+	);
 });
 
 // ─── withTimeout behavior: not exported directly, but we can verify

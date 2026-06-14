@@ -18,7 +18,7 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: '24'
+          node-version: "24"
 
       - name: Install dependencies
         run: npm install --no-audit --no-fund
@@ -44,7 +44,7 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: '24'
+          node-version: "24"
 
       - name: Install dependencies
         run: npm install --no-audit --no-fund
@@ -82,7 +82,7 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: '24'
+          node-version: "24"
 
       # --omit=dev omits @types/node (a devDep); typescript is a runtime dep so
       # tsc is present. This is the exact environment pi builds dist in.
@@ -123,7 +123,7 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: '24'
+          node-version: "24"
 
       - name: Install dependencies
         run: npm install --no-audit --no-fund
