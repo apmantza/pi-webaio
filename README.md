@@ -2,7 +2,7 @@
 
 # pi-webaio
 
-All-in-one web access tools for [pi](https://pi.dev) with search, fetch, crawl, extraction, anti-bot TLS fingerprinting, and intelligent resilience.
+All-in-one web access tools for [pi](https://pi.dev) with search, fetch, crawl, extraction, anti-bot TLS fingerprinting, intelligent resilience, RAG-ready output, and TUI rendering.
 
 ## What does pi-webaio do?
 
@@ -12,6 +12,8 @@ When you search, pi-webaio queries 5 engines in parallel (DuckDuckGo, Brave, Yah
 
 Long pages are automatically **AI-summarized** via Google AI Mode (headless Chrome) — you get a concise overview instantly, while the full content is always saved to disk for later inspection. For sites with API-first extractors (GitHub, YouTube, npm, PyPI, crates.io, RubyGems, Packagist, pub.dev, Go, NuGet, Reddit, Hacker News, arXiv, Stack Exchange, Wikipedia, Open Library, DEV.to, SonarCloud, docs sites), pi-webaio bypasses HTML scraping entirely and pulls structured data directly.
 
+For RAG pipelines, fetches can be returned as **paragraph-bounded chunks with overlap** (CJK-aware token estimation). All 6 tools ship with polished **TUI rendering** (real-time progress, elapsed time, phase/category badges, retry hints) and a **phase-aware error system** (25 failure codes × 10 fetch phases × 7 categories) that includes smart retry-timeout suggestions based on partial download progress.
+
 It's built for agents that need to:
 
 - **Research** — find current information, documentation, or references
@@ -19,6 +21,7 @@ It's built for agents that need to:
 - **Explore** — map out a website's pages before pulling them all
 - **Remember** — cached results survive restarts and can be retrieved by URL or ID
 - **Bypass** — opt-in paywall bypass for news sites that block non-subscribers
+- **Chunk for RAG** — split fetched markdown into pre-sized chunks with optional overlap
 
 No API keys. No subscriptions. No brittle scraping scripts. Just `pi install npm:pi-webaio` and go.
 
@@ -71,10 +74,11 @@ GitHub URLs are intercepted **before any HTTP request** and handled by a dedicat
 | `github.com/owner/repo/commit/sha`                 | GitHub REST API                                      | Commit details                                        |
 | `github.com/owner/repo/actions/runs/123`           | GitHub REST API + logs                               | Run status, jobs, step results, error log excerpts    |
 | `github.com/owner/repo/commit/sha/checks/{id}/logs/{step?}` | GitHub REST API + `gh run view --log`        | Check status, conclusion, annotations, log excerpt (Actions jobs); the `{step}` index resolves to a step name via the job's `steps[]` API field, then the tab-separated log is sliced to that step's section; metadata-only for external CI |
+| `api.github.com/repos/{owner}/{repo}/actions/runs/{runId}/logs` | `gh run view --log` (via gh CLI auth)        | Plain-text workflow logs. Previously returned HTTP 403 because the endpoint requires auth + redirects to a zip archive; now uses your existing `gh auth login` session for plain-text output with 302-redirect handling. |
 | `github.com/owner/repo/security/*`                 | GitHub REST API                                      | Security advisories, code scanning, Dependabot alerts |
 | `raw.githubusercontent.com/owner/repo/branch/path` | Direct fetch + fallback to pipeline                  | Raw file content with source marker                   |
 
-All GitHub results are tagged with `> via GitHub` and AI summarization is skipped.
+All GitHub results are tagged with `> via GitHub` and AI summarization is skipped. Non-existent repos now return a clear "Repository not found or inaccessible" error instead of an empty directory listing.
 
 ### YouTube
 
@@ -151,6 +155,54 @@ Set `PI_WEBAIO_DEBUG=1` to log every bypass attempt and confidence score — use
 
 **Note:** The bypass flag is opt-in. A normal `aio-webfetch(url)` gets the regular auto-escalation pipeline. You must explicitly pass `bypass: true` to trigger the strategy chain — this is intentional, since paywall circumvention is a deliberate user action.
 
+## Output formats
+
+`aio-webfetch` accepts a `format` parameter that controls what the tool returns:
+
+| Format     | Behavior                                                                                          |
+| ---------- | ------------------------------------------------------------------------------------------------- |
+| `markdown` | (default) Save to disk under `os.tmpdir()/pi-webaio/<host>/<path>.md`. Return body inline.        |
+| `html`     | Return raw HTML body inline. No disk write.                                                       |
+| `text`     | Return plain-text rendering of the markdown (strips headers, bold, links, code fences, HTML tags). |
+| `json`     | Return a structured JSON object with `url`, `title`, `author`, `published`, `site`, `language`, `wordCount`, `mimeType`, `content`, `rawHtml`. |
+| `raw`      | Return the original raw HTML body. No markdown conversion.                                          |
+
+Non-markdown formats stay in-memory and never touch disk — useful for piping into other tools or for JSON consumers that need structured data. The `compile` parameter auto-skips when any result is non-markdown.
+
+## RAG chunking
+
+`aio-webfetch` accepts a `chunks` parameter that splits the fetched markdown into paragraph-bounded chunks for RAG pipelines:
+
+```
+aio-webfetch url: https://en.wikipedia.org/wiki/Node.js
+            chunks: true
+            maxTokens: 512
+            overlapTokens: 50
+```
+
+- `chunks: true` enables chunking (default: `false`)
+- `maxTokens` is the soft target size per chunk in tokens (default: 512)
+- `overlapTokens` is the tail-overlap from the previous chunk (default: 50)
+- Only applies to `format: "markdown"` (other formats stay in-memory; the caller can chunk them)
+- Token estimation is CJK-aware (counts CJK chars at 1.5x Latin weight)
+- The tool result includes both the original markdown and a `chunks` array with metadata (index, total, token count, content)
+
+The chunks are also formatted as a readable numbered text section in the tool output for direct inspection.
+
+## Error handling
+
+`aio-webfetch` uses a **phase-aware FetchError system** with 25 failure codes × 10 fetch phases × 7 categories. Each error carries:
+
+- `code` (e.g. `http_error`, `tls_error`, `timeout`, `blocked`, `paywall`, `security_blocked`)
+- `phase` (e.g. `connecting`, `loading`, `headers`, `downloading`, `processing`)
+- `category` (e.g. `network`, `server`, `security`, `client`)
+- `retryable` (boolean — whether the agent should try again)
+- `statusCode`, `downloadedBytes`, `contentLength`, `elapsedMs` (for smart retry-timeout suggestions)
+
+When a partial download is interrupted by a timeout, the suggested retry timeout is extrapolated from the download rate. Security blocks (secrets in URL, private IPs) are flagged with a clear `security_blocked` code instead of a generic "Could not reach server" error.
+
+The TUI error view shows the phase + category badge and the suggested retry hint when the error is retryable.
+
 ## How search ranking works
 
 When you search, pi-webaio queries 5 engines in parallel: DuckDuckGo, Brave, Yahoo, Bing, and Google (via headless Chrome). Results are scored by two signals:
@@ -191,6 +243,30 @@ Use aio-webfetch to download these URLs:
   - https://example.com/page3
 ```
 
+### Fetch as JSON for structured downstream processing
+
+```
+Use aio-webfetch to download https://api.github.com/repos/apmantza/pi-webaio (format: "json")
+```
+
+Returns a structured JSON object with `url`, `title`, `author`, `published`, `site`, `language`, `wordCount`, `content`, `rawHtml`. Useful for piping into other tools.
+
+### Fetch with RAG chunking
+
+```
+Use aio-webfetch to download https://en.wikipedia.org/wiki/Node.js (chunks: true, maxTokens: 512)
+```
+
+Splits the markdown into paragraph-bounded chunks with 50-token overlap. Result includes both the markdown and a `chunks` array.
+
+### Fetch a GitHub Actions run log
+
+```
+Use aio-webfetch to download https://api.github.com/repos/apmantza/pi-drykiss/actions/runs/27479618304/logs
+```
+
+Routes through `gh run view --log` (uses your existing `gh auth login` session) to get plain-text logs with auth + 302-redirect handling. No more HTTP 403.
+
 ### Fetch with a specific browser fingerprint
 
 ```
@@ -209,11 +285,23 @@ Use aio-webcontent to get the full content from https://example.com/article
 Use aio-webpull to download https://docs.example.com (max: 50 pages)
 ```
 
-### Pull a site with custom fingerprint
+### Pull with URL pattern routing
 
 ```
-Use aio-webpull to download https://docs.example.com (max: 50, browser: "edge_145", os: "macos")
+Use aio-webpull to download https://example.com with routes:
+  - { pattern: "*/api/*", mode: "fast" }
+  - { pattern: "*/docs/*", mode: "browser" }
 ```
+
+Routes different URL patterns to different fetcher modes. First match wins.
+
+### Pull with resume from checkpoint
+
+```
+Use aio-webpull to download https://docs.example.com (resume: true)
+```
+
+Skips pages that were already pulled (checks for existing `.md` files in the output directory).
 
 ### Bypass a paywall (single URL)
 
@@ -244,11 +332,11 @@ Applies the per-domain strategy chain to every page in the pull. NYT pages use `
 | Tool             | Description                                                                                                                                                                                                                                                                                                                           |
 | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `aio-websearch`  | Search the web using DuckDuckGo, Brave, Yahoo, Bing, and Google in parallel (no API keys required). Returns compact results with title, URL, and snippet. Results are ranked by cross-engine consensus — URLs returned by multiple engines rank higher. 7s cap. Google runs via headless Chrome CDP (auto-launched). 10-minute cache. |
-| `aio-webfetch`   | Fetch a single URL (or batch of URLs) and convert to markdown with anti-bot TLS fingerprinting. Long content is **AI-summarized** via Google AI Mode; full file always saved. Detects PDFs, GitHub repos, and Next.js RSC. Supports auto escalation. Optional `bypass: true` runs a strategy chain to get past paywalls.                                              |
+| `aio-webfetch`   | Fetch a single URL (or batch of URLs) and convert to markdown with anti-bot TLS fingerprinting. Long content is **AI-summarized** via Google AI Mode; full file always saved. Detects PDFs, GitHub repos, and Next.js RSC. Supports `format: "markdown\|html\|text\|json\|raw"`, `chunks` for RAG, auto escalation, and opt-in paywall bypass.     |
 | `aio-webcontent` | Retrieve previously fetched content from session storage by URL. Returns **full untruncated content** — no data loss.                                                                                                                                                                                                                 |
 | `aio-webmap`     | Discovery-only tool — finds pages via robots.txt, sitemaps, navigation links, and llms.txt without fetching content. Returns structured URL list.                                                                                                                                                                                     |
 | `aio-webresult`  | Retrieve a previously fetched result by persistent response ID. Survives restarts. Shows recent results if ID not found.                                                                                                                                                                                                              |
-| `aio-webpull`    | Pull any public website or docs site into local markdown files. Discovers pages via sitemap, navigation links, or crawling. Rewrites internal links to relative `.md` paths. Supports auto escalation and context package compilation.                                                                                                |
+| `aio-webpull`    | Pull any public website or docs site into local markdown files. Discovers pages via sitemap, navigation links, or crawling. Rewrites internal links to relative `.md` paths. Supports `routes` for per-pattern routing, `resume` for checkpoint resume, `adaptive` selectors, and `bypass` for opt-in paywall bypass on every page.       |
 
 ### Tool Parameters
 
@@ -267,6 +355,10 @@ Applies the per-domain strategy chain to every page in the pull. NYT pages use `
 | `url`             | `string`   | —            | Single URL to fetch. Use either `url` or `urls`, not both.                                            |
 | `urls`            | `string[]` | —            | Multiple URLs to fetch in parallel. Use either `url` or `urls`, not both.                             |
 | `out`             | `string`   | auto-derived | Output file path under temp (for single url only)                                                     |
+| `format`          | `string`   | `markdown`   | Output format: `markdown` (saves to disk) \| `html` \| `text` \| `json` \| `raw` (all in-memory)    |
+| `chunks`          | `boolean`  | `false`      | Split markdown into paragraph-bounded chunks for RAG. Only applies to `format: "markdown"`.            |
+| `maxTokens`       | `number`   | `512`        | Soft target size per chunk in tokens.                                                                  |
+| `overlapTokens`   | `number`   | `50`         | Tail-overlap from the previous chunk prepended to each chunk after the first.                          |
 | `mode`            | `string`   | `auto`       | Scrape mode: `auto` (escalates), `fast`, `fingerprint`, or `browser`                                  |
 | `browser`         | `string`   | latest       | Browser profile for TLS fingerprinting. Options: `chrome_145`, `firefox_147`, `safari_26`, `edge_145` |
 | `os`              | `string`   | `windows`    | OS profile for fingerprinting. Options: `windows`, `macos`, `linux`, `android`, `ios`                 |
@@ -314,6 +406,17 @@ Applies the per-domain strategy chain to every page in the pull. NYT pages use `
 | `proxy`   | `string`  | —            | Proxy URL (`http://user:pass@host:port` or `socks5://host:port`). Supports HTTP, HTTPS, SOCKS5.       |
 | `compile` | `boolean` | `false`      | Compile pulled pages into a single context package                                                    |
 | `bypass`  | `boolean` | `false`      | If a paywall is detected on any page, run the per-domain strategy chain to bypass. Opt-in.            |
+| `resume`  | `boolean` | `true`       | Resume from previous pull (auto-detected from output directory). Set `false` to force a fresh pull.   |
+| `routes`  | `object[]`| —            | URL pattern → fetcher mode routing. Each: `{ pattern: string, mode?: string, browser?: string, os?: string, extractor?: string }`. Pattern supports substring, glob (`*/docs/*`), or regex (`/^\/api\//`). First match wins. |
+| `adaptive`| `boolean` | `false`      | Enable adaptive content selectors that survive site redesigns via structural DOM fingerprinting.       |
+
+## How it's built
+
+- **Precompiled `dist/`** — TypeScript source compiles to `dist/index.js` via `tsc` on `npm install` (the `prepare` hook). pi loads the compiled JS directly, no jiti transpile on every startup.
+- **TUI rendering** — All 6 tools ship custom `renderCall` / `renderResult` components. Progress view shows per-item status, spinner, elapsed time, and download progress in real time. Result view shows expanded preview with responseId, format, browser/os profile, package path, chunk count, and error details. Phase + category badge for errors.
+- **Phase-aware FetchError** — 25 failure codes × 10 fetch phases × 7 categories. `createFetchError()` produces frozen rich error objects. `classifyError()` maps Node errors. `buildUserFacingFetchErrorSummary()` produces agent-friendly messages. `suggestRetryTimeoutMs()` extrapolates from partial download progress.
+- **CI** — 4 GitHub Actions jobs: lint+typecheck (with `npm audit` and lockfile check), test (all 11 suites), prod-install-build (simulates the real `npm install --omit=dev` path), install-test (ubuntu/windows/macos — tarball verification + entry-point loading). Auto-release on version tag with GitHub Release notes.
+- **Security** — 19 secret patterns (AWS, GitHub, GitLab, npm, PyPI, Slack, Stripe, Google, SendGrid, DigitalOcean, OpenAI including `sk-proj-`/`sk-svcacct-`, Anthropic, Supabase, Vercel, Cloudflare, private keys, passwords in URLs). SSRF protection via DNS resolution + RFC 1918/RFC 6598/RFC 3927 range validation. Path-traversal guard in `utils.ts`. Prompt injection detection. Default GitHub CodeQL scanning.
 
 ## License
 
