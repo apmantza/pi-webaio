@@ -29,27 +29,27 @@
     "typescript"
   ],
   "type": "module",
-  "main": "index.ts",
+  "main": "./dist/index.js",
   "pi": {
     "extensions": [
-      "./index.ts"
+      "./dist/index.js"
     ]
   },
   "files": [
-    "index.ts",
+    "dist/",
+    "bin/",
+    "extractors/",
     "package.json",
     "README.md",
     "CHANGELOG.md",
-    "banner.svg",
-    "banner.png",
-    "bin/",
-    "extractors/",
-    "src/",
-    "types/",
-    "tests/",
     "tsconfig.json"
   ],
   "scripts": {
+    "build": "tsc --project tsconfig.dist.json",
+    "build:dist": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && tsc --project tsconfig.dist.json",
+    "prepare": "npm run build:dist",
+    "lint": "tsc --project tsconfig.json",
+    "watch": "tsc --watch",
     "test": "npx tsx tests/unit.test.mjs",
     "test:integration": "npx tsx tests/integration.test.mjs",
     "test:new": "npx tsx tests/new-features.test.mjs",

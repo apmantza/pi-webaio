@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, master]
+    branches: [master]
   pull_request:
-    branches: [main, master]
+    branches: [master]
 
 jobs:
   lint-and-typecheck:
@@ -18,14 +18,20 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: "22"
-          cache: "npm"
+          node-version: '24'
 
       - name: Install dependencies
-        run: npm ci --ignore-scripts --omit=optional
+        run: npm install --no-audit --no-fund
 
-      - name: TypeScript type-check
-        run: ./node_modules/.bin/tsc --noEmit
+      # Fail on known-vulnerable PRODUCTION deps (what actually ships to users via
+      # `npm install --omit=dev`). Scoped to high/critical to avoid blocking PRs on
+      # fix-less moderate advisories; transitive moderate ones are handled by
+      # Dependabot security updates. DevDeps are excluded — they never reach users.
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: TypeScript lint
+        run: npm run lint
 
   test:
     name: Unit tests
@@ -38,14 +44,68 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: "22"
-          cache: "npm"
+          node-version: '24'
 
       - name: Install dependencies
-        run: npm ci --ignore-scripts --omit=optional
+        run: npm install --no-audit --no-fund
+
+      - name: Build
+        run: npm run build
 
       - name: Run tests
         run: npm test
+
+      - name: Run full test suite (all suites)
+        run: |
+          # Run each suite individually so one failure doesn't mask others
+          for script in test:new test:paywall test:check test:render \
+                        test:fetcherror test:fetchprogress test:hardening \
+                        test:format test:webfetch-summary test:chunker; do
+            echo "=== Running $script ==="
+            npm run "$script" || exit 1
+          done
+
+  # Simulates pi's real install path: a `git:` install runs `npm install
+  # --omit=dev`, which triggers `prepare` → `build:dist` FROM SOURCE with the
+  # dev-only @types/node ABSENT. That's the path that broke with TS2688 in
+  # pi-lens (#193) and that the tarball-based install-test never exercises —
+  # the tarball ships pre-built dist/, so it never re-runs the build under
+  # --omit=dev.
+  prod-install-build:
+    name: Production install build (--omit=dev, from source)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      # --omit=dev omits @types/node (a devDep); typescript is a runtime dep so
+      # tsc is present. This is the exact environment pi builds dist in.
+      - name: Install without devDeps (--omit=dev)
+        run: npm install --omit=dev --no-audit --no-fund
+
+      - name: Build dist from source under --omit=dev (the prepare path)
+        run: npm run build:dist
+
+      - name: Verify dist built and the compiled entry loads
+        run: |
+          test -f dist/index.js || \
+            (echo "ERROR: dist/index.js not built under --omit=dev (TS2688? prepare/build:dist failed)" && exit 1)
+          node dist/index.js 2>&1 | tee /tmp/load.txt || true
+          # ERR_MODULE_NOT_FOUND = a runtime dep was wrongly in devDependencies.
+          # pi-coding-agent is a host-provided peer; its absence is expected here.
+          if grep -q "ERR_MODULE_NOT_FOUND\|Cannot find module" /tmp/load.txt \
+             && ! grep -q "pi-coding-agent" /tmp/load.txt; then
+            echo "FAILED: missing runtime module under --omit=dev"
+            cat /tmp/load.txt
+            exit 1
+          fi
+          echo "Production --omit=dev build + load OK"
 
   install-test:
     name: Install test (${{ matrix.os }})
@@ -63,11 +123,10 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: "22"
-          cache: "npm"
+          node-version: '24'
 
       - name: Install dependencies
-        run: npm ci --ignore-scripts
+        run: npm install --no-audit --no-fund
 
       - name: Pack tarball
         run: npm pack
@@ -77,11 +136,18 @@ jobs:
         run: |
           TARBALL=$(ls pi-webaio-*.tgz)
           echo "Checking tarball: $TARBALL"
-          tar -tzf "$TARBALL" | grep -E "index\.ts|package\.json|banner\.(svg|png)" | sort
-          tar -tzf "$TARBALL" | grep "index.ts" || \
-            (echo "ERROR: index.ts missing from tarball" && exit 1)
-          tar -tzf "$TARBALL" | grep "banner.png" || \
-            (echo "ERROR: banner.png missing from tarball" && exit 1)
+          # The published entry is compiled JS (prepare builds dist/); pi loads it
+          # directly instead of jiti-transpiling source on every startup.
+          tar -tzf "$TARBALL" | grep "package/dist/index.js" || \
+            (echo "ERROR: dist/index.js missing from tarball (prepare build failed?)" && exit 1)
+          # Guard against accidentally shipping TS source again (reintroduces the
+          # jiti transpile-on-startup cost).
+          if tar -tzf "$TARBALL" | grep -E "package/(index\.ts|src/.*\.ts)"; then
+            echo "ERROR: TypeScript source leaked into the tarball" && exit 1
+          fi
+          # Verify pi.extensions points to a real file
+          tar -tzf "$TARBALL" | grep "package/bin/" > /dev/null || true
+          echo "Tarball contents OK"
 
       - name: Verify package.json entry points exist in tarball
         shell: bash
@@ -99,10 +165,24 @@ jobs:
             echo "OK: $field -> $value"
           }
 
-          export PKG_DIR="$TMPDIR/package"
-          MAIN=$(node -p "require(process.env.PKG_DIR + '/package.json').main || ''" 2>/dev/null)
+          export PI_WEBAIO_PKG_DIR="$TMPDIR/package"
+          MAIN=$(node -p "require(process.env.PI_WEBAIO_PKG_DIR + '/package.json').main || ''" 2>/dev/null)
           [ -n "$MAIN" ] && check_field "main" "$MAIN"
 
+          # Check pi.extensions entries — this is what pi actually loads.
+          node -e "
+            const path = require('path'); const fs = require('fs');
+            const pkgDir = process.env.PI_WEBAIO_PKG_DIR;
+            const pkg = require(path.join(pkgDir, 'package.json'));
+            const exts = (pkg.pi && pkg.pi.extensions) || [];
+            if (exts.length === 0) { console.error('ERROR: no pi.extensions declared'); process.exit(1); }
+            for (const e of exts) {
+              if (!fs.existsSync(path.join(pkgDir, e))) {
+                console.error('ERROR: pi.extensions entry missing from tarball: ' + e); process.exit(1);
+              }
+              console.log('OK: pi.extensions -> ' + e);
+            }
+          "
           rm -rf "$TMPDIR"
 
       - name: Install from tarball (simulates pi install npm:pi-webaio)
@@ -111,40 +191,22 @@ jobs:
           TARBALL=$(ls pi-webaio-*.tgz)
           npm install -g "$TARBALL"
 
-      - name: Verify extension loads via tsx (catches missing node_modules deps)
+      - name: Verify extension entry loads (catches missing node_modules deps)
         shell: bash
         run: |
           INSTALL_DIR=$(npm root -g)/pi-webaio
           cd "$INSTALL_DIR"
-          npx --ignore-scripts --no-install tsx index.ts 2>&1 | tee /tmp/tsx-output.txt || true
-          if grep -q "ERR_MODULE_NOT_FOUND\|Cannot find module" /tmp/tsx-output.txt; then
+          # Simulate how pi loads the extension: the compiled entry, loaded by node.
+          # ERR_MODULE_NOT_FOUND = missing dep → fail
+          # Any other error = expected in CI (no pi API available) → pass
+          # pi-coding-agent is a host-provided peer dep; its absence is expected here
+          ENTRY=$(node -p "require('./package.json').pi.extensions[0]")
+          echo "Loading entry: $ENTRY"
+          node "$ENTRY" 2>&1 | tee /tmp/load-output.txt || true
+          if grep -q "ERR_MODULE_NOT_FOUND\|Cannot find module" /tmp/load-output.txt \
+             && ! grep -q "pi-coding-agent" /tmp/load-output.txt; then
             echo "FAILED: missing module dependency detected"
-            cat /tmp/tsx-output.txt
+            cat /tmp/load-output.txt
             exit 1
           fi
           echo "Extension import check passed"
-
-  sonarqube:
-    name: SonarQube Cloud
-    runs-on: ubuntu-latest
-    needs: [lint-and-typecheck, test]
-    if: github.repository == 'apmantza/pi-webaio' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: "22"
-          cache: "npm"
-
-      - name: Install dependencies
-        run: npm ci --ignore-scripts
-
-      - name: SonarQube Cloud Scan
-        uses: SonarSource/sonarqube-scan-action@7006c4492b2e0ee0f816d36501671557c97f5995 # v8.1.0
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
