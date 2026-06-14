@@ -23,7 +23,7 @@ import {
 } from "./paywall.ts";
 import { detectPromptInjection, applyInjectionAction } from "./injection.ts";
 import { compressHtml } from "./html-compress.ts";
-import { isDangerousUrl } from "./security.ts";
+import { isDangerousUrl, scanForSecrets } from "./security.ts";
 import { BASE_TEMP } from "./session-store.ts";
 import { loadPdfParseCtor } from "./types.ts";
 import type { PullResult, FetchOpts, FetchErrorInfo } from "./types.ts";
@@ -656,6 +656,30 @@ export async function pullPage(
 		return runHtmlPipeline(text, finalUrl, url, opts, redirectNotice);
 	}
 
+	// Pre-flight secret scan — surface a clear security error instead of
+	// the generic "Could not reach server" the inner fetch returns when it
+	// silently nulls out on a secret match.
+	const secretScan = scanForSecrets(url);
+	if (secretScan.found) {
+		const info: FetchErrorInfo = {
+			message: `Request blocked: potential secret(s) detected in URL (${secretScan.matches.join(", ")})`,
+			code: "blocked",
+			phase: "validation",
+			retryable: false,
+		};
+		const fetchError = createFetchError("blocked_secret", info.message, {
+			url,
+			phase: "validation",
+		});
+		return {
+			ok: false,
+			url,
+			error: formatErrorInfo(info),
+			errorInfo: info,
+			fetchError,
+		};
+	}
+
 	// GitHub pipeline — extractor handles github.com URLs via API/smartFetch
 	// Note: in a future phase, pullGitHub will be imported from ./github-pipeline.js
 	const { pullGitHub: ghPipeline } = await import("./github-pipeline.js").catch(
@@ -866,6 +890,29 @@ export async function pullPageEnhanced(
 	opts?: FetchOpts,
 	_redirectCount = 0,
 ): Promise<PullResult> {
+	// Pre-flight secret scan — surface a clear security error before any
+	// fetch path runs (vertical extractors call smartFetch directly).
+	const secretScan = scanForSecrets(url);
+	if (secretScan.found) {
+		const info: FetchErrorInfo = {
+			message: `Request blocked: potential secret(s) detected in URL (${secretScan.matches.join(", ")})`,
+			code: "blocked",
+			phase: "validation",
+			retryable: false,
+		};
+		const fetchError = createFetchError("blocked_secret", info.message, {
+			url,
+			phase: "validation",
+		});
+		return {
+			ok: false,
+			url,
+			error: formatErrorInfo(info),
+			errorInfo: info,
+			fetchError,
+		};
+	}
+
 	const mode = opts?.mode ?? "auto";
 
 	const vertical = await runVerticalExtractor(

@@ -145,7 +145,12 @@ export async function pullGitHub(url: string): Promise<PullResult | null> {
 	// Handle api.github.com actions logs endpoint (requires auth)
 	const apiLogs = parseGitHubActionsLogsApiUrl(url);
 	if (apiLogs) {
-		return pullGitHubActionsLogs(url, apiLogs.owner, apiLogs.repo, apiLogs.runId);
+		return pullGitHubActionsLogs(
+			url,
+			apiLogs.owner,
+			apiLogs.repo,
+			apiLogs.runId,
+		);
 	}
 
 	// Try standard GitHub pipeline (tree/blob/repo)
@@ -1220,20 +1225,30 @@ async function fetchGitHubRepo(ref: GitHubRef): Promise<PullResult> {
 
 	// Fallback to API
 	const repoInfo = await githubApiFetch(`/repos/${owner}/${repo}`);
-	let md = "";
-	if (repoInfo && typeof repoInfo === "object" && !(repoInfo as any).message) {
-		const info = repoInfo as any;
-		const repoName = info.full_name || `${owner}/${repo}`;
-		md = `# ${repoName}\n\n`;
-		if (info.description) md += `> ${info.description}\n\n`;
-		if (info.topics?.length) md += `**Topics:** ${info.topics.join(", ")}\n\n`;
-		md += `- **Language:** ${info.language || "N/A"}\n`;
-		md += `- **Stars:** ${info.stargazers_count ?? 0}\n`;
-		md += `- **Forks:** ${info.forks_count ?? 0}\n`;
-		md += `- **License:** ${info.license?.spdx_id || "N/A"}\n\n`;
-	} else {
-		md = `# ${owner}/${repo}\n\n`;
+
+	// If the API also failed with 404 (or any "message" response, which
+	// GitHub uses for errors), the repo doesn't exist or is private.
+	// Return a clear error instead of an empty directory listing.
+	if (!repoInfo || (typeof repoInfo === "object" && (repoInfo as any).message)) {
+		const errMsg =
+			(repoInfo as any)?.message ?? "Repository not found or inaccessible";
+		return {
+			ok: false,
+			url: `https://github.com/${owner}/${repo}`,
+			error: `GitHub repo ${owner}/${repo}: ${errMsg}`,
+		};
 	}
+
+	let md = "";
+	const info = repoInfo as any;
+	const repoName = info.full_name || `${owner}/${repo}`;
+	md = `# ${repoName}\n\n`;
+	if (info.description) md += `> ${info.description}\n\n`;
+	if (info.topics?.length) md += `**Topics:** ${info.topics.join(", ")}\n\n`;
+	md += `- **Language:** ${info.language || "N/A"}\n`;
+	md += `- **Stars:** ${info.stargazers_count ?? 0}\n`;
+	md += `- **Forks:** ${info.forks_count ?? 0}\n`;
+	md += `- **License:** ${info.license?.spdx_id || "N/A"}\n\n`;
 
 	const treeResult = await fetchGitHubTree(ref);
 	if (treeResult.ok && treeResult.content) {

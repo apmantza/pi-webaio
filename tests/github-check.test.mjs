@@ -87,10 +87,7 @@ test("parseGitHubActionsLogsApiUrl rejects non-api hostnames", async () => {
 		),
 		null,
 	);
-	assert.strictEqual(
-		parseGitHubActionsLogsApiUrl("not a url"),
-		null,
-	);
+	assert.strictEqual(parseGitHubActionsLogsApiUrl("not a url"), null);
 });
 
 // ─── filterLogByStepName (new primary filter) ──────────────────────
@@ -329,6 +326,19 @@ test("pullGitHub routes api.github.com actions logs endpoint to gh CLI", async (
 	assert.strictEqual(r.ok, true);
 	assert.match(r.title || "", /Actions run #27479618304/);
 	assert.ok(r.content?.includes("via GitHub API + gh CLI"));
+});
+
+test("pullGitHub returns clear error for non-existent repo", async () => {
+	const { pullGitHub } = await import("../src/github-pipeline.ts");
+	const url =
+		"https://github.com/nonexistent-org-definitely-fake-12345/nonexistent-repo-fake-67890";
+	const r = await pullGitHub(url);
+	if (r === null) {
+		// Clone failed and API call also failed — null is acceptable
+		return;
+	}
+	assert.strictEqual(r.ok, false);
+	assert.match(r.error || "", /Not Found|not found|inaccessible/i);
 });
 
 // ─── gh CLI helpers ────────────────────────────────────────────────

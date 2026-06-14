@@ -6,6 +6,7 @@ import { safeResolveInBaseTemp } from "../src/tools/utils.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BASE_TEMP } from "../src/session-store.ts";
+import { scanForSecrets } from "../src/security.ts";
 
 // ─── safeResolveInBaseTemp ──────────────────────────────────────────
 
@@ -102,4 +103,69 @@ test("withTimeout: when promise wins, it does not reject with timeout later", as
 	assert.equal(await r, "ok");
 	// Wait beyond the timeout to ensure the timer is cleared.
 	await new Promise((res) => setTimeout(res, 30));
+});
+
+// ─── Secret scanner: relaxed patterns for new token formats ────────
+
+test("scanForSecrets detects OpenAI sk-proj- keys", () => {
+	const r = scanForSecrets(
+		"https://example.com/?key=sk-proj-abcdefghijklmnopqrstuvwxyz0123456789ABCDEF",
+	);
+	assert.ok(r.found);
+	assert.ok(r.matches.includes("OpenAI API Key"));
+});
+
+test("scanForSecrets detects OpenAI sk-svcacct- keys", () => {
+	const r = scanForSecrets(
+		"https://example.com/?key=sk-svcacct-abcdefghijklmnopqrstuvwxyz",
+	);
+	assert.ok(r.found);
+	assert.ok(r.matches.includes("OpenAI API Key"));
+});
+
+test("scanForSecrets detects Anthropic sk-ant-api03- keys (shorter format)", () => {
+	// Previously required 95+ chars; now requires 20+
+	const r = scanForSecrets(
+		"https://example.com/?key=sk-ant-api03-abcdefghijklmnop",
+	);
+	assert.ok(r.found);
+	assert.ok(r.matches.includes("Anthropic API Key"));
+});
+
+test("scanForSecrets detects GitHub user tokens (ghu_)", () => {
+	const r = scanForSecrets(
+		"https://example.com/?key=ghu_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+	);
+	assert.ok(r.found);
+	assert.ok(r.matches.includes("GitHub App Token"));
+});
+
+test("scanForSecrets detects Supabase JWT tokens", () => {
+	const jwt =
+		"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIn0.signature_here_long_enough";
+	const r = scanForSecrets(`https://example.com/?key=${jwt}`);
+	assert.ok(r.found);
+	assert.ok(r.matches.includes("Supabase Service Key"));
+});
+
+test("scanForSecrets detects Vercel tokens", () => {
+	const r = scanForSecrets(
+		"https://example.com/?key=vercel_abcdefghijklmnopqrstuvwx",
+	);
+	assert.ok(r.found);
+	assert.ok(r.matches.includes("Vercel Token"));
+});
+
+test("scanForSecrets detects Cloudflare API tokens", () => {
+	const r = scanForSecrets(
+		"https://example.com/?key=cf-abcdefghijklmnopqrstuvwxyz0123456789abcd",
+	);
+	assert.ok(r.found);
+	assert.ok(r.matches.includes("Cloudflare API Token"));
+});
+
+test("scanForSecrets does not false-positive on short sk- strings", () => {
+	// Make sure "sk-" followed by just a few chars doesn't match
+	const r = scanForSecrets("https://example.com/?short=sk-abc");
+	assert.equal(r.found, false);
 });

@@ -148,7 +148,8 @@ export const SECRET_PATTERNS: SecretMatch[] = [
 		pattern: /github_pat_[a-zA-Z0-9]{22}_[a-zA-Z0-9]{59}/,
 	},
 	{ type: "GitHub OAuth", pattern: /gho_[a-zA-Z0-9]{36}/ },
-	{ type: "GitHub App Token", pattern: /ghs_[a-zA-Z0-9]{36}/ },
+	{ type: "GitHub App Token", pattern: /(ghs_|ghu_)[a-zA-Z0-9]{36}/ },
+	{ type: "GitHub Actions Token", pattern: /ghp_[a-zA-Z0-9]{36}/ },
 	{ type: "GitLab PAT", pattern: /glpat-[a-zA-Z0-9-]{20,}/ },
 	{ type: "npm Token", pattern: /npm_[a-zA-Z0-9]{36}/ },
 	{ type: "PyPI Token", pattern: /pypi-[a-zA-Z0-9_-]{50,}/ },
@@ -164,8 +165,29 @@ export const SECRET_PATTERNS: SecretMatch[] = [
 		pattern: /SG\.[a-zA-Z0-9_-]{22}\.[a-zA-Z0-9_-]{43}/,
 	},
 	{ type: "DigitalOcean PAT", pattern: /dop_v1_[a-f0-9]{64}/ },
-	{ type: "OpenAI API Key", pattern: /sk-[a-zA-Z0-9]{48}/ },
-	{ type: "Anthropic API Key", pattern: /sk-ant-api03-[a-zA-Z0-9_-]{95,}/ },
+	// OpenAI: legacy sk- keys are 48 chars; sk-proj- and sk-svcacct- are
+	// longer. Pattern requires at least 20 trailing chars to avoid false
+	// positives on short random strings, but stays loose enough for new
+	// formats.
+	{
+		type: "OpenAI API Key",
+		pattern: /sk-(?:proj-|svcacct-)?[a-zA-Z0-9_-]{20,}/,
+	},
+	// Anthropic: sk-ant-api03- is the current format; older sk-ant-
+	// prefixes exist too. Require at least 20 trailing chars.
+	{
+		type: "Anthropic API Key",
+		pattern: /sk-ant-(?:api03-)?[a-zA-Z0-9_-]{20,}/,
+	},
+	// Supabase service_role / anon keys
+	{
+		type: "Supabase Service Key",
+		pattern: /eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\.[a-zA-Z0-9_-]{40,}\.[a-zA-Z0-9_-]{20,}/,
+	},
+	// Vercel tokens
+	{ type: "Vercel Token", pattern: /vercel_[a-zA-Z0-9]{24,}/ },
+	// Cloudflare API tokens
+	{ type: "Cloudflare API Token", pattern: /cf-[a-zA-Z0-9_-]{40}/ },
 	{
 		type: "Private Key",
 		pattern: /-----BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----/,
