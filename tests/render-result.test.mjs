@@ -115,10 +115,7 @@ test("createProgressComponent: emits tool title for single URL", () => {
 	const lines = comp.render(80);
 	const text = lines.join("\n");
 	assert.ok(text.includes("aio-webfetch"), "should include tool name");
-	assert.ok(
-		/example\.com|…/.test(text),
-		"should show URL",
-	);
+	assert.ok(/example\.com|…/.test(text), "should show URL");
 	// The status label is centered in the progress bar and may be split
 	// between the filled and empty parts (depending on progress %), so we
 	// just look for a stable fragment.

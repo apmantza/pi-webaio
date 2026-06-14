@@ -56,6 +56,43 @@ test("parseGitHubCheckLogUrl rejects non-numeric check_id", async () => {
 	);
 });
 
+// ─── parseGitHubActionsLogsApiUrl ──────────────────────────────────
+
+test("parseGitHubActionsLogsApiUrl handles api.github.com actions logs endpoint", async () => {
+	const { parseGitHubActionsLogsApiUrl } = await import(
+		"../src/github-pipeline.ts"
+	);
+	const r = parseGitHubActionsLogsApiUrl(
+		"https://api.github.com/repos/apmantza/pi-drykiss/actions/runs/27479618304/logs",
+	);
+	assert.ok(r);
+	assert.strictEqual(r.owner, "apmantza");
+	assert.strictEqual(r.repo, "pi-drykiss");
+	assert.strictEqual(r.runId, "27479618304");
+});
+
+test("parseGitHubActionsLogsApiUrl rejects non-api hostnames", async () => {
+	const { parseGitHubActionsLogsApiUrl } = await import(
+		"../src/github-pipeline.ts"
+	);
+	assert.strictEqual(
+		parseGitHubActionsLogsApiUrl(
+			"https://github.com/apmantza/pi-drykiss/actions/runs/27479618304/logs",
+		),
+		null,
+	);
+	assert.strictEqual(
+		parseGitHubActionsLogsApiUrl(
+			"https://api.github.com/repos/apmantza/pi-drykiss/actions/runs/27479618304",
+		),
+		null,
+	);
+	assert.strictEqual(
+		parseGitHubActionsLogsApiUrl("not a url"),
+		null,
+	);
+});
+
 // ─── filterLogByStepName (new primary filter) ──────────────────────
 
 test("filterLogByStepName returns the section for a given step", async () => {
@@ -278,6 +315,20 @@ test("pullGitHub with /commit/{sha} still returns commit (not check log)", async
 		return;
 	}
 	assert.match(r.title || "", /commit/);
+});
+
+test("pullGitHub routes api.github.com actions logs endpoint to gh CLI", async () => {
+	const { pullGitHub } = await import("../src/github-pipeline.ts");
+	const url =
+		"https://api.github.com/repos/apmantza/pi-drykiss/actions/runs/27479618304/logs";
+	const r = await pullGitHub(url);
+	if (r === null) {
+		console.log("  (skipped — gh CLI unavailable or run not accessible)");
+		return;
+	}
+	assert.strictEqual(r.ok, true);
+	assert.match(r.title || "", /Actions run #27479618304/);
+	assert.ok(r.content?.includes("via GitHub API + gh CLI"));
 });
 
 // ─── gh CLI helpers ────────────────────────────────────────────────

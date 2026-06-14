@@ -77,7 +77,77 @@ function parseRawGitHubUrl(
 	return { owner: m[1]!, repo: m[2]!, branch: m[3]!, path: m[4]! };
 }
 
+export function parseGitHubActionsLogsApiUrl(
+	url: string,
+): { owner: string; repo: string; runId: string } | null {
+	try {
+		const u = new URL(url);
+		if (u.hostname !== "api.github.com") return null;
+		const m = u.pathname.match(
+			/^\/repos\/([^/]+)\/([^/]+)\/actions\/runs\/(\d+)\/logs$/,
+		);
+		if (!m) return null;
+		return { owner: m[1]!, repo: m[2]!, runId: m[3]! };
+	} catch {
+		return null;
+	}
+}
+
+async function pullGitHubActionsLogs(
+	url: string,
+	owner: string,
+	repo: string,
+	runId: string,
+): Promise<PullResult | null> {
+	try {
+		const logText: string | null = await ghRunLogs(owner, repo, runId);
+		if (!logText) {
+			// gh CLI unavailable or failed — try authenticated API call.
+			// The /logs endpoint redirects to a zip archive; gh api follows
+			// redirects with auth, but returns raw bytes. We skip this path
+			// unless the caller can decode zip, so plain-text ghRunLogs is
+			// the only supported route.
+			return null;
+		}
+
+		const excerpt = extractLogExcerpt(logText);
+		let md = `# ${owner}/${repo} — Actions run #${runId} logs\n\n`;
+		md += `> via GitHub API + gh CLI\n\n`;
+		md += `\`\`\`\n${excerpt}\n\`\`\`\n`;
+
+		try {
+			const safeOwner = owner.replace(/[^a-z0-9_-]/gi, "_");
+			const safeRepo = repo.replace(/[^a-z0-9_-]/gi, "_");
+			const outDir = `${BASE_TEMP}/github-logs/${safeOwner}-${safeRepo}`;
+			const fs = await import("node:fs/promises");
+			await fs.mkdir(outDir, { recursive: true });
+			const outFile = `${outDir}/run-${runId}.log`;
+			await fs.writeFile(outFile, logText, "utf8");
+			md += `\n<details>\n<summary>📋 Full log saved to disk</summary>\n\n`;
+			md += `\`${outFile}\` (${logText.length.toLocaleString()} chars)\n`;
+			md += `</details>\n`;
+		} catch {
+			/* best effort */
+		}
+
+		return {
+			ok: true,
+			url,
+			title: `${owner}/${repo} — Actions run #${runId}`,
+			content: md,
+		};
+	} catch {
+		return null;
+	}
+}
+
 export async function pullGitHub(url: string): Promise<PullResult | null> {
+	// Handle api.github.com actions logs endpoint (requires auth)
+	const apiLogs = parseGitHubActionsLogsApiUrl(url);
+	if (apiLogs) {
+		return pullGitHubActionsLogs(url, apiLogs.owner, apiLogs.repo, apiLogs.runId);
+	}
+
 	// Try standard GitHub pipeline (tree/blob/repo)
 	const ref = parseGitHubUrl(url);
 	if (ref) {
