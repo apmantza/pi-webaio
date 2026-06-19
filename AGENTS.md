@@ -24,6 +24,7 @@ pi-webaio/
 │   ├── paywall.ts            ← Paywall bypass engine — detection, strategy chain, bot UA fetch, archive.org fetch, Playwright block_js (v0.4.1)
 │   ├── paywall-sites.ts      ← Top-50+ paywall site strategy catalog (v0.4.1)
 │   ├── chunker.ts            ← RAG chunking — paragraph-bounded markdown chunks with optional overlap (v0.5.0)
+│   ├── github-map.ts         ← GitHub-native discovery for aio-webmap (recursive tree API + feature URLs + README + architecture) (v0.5.1)
 │   ├── fetch-jina.ts         ← Jina AI Reader proxy fallback
 │   ├── html-compress.ts      ← HTML noise attribute stripping
 │   ├── injection.ts          ← Prompt injection detection + action (warn/redact/block)
@@ -100,6 +101,7 @@ pi-webaio/
 │   ├── format.test.mjs       ← 18 unit tests (markdownToText, applyFormat, format param)
 │   ├── webfetch-summary.test.mjs ← 10 unit tests (buildDeterministicSummary)
 │   ├── chunker.test.mjs      ← 31 unit tests (RAG chunking)
+│   ├── github-map.test.mjs   ← 50 unit tests (URL parsing, tree rendering, architecture detection, path filtering, repo map) (v0.5.1)
 │   ├── webfetch-format-bug.test.mjs ← regression test for non-markdown readFile bug
 │   ├── integration.test.mjs  ← Integration tests
 │   └── lib.mjs               ← Test helpers and fixtures
@@ -178,8 +180,15 @@ pi-webaio/
 
 - Discovery-only tool — finds pages via robots.txt, sitemaps, navigation links, llms.txt
 - Returns structured URLs grouped by source without fetching content
+- **GitHub-native (v0.5.1)**: when given a GitHub URL, returns a proper repo map — file tree, architecture signals, feature URLs (issues, PRs, releases, tags, branches), and a README excerpt. Uses the recursive Git Trees API (`GET /repos/{owner}/{repo}/git/trees/{branch}?recursive=1`) for the file tree, with `gh repo clone` / `git clone` as fallback for truncated trees. Inspired by [ahmedkhaleel2004/gitdiagram](https://github.com/ahmedkhaleel2004/gitdiagram).
+- **URL shapes handled**:
+  - Repo URL (`https://github.com/owner/repo`) → full repo map
+  - Tree URL (`https://github.com/owner/repo/tree/branch/path`) → directory contents
+  - Feature URL (`/issues`, `/pulls`, `/releases`, `/tags`, `/actions`, `/branches`) → numbered list of items
+  - Blob URL (`/blob/branch/path`) → single file URL
+  - Non-GitHub URL → sitemap/nav/crawl as before
 - Parameters: `url`, `max` (default 100), `browser`, `os`
-- Useful for previewing what pages webpull would fetch
+- Returns `details.sources` (grouped URLs), `details.repo` (metadata), `details.treeMarkdown`, `details.architecture`
 
 ### 6. `aio-webresult`
 

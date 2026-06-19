@@ -1,3 +1,25 @@
+## [Unreleased]
+
+### Added
+
+- **`aio-webmap` GitHub repo mapping** (`src/github-map.ts`, 530 LOC) — When `aio-webmap` is called on a GitHub URL it now returns a proper map of the repo instead of falling back to crawling github.com's explore pages. The new `mapGitHubRepo()` orchestrator handles three URL shapes:
+  - **Repo URL** (`https://github.com/owner/repo`) — uses the recursive Git Trees API (`GET /repos/{owner}/{repo}/git/trees/{branch}?recursive=1`) for a full file tree in one call, with `gh repo clone` (preferred) or `git clone` as fallback for truncated trees. Filters out noise (node_modules, build outputs, asset files, lockfiles) and runs the existing architecture-signal detector (CI/CD, tests, monorepo, package managers, security). In parallel it queries the GitHub API for issues, PRs, releases, tags, branches, and a 8KB README excerpt.
+  - **Tree URL** (`https://github.com/owner/repo/tree/branch/path`) — uses `GET /repos/{owner}/{repo}/contents/{path}` to list the directory contents and return a markdown table of 📁/📄 entries with clickable GitHub URLs.
+  - **Feature URL** (`/issues`, `/pulls`, `/releases`, `/tags`, etc.) — uses the relevant API endpoint and returns a numbered list of items with state + URL.
+  - **Blob URL** (`/blob/branch/path`) — returns the single blob URL.
+  - Inspired by [ahmedkhaleel2004/gitdiagram](https://github.com/ahmedkhaleel2004/gitdiagram)'s recursive tree approach. 50 unit tests in `tests/github-map.test.mjs`.
+- **`details.sources` field on `aio-webmap`** — URLs now returned grouped by discovery source (`github-api:tree`, `github-api:issues`, `github-api:pulls`, `github-api:releases`, `github-api:tags`, `github-api:branches`, `github-api:readme`, `repo-clone`, `llms.txt`, `sitemap-or-nav-or-crawl`) instead of one flat list. Backward compatible — the flat `details.urls` is still populated.
+- **`details.repo` field on `aio-webmap`** — for GitHub repo URLs: `{ owner, repo, ref, totalFiles, totalDirs, description, topics, language, stars, forks, license, defaultBranch, cloned, clonePath }`. Lets the renderer show repo metadata without re-fetching.
+- **`details.treeMarkdown` and `details.architecture`** — full file tree and architecture signals (CI/CD, tests, monorepo, package managers, security) included in the response so agents can plan follow-up `aio-webfetch` calls.
+
+### Changed
+
+- **`aio-webmap` description and promptGuidelines** updated to document the GitHub path and the `details.sources` shape.
+
+### Test results
+
+Test count: 484 → 534 (+50 github-map).
+
 ## [0.5.0] - 2026-06-14
 
 ### Added
@@ -49,4 +71,3 @@ Test count: 235 → 484 (145 unit + 31 new-features + 65 paywall + 26 github-che
 
 - **Chromium output detection** -- detectChromiumError() recognizes Chromium running without the --no-sandbox flag errors so they do not get mistaken for paywall markers.
 - **57 new unit tests** covering deep-marker detection, tail detection, bypass safety, and large-page scanning.
-
