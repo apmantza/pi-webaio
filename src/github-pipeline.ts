@@ -276,10 +276,7 @@ function extractLogExcerpt(logText: string, maxLen = 3000): string {
  * Use this helper instead of inline `.replace(/\|/g, "\\|")` calls.
  */
 export function escapeMarkdownTableCell(s: string): string {
-	return s
-		.replace(/\\/g, "\\\\")
-		.replace(/\|/g, "\\|")
-		.replace(/\n/g, " ");
+	return s.replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/\n/g, " ");
 }
 
 /**
@@ -449,7 +446,9 @@ async function pullGitHubCheckLog(
 						const file = a.path || a.blob_href?.split("/").pop() || "?";
 						const line = a.start_line || a.end_line || "?";
 						const level = a.annotation_level || "?";
-						const msg = escapeMarkdownTableCell((a.message || "").slice(0, 200));
+						const msg = escapeMarkdownTableCell(
+							(a.message || "").slice(0, 200),
+						);
 						md += `\n| \`${file}\` | ${line} | ${level} | ${msg} |`;
 					}
 					if (annotations.length > 20) {
