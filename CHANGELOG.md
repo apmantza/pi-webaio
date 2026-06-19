@@ -32,6 +32,16 @@ Test count: 484 → 534 (+50 github-map).
 
 Test count: 534 → 553 (+19 reddit-block + github-check).
 
+### Changed
+
+- **Bumped `@earendil-works/pi-coding-agent` to `^0.79.0` and `@earendil-works/pi-tui` to `^0.79.0`** — resolves 6 of 9 open Dependabot alerts via the new transitive versions:
+  - `undici`: 7.25.0 → 8.5.0 (closes #16 medium cross-user info disclosure, #17 high TLS cert validation bypass)
+  - `protobufjs`: 7.6.0 → 7.6.4 (closes #9 medium schema-derived name shadowing, #10 high DoS via unbounded Any expansion)
+  - `ws`: 8.20.1 → 8.21.0 (no change in vulnerability, but bumps the dep)
+  - `@earendil-works/pi-coding-agent` itself: 0.74.0 → 0.79.8 (closes #14 high temp-path privilege escalation, #15 medium project-local extension loading)
+  - `npm audit --omit=dev --audit-level=high` now reports `found 0 vulnerabilities` (was 4 high). The 3 remaining open Dependabot alerts (#11 ws, #12 XSS, #13 race condition) are either false positives (ws is at 8.x, well above the 1.1.0–<5.2.5 vulnerable range) or have vulnerable ranges of `<= 0.73.1` that this bump is well past — Dependabot will likely auto-close them on the next scan.
+- `pi-coding-agent@0.77.0` renamed `model_select`/`thinking_level_select` events to `model_update`/`thinking_level_update`. We don't use those events (we only import `ExtensionAPI`, `Theme`, and `getMarkdownTheme`), so the bump is API-compatible.
+
 ## [0.5.0] - 2026-06-14
 
 ### Added

@@ -29,7 +29,11 @@ function buildBlockPage(marker = "You've been blocked by network security.") {
 	// ~180KB of CSS-like padding, then the marker at the end (mirroring
 	// the real Reddit 403 page where the marker is at byte 189,327).
 	const padding = "x".repeat(180000);
-	return padding + marker + " If you think you've been blocked by mistake, file a ticket below.";
+	return (
+		padding +
+		marker +
+		" If you think you've been blocked by mistake, file a ticket below."
+	);
 }
 
 /**
@@ -48,18 +52,30 @@ function stubRedditFetch(opts = {}) {
 		const u = String(url);
 		if (opts.overrides?.[u]) {
 			const o = opts.overrides[u];
-			return new Response(o.body, { status: o.status, headers: { "content-type": o.type || "text/html" } });
+			return new Response(o.body, {
+				status: o.status,
+				headers: { "content-type": o.type || "text/html" },
+			});
 		}
 		if (u.endsWith("/.json")) {
 			// Reddit home .json
-			return new Response("[]", { status: 200, headers: { "content-type": "application/json" } });
+			return new Response("[]", {
+				status: 200,
+				headers: { "content-type": "application/json" },
+			});
 		}
 		if (u.endsWith(".json")) {
 			// Post .json
-			return new Response(blockBody, { status: 403, headers: { "content-type": "text/html" } });
+			return new Response(blockBody, {
+				status: 403,
+				headers: { "content-type": "text/html" },
+			});
 		}
 		// Main HTML page
-		return new Response(verifyBody, { status: 200, headers: { "content-type": "text/html" } });
+		return new Response(verifyBody, {
+			status: 200,
+			headers: { "content-type": "text/html" },
+		});
 	};
 	return () => {
 		globalThis.fetch = originalFetch;

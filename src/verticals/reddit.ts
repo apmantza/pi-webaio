@@ -30,9 +30,9 @@ async function detectRedditBlock(url: string): Promise<string | null> {
 	// HTML page (returns 200 with a "Please wait" body on block).
 	// Either signal confirms the block.
 	const probeUrls = [
-		url.replace(/\/?$/, ".json"),           // .json (returns 403 on block)
-		url,                                    // main page (returns 200 with verify body)
-		"https://www.reddit.com/.json",         // reddit's home .json (control)
+		url.replace(/\/?$/, ".json"), // .json (returns 403 on block)
+		url, // main page (returns 200 with verify body)
+		"https://www.reddit.com/.json", // reddit's home .json (control)
 	];
 	try {
 		const probes = await Promise.all(
@@ -135,7 +135,9 @@ export async function extractReddit(
 		return {
 			ok: false,
 			url,
-			error: blockedHint ?? "Reddit post unavailable: may be blocked, rate-limited, or requires authentication. Reddit returns structured errors rather than bypassing bot controls.",
+			error:
+				blockedHint ??
+				"Reddit post unavailable: may be blocked, rate-limited, or requires authentication. Reddit returns structured errors rather than bypassing bot controls.",
 			content: "",
 		};
 	}

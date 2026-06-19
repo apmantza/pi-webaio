@@ -68,7 +68,7 @@
     "check:lockfile": "node scripts/check-lockfile-sync.mjs"
   },
   "dependencies": {
-    "@earendil-works/pi-tui": "^0.74.2",
+    "@earendil-works/pi-tui": "^0.79.0",
     "@mozilla/readability": "^0.6.0",
     "defuddle": "^0.18.1",
     "linkedom": "^0.18.12",
@@ -81,7 +81,7 @@
     "youtube-transcript-plus": "^2.0.0"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-coding-agent": "^0.79.0",
     "typebox": "*"
   },
   "optionalDependencies": {

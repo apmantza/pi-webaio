@@ -618,7 +618,8 @@ async function pullGitHubSecurityAlert(
 			return {
 				ok: false,
 				url,
-				error: `GitHub ${sub} alert #${alertId}: ${msg}. ` +
+				error:
+					`GitHub ${sub} alert #${alertId}: ${msg}. ` +
 					`Set GITHUB_TOKEN or run \`gh auth login\` to access gated security advisories.`,
 				errorInfo: {
 					message: msg,
@@ -702,7 +703,8 @@ async function pullGitHubSecurityAlert(
 				if (Array.isArray(advisory.references) && advisory.references.length) {
 					md += `\n## References (${advisory.references.length})\n\n`;
 					for (const r of advisory.references.slice(0, 20)) {
-						const label = r.url?.replace(/^https?:\/\//, "").slice(0, 80) || "?";
+						const label =
+							r.url?.replace(/^https?:\/\//, "").slice(0, 80) || "?";
 						md += `- [${label}](${r.url})\n`;
 					}
 				}
@@ -713,10 +715,12 @@ async function pullGitHubSecurityAlert(
 				const name = dep.package?.name || pkg.name || "?";
 				const ecosystem = dep.package?.ecosystem || pkg.ecosystem || "?";
 				md += `- **Package:** \`${name}\` (\`${ecosystem}\`)\n`;
-				if (dep.manifest_path) md += `- **Manifest:** \`${dep.manifest_path}\`\n`;
+				if (dep.manifest_path)
+					md += `- **Manifest:** \`${dep.manifest_path}\`\n`;
 				if (dep.scope) md += `- **Scope:** \`${dep.scope}\`\n`;
 				if (cvss) md += `- **Vulnerable range:** \`${cvss}\`\n`;
-				if (patchedVersions) md += `- **Patched versions:** \`${patchedVersions}\`\n`;
+				if (patchedVersions)
+					md += `- **Patched versions:** \`${patchedVersions}\`\n`;
 				if (vuln.vulnerable_version_range) {
 					md += `- **Vulnerable range:** \`${vuln.vulnerable_version_range}\`\n`;
 				}
@@ -832,7 +836,8 @@ async function pullGitHubSecurityAlert(
 		return {
 			ok: false,
 			url,
-			error: `GitHub ${sub} alert #${alertId}: ${msg}. ` +
+			error:
+				`GitHub ${sub} alert #${alertId}: ${msg}. ` +
 				`Set GITHUB_TOKEN or run \`gh auth login\` to access gated security advisories.`,
 			errorInfo: {
 				message: msg,
@@ -890,7 +895,14 @@ async function pullGitHubFeature(url: string): Promise<PullResult | null> {
 					alertPath = `${baseRepoPath}/secret-scanning/alerts/${alertId}`;
 				}
 				if (alertPath) {
-					return pullGitHubSecurityAlert(url, owner, repo, sub, alertId, alertPath);
+					return pullGitHubSecurityAlert(
+						url,
+						owner,
+						repo,
+						sub,
+						alertId,
+						alertPath,
+					);
 				}
 			}
 
@@ -1505,7 +1517,10 @@ async function fetchGitHubRepo(ref: GitHubRef): Promise<PullResult> {
 	// If the API also failed with 404 (or any "message" response, which
 	// GitHub uses for errors), the repo doesn't exist or is private.
 	// Return a clear error instead of an empty directory listing.
-	if (!repoInfo || (typeof repoInfo === "object" && (repoInfo as any).message)) {
+	if (
+		!repoInfo ||
+		(typeof repoInfo === "object" && (repoInfo as any).message)
+	) {
 		const errMsg =
 			(repoInfo as any)?.message ?? "Repository not found or inaccessible";
 		return {

@@ -410,9 +410,7 @@ test("pullPageEnhanced: GitHub security/dependabot/21 returns alert content (gat
 		// We just verify the error is informative, not the old gate text.
 		assert.ok(result.error, "should have an error message");
 		assert.ok(
-			/GITHUB_TOKEN|gh auth login|Requires authentication/i.test(
-				result.error,
-			),
+			/GITHUB_TOKEN|gh auth login|Requires authentication/i.test(result.error),
 			`error should mention auth (GITHUB_TOKEN / gh auth login / auth). got: ${result.error}`,
 		);
 	}
@@ -420,8 +418,7 @@ test("pullPageEnhanced: GitHub security/dependabot/21 returns alert content (gat
 
 test("pullPageEnhanced: GitHub security/code-scanning/1 routes to API", async () => {
 	const { pullPageEnhanced } = await import("../src/content.ts");
-	const url =
-		"https://github.com/apmantza/pi-free/security/code-scanning/1";
+	const url = "https://github.com/apmantza/pi-free/security/code-scanning/1";
 	const result = await pullPageEnhanced(url, {
 		browser: "chrome_145",
 		os: "windows",
@@ -447,8 +444,7 @@ test("pullPageEnhanced: GitHub security/code-scanning/1 routes to API", async ()
 
 test("pullPageEnhanced: GitHub security/secret-scanning/1 routes to API", async () => {
 	const { pullPageEnhanced } = await import("../src/content.ts");
-	const url =
-		"https://github.com/apmantza/pi-free/security/secret-scanning/1";
+	const url = "https://github.com/apmantza/pi-free/security/secret-scanning/1";
 	const result = await pullPageEnhanced(url, {
 		browser: "chrome_145",
 		os: "windows",
