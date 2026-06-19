@@ -4,7 +4,7 @@
 
 pi-webaio is an **all-in-one web tools extension** for [pi](https://pi.dev) (the coding agent) that provides search, fetch, crawl, extraction, discovery, storage, compilation, RAG chunking, phase-aware error handling, TUI rendering, and (v0.4.1+) opt-in paywall bypass capabilities via 6 tools: `aio-websearch`, `aio-webfetch`, `aio-webcontent`, `aio-webpull`, `aio-webmap`, and `aio-webresult`. It's published as `npm:pi-webaio` and installable via `pi install npm:pi-webaio`.
 
-**Current version: 0.5.0** — precompiled `dist/` for fast startup, TUI renderer, phase-aware FetchError system, `format` parameter, RAG `chunks` parameter, GitHub Actions run logs handler, full CI pipeline with security audit and lockfile check, automated GitHub release on version tag.
+**Current version: 0.6.0** — GitHub repo mapping for `aio-webmap`, GitHub security alert handler (Dependabot / code-scanning / secret-scanning via REST API), Reddit network-block detection, vertical `ok:false` propagation, Node 24 `--experimental-strip-types` test runner (36× faster), `@earendil-works/pi-coding-agent ^0.79.0` (closes 6 of 9 Dependabot alerts).
 
 ## Architecture
 

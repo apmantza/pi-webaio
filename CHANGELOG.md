@@ -1,9 +1,9 @@
-## [Unreleased]
+## [0.6.0] - 2026-06-19
 
 ### Added
 
-- **`aio-webmap` GitHub repo mapping** (`src/github-map.ts`, 530 LOC) — When `aio-webmap` is called on a GitHub URL it now returns a proper map of the repo instead of falling back to crawling github.com's explore pages. The new `mapGitHubRepo()` orchestrator handles three URL shapes:
-  - **Repo URL** (`https://github.com/owner/repo`) — uses the recursive Git Trees API (`GET /repos/{owner}/{repo}/git/trees/{branch}?recursive=1`) for a full file tree in one call, with `gh repo clone` (preferred) or `git clone` as fallback for truncated trees. Filters out noise (node_modules, build outputs, asset files, lockfiles) and runs the existing architecture-signal detector (CI/CD, tests, monorepo, package managers, security). In parallel it queries the GitHub API for issues, PRs, releases, tags, branches, and a 8KB README excerpt.
+- **`aio-webmap` GitHub repo mapping** (`src/github-map.ts`, ~1100 LOC) — When `aio-webmap` is called on a GitHub URL it now returns a proper map of the repo instead of falling back to crawling github.com's explore pages. The new `mapGitHubRepo()` orchestrator handles four URL shapes:
+  - **Repo URL** (`https://github.com/owner/repo`) — uses the recursive Git Trees API (`GET /repos/{owner}/{repo}/git/trees/{branch}?recursive=1`) for a full file tree in one call, with `gh repo clone` (preferred) or `git clone` as fallback for truncated trees. Filters out ~50 noise patterns (node_modules, build outputs, asset files, lockfiles) before building the tree. Runs the existing architecture-signal detector (CI/CD, tests, monorepo, package managers, security). In parallel it queries the GitHub API for issues, PRs, releases, tags, branches, and a 8KB README excerpt.
   - **Tree URL** (`https://github.com/owner/repo/tree/branch/path`) — uses `GET /repos/{owner}/{repo}/contents/{path}` to list the directory contents and return a markdown table of 📁/📄 entries with clickable GitHub URLs.
   - **Feature URL** (`/issues`, `/pulls`, `/releases`, `/tags`, etc.) — uses the relevant API endpoint and returns a numbered list of items with state + URL.
   - **Blob URL** (`/blob/branch/path`) — returns the single blob URL.
@@ -11,39 +11,7 @@
 - **`details.sources` field on `aio-webmap`** — URLs now returned grouped by discovery source (`github-api:tree`, `github-api:issues`, `github-api:pulls`, `github-api:releases`, `github-api:tags`, `github-api:branches`, `github-api:readme`, `repo-clone`, `llms.txt`, `sitemap-or-nav-or-crawl`) instead of one flat list. Backward compatible — the flat `details.urls` is still populated.
 - **`details.repo` field on `aio-webmap`** — for GitHub repo URLs: `{ owner, repo, ref, totalFiles, totalDirs, description, topics, language, stars, forks, license, defaultBranch, cloned, clonePath }`. Lets the renderer show repo metadata without re-fetching.
 - **`details.treeMarkdown` and `details.architecture`** — full file tree and architecture signals (CI/CD, tests, monorepo, package managers, security) included in the response so agents can plan follow-up `aio-webfetch` calls.
-
-### Changed
-
-- **`aio-webmap` description and promptGuidelines** updated to document the GitHub path and the `details.sources` shape.
-
-### Test results
-
-Test count: 484 → 534 (+50 github-map).
-
-## [Unreleased] - 2026-06-19
-
-### Fixed
-
-- **`aio-webmap` GitHub security alert handler** (`src/github-pipeline.ts`, +245 LOC) — `aio-webfetch` on `/security/dependabot/{id}`, `/security/code-scanning/{id}`, or `/security/secret-scanning/{id}` used to return only 8 lines of mostly-empty gated content. The new `pullGitHubSecurityAlert()` handler routes to the REST API endpoint (`GET /repos/{owner}/{repo}/dependabot/alerts/{id}` etc.) via `ghFetchWithFallback`, surfacing the full advisory details — GHSA/CVE IDs, severity, vulnerable package + version range, first patched version, CVSS scores, references, annotations, and locations. Uses `gh auth login` token if available, otherwise `GITHUB_TOKEN` env var. 4 unit tests in `tests/github-check.test.mjs`.
-- **Vertical extractor `ok: false` treated as success** (`src/content.ts:920-957`) — `pullPageEnhanced` hardcoded `ok: true` for any non-null vertical result, which meant a Reddit vertical returning `ok: false` (network block, rate limit) showed up as "empty content" to the user. Now honors `vertical.ok` — a `false` result with an error message is propagated as a structured failure with the vertical's error message preserved. The vertical result still wins over the regular HTML pipeline when it has useful error context.
-- **Reddit network block detection** (`src/verticals/reddit.ts`, +75 LOC) — The `.json` endpoint (the only AI-consumable Reddit API) is gated by Reddit's anti-bot wall. The new `detectRedditBlock()` helper probes three endpoints (`.json`, main page, reddit.com home) in parallel to distinguish between the 4 most common failure modes: network block (with a clear explanation that .json is gated), 5xx server error, 404 (post deleted), and "both endpoints down" (Reddit is offline from this network). 7 unit tests in `tests/reddit-block.test.mjs`.
-
-### Test results
-
-Test count: 534 → 553 (+19 reddit-block + github-check).
-
-### Fixed
-
-- **`npm install --omit=dev` failed to build dist** — `typebox` was declared in both `devDependencies` and `peerDependencies`. With `--omit=dev`, devDeps are skipped, and the peerDep `typebox: "*"` was being satisfied by `@earendil-works/pi-coding-agent`'s nested copy (at `node_modules/@earendil-works/pi-coding-agent/node_modules/typebox`). Our `prepare` hook (which runs `tsc`) couldn't resolve `import { Type } from "typebox"` from the top level, so the `Production install build (--omit=dev, from source)` CI job failed with `TS2307: Cannot find module 'typebox'`. Fix: move `typebox` from `devDependencies` to `dependencies` (it's a runtime dep — our tool parameter schemas use it at runtime) and drop the redundant `peerDependencies` entry. `npm install --omit=dev` now completes the build successfully.
-- **CodeQL `js/incomplete-sanitization` alert #61** (`src/github-pipeline.ts:812`, severity: warning) — The new `pullGitHubSecurityAlert()` handler for secret-scanning locations escaped only the `|` meta-character with `.replace(/\|/g, "\\|")` but not the `\` character itself. If a secret location contained a literal backslash before a pipe (e.g. `a\|b`), our pipe-escape would have left the backslash intact, producing `a\\|b` instead of `a\\\|b` — confusing for markdown table parsers. Extracted the existing triple-replace pattern (from the check-run annotations handler at line 435) into a shared `escapeMarkdownTableCell()` helper that escapes backslashes BEFORE pipes (so the pipe-escape isn't itself re-escaped) and collapses newlines to spaces. Both call sites (annotations + secret locations) now use the helper. 5 unit tests in `tests/github-check.test.mjs`.
-
-### Changed
-
-- **Test runner: switched from `npx tsx` to `node --experimental-strip-types --test`** — 36× faster test suite execution (4m50s → 8s for all 508 tests across 14 suites). The previous 4-minute runtime was almost entirely `tsx` process startup overhead loading the heavy `@earendil-works/pi-coding-agent` package transitively per test file. Node 24's native TypeScript stripping bypasses `tsx` entirely. To enable this:
-  - Converted the one TypeScript parameter property in `src/fetch.ts` (`TokenBucket` constructor's `private maxTokens: number,` etc.) to explicit field declarations + constructor assignments, since Node 24's strip mode doesn't support parameter properties
-  - Updated `content.ts`'s dynamic import of `github-pipeline` to try `.js` (production runtime) first, then `.ts` (test runtime), so strip-types can resolve the import
-  - Updated all `test*` scripts in `package.json` and `.github/workflows/ci.yml`
-- **Replaced the CI's per-suite `for` loop with a single `npm run test:all`** — same coverage, ~9s instead of ~5min.
+- **GitHub security alert handler** (`pullGitHubSecurityAlert` in `src/github-pipeline.ts`, +245 LOC) — `aio-webfetch` on `/security/dependabot/{id}`, `/security/code-scanning/{id}`, or `/security/secret-scanning/{id}` used to return only 8 lines of mostly-empty gated content. The new handler routes to the REST API endpoint (`GET /repos/{owner}/{repo}/dependabot/alerts/{id}` etc.) via `ghFetchWithFallback`, surfacing the full advisory details — GHSA/CVE IDs, severity, vulnerable package + version range, first patched version, CVSS scores, references, annotations, and locations. Uses `gh auth login` token if available, otherwise `GITHUB_TOKEN` env var. 4 unit tests in `tests/github-check.test.mjs`.
 
 ### Changed
 
@@ -52,8 +20,24 @@ Test count: 534 → 553 (+19 reddit-block + github-check).
   - `protobufjs`: 7.6.0 → 7.6.4 (closes #9 medium schema-derived name shadowing, #10 high DoS via unbounded Any expansion)
   - `ws`: 8.20.1 → 8.21.0 (no change in vulnerability, but bumps the dep)
   - `@earendil-works/pi-coding-agent` itself: 0.74.0 → 0.79.8 (closes #14 high temp-path privilege escalation, #15 medium project-local extension loading)
-  - `npm audit --omit=dev --audit-level=high` now reports `found 0 vulnerabilities` (was 4 high). The 3 remaining open Dependabot alerts (#11 ws, #12 XSS, #13 race condition) are either false positives (ws is at 8.x, well above the 1.1.0–<5.2.5 vulnerable range) or have vulnerable ranges of `<= 0.73.1` that this bump is well past — Dependabot will likely auto-close them on the next scan.
-- `pi-coding-agent@0.77.0` renamed `model_select`/`thinking_level_select` events to `model_update`/`thinking_level_update`. We don't use those events (we only import `ExtensionAPI`, `Theme`, and `getMarkdownTheme`), so the bump is API-compatible.
+  - `npm audit --omit=dev --audit-level=high` now reports `found 0 vulnerabilities` (was 4 high).
+  - `pi-coding-agent@0.77.0` renamed `model_select`/`thinking_level_select` events to `model_update`/`thinking_level_update`. We don't use those events (we only import `ExtensionAPI`, `Theme`, and `getMarkdownTheme`), so the bump is API-compatible.
+- **Test runner: switched from `npx tsx` to `node --experimental-strip-types --test`** — 36× faster test suite execution (4m50s → 8s for all 553 tests across 14 suites). The previous 4-minute runtime was almost entirely `tsx` process startup overhead loading the heavy `@earendil-works/pi-coding-agent` package transitively per test file. Node 24's native TypeScript stripping bypasses `tsx` entirely. Updated all `test*` scripts in `package.json` and `.github/workflows/ci.yml`.
+- **Replaced the CI's per-suite `for` loop with a single `npm run test:all`** — same coverage, ~9s instead of ~5min.
+- **Moved `typebox` from `devDependencies` to `dependencies`** — required for `npm install --omit=dev` to complete the build (the peerDep `*` was being satisfied by `@earendil-works/pi-coding-agent`'s nested copy, unreachable from our top-level code).
+- **Extracted `escapeMarkdownTableCell()` helper** (`src/github-pipeline.ts`) — escapes backslashes BEFORE pipes (so the pipe-escape isn't itself re-escaped), then collapses newlines. Replaces the inline `.replace(/\|/g, "\\|")` pattern that CodeQL flagged as incomplete sanitization in two places.
+
+### Fixed
+
+- **Vertical extractor `ok: false` treated as success** (`src/content.ts:920-957`) — `pullPageEnhanced` hardcoded `ok: true` for any non-null vertical result, which meant a Reddit vertical returning `ok: false` (network block, rate limit) showed up as "empty content" to the user. Now honors `vertical.ok` — a `false` result with an error message is propagated as a structured failure with the vertical's error message preserved. The vertical result still wins over the regular HTML pipeline when it has useful error context.
+- **Reddit network block detection** (`src/verticals/reddit.ts`, +75 LOC) — The `.json` endpoint (the only AI-consumable Reddit API) is gated by Reddit's anti-bot wall. The new `detectRedditBlock()` helper probes three endpoints (`.json`, main page, reddit.com home) in parallel to distinguish between the 4 most common failure modes: network block (with a clear explanation that .json is gated, suggests opening in a browser or using a Reddit-aware proxy), 5xx server error, 404 (post deleted), and "both endpoints down" (Reddit is offline from this network). 7 unit tests in `tests/reddit-block.test.mjs`.
+- **CodeQL `js/incomplete-sanitization` alert #61** — The new `pullGitHubSecurityAlert()` handler for secret-scanning locations escaped only the `|` meta-character but not the `\` character itself. Fixed via the `escapeMarkdownTableCell()` helper (see Changed section above). 5 unit tests cover pipe escape, backslash-before-pipe ordering, newline collapse, clean pass-through, and combined input.
+- **`npm install --omit=dev` failed to build dist** (`Production install build` CI job) — `typebox` was declared in both `devDependencies` and `peerDependencies`. With `--omit=dev`, devDeps are skipped, and the peerDep was being satisfied by `@earendil-works/pi-coding-agent`'s nested copy at `node_modules/@earendil-works/pi-coding-agent/node_modules/typebox`. Our `prepare` hook (which runs `tsc`) couldn't resolve `import { Type } from "typebox"` from the top level — `TS2307: Cannot find module 'typebox'` in 6 files. Fixed by moving `typebox` from `devDependencies` to `dependencies` (it's a runtime dep — our tool parameter schemas use it at runtime) and dropping the redundant `peerDependencies` entry.
+- **Test runner source incompatibility** — `src/fetch.ts`'s `TokenBucket` class used TypeScript parameter properties (`constructor(private maxTokens: number, ...)`) which Node 24's `--strip-types` doesn't support. Converted to explicit readonly fields + constructor assignments. `src/content.ts`'s dynamic import of `./github-pipeline.js` failed in strip-types mode (only the .js exists in dist/, not in src/) — now tries `.js` first then `.ts` as a fallback.
+
+### Test results
+
+Test count: 484 → 553 (+69 across 7 new features: github-map, reddit-block, github-check security alerts, escapeMarkdownTableCell, plus the dep bump enabling all of it). 14 test suites, all pass locally in 8.8s.
 
 ## [0.5.0] - 2026-06-14
 
