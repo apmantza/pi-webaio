@@ -680,13 +680,22 @@ export async function pullPage(
 		};
 	}
 
-	// GitHub pipeline — extractor handles github.com URLs via API/smartFetch
-	// Note: in a future phase, pullGitHub will be imported from ./github-pipeline.js
-	const { pullGitHub: ghPipeline } = await import("./github-pipeline.js").catch(
-		() => ({
-			pullGitHub: null as ((u: string) => Promise<PullResult | null>) | null,
-		}),
-	);
+	// GitHub pipeline — extractor handles github.com URLs via API/smartFetch.
+	// Try the compiled .js first (production runtime), fall back to the .ts
+	// source (Node 24 native strip-types for the test runner). Either way,
+	// the dynamic import resolves to the same pullGitHub function.
+	let ghPipeline: ((u: string) => Promise<PullResult | null>) | null = null;
+	try {
+		const mod = await import("./github-pipeline.js");
+		ghPipeline = mod.pullGitHub;
+	} catch {
+		try {
+			const mod = await import("./github-pipeline.ts");
+			ghPipeline = mod.pullGitHub;
+		} catch {
+			ghPipeline = null;
+		}
+	}
 	if (ghPipeline) {
 		const gh = await ghPipeline(url);
 		if (gh) return finalizePullResult(gh, redirectNotice);

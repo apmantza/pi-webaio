@@ -109,12 +109,22 @@ export class TokenBucket {
 	private lastRefill: number;
 	/** Simple lock to prevent concurrent acquire() corruption */
 	private lockPromise: Promise<void> = Promise.resolve();
+	// Note: not using TypeScript parameter properties (constructor(private
+	// maxTokens: number)) here because Node 24's native --strip-types
+	// (used by the test runner) doesn't support them. Explicit fields +
+	// constructor assignments are equally type-safe and strip-types-clean.
+	private readonly maxTokens: number;
+	private readonly refillRate: number;
+	private readonly refillIntervalMs: number;
 
 	constructor(
-		private maxTokens: number,
-		private refillRate: number,
-		private refillIntervalMs: number = 1000,
+		maxTokens: number,
+		refillRate: number,
+		refillIntervalMs: number = 1000,
 	) {
+		this.maxTokens = maxTokens;
+		this.refillRate = refillRate;
+		this.refillIntervalMs = refillIntervalMs;
 		this.tokens = maxTokens;
 		this.lastRefill = Date.now();
 	}

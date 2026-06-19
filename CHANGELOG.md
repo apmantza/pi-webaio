@@ -39,6 +39,14 @@ Test count: 534 → 553 (+19 reddit-block + github-check).
 
 ### Changed
 
+- **Test runner: switched from `npx tsx` to `node --experimental-strip-types --test`** — 36× faster test suite execution (4m50s → 8s for all 508 tests across 14 suites). The previous 4-minute runtime was almost entirely `tsx` process startup overhead loading the heavy `@earendil-works/pi-coding-agent` package transitively per test file. Node 24's native TypeScript stripping bypasses `tsx` entirely. To enable this:
+  - Converted the one TypeScript parameter property in `src/fetch.ts` (`TokenBucket` constructor's `private maxTokens: number,` etc.) to explicit field declarations + constructor assignments, since Node 24's strip mode doesn't support parameter properties
+  - Updated `content.ts`'s dynamic import of `github-pipeline` to try `.js` (production runtime) first, then `.ts` (test runtime), so strip-types can resolve the import
+  - Updated all `test*` scripts in `package.json` and `.github/workflows/ci.yml`
+- **Replaced the CI's per-suite `for` loop with a single `npm run test:all`** — same coverage, ~9s instead of ~5min.
+
+### Changed
+
 - **Bumped `@earendil-works/pi-coding-agent` to `^0.79.0` and `@earendil-works/pi-tui` to `^0.79.0`** — resolves 6 of 9 open Dependabot alerts via the new transitive versions:
   - `undici`: 7.25.0 → 8.5.0 (closes #16 medium cross-user info disclosure, #17 high TLS cert validation bypass)
   - `protobufjs`: 7.6.0 → 7.6.4 (closes #9 medium schema-derived name shadowing, #10 high DoS via unbounded Any expansion)

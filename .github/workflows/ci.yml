@@ -59,14 +59,9 @@ jobs:
         run: npm test
 
       - name: Run full test suite (all suites)
-        run: |
-          # Run each suite individually so one failure doesn't mask others
-          for script in test:new test:paywall test:check test:render \
-                        test:fetcherror test:fetchprogress test:hardening \
-                        test:format test:webfetch-summary test:chunker; do
-            echo "=== Running $script ==="
-            npm run "$script" || exit 1
-          done
+        # One invocation — Node 24 --experimental-strip-types handles all
+        # .mjs files and their .ts imports in ~8s (was 4m50s with tsx).
+        run: npm run test:all
 
   # Simulates pi's real install path: a `git:` install runs `npm install
   # --omit=dev`, which triggers `prepare` → `build:dist` FROM SOURCE with the
