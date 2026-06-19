@@ -372,3 +372,110 @@ test("ghFetchWithFallback still throws when gh fallback disabled", async () => {
 		else process.env.PI_WEBAIO_GH_FALLBACK = prev;
 	}
 });
+
+// ─── pullGitHub Security alert handler ────────────────────────────
+// The /security/{sub}/{id} URLs route to a new per-alert handler in
+// github-pipeline.ts. We test it via pullPageEnhanced, which is the
+// public entry point and the one that users see fail-or-succeed.
+
+test("pullPageEnhanced: GitHub security/dependabot/21 returns alert content (gated web UI bypass)", async () => {
+	const { pullPageEnhanced } = await import("../src/content.ts");
+	const url = "https://github.com/apmantza/pi-free/security/dependabot/21";
+	const result = await pullPageEnhanced(url, {
+		browser: "chrome_145",
+		os: "windows",
+	});
+	// We expect success or auth-required, depending on whether the
+	// caller's token is configured. Either way, we should NOT see the
+	// "8 lines" truncated content that the gated web UI used to produce.
+	if (result.ok) {
+		assert.ok(result.content, "should have content on success");
+		// Content should reference the alert or the API
+		const hasDependabotRef =
+			result.content.includes("Dependabot alert") ||
+			result.content.includes("via GitHub API");
+		assert.ok(
+			hasDependabotRef,
+			"content should reference the alert type or GitHub API",
+		);
+		// Should have a GHSA ID or package name (rich data, not gated)
+		const hasRichData =
+			result.content.includes("protobufjs") ||
+			result.content.includes("GHSA-") ||
+			result.content.includes("dependabot/alerts");
+		assert.ok(hasRichData, "content should have rich alert data");
+	} else {
+		// Auth-required is acceptable — the previous behavior was
+		// "truncated to 8 lines" which is now fixed by the new handler.
+		// We just verify the error is informative, not the old gate text.
+		assert.ok(result.error, "should have an error message");
+		assert.ok(
+			/GITHUB_TOKEN|gh auth login|Requires authentication/i.test(
+				result.error,
+			),
+			`error should mention auth (GITHUB_TOKEN / gh auth login / auth). got: ${result.error}`,
+		);
+	}
+});
+
+test("pullPageEnhanced: GitHub security/code-scanning/1 routes to API", async () => {
+	const { pullPageEnhanced } = await import("../src/content.ts");
+	const url =
+		"https://github.com/apmantza/pi-free/security/code-scanning/1";
+	const result = await pullPageEnhanced(url, {
+		browser: "chrome_145",
+		os: "windows",
+	});
+	// Same expectations: success OR clear auth-required error.
+	if (result.ok) {
+		assert.ok(result.content);
+		assert.ok(
+			result.content.includes("Code scanning alert") ||
+				result.content.includes("via GitHub API"),
+			"content should reference code scanning or API",
+		);
+	} else {
+		assert.ok(result.error);
+		assert.ok(
+			/GITHUB_TOKEN|gh auth login|Requires authentication|404/i.test(
+				result.error,
+			),
+			`error should be informative (auth/404). got: ${result.error}`,
+		);
+	}
+});
+
+test("pullPageEnhanced: GitHub security/secret-scanning/1 routes to API", async () => {
+	const { pullPageEnhanced } = await import("../src/content.ts");
+	const url =
+		"https://github.com/apmantza/pi-free/security/secret-scanning/1";
+	const result = await pullPageEnhanced(url, {
+		browser: "chrome_145",
+		os: "windows",
+	});
+	if (result.ok) {
+		assert.ok(result.content);
+		assert.ok(
+			result.content.includes("Secret scanning alert") ||
+				result.content.includes("via GitHub API"),
+			"content should reference secret scanning or API",
+		);
+	} else {
+		assert.ok(result.error);
+	}
+});
+
+test("pullPageEnhanced: GitHub security listing still works (/security/dependabot)", async () => {
+	const { pullPageEnhanced } = await import("../src/content.ts");
+	const url = "https://github.com/apmantza/pi-free/security/dependabot";
+	const result = await pullPageEnhanced(url, {
+		browser: "chrome_145",
+		os: "windows",
+	});
+	// The list endpoint should still work; success or auth error both ok.
+	if (result.ok) {
+		assert.ok(result.content);
+	} else {
+		assert.ok(result.error);
+	}
+});

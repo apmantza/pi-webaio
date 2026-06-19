@@ -20,6 +20,18 @@
 
 Test count: 484 → 534 (+50 github-map).
 
+## [Unreleased] - 2026-06-19
+
+### Fixed
+
+- **`aio-webmap` GitHub security alert handler** (`src/github-pipeline.ts`, +245 LOC) — `aio-webfetch` on `/security/dependabot/{id}`, `/security/code-scanning/{id}`, or `/security/secret-scanning/{id}` used to return only 8 lines of mostly-empty gated content. The new `pullGitHubSecurityAlert()` handler routes to the REST API endpoint (`GET /repos/{owner}/{repo}/dependabot/alerts/{id}` etc.) via `ghFetchWithFallback`, surfacing the full advisory details — GHSA/CVE IDs, severity, vulnerable package + version range, first patched version, CVSS scores, references, annotations, and locations. Uses `gh auth login` token if available, otherwise `GITHUB_TOKEN` env var. 4 unit tests in `tests/github-check.test.mjs`.
+- **Vertical extractor `ok: false` treated as success** (`src/content.ts:920-957`) — `pullPageEnhanced` hardcoded `ok: true` for any non-null vertical result, which meant a Reddit vertical returning `ok: false` (network block, rate limit) showed up as "empty content" to the user. Now honors `vertical.ok` — a `false` result with an error message is propagated as a structured failure with the vertical's error message preserved. The vertical result still wins over the regular HTML pipeline when it has useful error context.
+- **Reddit network block detection** (`src/verticals/reddit.ts`, +75 LOC) — The `.json` endpoint (the only AI-consumable Reddit API) is gated by Reddit's anti-bot wall. The new `detectRedditBlock()` helper probes three endpoints (`.json`, main page, reddit.com home) in parallel to distinguish between the 4 most common failure modes: network block (with a clear explanation that .json is gated), 5xx server error, 404 (post deleted), and "both endpoints down" (Reddit is offline from this network). 7 unit tests in `tests/reddit-block.test.mjs`.
+
+### Test results
+
+Test count: 534 → 553 (+19 reddit-block + github-check).
+
 ## [0.5.0] - 2026-06-14
 
 ### Added

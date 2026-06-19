@@ -941,12 +941,37 @@ export async function pullPageEnhanced(
 		},
 	);
 	if (vertical) {
-		return finalizePullResult({
-			ok: true,
-			url,
-			title: vertical.title,
-			content: `> via ${findVerticalExtractor(url) ?? "vertical extractor"}\n\n${vertical.content}`,
-		});
+		// Honor vertical.ok — a vertical that returns ok:false (e.g. Reddit's
+		// .json endpoint blocked, YouTube transcript unavailable) is signaling
+		// a real error, not "this extractor doesn't apply". Fall through to
+		// the regular HTML pipeline if the vertical failed and there's an
+		// error message to surface.
+		if (vertical.ok) {
+			return finalizePullResult({
+				ok: true,
+				url,
+				title: vertical.title,
+				content: `> via ${findVerticalExtractor(url) ?? "vertical extractor"}\n\n${vertical.content}`,
+			});
+		}
+		// Vertical reported a structured error. Surface it as a result so the
+		// user gets a clear explanation (e.g. "Reddit blocked our network")
+		// instead of an empty body or a generic 403 from the HTML fallback.
+		if (vertical.error) {
+			return {
+				ok: false,
+				url,
+				title: vertical.title,
+				error: vertical.error,
+				errorInfo: {
+					message: vertical.error,
+					code: "http_error",
+					phase: "loading",
+					retryable: false,
+				},
+			};
+		}
+		// No error message — fall through to the regular HTML pipeline.
 	}
 
 	if (mode === "fast" || mode === "auto" || mode === "fingerprint") {

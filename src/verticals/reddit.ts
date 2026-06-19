@@ -11,6 +11,110 @@ export function matchesReddit(url: string): boolean {
 	);
 }
 
+/**
+ * Quick probe to figure out why a Reddit fetch failed. The .json endpoint
+ * is the only AI-consumable path; when it returns 403/HTML we want to
+ * give the user a clear explanation instead of a generic "blocked" error.
+ *
+ *   - "You've been blocked by network security" — Reddit's anti-bot wall
+ *     is blocking our IP. No workaround; the only way to read the post
+ *     is to open the URL in a browser.
+ *   - 404 HTML — the post was deleted or the URL is wrong.
+ *   - Other 4xx/5xx — generic fetch error.
+ *
+ * Returns null when we can't tell (no extra info beyond the generic
+ * "Reddit returns structured errors" message).
+ */
+async function detectRedditBlock(url: string): Promise<string | null> {
+	// Probe the .json endpoint (returns 403 on block) and the main
+	// HTML page (returns 200 with a "Please wait" body on block).
+	// Either signal confirms the block.
+	const probeUrls = [
+		url.replace(/\/?$/, ".json"),           // .json (returns 403 on block)
+		url,                                    // main page (returns 200 with verify body)
+		"https://www.reddit.com/.json",         // reddit's home .json (control)
+	];
+	try {
+		const probes = await Promise.all(
+			probeUrls.map(async (u) => {
+				try {
+					const res = await fetch(u, {
+						headers: {
+							"User-Agent":
+								"pi-webaio:0.5.0 (https://github.com/apmantza/pi-webaio)",
+						},
+						redirect: "follow",
+					});
+					// Read full body — Reddit's 403 block page puts the
+					// diagnostic message at the END of a 190KB doc that's
+					// mostly CSS, so truncating to 4KB misses the marker.
+					const text = await res.text();
+					return { url: u, status: res.status, text };
+				} catch {
+					return { url: u, status: 0, text: "" };
+				}
+			}),
+		);
+
+		const jsonProbe = probes[0];
+		const main = probes[1];
+		const home = probes[2];
+
+		// 404 on the post — clearly a "not found" not a network block
+		if (jsonProbe && jsonProbe.status === 404) {
+			return `Reddit returned 404 for ${url} — the post may have been deleted or the URL is incorrect.`;
+		}
+
+		// The 403 block page marker — both statuses can indicate a block:
+		//   - .json → 403 with "blocked by network security" in the body
+		//   - main HTML page → 200 with "Please wait for verification"
+		// Check the .json probe for the canonical block message.
+		if (jsonProbe && jsonProbe.status === 403) {
+			if (
+				jsonProbe.text.includes("blocked by network security") ||
+				jsonProbe.text.includes("You've been blocked")
+			) {
+				return (
+					`Reddit returned 403 — its anti-bot wall is blocking requests from this network. ` +
+					`The .json endpoint (the only AI-consumable Reddit API) is gated, so we can't extract the post or comments programmatically. ` +
+					`Try opening the URL in a browser, or use a Reddit-aware proxy. ` +
+					`Affected URL: ${url}`
+				);
+			}
+			// 403 but not the block page — rate limit?
+			return `Reddit returned 403 for ${url} — possibly rate-limited. Wait a few minutes and try again.`;
+		}
+
+		// Main page returned 200 — check for the "Please wait for verification" body
+		if (main && main.status === 200) {
+			if (
+				main.text.includes("Please wait for verification") ||
+				main.text.includes("Verifying your browser")
+			) {
+				return (
+					`Reddit's anti-bot wall is blocking requests from this network. ` +
+					`The .json endpoint (the only AI-consumable Reddit API) is gated, so we can't extract the post or comments programmatically. ` +
+					`Try opening the URL in a browser, or use a Reddit-aware proxy. ` +
+					`Affected URL: ${url}`
+				);
+			}
+		}
+
+		// Main page returns 5xx — but check whether Reddit as a whole
+		// is down (main AND home both 5xx) vs just this endpoint
+		if (main && main.status >= 500) {
+			if (home && home.status >= 500) {
+				return `Reddit returned ${main.status} for the post and ${home.status} for reddit.com. Reddit may be temporarily down from this network.`;
+			}
+			return `Reddit returned ${main.status} (server error). The post may be temporarily unavailable; try again later.`;
+		}
+
+		return null;
+	} catch {
+		return null;
+	}
+}
+
 export async function extractReddit(
 	url: string,
 	fetchJson: (url: string) => Promise<unknown | null>,
@@ -18,14 +122,20 @@ export async function extractReddit(
 	// Normalize to .json endpoint
 	const jsonUrl = url.replace(/\/?$/, ".json");
 
+	// Try the .json endpoint first. Reddit's .json API is the only
+	// AI-consumable way to get post + comment data — there is no
+	// official public API. If we can't reach it, the post is unreachable.
 	const data = await fetchJson(jsonUrl);
 	if (!data || !Array.isArray(data)) {
-		// Check if we got an error page / rate limit
+		// The fetchJson wrapper returned null when status >= 400.
+		// Try a plain text fetch so we can see WHY it failed — Reddit's
+		// "blocked by network security" 403 page is a giant HTML doc, not
+		// JSON, and we want to differentiate that from a 404.
+		const blockedHint = await detectRedditBlock(url);
 		return {
 			ok: false,
 			url,
-			error:
-				"Reddit post unavailable: may be blocked, rate-limited, or requires authentication. Reddit returns structured errors rather than bypassing bot controls.",
+			error: blockedHint ?? "Reddit post unavailable: may be blocked, rate-limited, or requires authentication. Reddit returns structured errors rather than bypassing bot controls.",
 			content: "",
 		};
 	}

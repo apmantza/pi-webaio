@@ -588,6 +588,261 @@ async function pullGitHubCheckLog(
 	}
 }
 
+/**
+ * Fetch and render a single GitHub security advisory alert
+ * (Dependabot, code-scanning, or secret-scanning). The web UI for
+ * these is gated to authenticated users, but the REST API works for
+ * any alert whose repo is readable with the caller's token.
+ *
+ * URL patterns:
+ *   /security/dependabot/{id}
+ *   /security/code-scanning/{id}
+ *   /security/secret-scanning/{id}
+ */
+async function pullGitHubSecurityAlert(
+	url: string,
+	owner: string,
+	repo: string,
+	sub: string,
+	alertId: string,
+	apiPath: string,
+): Promise<PullResult | null> {
+	try {
+		const data: any = await ghFetchWithFallback(apiPath);
+		// GitHub returns 404 as { message: "..." } for missing alerts,
+		// and 401/403 the same way. Surface a clear error in that case
+		// instead of rendering an empty object.
+		if (!data || data.message) {
+			const msg = data?.message ?? "Alert not found";
+			const isAuth = /auth|permission|forbidden/i.test(msg);
+			return {
+				ok: false,
+				url,
+				error: `GitHub ${sub} alert #${alertId}: ${msg}. ` +
+					`Set GITHUB_TOKEN or run \`gh auth login\` to access gated security advisories.`,
+				errorInfo: {
+					message: msg,
+					code: isAuth ? "http_error" : "http_error",
+					statusCode: 401,
+					retryable: false,
+				},
+			};
+		}
+
+		const subLabel =
+			sub === "dependabot"
+				? "Dependabot alert"
+				: sub === "code-scanning"
+					? "Code scanning alert"
+					: "Secret scanning alert";
+
+		let md = `# ${owner}/${repo} — ${subLabel} #${alertId}\n\n`;
+		md += `> via GitHub API (security advisories are gated on the web UI; the API works with \`GITHUB_TOKEN\` or \`gh auth login\`)\n\n`;
+
+		// Common fields across all three alert types
+		const state = data.state || "?";
+		const severity = data.severity || data.rule?.severity;
+		const createdAt = data.created_at;
+		const updatedAt = data.updated_at;
+		const htmlUrl = data.html_url || url;
+		const dismissedAt = data.dismissed_at;
+		const dismissedBy = data.dismissed_by?.login;
+		const dismissedReason = data.dismissed_reason;
+
+		const stateIcon =
+			state === "open" || state === "new" || state === "detected"
+				? "🟢"
+				: state === "fixed" || state === "resolved"
+					? "✅"
+					: state === "dismissed" || state === "auto_dismissed"
+						? "🚫"
+						: "❓";
+
+		md += `${stateIcon} **State:** \`${state}\``;
+		if (severity) md += ` · **Severity:** \`${severity}\``;
+		md += `\n`;
+		if (createdAt) md += `- **Created:** ${createdAt}\n`;
+		if (updatedAt) md += `- **Updated:** ${updatedAt}\n`;
+		if (dismissedAt) {
+			md += `- **Dismissed:** ${dismissedAt}`;
+			if (dismissedBy) md += ` by @${dismissedBy}`;
+			if (dismissedReason) md += ` (${dismissedReason})`;
+			md += `\n`;
+		}
+		if (htmlUrl) md += `- [View on GitHub](${htmlUrl})\n`;
+
+		// Dependabot-specific
+		if (sub === "dependabot") {
+			const advisory = data.advisory;
+			const dep = data.dependency || {};
+			const vuln = data.security_vulnerability || {};
+			const pkg = vuln.package || {};
+			const cvss = vuln.vulnerable_version_range;
+			const patchedVersions = vuln.patched_versions;
+
+			if (advisory) {
+				md += `\n## Advisory\n\n`;
+				md += `- **GHSA ID:** \`${advisory.ghsa_id || "?"}\`\n`;
+				md += `- **CVE ID:** ${advisory.cve_id || "_(none)_"}\n`;
+				md += `- **Summary:** ${advisory.summary || "_(no summary)_"}\n`;
+				if (advisory.description) {
+					md += `\n${advisory.description.slice(0, 4000)}\n`;
+				}
+				if (advisory.severity) {
+					md += `\n- **Severity:** \`${advisory.severity}\`\n`;
+				}
+				if (Array.isArray(advisory.cvss) && advisory.cvss.length) {
+					md += `- **CVSS scores:**\n`;
+					for (const c of advisory.cvss) {
+						if (c.score !== undefined) {
+							md += `  - ${c.vector_string || "?"} → ${c.score}\n`;
+						}
+					}
+				}
+				if (Array.isArray(advisory.references) && advisory.references.length) {
+					md += `\n## References (${advisory.references.length})\n\n`;
+					for (const r of advisory.references.slice(0, 20)) {
+						const label = r.url?.replace(/^https?:\/\//, "").slice(0, 80) || "?";
+						md += `- [${label}](${r.url})\n`;
+					}
+				}
+			}
+
+			if (dep.package || pkg.name) {
+				md += `\n## Vulnerable package\n\n`;
+				const name = dep.package?.name || pkg.name || "?";
+				const ecosystem = dep.package?.ecosystem || pkg.ecosystem || "?";
+				md += `- **Package:** \`${name}\` (\`${ecosystem}\`)\n`;
+				if (dep.manifest_path) md += `- **Manifest:** \`${dep.manifest_path}\`\n`;
+				if (dep.scope) md += `- **Scope:** \`${dep.scope}\`\n`;
+				if (cvss) md += `- **Vulnerable range:** \`${cvss}\`\n`;
+				if (patchedVersions) md += `- **Patched versions:** \`${patchedVersions}\`\n`;
+				if (vuln.vulnerable_version_range) {
+					md += `- **Vulnerable range:** \`${vuln.vulnerable_version_range}\`\n`;
+				}
+				if (vuln.first_patched_version?.identifier) {
+					md += `- **First patched:** \`${vuln.first_patched_version.identifier}\`\n`;
+				}
+			}
+		}
+
+		// Code-scanning-specific
+		if (sub === "code-scanning") {
+			const rule = data.rule;
+			const tool = data.tool;
+			const instances = data.most_recent_instance || data.instances?.[0];
+			const loc = instances?.location;
+
+			if (rule) {
+				md += `\n## Rule\n\n`;
+				md += `- **ID:** \`${rule.id || rule.rule_id || "?"}\`\n`;
+				if (rule.severity) md += `- **Severity:** \`${rule.severity}\`\n`;
+				if (rule.name) md += `- **Name:** ${rule.name}\n`;
+				if (rule.description) md += `\n${rule.description.slice(0, 2000)}\n`;
+				if (rule.full_description) {
+					md += `\n<details>\n<summary>Full description</summary>\n\n${rule.full_description.slice(0, 4000)}\n</details>\n`;
+				}
+				if (Array.isArray(rule.tags) && rule.tags.length) {
+					md += `\n- **Tags:** ${rule.tags.map((t: string) => `\`${t}\``).join(", ")}\n`;
+				}
+				if (rule.help?.text) {
+					md += `\n## Help\n\n${rule.help.text.slice(0, 4000)}\n`;
+				}
+				if (Array.isArray(rule.help?.markdown_url)) {
+					md += `\n## Help links\n\n`;
+					for (const u of rule.help.markdown_url) md += `- ${u}\n`;
+				}
+			}
+
+			if (tool) {
+				md += `\n## Tool\n\n`;
+				if (tool.name) md += `- **Name:** ${tool.name}\n`;
+				if (tool.guid) md += `- **GUID:** \`${tool.guid}\`\n`;
+				if (tool.version) md += `- **Version:** \`${tool.version}\`\n`;
+			}
+
+			if (instances) {
+				md += `\n## Most recent instance\n\n`;
+				if (loc?.path) {
+					md += `- **Path:** \`${loc.path}\`\n`;
+					if (loc.start_line) {
+						md += `- **Lines:** ${loc.start_line}${loc.end_line ? `–${loc.end_line}` : ""}\n`;
+					}
+				}
+				if (instances.commit_sha) {
+					md += `- **Commit:** \`${instances.commit_sha.slice(0, 12)}\`\n`;
+				}
+				if (instances.message?.text) {
+					md += `\n${instances.message.text.slice(0, 1000)}\n`;
+				}
+			}
+		}
+
+		// Secret-scanning-specific
+		if (sub === "secret-scanning") {
+			const secretType = data.secret_type;
+			const secretTypeDisplay = data.secret_type_display_name;
+			const resolution = data.resolution;
+			const locations = Array.isArray(data.locations) ? data.locations : [];
+			const pushProtectionBypass = data.push_protection_bypassed;
+
+			if (secretType || secretTypeDisplay) {
+				md += `\n## Secret\n\n`;
+				md += `- **Type:** ${secretTypeDisplay || secretType || "?"}\n`;
+				if (secretType) md += `- **ID:** \`${secretType}\`\n`;
+				if (resolution) md += `- **Resolution:** \`${resolution}\`\n`;
+				if (pushProtectionBypass) {
+					md += `- **Push protection bypassed:** ${pushProtectionBypass.bypassed_at || "?"}`;
+					if (pushProtectionBypass.bypassed_by?.login) {
+						md += ` by @${pushProtectionBypass.bypassed_by.login}`;
+					}
+					md += `\n`;
+				}
+			}
+
+			if (locations.length) {
+				md += `\n## Locations (${locations.length})\n\n`;
+				md += `| Type | Details |\n|------|---------|\n`;
+				for (const loc of locations.slice(0, 20)) {
+					if (loc.details) {
+						md += `| ${loc.type || "?"} | ${loc.details.slice(0, 200).replace(/\|/g, "\\|")} |\n`;
+					} else if (loc.path) {
+						const lines = loc.start_line
+							? `:${loc.start_line}${loc.end_line ? `–${loc.end_line}` : ""}`
+							: "";
+						md += `| ${loc.type || "commit"} | \`${loc.path}${lines}\` |\n`;
+					} else {
+						md += `| ${loc.type || "?"} | (no details) |\n`;
+					}
+				}
+			}
+		}
+
+		// Common: raw JSON for anything we missed
+		md += `\n<details>\n<summary>📋 Raw API response</summary>\n\n\`\`\`json\n${JSON.stringify(data, null, 2).slice(0, 8000)}\n\`\`\`\n</details>\n`;
+
+		return {
+			ok: true,
+			url,
+			title: `${owner}/${repo} — ${subLabel} #${alertId}`,
+			content: md,
+		};
+	} catch (err: any) {
+		const msg = err?.message ?? "GitHub API call failed";
+		return {
+			ok: false,
+			url,
+			error: `GitHub ${sub} alert #${alertId}: ${msg}. ` +
+				`Set GITHUB_TOKEN or run \`gh auth login\` to access gated security advisories.`,
+			errorInfo: {
+				message: msg,
+				code: "http_error",
+				retryable: false,
+			},
+		};
+	}
+}
+
 async function pullGitHubFeature(url: string): Promise<PullResult | null> {
 	try {
 		const u = new URL(url);
@@ -618,6 +873,27 @@ async function pullGitHubFeature(url: string): Promise<PullResult | null> {
 		if (feature === "security" && rest[0]) {
 			const sub = rest[0];
 			featureLabel = `security/${sub}`;
+
+			// Per-alert endpoints: /security/dependabot/{id},
+			// /security/code-scanning/{id}, /security/secret-scanning/{id}.
+			// The web UI for these is gated to authenticated users, but
+			// the REST API works for any alert whose repo is readable
+			// with the caller's token (env var, gh CLI, etc.).
+			const alertId = rest[1];
+			if (alertId && /^\d+$/.test(alertId)) {
+				let alertPath: string | null = null;
+				if (sub === "dependabot") {
+					alertPath = `${baseRepoPath}/dependabot/alerts/${alertId}`;
+				} else if (sub === "code-scanning") {
+					alertPath = `${baseRepoPath}/code-scanning/alerts/${alertId}`;
+				} else if (sub === "secret-scanning") {
+					alertPath = `${baseRepoPath}/secret-scanning/alerts/${alertId}`;
+				}
+				if (alertPath) {
+					return pullGitHubSecurityAlert(url, owner, repo, sub, alertId, alertPath);
+				}
+			}
+
 			const mapped = GH_FEATURE_API_MAP[sub];
 			if (mapped) apiPath = `${baseRepoPath}${mapped}`;
 		}
