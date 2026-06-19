@@ -475,3 +475,43 @@ test("pullPageEnhanced: GitHub security listing still works (/security/dependabo
 		assert.ok(result.error);
 	}
 });
+
+// ─── escapeMarkdownTableCell (CodeQL js/incomplete-sanitization fix) ──
+
+test("escapeMarkdownTableCell: escapes pipes", async () => {
+	const { escapeMarkdownTableCell } = await import("../src/github-pipeline.ts");
+	assert.strictEqual(escapeMarkdownTableCell("a|b"), "a\\|b");
+});
+
+test("escapeMarkdownTableCell: escapes backslashes BEFORE pipes", async () => {
+	const { escapeMarkdownTableCell } = await import("../src/github-pipeline.ts");
+	// Critical: backslash must be escaped first, otherwise the pipe-escape
+	// would leave a backslash that re-escapes our pipe-escape.
+	// Input "a\|b" (4 chars: a,\\,|,b) → "a\\\|b" (6 chars: a,\\,\,|b)
+	assert.strictEqual(escapeMarkdownTableCell("a\\|b"), "a\\\\\\|b");
+});
+
+test("escapeMarkdownTableCell: collapses newlines to spaces", async () => {
+	const { escapeMarkdownTableCell } = await import("../src/github-pipeline.ts");
+	assert.strictEqual(escapeMarkdownTableCell("a\nb"), "a b");
+	// Note: \r\n is NOT collapsed — only \n. Callers that need \r\n
+	// handling should normalize the input first (most markdown table
+	// sources use \n line endings).
+});
+
+test("escapeMarkdownTableCell: passes through clean strings", async () => {
+	const { escapeMarkdownTableCell } = await import("../src/github-pipeline.ts");
+	assert.strictEqual(escapeMarkdownTableCell("hello world"), "hello world");
+	assert.strictEqual(escapeMarkdownTableCell(""), "");
+});
+
+test("escapeMarkdownTableCell: handles all three in one string", async () => {
+	const { escapeMarkdownTableCell } = await import("../src/github-pipeline.ts");
+	// Pipe, backslash, and newline all in one input.
+	// Order: backslash first (so the pipe-escape isn't itself re-escaped),
+	// then pipe, then collapse newlines.
+	assert.strictEqual(
+		escapeMarkdownTableCell("foo | bar\nbaz\\qux"),
+		"foo \\| bar baz\\\\qux",
+	);
+});

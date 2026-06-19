@@ -32,6 +32,10 @@ Test count: 484 → 534 (+50 github-map).
 
 Test count: 534 → 553 (+19 reddit-block + github-check).
 
+### Fixed
+
+- **CodeQL `js/incomplete-sanitization` alert #61** (`src/github-pipeline.ts:812`, severity: warning) — The new `pullGitHubSecurityAlert()` handler for secret-scanning locations escaped only the `|` meta-character with `.replace(/\|/g, "\\|")` but not the `\` character itself. If a secret location contained a literal backslash before a pipe (e.g. `a\|b`), our pipe-escape would have left the backslash intact, producing `a\\|b` instead of `a\\\|b` — confusing for markdown table parsers. Extracted the existing triple-replace pattern (from the check-run annotations handler at line 435) into a shared `escapeMarkdownTableCell()` helper that escapes backslashes BEFORE pipes (so the pipe-escape isn't itself re-escaped) and collapses newlines to spaces. Both call sites (annotations + secret locations) now use the helper. 5 unit tests in `tests/github-check.test.mjs`.
+
 ### Changed
 
 - **Bumped `@earendil-works/pi-coding-agent` to `^0.79.0` and `@earendil-works/pi-tui` to `^0.79.0`** — resolves 6 of 9 open Dependabot alerts via the new transitive versions:

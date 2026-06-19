@@ -264,6 +264,25 @@ function extractLogExcerpt(logText: string, maxLen = 3000): string {
 }
 
 /**
+ * Escape a string for safe inclusion in a markdown table cell.
+ *
+ * Order matters: backslashes must be escaped BEFORE the meta-character
+ * (pipe), otherwise the escape we add for the meta-character will itself
+ * be re-escaped by the backslash pass. We also collapse newlines into
+ * spaces so a single cell can't break the table row.
+ *
+ * CodeQL `js/incomplete-sanitization` will flag any single-pass replace
+ * that escapes one meta-character without also handling backslashes.
+ * Use this helper instead of inline `.replace(/\|/g, "\\|")` calls.
+ */
+export function escapeMarkdownTableCell(s: string): string {
+	return s
+		.replace(/\\/g, "\\\\")
+		.replace(/\|/g, "\\|")
+		.replace(/\n/g, " ");
+}
+
+/**
  * Extract the step name from a tab-separated log line. `gh run view --log`
  * output prepends each line with `<step_name>\t` so the tool can identify
  * which step produced each line. Returns null if the line doesn't have a
@@ -430,11 +449,7 @@ async function pullGitHubCheckLog(
 						const file = a.path || a.blob_href?.split("/").pop() || "?";
 						const line = a.start_line || a.end_line || "?";
 						const level = a.annotation_level || "?";
-						const msg = (a.message || "")
-							.slice(0, 200)
-							.replace(/\\/g, "\\\\")
-							.replace(/\|/g, "\\|")
-							.replace(/\n/g, " ");
+						const msg = escapeMarkdownTableCell((a.message || "").slice(0, 200));
 						md += `\n| \`${file}\` | ${line} | ${level} | ${msg} |`;
 					}
 					if (annotations.length > 20) {
@@ -809,7 +824,7 @@ async function pullGitHubSecurityAlert(
 				md += `| Type | Details |\n|------|---------|\n`;
 				for (const loc of locations.slice(0, 20)) {
 					if (loc.details) {
-						md += `| ${loc.type || "?"} | ${loc.details.slice(0, 200).replace(/\|/g, "\\|")} |\n`;
+						md += `| ${loc.type || "?"} | ${escapeMarkdownTableCell(loc.details.slice(0, 200))} |\n`;
 					} else if (loc.path) {
 						const lines = loc.start_line
 							? `:${loc.start_line}${loc.end_line ? `–${loc.end_line}` : ""}`
