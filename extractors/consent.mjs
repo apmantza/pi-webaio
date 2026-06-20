@@ -186,21 +186,21 @@ async function browserLevelClick(x, y) {
 	const ws = new globalThis.WebSocket(version.webSocketDebuggerUrl);
 	let msgId = 0;
 
+	const send = (method, params) =>
+		new Promise((r) => {
+			const id = ++msgId;
+			const handler = (evt) => {
+				if (JSON.parse(evt.data).id === id) {
+					ws.removeEventListener("message", handler);
+					r();
+				}
+			};
+			ws.addEventListener("message", handler);
+			ws.send(JSON.stringify({ id, method, params }));
+		});
+
 	await new Promise((resolve) => {
 		ws.onopen = async () => {
-			const send = (method, params) =>
-				new Promise((r) => {
-					const id = ++msgId;
-					const handler = (evt) => {
-						if (JSON.parse(evt.data).id === id) {
-							ws.removeEventListener("message", handler);
-							r();
-						}
-					};
-					ws.addEventListener("message", handler);
-					ws.send(JSON.stringify({ id, method, params }));
-				});
-
 			const cx = x + rng(-2, 2);
 			const cy = y + rng(-2, 2);
 			await send("Input.dispatchMouseEvent", {

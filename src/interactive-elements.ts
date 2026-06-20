@@ -258,7 +258,7 @@ export function formatInteractablesSection(
 	for (const el of elements) {
 		let line = `[${el.ref}] ${el.role}: ${el.name} (${el.affordance})`;
 		if (el.value) line += ` value="${el.value}"`;
-		if (el.options && el.options.length) {
+		if (el.options?.length) {
 			const opts = el.options.slice(0, 8).join(",");
 			const extra = el.options.length > 8 ? `...+${el.options.length - 8}` : "";
 			line += ` options=[${opts}${extra}]`;

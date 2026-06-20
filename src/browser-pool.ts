@@ -59,7 +59,7 @@ const DEFAULTS: Required<BrowserPoolOptions> = {
 // ─── BrowserPool ─────────────────────────────────────────────────────
 
 export class BrowserPool {
-	private options: Required<BrowserPoolOptions>;
+	private readonly options: Required<BrowserPoolOptions>;
 	private browsers: PoolBrowser[] = [];
 	private launchQueue: Promise<PoolBrowser>[] = [];
 	private totalLaunched = 0;

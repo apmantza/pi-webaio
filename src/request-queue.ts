@@ -38,8 +38,8 @@ const SAVE_INTERVAL_MS = 5_000; // flush in-memory changes to disk every 5s
 // ─── Public API ──────────────────────────────────────────────────────
 
 export class RequestQueue {
-	private entries: Map<string, QueueEntry> = new Map();
-	private queuePath: string;
+	private readonly entries: Map<string, QueueEntry> = new Map();
+	private readonly queuePath: string;
 	private saveTimer: ReturnType<typeof setTimeout> | null = null;
 	private dirty = false;
 	/** Simple promise-based lock to prevent race conditions in next() */

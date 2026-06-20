@@ -646,10 +646,6 @@ function stripArchivePhChrome(html: string): string {
 	// archive.ph wraps the archived page in an <iframe id="replay">. If
 	// present, we don't have the real content — return as-is (caller
 	// will detect no article markers and fall through).
-	if (html.includes('id="replay"') || html.includes('id="rmobile"')) {
-		// Try to extract title from the archive page itself
-		return html;
-	}
 	return html;
 }
 
@@ -884,9 +880,6 @@ export async function bypassUrl(
 				}
 				break;
 			case "archive":
-				result = await tryArchiveOrgFetch(url, opts);
-				if (!result) result = await tryArchivePhFetch(url);
-				break;
 			case "archive_first":
 				result = await tryArchiveOrgFetch(url, opts);
 				if (!result) result = await tryArchivePhFetch(url);

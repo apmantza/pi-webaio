@@ -152,22 +152,22 @@ export function cleanupSessionCache(): void {
 
 // ─── Disk persistence (content cache) ──────────────────────────────
 
+async function readFrontmatterHead(path: string): Promise<string | null> {
+	let handle: Awaited<ReturnType<typeof open>> | null = null;
+	try {
+		handle = await open(path, "r");
+		const buf = Buffer.alloc(512);
+		const { bytesRead } = await handle.read(buf, 0, buf.length, 0);
+		return buf.toString("utf8", 0, bytesRead);
+	} catch {
+		return null;
+	} finally {
+		await handle?.close().catch(() => {});
+	}
+}
+
 export function loadContentCacheFromDisk(): void {
 	const root = BASE_TEMP;
-
-	async function readFrontmatterHead(path: string): Promise<string | null> {
-		let handle: Awaited<ReturnType<typeof open>> | null = null;
-		try {
-			handle = await open(path, "r");
-			const buf = Buffer.alloc(512);
-			const { bytesRead } = await handle.read(buf, 0, buf.length, 0);
-			return buf.toString("utf8", 0, bytesRead);
-		} catch {
-			return null;
-		} finally {
-			await handle?.close().catch(() => {});
-		}
-	}
 
 	async function scan(dir: string): Promise<number> {
 		let items: string[];

@@ -34,7 +34,7 @@ export async function extractGoPackages(
 		version = String(d.Version || "");
 		publishTime = String(d.Time || "");
 		const origin =
-			d.Origin && typeof d.Origin === "object"
+			typeof d.Origin === "object" && d.Origin !== null
 				? (d.Origin as Record<string, unknown>)
 				: null;
 		if (origin) {

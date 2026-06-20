@@ -308,7 +308,7 @@ export function parseBraveResults(html: string): SearchResult[] {
 		const snippet = gsMatch
 			? gsMatch[1]!
 					.replace(/<![^>]*-->/g, "")
-					.replace(/<|>/g, "")
+					.replace(/[<>]/g, "")
 					.replace(/\s+/g, " ")
 					.trim()
 			: "";

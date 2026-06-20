@@ -8,7 +8,7 @@ import type { VerticalResult } from "./types.ts";
  * Match Open Library book/works URLs.
  */
 export function matchesOpenLibrary(url: string): boolean {
-	return /^https?:\/\/openlibrary\.org\/(books|works|authors)\/[A-Za-z0-9]+/i.test(
+	return /^https?:\/\/openlibrary\.org\/(books|works|authors)\/[\w]+/i.test(
 		url,
 	);
 }
@@ -18,7 +18,7 @@ export function matchesOpenLibrary(url: string): boolean {
  */
 function extractId(url: string): { type: string; id: string } | null {
 	const m = url.match(
-		/openlibrary\.org\/(books|works|authors)\/([A-Za-z0-9]+)/i,
+		/openlibrary\.org\/(books|works|authors)\/([\w]+)/i,
 	);
 	if (!m) return null;
 	return { type: m[1]!.toLowerCase(), id: m[2]! };

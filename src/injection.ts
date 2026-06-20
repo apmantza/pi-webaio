@@ -35,7 +35,7 @@ export const INJECTION_PATTERNS: InjectionPattern[] = [
 		patterns: [
 			/ignore\s+(all\s+)?(prior|previous|above|all|any)\s+(instructions|directives|commands|prompts)/i,
 			/disregard\s+(all\s+)?(prior|previous|above)/i,
-			/new\s+(instructions|directives|commands|prompts)\s*[::]/i,
+			/new\s+(instructions|directives|commands|prompts)\s*[:]/i,
 			/you\s+(must|will|should|need\s+to)\s+(ignore|disregard|forget)/i,
 			/system\s*(instruction|prompt|message)\s*[:=]/i,
 		],

@@ -535,7 +535,7 @@ export async function runHtmlPipeline(
 	if (text.includes("http-equiv")) {
 		const redirectTarget = extractClientSideRedirect(text, finalUrl);
 		if (redirectTarget) {
-			return pullPage(redirectTarget, _opts, 1, undefined);
+			return pullPage(redirectTarget, _opts, 1);
 		}
 	}
 
@@ -649,7 +649,7 @@ export async function pullPage(
 		if (_redirectCount < MAX_CLIENT_REDIRECTS) {
 			const redirectTarget = extractClientSideRedirect(text, finalUrl);
 			if (redirectTarget) {
-				return pullPage(redirectTarget, opts, _redirectCount + 1, undefined);
+				return pullPage(redirectTarget, opts, _redirectCount + 1);
 			}
 		}
 
