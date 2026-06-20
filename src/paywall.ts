@@ -252,7 +252,7 @@ function detectTruncation(text: string): boolean {
 	// by a paywall curtain in the tail (sign in form, subscription
 	// cards, "you need a subscription" prompt, etc.).
 	if (
-		/(?:^|\n\n)\s*\S[^\n]{0,400}\.\.\.\s*\n+/.test(text.slice(-4000)) &&
+		/(?:^|\n\n)\s*\S[^.]{0,400}\.\.\.\s*\n+/.test(text.slice(-4000)) &&
 		(tail.includes("you need a subscription") ||
 			tail.includes("subscribe to access") ||
 			tail.includes("subscribe to read") ||
@@ -880,6 +880,8 @@ export async function bypassUrl(
 				}
 				break;
 			case "archive":
+				// falls through — archive and archive_first share the same logic;
+				// the difference is ordering in the strategy chain, not behavior
 			case "archive_first":
 				result = await tryArchiveOrgFetch(url, opts);
 				if (!result) result = await tryArchivePhFetch(url);
