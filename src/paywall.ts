@@ -252,7 +252,7 @@ function detectTruncation(text: string): boolean {
 	// by a paywall curtain in the tail (sign in form, subscription
 	// cards, "you need a subscription" prompt, etc.).
 	if (
-		/(?:^|\n\n)\s*\S[\s\S]{0,400}\.\.\.\s*\n+/.test(text.slice(-4000)) &&
+		/(?:^|\n\n)\s*\S[^\n]{0,400}\.\.\.\s*\n+/.test(text.slice(-4000)) &&
 		(tail.includes("you need a subscription") ||
 			tail.includes("subscribe to access") ||
 			tail.includes("subscribe to read") ||

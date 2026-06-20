@@ -114,7 +114,7 @@ export const INJECTION_PATTERNS: InjectionPattern[] = [
 	{
 		name: "injection-probe",
 		patterns: [
-			/(?:{+:+}|{+:+}|{[:|]}|input|user\s*(message|input))\s*[:=]\s*$/im,
+			/(?:{+:+}|{[:|]}|input|user\s*(message|input))\s*[:=]\s*$/im,
 			/<\s*script\s*>/i,
 			/on\w+\s*=\s*["']javascript:/i,
 		],

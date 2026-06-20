@@ -33,7 +33,7 @@ import { createFetchError } from "./tools/fetch-error.ts";
 // ─── Constants ─────────────────────────────────────────────────────
 
 export const MARKDOWN_SIGNAL =
-	/^(#{1,6}\s|[-*]\s|\d+\.\s|```|>\s|\[.+\]\(.+\))/m;
+	/^(#{1,6}\s|[-*]\s|\d+\.\s|```|>\s|\[[^\]]+\]\([^)]+\))/m;
 export const DEFUDDLE_TIMEOUT = 8000;
 export const MAX_PREVIEW_CHARS = 1800;
 export const MIN_USEFUL_CONTENT = 500;
