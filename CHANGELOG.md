@@ -6,6 +6,7 @@ All notable changes to pi-webaio will be documented in this file.
 
 ### Added
 
+- **MIT license file** — Added a repository-level `LICENSE` file and linked it from the README.
 - **Contributor guide for web integrations** — Added `CONTRIBUTING.md` with setup, PR checklist, and dedicated guidance for vertical extractors, search engines, anti-bot/paywall work, tests, and release notes.
 
 ### Changed

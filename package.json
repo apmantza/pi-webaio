@@ -43,6 +43,7 @@
     "README.md",
     "CHANGELOG.md",
     "CONTRIBUTING.md",
+    "LICENSE",
     "docs/",
     "tsconfig.json"
   ],

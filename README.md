@@ -54,4 +54,4 @@ checklists.
 
 ## License
 
-MIT
+pi-webaio is released under the [MIT License](LICENSE).
