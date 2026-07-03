@@ -13,15 +13,30 @@ import { join } from "node:path";
 
 // ─── Paths ───────────────────────────────────────────────────────────
 
-// Resolve relative to the pi-webaio package root
-// When this file is compiled/run as part of the extension, the CWD should
-// be the package root. We also try to resolve via import.meta if available.
-let PACKAGE_ROOT = "";
-try {
-	PACKAGE_ROOT = join(import.meta.dirname || "", "..");
-} catch {
-	PACKAGE_ROOT = process.cwd();
+// Resolve relative to the pi-webaio package root.
+// Source runs from src/google-ai.ts, while the published extension runs from
+// dist/src/google-ai.js. The CDP helpers are shipped at the package root
+// (bin/, extractors/), not under dist/, so probe both possible roots.
+function hasCdpAssets(root: string): boolean {
+	return (
+		existsSync(join(root, "bin", "launch.mjs")) &&
+		existsSync(join(root, "extractors", "google-search.mjs"))
+	);
 }
+
+function resolvePackageRoot(): string {
+	try {
+		const here = import.meta.dirname || "";
+		const candidates = [join(here, ".."), join(here, "..", "..")];
+		const found = candidates.find(hasCdpAssets);
+		if (found) return found;
+	} catch {
+		// Fall back below.
+	}
+	return process.cwd();
+}
+
+const PACKAGE_ROOT = resolvePackageRoot();
 
 function resolvePath(...segments: string[]): string {
 	return join(PACKAGE_ROOT, ...segments);
