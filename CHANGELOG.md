@@ -1,3 +1,30 @@
+# Changelog
+
+All notable changes to pi-webaio will be documented in this file.
+
+## [Unreleased]
+
+### Added
+
+### Changed
+
+### Fixed
+
+## [0.6.1] - 2026-07-03
+
+### Added
+
+- **CHANGELOG-driven GitHub release notes and backfill tooling** — Added shared changelog parser/extractor/release-promotion/backfill scripts plus package scripts, so release bodies can be generated from curated CHANGELOG sections and existing GitHub releases can be retroactively updated.
+
+### Changed
+
+- **Release workflow uses CHANGELOG as the release-notes source of truth** — Replaced generated GitHub release notes with `scripts/changelog-extract.mjs --summary` and `gh release create --notes-file`, matching the pi-lens release process.
+
+### Fixed
+
+- **Google results now appear in the registered `aio-websearch` extension** — The compiled `dist/src/google-ai.js` wrapper now resolves the package root before looking for `bin/` and `extractors/`, so CDP-backed Google search is available from the published/registered extension instead of only from TypeScript source.
+- **Static-analysis hardening after v0.6.0** — Tightened ReDoS-prone regexes, removed a duplicate prompt-injection probe alternative, simplified optional handling, and cleaned up SonarCloud/autoreview findings across fetch, paywall, cache, vertical, and browser helper code.
+
 ## [0.6.0] - 2026-06-19
 
 ### Added
