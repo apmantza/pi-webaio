@@ -17,9 +17,8 @@ import { extractSection, summarizeSection } from "./lib/changelog.mjs";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CHANGELOG_PATH = join(__dirname, "..", "CHANGELOG.md");
 
-function err(message) {
-  process.stderr.write(`${message}
-`);
+function logError(message) {
+  process.stderr.write(`${message}\n`);
 }
 
 function parseArgs(argv) {
@@ -41,18 +40,18 @@ function main() {
   try {
     parsed = parseArgs(process.argv.slice(2));
   } catch (err) {
-    err(String(err.message || err));
+    logError(String(err.message || err));
     process.exit(2);
   }
   const { version, out, summary } = parsed;
   if (!version) {
-    err("usage: changelog-extract.mjs <version> [--summary] [-o <file>]");
+    logError("usage: changelog-extract.mjs <version> [--summary] [-o <file>]");
     process.exit(2);
   }
   const text = readFileSync(CHANGELOG_PATH, "utf8");
   const full = extractSection(text, version);
   if (full === null || full.trim().length === 0) {
-    err(`No CHANGELOG section for version "${version}".`);
+    logError(`No CHANGELOG section for version "${version}".`);
     process.exit(1);
   }
   // The release body is a scannable summary (bold titles, grouped) — the full

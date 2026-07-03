@@ -42,6 +42,8 @@
     "package.json",
     "README.md",
     "CHANGELOG.md",
+    "CONTRIBUTING.md",
+    "docs/",
     "tsconfig.json"
   ],
   "scripts": {

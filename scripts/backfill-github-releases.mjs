@@ -35,9 +35,8 @@ function log(message = "") {
   process.stdout.write(`${message}\n`);
 }
 
-function err(message) {
-  process.stderr.write(`${message}
-`);
+function logError(message) {
+  process.stderr.write(`${message}\n`);
 }
 
 function parseArgs(argv) {
@@ -88,7 +87,7 @@ function main() {
   try {
     args = parseArgs(process.argv.slice(2));
   } catch (err) {
-    err(String(err.message || err));
+    logError(String(err.message || err));
     process.exit(2);
   }
   const changelog = readFileSync(CHANGELOG_PATH, "utf8");
@@ -97,8 +96,8 @@ function main() {
   try {
     tags = listReleases(args.repo);
   } catch (err) {
-    err("Failed to list releases via `gh`. Is it installed/authed?");
-    err(String(err.message || err));
+    logError("Failed to list releases via `gh`. Is it installed/authed?");
+    logError(String(err.message || err));
     process.exit(1);
   }
 
@@ -143,7 +142,7 @@ function main() {
       ok++;
       log(`  ok     ${p.tag}`);
     } catch (err) {
-      err(`  FAIL   ${p.tag}: ${String(err.message || err)}`);
+      logError(`  FAIL   ${p.tag}: ${String(err.message || err)}`);
     }
   }
   log(`\nUpdated ${ok}/${updates.length} release bodies.`);

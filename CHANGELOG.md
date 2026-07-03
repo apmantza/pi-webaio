@@ -6,7 +6,11 @@ All notable changes to pi-webaio will be documented in this file.
 
 ### Added
 
+- **Contributor guide for web integrations** — Added `CONTRIBUTING.md` with setup, PR checklist, and dedicated guidance for vertical extractors, search engines, anti-bot/paywall work, tests, and release notes.
+
 ### Changed
+
+- **README reorganized into a small landing page plus docs** — Moved the detailed feature, usage, tool, and architecture reference into `docs/` so the repository front page stays concise while preserving the full documentation.
 
 ### Fixed
 

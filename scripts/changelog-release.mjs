@@ -24,9 +24,8 @@ function log(message) {
   process.stdout.write(`${message}\n`);
 }
 
-function err(message) {
-  process.stderr.write(`${message}
-`);
+function logError(message) {
+  process.stderr.write(`${message}\n`);
 }
 
 function parseArgs(argv) {
@@ -60,14 +59,14 @@ function main() {
   try {
     args = parseArgs(process.argv.slice(2));
   } catch (err) {
-    err(String(err.message || err));
+    logError(String(err.message || err));
     process.exit(2);
   }
   const text = readFileSync(CHANGELOG_PATH, "utf8");
 
   if (args.check) {
     if (!unreleasedHasEntries(text)) {
-      err("`## [Unreleased]` has no entries to release.");
+      logError("`## [Unreleased]` has no entries to release.");
       process.exit(1);
     }
     log("[Unreleased] has entries — ready to release.");
@@ -78,7 +77,7 @@ function main() {
   try {
     version = args.version ?? readPackageVersion();
   } catch (err) {
-    err(String(err.message || err));
+    logError(String(err.message || err));
     process.exit(1);
   }
   const date = args.date ?? new Date().toISOString().slice(0, 10);
@@ -87,7 +86,7 @@ function main() {
   try {
     next = promoteUnreleased(text, version, date);
   } catch (err) {
-    err(String(err.message || err));
+    logError(String(err.message || err));
     process.exit(1);
   }
   writeFileSync(CHANGELOG_PATH, next, "utf8");
