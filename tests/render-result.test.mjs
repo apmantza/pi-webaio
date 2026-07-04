@@ -389,6 +389,20 @@ test("createResultComponent: browser/os profile is shown", () => {
 	assert.ok(text.includes("windows"));
 });
 
+test("createResultComponent: non-markdown format is shown", () => {
+	const theme = makeTheme();
+	const details = {
+		title: "x",
+		url: "https://x",
+		content: '{"ok":true}',
+		format: "json",
+	};
+	const comp = createResultComponent(details, false, theme);
+	const text = comp.render(80).join("\n");
+	assert.ok(text.includes("Format:"));
+	assert.ok(text.includes("json"));
+});
+
 // ─── createCallComponent ────────────────────────────────────────────────
 
 test("createCallComponent: shows tool name + URL", () => {

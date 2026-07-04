@@ -91,7 +91,7 @@ export type WebfetchDetails = {
 	mimeType?: string;
 
 	// ── Renderer-only fields ──
-	/** Body markdown for the preview/expanded view. */
+	/** Preview body for the rendered result view. Large full bodies stay in tool content/storage. */
 	content?: string;
 	/** Output format hint (controls Markdown highlighting). */
 	format?: "markdown" | "text" | "html" | "json" | "raw";
@@ -610,6 +610,9 @@ function buildResultMetadataLines(
 	}
 	if (details.outPath) {
 		rows.push(["Saved to", details.outPath]);
+	}
+	if (details.format && details.format !== "markdown") {
+		rows.push(["Format", details.format]);
 	}
 	if (details.packagePath) {
 		rows.push(["Package", details.packagePath]);

@@ -116,11 +116,7 @@ export function maybeChunkMarkdown(
 			overlapTokens: params.overlapTokens,
 		});
 		return result.length > 0 ? result : undefined;
-	} catch (err) {
-		// Log full error for debugging, but only a generic
-		// message reaches the user (defense in depth — don't
-		// leak stack traces or body fragments).
-		console.error(`[aio-webfetch] chunking failed:`, err);
+	} catch {
 		errors.push("chunking failed for this result");
 		return undefined;
 	}
@@ -915,7 +911,10 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 							status: "done",
 							progress: 1,
 							spinnerTick: details.spinnerTick,
-							content: (r as any).body ?? "",
+							// The TUI details payload is for rendering only. Keep it aligned
+							// with the agent-visible preview/summary instead of leaking the
+							// full in-memory body when the result is marked truncated.
+							content: displayContent,
 							format: itemFormat,
 							chunks,
 							items: details.items,
