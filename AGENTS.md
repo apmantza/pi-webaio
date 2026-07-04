@@ -438,8 +438,9 @@ The bypass flag is **opt-in** — a normal `aio-webfetch(url)` still gets the re
   - `prod-install-build` — simulates the actual pi install path (`npm install --omit=dev` → `prepare` → `build:dist` from source). Catches TS2688-style breakage when `@types/node` is absent.
   - `install-test` (ubuntu/windows/macos) — packs tarball, verifies `dist/` is present and no `.ts` leaked, installs from tarball (simulates `pi install npm:pi-webaio`), checks the compiled entry loads without missing-module errors.
 - **GitHub Releases** for version tags (`.github/workflows/release.yml`):
-  - Auto-creates `v{version}` tag on push to master
-  - Auto-creates GitHub release with CHANGELOG-driven notes (`scripts/changelog-extract.mjs --summary`)
+  - Triggers on push to master; reads version from `package.json`
+  - **Do NOT manually create or push tags** — the workflow creates them via `gh release create`. If the tag already exists, the workflow skips the release entirely.
+  - Creates GitHub release with CHANGELOG-driven notes (`scripts/changelog-extract.mjs --summary`)
   - `npm publish` if `NPM_TOKEN` secret is configured
   - Verifies CHANGELOG entry exists for the new version
   - Smoke-loads the compiled extension entry point before publishing
