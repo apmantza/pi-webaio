@@ -12,7 +12,10 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildDeterministicSummary } from "../src/tools/webfetch.ts";
+import {
+	buildCompactJsonPreview,
+	buildDeterministicSummary,
+} from "../src/tools/webfetch.ts";
 import { MAX_PREVIEW_CHARS } from "../src/content.ts";
 
 test("buildDeterministicSummary: returns empty string for empty input", () => {
@@ -107,4 +110,42 @@ test("buildDeterministicSummary: caps input to MAX_SUMMARY_INPUT_CHARS (regressi
 	// Output is dominated by the trailing dot + repeat; sanity check
 	// that we didn't OOM or hang. Length must be bounded by MAX_PREVIEW_CHARS.
 	assert.ok(out.length <= MAX_PREVIEW_CHARS);
+});
+
+// ─── Compact JSON previews ─────────────────────────────────────────
+
+test("buildCompactJsonPreview: summarizes fenced JSON markdown", () => {
+	const body = `---\ntitle: "runs"\n---\n\n[UNTRUSTED WEB CONTENT START]\n\`\`\`json\n{"total_count":3,"workflow_runs":[{"id":1},{"id":2},{"id":3}]}\n\`\`\`\n[UNTRUSTED WEB CONTENT END]`;
+	const out = buildCompactJsonPreview(body, {
+		outPath: "/tmp/runs.md",
+		responseId: "abc-123",
+	});
+	assert.ok(out, "should return a compact preview");
+	assert.ok(out.includes("JSON payload omitted from chat"));
+	assert.ok(out.includes("total_count"));
+	assert.ok(out.includes("workflow_runs: 3 items"));
+	assert.ok(out.includes("/tmp/runs.md"));
+	assert.ok(out.includes("abc-123"));
+	assert.ok(!out.includes('"id":1'), "should not dump item contents");
+});
+
+test("buildCompactJsonPreview: unwraps format=json result body", () => {
+	const body = JSON.stringify({
+		url: "https://api.example.test/runs",
+		title: "runs",
+		contentLength: 52,
+		rawHtmlLength: 0,
+		content:
+			'[UNTRUSTED WEB CONTENT START]\n```json\n{"total_count":1,"workflow_runs":[{"id":1}]}\n```\n[UNTRUSTED WEB CONTENT END]',
+	});
+	const out = buildCompactJsonPreview(body, { responseId: "json-1" });
+	assert.ok(out, "should return a compact preview");
+	assert.ok(out.includes("JSON object: 2 top-level keys"));
+	assert.ok(out.includes("workflow_runs: 1 item"));
+	assert.ok(out.includes("json-1"));
+	assert.ok(!out.includes("contentLength"));
+});
+
+test("buildCompactJsonPreview: returns null for non-JSON content", () => {
+	assert.equal(buildCompactJsonPreview("# Heading\n\nNot JSON"), null);
 });

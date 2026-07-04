@@ -97,6 +97,99 @@ export function buildDeterministicSummary(content: string): string {
 	return out.join("\n\n").slice(0, MAX_PREVIEW_CHARS);
 }
 
+function parseJsonCandidate(value: string): unknown | null {
+	try {
+		return JSON.parse(value);
+	} catch {
+		return null;
+	}
+}
+
+function extractJsonPayload(body: string): unknown | null {
+	let trimmed = body.trim();
+	const wrapper = parseJsonCandidate(trimmed);
+	if (
+		wrapper &&
+		typeof wrapper === "object" &&
+		!Array.isArray(wrapper) &&
+		"content" in wrapper &&
+		"contentLength" in wrapper &&
+		typeof (wrapper as { content?: unknown }).content === "string"
+	) {
+		trimmed = (wrapper as { content: string }).content.trim();
+	}
+
+	trimmed = trimmed.replace(/^---\n[\s\S]*?\n---\n/, "").trim();
+	trimmed = trimmed
+		.replace(/^\[UNTRUSTED WEB CONTENT START\]\n?/, "")
+		.replace(/\n?\[UNTRUSTED WEB CONTENT END\]$/, "")
+		.trim();
+
+	const fenced = trimmed.match(/^```json\s*\n([\s\S]*?)\n```\s*$/i);
+	if (fenced) return parseJsonCandidate(fenced[1]!.trim());
+	if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+		return parseJsonCandidate(trimmed);
+	}
+	return null;
+}
+
+function describeJsonPayload(payload: unknown): string[] {
+	if (Array.isArray(payload)) {
+		return [
+			`JSON array: ${payload.length} item${payload.length === 1 ? "" : "s"}`,
+		];
+	}
+	if (!payload || typeof payload !== "object") {
+		return [`JSON ${typeof payload}`];
+	}
+
+	const obj = payload as Record<string, unknown>;
+	const keys = Object.keys(obj);
+	const visibleKeys = keys.slice(0, 12);
+	const lines = [
+		`JSON object: ${keys.length} top-level key${keys.length === 1 ? "" : "s"}`,
+		`Keys: ${visibleKeys.join(", ")}${keys.length > visibleKeys.length ? ", …" : ""}`,
+	];
+
+	for (const key of keys.slice(0, 6)) {
+		const value = obj[key];
+		if (Array.isArray(value)) {
+			lines.push(
+				`- ${key}: ${value.length} item${value.length === 1 ? "" : "s"}`,
+			);
+		} else if (value && typeof value === "object") {
+			const nestedKeys = Object.keys(value as Record<string, unknown>);
+			lines.push(
+				`- ${key}: object (${nestedKeys.slice(0, 5).join(", ")}${nestedKeys.length > 5 ? ", …" : ""})`,
+			);
+		} else {
+			lines.push(`- ${key}: ${value === null ? "null" : typeof value}`);
+		}
+	}
+	return lines;
+}
+
+export function buildCompactJsonPreview(
+	body: string,
+	options: { outPath?: string; responseId?: string; length?: number } = {},
+): string | null {
+	const payload = extractJsonPayload(body);
+	if (payload === null) return null;
+
+	const length = options.length ?? body.length;
+	const lines = [
+		`JSON payload omitted from chat (${length} chars).`,
+		...describeJsonPayload(payload),
+	];
+	if (options.outPath) {
+		lines.push(`Full markdown saved to: ${options.outPath}`);
+	}
+	if (options.responseId) {
+		lines.push(`Full result ID: ${options.responseId}`);
+	}
+	return lines.join("\n");
+}
+
 /**
  * Compute RAG chunks for a single markdown result, if requested.
  * Returns undefined if chunks are not requested, the body is
@@ -634,7 +727,6 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 							// tool, or for JSON consumers that need a structured
 							// object).
 							let outPath: string | undefined;
-							let responseId: string | undefined;
 							if (formatted.savedToDisk) {
 								outPath = resolve(outFile);
 								await mkdir(dirname(outPath), { recursive: true });
@@ -652,16 +744,20 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 										wordCount: result.wordCount,
 									},
 								);
-								responseId = await storeResult(
-									result.url!,
-									formatted.body,
-									"webfetch",
-									{
-										title: result.title || url.pathname,
-										ttlSeconds: params.cacheTtlSeconds,
-									},
-								);
 							}
+							const responseId = await storeResult(
+								result.url!,
+								formatted.body,
+								"webfetch",
+								{
+									title: result.title || url.pathname,
+									ttlSeconds: params.cacheTtlSeconds,
+									meta: {
+										format: formatted.format,
+										savedToDisk: formatted.savedToDisk,
+									},
+								},
+							);
 
 							return {
 								ok: true,
@@ -837,29 +933,43 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 						}
 					}
 
+					const itemFormat = (r as any).format ?? "markdown";
+					const responseId = (r as any).responseId as string | undefined;
 					let summaryNotice: string;
 					let displayContent: string;
 
-					if (summarized && summary) {
+					const compactJsonPreview = !summarized
+						? buildCompactJsonPreview(preview, {
+								outPath: r.outPath,
+								responseId,
+								length: preview.length,
+							})
+						: null;
+
+					if (compactJsonPreview && !isShort) {
+						summaryNotice = "";
+						displayContent = compactJsonPreview;
+					} else if (summarized && summary) {
 						summaryNotice = r.outPath
 							? `\n[AI-summarized by Google AI. Full content (${preview.length} chars) saved to ${r.outPath}. Use the read tool for full text.]`
-							: `\n[AI-summarized by Google AI. Full content (${preview.length} chars, in-memory only).]`;
+							: `\n[AI-summarized by Google AI. Full content (${preview.length} chars, result ID ${responseId ?? "unavailable"}).]`;
 						displayContent = summary;
 					} else if (isShort) {
 						summaryNotice = "";
 						displayContent = preview;
 					} else {
-						summaryNotice = `\n[Preview truncated: ${preview.length} chars total, ${MAX_PREVIEW_CHARS} chars shown. Use the read tool for full content.]`;
+						summaryNotice = r.outPath
+							? `\n[Preview truncated: ${preview.length} chars total, ${MAX_PREVIEW_CHARS} chars shown. Use the read tool for full content.]`
+							: `\n[Preview truncated: ${preview.length} chars total, ${MAX_PREVIEW_CHARS} chars shown. Full result ID: ${responseId ?? "unavailable"}.]`;
 						displayContent = preview.slice(0, MAX_PREVIEW_CHARS);
 					}
 
-					// For non-markdown formats, the content is in `body` but
-					// was not saved to disk. Show a different header.
-					const itemFormat = (r as any).format ?? "markdown";
+					// For non-markdown formats, the content is in the response-id cache
+					// rather than written as a markdown file. Show a different header.
 					const formatLabel =
 						itemFormat === "markdown"
 							? `✓ Fetched and saved to ${r.outPath}${summaryNotice}`
-							: `✓ Fetched as ${itemFormat} (${preview.length} chars, in-memory only)${summaryNotice}`;
+							: `✓ Fetched as ${itemFormat} (${preview.length} chars, result ID ${responseId ?? "unavailable"})${summaryNotice}`;
 
 					// Compute RAG chunks if requested. Only meaningful for
 					// format: markdown (other formats are in-memory; caller
@@ -878,7 +988,7 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 						`\nTitle: ${r.title}`,
 						`URL: ${r.url}`,
 						`Format: ${itemFormat}`,
-						`Response ID: ${(r as any).responseId}`,
+						`Response ID: ${responseId}`,
 						chunkFmt.header ? `\n${chunkFmt.header}` : "",
 						"\n---\n",
 						displayContent,
@@ -900,7 +1010,7 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 							outPath: r.outPath,
 							title: r.title,
 							url: r.url,
-							responseId: (r as any).responseId,
+							responseId,
 							browser,
 							os,
 							proxy,
