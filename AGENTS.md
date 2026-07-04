@@ -4,7 +4,7 @@
 
 pi-webaio is an **all-in-one web tools extension** for [pi](https://pi.dev) (the coding agent) that provides search, fetch, crawl, extraction, discovery, storage, compilation, RAG chunking, phase-aware error handling, TUI rendering, and (v0.4.1+) opt-in paywall bypass capabilities via 6 tools: `aio-websearch`, `aio-webfetch`, `aio-webcontent`, `aio-webpull`, `aio-webmap`, and `aio-webresult`. It's published as `npm:pi-webaio` and installable via `pi install npm:pi-webaio`.
 
-**Current version: 0.6.0** — GitHub repo mapping for `aio-webmap`, GitHub security alert handler (Dependabot / code-scanning / secret-scanning via REST API), Reddit network-block detection, vertical `ok:false` propagation, Node 24 `--experimental-strip-types` test runner (36× faster), `@earendil-works/pi-coding-agent ^0.79.0` (closes 6 of 9 Dependabot alerts).
+**Current version: 0.6.2** — Query-aware BM25 content pruning, TLS fingerprint regression diagnostics, CHANGELOG-driven release workflow.
 
 ## Architecture
 
@@ -29,7 +29,8 @@ pi-webaio/
 │   ├── html-compress.ts      ← HTML noise attribute stripping
 │   ├── injection.ts          ← Prompt injection detection + action (warn/redact/block)
 │   ├── interactive-elements.ts ← Extract buttons/links/forms as numbered refs
-│   ├── prune-markdown.ts     ← Score-based markdown pruning to token budget
+│   ├── bm25.ts               ← Okapi BM25 scoring with IDF caching and stop-word filtering
+│   ├── prune-markdown.ts     ← Score-based markdown pruning to token budget (query-aware BM25 in v0.6.2)
 │   ├── security.ts           ← SSRF guard (isDangerousUrl) + secret scanner
 │   ├── session-store.ts      ← Content cache + search context store (disk-backed)
 │   ├── token-count.ts        ← CJK-aware token estimation
@@ -313,6 +314,18 @@ The bypass flag is **opt-in** — a normal `aio-webfetch(url)` still gets the re
 
 ## Recent Changes
 
+### v0.6.2 — BM25 pruning, fingerprint diagnostics, CHANGELOG-driven releases
+
+**Query-aware BM25 pruning** (`src/bm25.ts`, ~150 LOC) — New `query` parameter on `aio-webfetch` enables relevance-based content pruning via Okapi BM25 scoring. When `query` is provided alongside `prune`, sections are scored against the query, ranked by relevance, and the most relevant sections are selected first up to the token budget. Includes IDF caching, stop-word filtering, markdown stripping, and `combineScores`/`bm25Weight` tuning options. 21 unit tests in `tests/prune-markdown.test.mjs`.
+
+**TLS fingerprint regression diagnostics** (`tests/fingerprint.test.mjs`, `scripts/fingerprint-diagnostics.mjs`) — 10 offline tests locking down profile defaults, header shapes per browser/OS, and fallback behavior. Opt-in live diagnostics via `npm run diagnose:fingerprint -- --target tls|sannysoft|creepjs` with optional Playwright-based browser fingerprint pages. Exported `applyStealth()` from `src/fetch.ts` for consistent stealth patch validation.
+
+**CHANGELOG-driven release workflow** — Release workflow now uses `scripts/changelog-extract.mjs --summary` to extract curated release notes from `CHANGELOG.md` instead of auto-generated GitHub notes. New `scripts/changelog-release.mjs` promotes `[Unreleased]` sections to dated version sections. `scripts/backfill-github-releases.mjs` retroactively updates existing GitHub releases with CHANGELOG content.
+
+**`smartFetch` hardening** — Returns `null` instead of throwing on invalid URLs. Large JSON previews compacted to summary snippets. Full truncated content no longer leaks into TUI result view.
+
+**Test count**: 484 → 574 (16 suites, all green locally and in CI).
+
 ### v0.5.0 — TUI renderer, phase-aware FetchError, format param, hardening, precompiled dist, CI
 
 **TUI result rendering** (411 LOC in `src/tools/render-result.ts`) — All 6 tools now have polished `renderCall` / `renderResult` TUI components. Call view shows tool name + URL(s). Progress view shows per-item status, spinner, elapsed time, and download progress. Result view shows expanded preview with responseId, format, browser/os profile, package path, chunk count, and error details. Phase + category badge for errors. Real-time progress bar wired to `smartFetch` via `readResponseTextWithProgress`.
@@ -393,11 +406,16 @@ The bypass flag is **opt-in** — a normal `aio-webfetch(url)` still gets the re
 - `npm run test:fetcherror` → runs FetchError system tests (50 tests)
 - `npm run test:fetchprogress` → runs streaming body tests (6 tests)
 - `npm run test:hardening` → runs security hardening tests (16 tests)
+- `npm run test:fingerprint` → runs fingerprint/profile regression tests (10 tests)
 - `npm run test:format` → runs format parameter tests (18 tests)
 - `npm run test:webfetch-summary` → runs summary builder tests (10 tests)
 - `npm run test:chunker` → runs RAG chunking tests (31 tests)
+- `npm run test:prune` → runs query-aware BM25 pruning tests (21 tests)
+- `npm run test:github-map` → runs GitHub repo mapping tests (50 tests)
+- `npm run test:reddit` → runs Reddit block detection tests (7 tests)
 - `npm run test:integration` → runs integration tests
-- `npm run test:all` → runs all 11 suites (~480 tests total)
+- `npm run test:all` → runs all 16 suites (~570 tests total)
+- `npm run diagnose:fingerprint` → opt-in live TLS/SannySoft/CreepJS diagnostics
 - `npm run check:lockfile` → fails if package-lock.json drifts from package.json
 - `npm run build` → compiles TypeScript to `dist/`
 - `npm run lint` → runs `tsc --noEmit` as type-check
@@ -421,8 +439,9 @@ The bypass flag is **opt-in** — a normal `aio-webfetch(url)` still gets the re
   - `install-test` (ubuntu/windows/macos) — packs tarball, verifies `dist/` is present and no `.ts` leaked, installs from tarball (simulates `pi install npm:pi-webaio`), checks the compiled entry loads without missing-module errors.
 - **GitHub Releases** for version tags (`.github/workflows/release.yml`):
   - Auto-creates `v{version}` tag on push to master
-  - Auto-creates GitHub release with auto-generated notes
+  - Auto-creates GitHub release with CHANGELOG-driven notes (`scripts/changelog-extract.mjs --summary`)
   - `npm publish` if `NPM_TOKEN` secret is configured
   - Verifies CHANGELOG entry exists for the new version
+  - Smoke-loads the compiled extension entry point before publishing
 - **Default GitHub CodeQL** scanning for security alerts
 - **NPM_TOKEN** secret optional — without it, releases still create GitHub releases but skip npm publish

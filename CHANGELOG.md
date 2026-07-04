@@ -6,14 +6,28 @@ All notable changes to pi-webaio will be documented in this file.
 
 ### Added
 
+### Changed
+
+### Fixed
+
+## [0.6.2] - 2026-07-04
+
+### Added
+
+- **Query-aware BM25 content pruning** (`src/bm25.ts`, `src/prune-markdown.ts`) — New `query` parameter on `aio-webfetch` enables relevance-based pruning via Okapi BM25 scoring. When `query` is provided alongside `prune`, sections are scored against the query, ranked by relevance, and the most relevant sections are selected first up to the token budget. Includes BM25 with IDF caching, stop-word filtering, markdown stripping, and `combineScores`/`bm25Weight` tuning options. 21 unit tests in `tests/prune-markdown.test.mjs`.
+- **TLS fingerprint regression diagnostics** (`tests/fingerprint.test.mjs`, `scripts/fingerprint-diagnostics.mjs`) — 10 offline tests locking down profile defaults, header shapes per browser/OS, and fallback behavior. Opt-in live diagnostics via `npm run diagnose:fingerprint -- --target tls|sannysoft|creepjs` with optional Playwright-based browser fingerprint pages. Exported `applyStealth()` for consistent stealth patch validation.
 - **MIT license file** — Added a repository-level `LICENSE` file and linked it from the README.
 - **Contributor guide for web integrations** — Added `CONTRIBUTING.md` with setup, PR checklist, and dedicated guidance for vertical extractors, search engines, anti-bot/paywall work, tests, and release notes.
 
 ### Changed
 
 - **README reorganized into a small landing page plus docs** — Moved the detailed feature, usage, tool, and architecture reference into `docs/` so the repository front page stays concise while preserving the full documentation.
+- **`smartFetch` returns null on invalid URLs** — Previously threw an unhandled `TypeError` from `new URL()` on malformed input. Now returns `null` so callers can classify it via `FetchError`.
 
 ### Fixed
+
+- **Large JSON preview truncation in `aio-webfetch`** — JSON responses larger than 30KB now compact to a summary snippet instead of leaking a massive truncated preview into the tool output.
+- **Full truncated content leak in `aio-webfetch`** — Raw full-text preview no longer bleeds into the TUI result view.
 
 ## [0.6.1] - 2026-07-03
 
