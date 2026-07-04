@@ -102,7 +102,9 @@ async function runTls(outDir) {
 	await writeJson(join(outDir, "tls.summary.json"), summary);
 	await writeJson(join(outDir, "tls.raw.json"), payload);
 	process.stdout.write(`[tls] ${summary.userAgent ?? "unknown UA"}\n`);
-	process.stdout.write(`[tls] ja3=${summary.ja3Hash ?? summary.ja3 ?? "n/a"}\n`);
+	process.stdout.write(
+		`[tls] ja3=${summary.ja3Hash ?? summary.ja3 ?? "n/a"}\n`,
+	);
 	process.stdout.write(`[tls] ja4=${summary.ja4 ?? "n/a"}\n`);
 }
 
@@ -162,7 +164,9 @@ async function runBrowserTarget(name, url, outDir, opts) {
 		await writeFile(join(outDir, `${name}.png`), screenshot);
 
 		process.stdout.write(`[${name}] title=${diagnostics.title}\n`);
-		process.stdout.write(`[${name}] webdriver=${String(diagnostics.webdriver)}\n`);
+		process.stdout.write(
+			`[${name}] webdriver=${String(diagnostics.webdriver)}\n`,
+		);
 		process.stdout.write(`[${name}] userAgent=${diagnostics.userAgent}\n`);
 	} finally {
 		await browser.close().catch(() => {});

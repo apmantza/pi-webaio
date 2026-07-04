@@ -94,27 +94,25 @@ test("smartFetch returns null instead of throwing on invalid URL", async () => {
 // Optional live TLS diagnostic test
 // ─────────────────────────────────────────────────────────────────────
 
-test(
-	"live TLS fingerprint endpoint returns profile metadata (opt-in)",
-	{ skip: process.env.PI_WEBAIO_LIVE_TLS_TEST !== "1" },
-	async () => {
-		const profile = getLatestChromeProfile();
-		const result = await smartFetch("https://tls.peet.ws/api/all", {
-			browser: profile,
-			os: DEFAULT_OS,
-		});
-		assert.ok(result, "expected live TLS endpoint response");
-		assert.equal(result.status, 200);
+test("live TLS fingerprint endpoint returns profile metadata (opt-in)", {
+	skip: process.env.PI_WEBAIO_LIVE_TLS_TEST !== "1",
+}, async () => {
+	const profile = getLatestChromeProfile();
+	const result = await smartFetch("https://tls.peet.ws/api/all", {
+		browser: profile,
+		os: DEFAULT_OS,
+	});
+	assert.ok(result, "expected live TLS endpoint response");
+	assert.equal(result.status, 200);
 
-		let payload;
-		try {
-			payload = JSON.parse(result.text);
-		} catch (err) {
-			assert.fail(`expected JSON payload from TLS endpoint: ${String(err)}`);
-		}
-		assert.equal(typeof payload.user_agent, "string");
-		assert.ok(payload.tls, "expected tls object");
-		assert.equal(typeof payload.tls.ja3, "string");
-		assert.equal(typeof payload.tls.ja4, "string");
-	},
-);
+	let payload;
+	try {
+		payload = JSON.parse(result.text);
+	} catch (err) {
+		assert.fail(`expected JSON payload from TLS endpoint: ${String(err)}`);
+	}
+	assert.equal(typeof payload.user_agent, "string");
+	assert.ok(payload.tls, "expected tls object");
+	assert.equal(typeof payload.tls.ja3, "string");
+	assert.equal(typeof payload.tls.ja4, "string");
+});
