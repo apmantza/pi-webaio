@@ -3,8 +3,14 @@
 // most important sections: headings, first paragraphs, and key content.
 // Inspired by Retio-pagemap's rule-based pruner but operating on
 // markdown text instead of HTML chunks.
+//
+// When a `query` parameter is provided, sections are scored by BM25
+// relevance to the query instead of generic importance heuristics.
+// This produces query-aware "fit markdown" — only the most relevant
+// sections survive the budget.
 
 import { estimateTokens } from "./token-count.ts";
+import { createBM25Scorer } from "./bm25.ts";
 
 /** Default target token budget. */
 const DEFAULT_PRUNE_TOKENS = 3000;
@@ -71,7 +77,7 @@ function splitSections(markdown: string): Array<{
 }
 
 /**
- * Score a section for importance.
+ * Score a section for importance (heuristic, non-query path).
  * Higher score = more likely to be kept.
  *
  * Heuristics:
@@ -144,25 +150,69 @@ function scoreSection(
 }
 
 /**
+ * Options for pruneMarkdown.
+ */
+export interface PruneOptions {
+	/** Target token budget (default 3000). */
+	maxTokens?: number;
+	/**
+	 * Optional query for BM25 relevance scoring.
+	 * When provided, sections are scored by relevance to this query
+	 * instead of generic importance heuristics.
+	 */
+	query?: string;
+	/**
+	 * When true and a query is provided, combine BM25 relevance score
+	 * with the heuristic importance score (weighted average).
+	 * Default: false (BM25 replaces heuristic scoring entirely).
+	 */
+	combineScores?: boolean;
+	/**
+	 * Weight for BM25 score when combineScores is true (0-1).
+	 * Default: 0.7 (70% BM25, 30% heuristic).
+	 */
+	bm25Weight?: number;
+}
+
+/**
  * Prune markdown content to fit within a token budget.
+ *
+ * When `query` is provided, sections are scored by BM25 relevance to
+ * the query, producing query-aware "fit markdown" — only the most
+ * relevant sections survive the budget.
  *
  * Algorithm:
  * 1. Split into sections by headings
- * 2. Score each section for importance
- * 3. Keep sections in order (top-to-bottom) until budget is exceeded
- * 4. If a section can fit partially, truncate it
+ * 2. Score each section (heuristic or BM25-based)
+ * 3. If query is provided, consider higher-relevance sections first;
+ *    otherwise preserve top-to-bottom order
+ * 4. Keep selected sections within budget
+ * 5. Reconstruct selected sections in original document order
  *
  * Returns the pruned markdown string.
  */
 export function pruneMarkdown(
 	markdown: string,
-	maxTokens: number = DEFAULT_PRUNE_TOKENS,
+	maxTokensOrOptions: number | PruneOptions = DEFAULT_PRUNE_TOKENS,
 ): {
 	content: string;
 	originalTokens: number;
 	prunedTokens: number;
 	truncated: boolean;
+	/** Per-section relevance scores (only when query is provided). */
+	scores?: Array<{ heading: string; score: number }>;
 } {
+	// Normalize arguments
+	const options: PruneOptions =
+		typeof maxTokensOrOptions === "number"
+			? { maxTokens: maxTokensOrOptions }
+			: maxTokensOrOptions;
+
+	const maxTokens = options.maxTokens ?? DEFAULT_PRUNE_TOKENS;
+	const query = options.query;
+	const combineScores = options.combineScores ?? false;
+	const bm25Weight = options.bm25Weight ?? 0.7;
+
 	const originalTokens = estimateTokens(markdown);
 
 	// If already under budget, return as-is
@@ -188,19 +238,55 @@ export function pruneMarkdown(
 		};
 	}
 
-	// Score all sections
-	const scored = sections.map((s, i) => ({
-		...s,
-		score: scoreSection(s, i, sections.length),
-		index: i,
-	}));
+	// Score all sections. For BM25, score the whole collection at once so
+	// IDF reflects this page's section distribution instead of a single section.
+	const bm25Scores = query
+		? createBM25Scorer(query).scoreAll(
+				sections.map((s) => `${s.heading}\n${s.content}`),
+			)
+		: [];
 
-	// Sort by index (preserve top-to-bottom order), then greedily fill budget
-	scored.sort((a, b) => a.index - b.index);
+	const scored = sections.map((s, i) => {
+		let score: number;
+
+		if (query) {
+			const bm25Score = bm25Scores[i] ?? 0;
+
+			if (combineScores) {
+				// Blend BM25 with heuristic importance
+				const heuristicScore = scoreSection(s, i, sections.length);
+				score = bm25Score * bm25Weight + heuristicScore * (1 - bm25Weight);
+			} else {
+				// BM25 replaces heuristic entirely
+				score = bm25Score;
+			}
+		} else {
+			// Heuristic importance path (original behavior)
+			score = scoreSection(s, i, sections.length);
+		}
+
+		return {
+			...s,
+			score,
+			index: i,
+		};
+	});
+
+	// When a query is provided, sort by BM25 score descending so the most
+	// relevant sections are considered first. Then re-sort by index for output
+	// so the final markdown preserves document order.
+	if (query) {
+		scored.sort((a, b) => b.score - a.score);
+	}
 
 	const kept: typeof scored = [];
 	let currentTokens = 0;
-	const budgetForContent = maxTokens - 80; // reserve for header/footer
+	// Reserve up to 80 tokens for the truncation notice, but do not consume
+	// most of very small budgets used by tests or callers.
+	const budgetForContent = Math.max(
+		1,
+		maxTokens - Math.min(80, Math.floor(maxTokens * 0.1)),
+	);
 
 	for (const section of scored) {
 		const sectionTokens = estimateTokens(section.content);
@@ -224,6 +310,11 @@ export function pruneMarkdown(
 		} else {
 			break;
 		}
+	}
+
+	// Re-sort kept sections by original document order for output
+	if (query) {
+		kept.sort((a, b) => a.index - b.index);
 	}
 
 	// Reconstruct markdown from kept sections
@@ -251,12 +342,44 @@ export function pruneMarkdown(
 	}
 
 	const prunedTokens = estimateTokens(result);
+
+	// Build per-section scores for the return value (only when query is provided)
+	const scores = query
+		? [...scored]
+				.sort((a, b) => a.index - b.index)
+				.map((s) => ({
+					heading: s.heading || "(no heading)",
+					score: Math.round(s.score * 1000) / 1000,
+				}))
+		: undefined;
+
 	return {
 		content: result,
 		originalTokens,
 		prunedTokens,
 		truncated: prunedTokens < originalTokens,
+		scores,
 	};
+}
+
+/**
+ * Convenience wrapper: prune markdown by relevance to a query.
+ * Equivalent to pruneMarkdown(md, { maxTokens, query }).
+ */
+export function pruneByRelevance(
+	markdown: string,
+	query: string,
+	maxTokens: number = DEFAULT_PRUNE_TOKENS,
+): {
+	content: string;
+	originalTokens: number;
+	prunedTokens: number;
+	truncated: boolean;
+	scores: Array<{ heading: string; score: number }>;
+} {
+	return pruneMarkdown(markdown, { maxTokens, query }) as ReturnType<
+		typeof pruneByRelevance
+	>;
 }
 
 /**

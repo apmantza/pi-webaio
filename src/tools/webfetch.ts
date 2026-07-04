@@ -222,7 +222,7 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 		description:
 			"Fetch a single URL (or batch of URLs) and convert to markdown with anti-bot TLS fingerprinting. Detects PDFs, GitHub repos, and Next.js RSC. Long content is automatically summarized via Gemini AI; full content always saved to file.",
 		promptSnippet:
-			"aio-webfetch(url|urls, mode?, browser?, os?, proxy?, prune?, interactive?, bypass?, bypassStrategies?, compile?, out?, cacheTtlSeconds?, start_index?, max_length?, format?): fetch URL(s) with anti-bot TLS fingerprinting, defuddle extraction, and optional AI summary. Default `format=markdown` saves to disk; pass `format=html|text|json|raw` for an in-memory body. Use the read tool on the saved path for full text.",
+			"aio-webfetch(url|urls, mode?, browser?, os?, proxy?, prune?, query?, interactive?, bypass?, bypassStrategies?, compile?, out?, cacheTtlSeconds?, start_index?, max_length?, format?): fetch URL(s) with anti-bot TLS fingerprinting, defuddle extraction, and optional AI summary. Default `format=markdown` saves to disk; pass `format=html|text|json|raw` for an in-memory body. Use the read tool on the saved path for full text.",
 		promptGuidelines: [
 			"Use aio-webfetch when the user wants to retrieve specific webpage(s), article(s), or file(s).",
 			"Use aio-webpull when the user wants to download an entire site or docs collection.",
@@ -281,6 +281,12 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 			prune: Type.Optional(
 				Type.Number({
 					description: "Prune markdown to token budget (e.g. 3000).",
+				}),
+			),
+			query: Type.Optional(
+				Type.String({
+					description:
+						"Optional relevance query used with prune. When set, pruning keeps sections most relevant to this query using BM25 scoring.",
 				}),
 			),
 			interactive: Type.Optional(
@@ -604,6 +610,7 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 							const mode = (params.mode as ScrapeMode) ?? "auto";
 							const interactive = params.interactive === true;
 							const pruneTokens = params.prune as number | undefined;
+							const pruneQuery = params.query as string | undefined;
 							const startIndex = params.start_index as number | undefined;
 							const maxLength = params.max_length as number | undefined;
 							const bypass = params.bypass === true;
@@ -699,7 +706,10 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 							const tokenCount = estimateTokens(contentBody);
 
 							if (pruneTokens && pruneTokens > 0 && tokenCount > pruneTokens) {
-								const pruned = pruneMarkdown(contentBody, pruneTokens);
+								const pruned = pruneMarkdown(contentBody, {
+									maxTokens: pruneTokens,
+									query: pruneQuery,
+								});
 								contentBody = pruned.content;
 							}
 
