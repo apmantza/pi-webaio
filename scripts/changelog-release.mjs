@@ -21,76 +21,76 @@ const CHANGELOG_PATH = join(__dirname, "..", "CHANGELOG.md");
 const PKG_PATH = join(__dirname, "..", "package.json");
 
 function log(message) {
-  process.stdout.write(`${message}\n`);
+	process.stdout.write(`${message}\n`);
 }
 
 function logError(message) {
-  process.stderr.write(`${message}\n`);
+	process.stderr.write(`${message}\n`);
 }
 
 function parseArgs(argv) {
-  const args = { version: undefined, date: undefined, check: false };
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
-    if (a === "--check") args.check = true;
-    else if (a === "--date") {
-      const value = argv[++i];
-      if (!value) throw new Error("--date requires a value.");
-      args.date = value;
-    } else if (!args.version) args.version = a;
-  }
-  return args;
+	const args = { version: undefined, date: undefined, check: false };
+	for (let i = 0; i < argv.length; i++) {
+		const a = argv[i];
+		if (a === "--check") args.check = true;
+		else if (a === "--date") {
+			const value = argv[++i];
+			if (!value) throw new Error("--date requires a value.");
+			args.date = value;
+		} else if (!args.version) args.version = a;
+	}
+	return args;
 }
 
 function readPackageVersion() {
-  try {
-    const pkg = JSON.parse(readFileSync(PKG_PATH, "utf8"));
-    if (typeof pkg.version === "string" && pkg.version.trim()) {
-      return pkg.version;
-    }
-  } catch (err) {
-    throw new Error(`Could not read package.json version: ${err.message}`);
-  }
-  throw new Error("package.json does not contain a string version.");
+	try {
+		const pkg = JSON.parse(readFileSync(PKG_PATH, "utf8"));
+		if (typeof pkg.version === "string" && pkg.version.trim()) {
+			return pkg.version;
+		}
+	} catch (err) {
+		throw new Error(`Could not read package.json version: ${err.message}`);
+	}
+	throw new Error("package.json does not contain a string version.");
 }
 
 function main() {
-  let args;
-  try {
-    args = parseArgs(process.argv.slice(2));
-  } catch (err) {
-    logError(String(err.message || err));
-    process.exit(2);
-  }
-  const text = readFileSync(CHANGELOG_PATH, "utf8");
+	let args;
+	try {
+		args = parseArgs(process.argv.slice(2));
+	} catch (err) {
+		logError(String(err.message || err));
+		process.exit(2);
+	}
+	const text = readFileSync(CHANGELOG_PATH, "utf8");
 
-  if (args.check) {
-    if (!unreleasedHasEntries(text)) {
-      logError("`## [Unreleased]` has no entries to release.");
-      process.exit(1);
-    }
-    log("[Unreleased] has entries — ready to release.");
-    return;
-  }
+	if (args.check) {
+		if (!unreleasedHasEntries(text)) {
+			logError("`## [Unreleased]` has no entries to release.");
+			process.exit(1);
+		}
+		log("[Unreleased] has entries — ready to release.");
+		return;
+	}
 
-  let version;
-  try {
-    version = args.version ?? readPackageVersion();
-  } catch (err) {
-    logError(String(err.message || err));
-    process.exit(1);
-  }
-  const date = args.date ?? new Date().toISOString().slice(0, 10);
+	let version;
+	try {
+		version = args.version ?? readPackageVersion();
+	} catch (err) {
+		logError(String(err.message || err));
+		process.exit(1);
+	}
+	const date = args.date ?? new Date().toISOString().slice(0, 10);
 
-  let next;
-  try {
-    next = promoteUnreleased(text, version, date);
-  } catch (err) {
-    logError(String(err.message || err));
-    process.exit(1);
-  }
-  writeFileSync(CHANGELOG_PATH, next, "utf8");
-  log(`Promoted [Unreleased] -> [${version}] - ${date}.`);
+	let next;
+	try {
+		next = promoteUnreleased(text, version, date);
+	} catch (err) {
+		logError(String(err.message || err));
+		process.exit(1);
+	}
+	writeFileSync(CHANGELOG_PATH, next, "utf8");
+	log(`Promoted [Unreleased] -> [${version}] - ${date}.`);
 }
 
 main();

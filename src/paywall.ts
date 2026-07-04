@@ -880,8 +880,8 @@ export async function bypassUrl(
 				}
 				break;
 			case "archive":
-				// falls through — archive and archive_first share the same logic;
-				// the difference is ordering in the strategy chain, not behavior
+			// falls through — archive and archive_first share the same logic;
+			// the difference is ordering in the strategy chain, not behavior
 			case "archive_first":
 				result = await tryArchiveOrgFetch(url, opts);
 				if (!result) result = await tryArchivePhFetch(url);

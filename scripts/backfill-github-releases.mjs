@@ -23,129 +23,129 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import {
-  extractSection,
-  summarizeSection,
-  normalizeVersion,
+	extractSection,
+	summarizeSection,
+	normalizeVersion,
 } from "./lib/changelog.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CHANGELOG_PATH = join(__dirname, "..", "CHANGELOG.md");
 
 function log(message = "") {
-  process.stdout.write(`${message}\n`);
+	process.stdout.write(`${message}\n`);
 }
 
 function logError(message) {
-  process.stderr.write(`${message}\n`);
+	process.stderr.write(`${message}\n`);
 }
 
 function parseArgs(argv) {
-  const args = { apply: false, full: false, repo: undefined, only: undefined };
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
-    if (a === "--apply") args.apply = true;
-    else if (a === "--full") args.full = true;
-    else if (a === "--repo") {
-      const value = argv[++i];
-      if (!value) throw new Error("--repo requires a value.");
-      args.repo = value;
-    } else if (a === "--only") {
-      const value = argv[++i];
-      if (!value) throw new Error("--only requires a comma-separated list.");
-      args.only = new Set(
-        value.split(",").map((s) => normalizeVersion(s.trim())),
-      );
-    }
-  }
-  return args;
+	const args = { apply: false, full: false, repo: undefined, only: undefined };
+	for (let i = 0; i < argv.length; i++) {
+		const a = argv[i];
+		if (a === "--apply") args.apply = true;
+		else if (a === "--full") args.full = true;
+		else if (a === "--repo") {
+			const value = argv[++i];
+			if (!value) throw new Error("--repo requires a value.");
+			args.repo = value;
+		} else if (a === "--only") {
+			const value = argv[++i];
+			if (!value) throw new Error("--only requires a comma-separated list.");
+			args.only = new Set(
+				value.split(",").map((s) => normalizeVersion(s.trim())),
+			);
+		}
+	}
+	return args;
 }
 
 function gh(args) {
-  return execFileSync("gh", args, { encoding: "utf8" });
+	return execFileSync("gh", args, { encoding: "utf8" });
 }
 
 function listReleases(repo) {
-  const args = ["release", "list", "--limit", "200", "--json", "tagName"];
-  if (repo) args.push("--repo", repo);
-  const raw = gh(args);
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (err) {
-    throw new Error(`Invalid JSON from gh release list: ${err.message}`);
-  }
-  if (!Array.isArray(parsed)) {
-    throw new Error("Invalid gh release list payload: expected an array.");
-  }
-  return parsed
-    .map((r) => (typeof r?.tagName === "string" ? r.tagName : null))
-    .filter(Boolean);
+	const args = ["release", "list", "--limit", "200", "--json", "tagName"];
+	if (repo) args.push("--repo", repo);
+	const raw = gh(args);
+	let parsed;
+	try {
+		parsed = JSON.parse(raw);
+	} catch (err) {
+		throw new Error(`Invalid JSON from gh release list: ${err.message}`);
+	}
+	if (!Array.isArray(parsed)) {
+		throw new Error("Invalid gh release list payload: expected an array.");
+	}
+	return parsed
+		.map((r) => (typeof r?.tagName === "string" ? r.tagName : null))
+		.filter(Boolean);
 }
 
 function main() {
-  let args;
-  try {
-    args = parseArgs(process.argv.slice(2));
-  } catch (err) {
-    logError(String(err.message || err));
-    process.exit(2);
-  }
-  const changelog = readFileSync(CHANGELOG_PATH, "utf8");
+	let args;
+	try {
+		args = parseArgs(process.argv.slice(2));
+	} catch (err) {
+		logError(String(err.message || err));
+		process.exit(2);
+	}
+	const changelog = readFileSync(CHANGELOG_PATH, "utf8");
 
-  let tags;
-  try {
-    tags = listReleases(args.repo);
-  } catch (err) {
-    logError("Failed to list releases via `gh`. Is it installed/authed?");
-    logError(String(err.message || err));
-    process.exit(1);
-  }
+	let tags;
+	try {
+		tags = listReleases(args.repo);
+	} catch (err) {
+		logError("Failed to list releases via `gh`. Is it installed/authed?");
+		logError(String(err.message || err));
+		process.exit(1);
+	}
 
-  const tmp = mkdtempSync(join(tmpdir(), "piwebaio-relnotes-"));
-  const plan = [];
-  for (const tag of tags) {
-    if (args.only && !args.only.has(normalizeVersion(tag))) continue;
-    const full = extractSection(changelog, tag);
-    if (full === null || full.trim().length === 0) {
-      plan.push({ tag, action: "skip", reason: "no CHANGELOG section" });
-      continue;
-    }
-    const body = args.full ? full : summarizeSection(full);
-    plan.push({ tag, action: "update", body });
-  }
+	const tmp = mkdtempSync(join(tmpdir(), "piwebaio-relnotes-"));
+	const plan = [];
+	for (const tag of tags) {
+		if (args.only && !args.only.has(normalizeVersion(tag))) continue;
+		const full = extractSection(changelog, tag);
+		if (full === null || full.trim().length === 0) {
+			plan.push({ tag, action: "skip", reason: "no CHANGELOG section" });
+			continue;
+		}
+		const body = args.full ? full : summarizeSection(full);
+		plan.push({ tag, action: "update", body });
+	}
 
-  const updates = plan.filter((p) => p.action === "update");
-  const skips = plan.filter((p) => p.action === "skip");
+	const updates = plan.filter((p) => p.action === "update");
+	const skips = plan.filter((p) => p.action === "skip");
 
-  log(
-    `${args.apply ? "APPLYING" : "DRY RUN"} — ${updates.length} release(s) to update, ${skips.length} skipped.\n`,
-  );
-  for (const p of skips) log(`  skip   ${p.tag}  (${p.reason})`);
-  for (const p of updates) {
-    const firstLine = p.body.split("\n").find((l) => l.trim()) ?? "";
-    log(`  update ${p.tag}  ${firstLine.slice(0, 70)}`);
-  }
+	log(
+		`${args.apply ? "APPLYING" : "DRY RUN"} — ${updates.length} release(s) to update, ${skips.length} skipped.\n`,
+	);
+	for (const p of skips) log(`  skip   ${p.tag}  (${p.reason})`);
+	for (const p of updates) {
+		const firstLine = p.body.split("\n").find((l) => l.trim()) ?? "";
+		log(`  update ${p.tag}  ${firstLine.slice(0, 70)}`);
+	}
 
-  if (!args.apply) {
-    log("\nRe-run with --apply to write these release bodies.");
-    return;
-  }
+	if (!args.apply) {
+		log("\nRe-run with --apply to write these release bodies.");
+		return;
+	}
 
-  let ok = 0;
-  for (const p of updates) {
-    const notesFile = join(tmp, `${normalizeVersion(p.tag)}.md`);
-    writeFileSync(notesFile, p.body + "\n", "utf8");
-    const editArgs = ["release", "edit", p.tag, "--notes-file", notesFile];
-    if (args.repo) editArgs.push("--repo", args.repo);
-    try {
-      gh(editArgs);
-      ok++;
-      log(`  ok     ${p.tag}`);
-    } catch (err) {
-      logError(`  FAIL   ${p.tag}: ${String(err.message || err)}`);
-    }
-  }
-  log(`\nUpdated ${ok}/${updates.length} release bodies.`);
+	let ok = 0;
+	for (const p of updates) {
+		const notesFile = join(tmp, `${normalizeVersion(p.tag)}.md`);
+		writeFileSync(notesFile, p.body + "\n", "utf8");
+		const editArgs = ["release", "edit", p.tag, "--notes-file", notesFile];
+		if (args.repo) editArgs.push("--repo", args.repo);
+		try {
+			gh(editArgs);
+			ok++;
+			log(`  ok     ${p.tag}`);
+		} catch (err) {
+			logError(`  FAIL   ${p.tag}: ${String(err.message || err)}`);
+		}
+	}
+	log(`\nUpdated ${ok}/${updates.length} release bodies.`);
 }
 
 main();
