@@ -62,18 +62,20 @@
     "test:fetcherror": "node --experimental-strip-types --test tests/fetch-error.test.mjs",
     "test:fetchprogress": "node --experimental-strip-types --test tests/fetch-progress.test.mjs",
     "test:hardening": "node --experimental-strip-types --test tests/hardening.test.mjs",
+    "test:fingerprint": "node --experimental-strip-types --test tests/fingerprint.test.mjs",
     "test:format": "node --experimental-strip-types --test tests/format.test.mjs",
     "test:webfetch-summary": "node --experimental-strip-types --test tests/webfetch-summary.test.mjs",
     "test:chunker": "node --experimental-strip-types --test tests/chunker.test.mjs",
     "test:prune": "node --experimental-strip-types --test tests/prune-markdown.test.mjs",
     "test:github-map": "node --experimental-strip-types --test tests/github-map.test.mjs",
     "test:reddit": "node --experimental-strip-types --test tests/reddit-block.test.mjs",
-    "test:all": "node --experimental-strip-types --test tests/unit.test.mjs tests/new-features.test.mjs tests/paywall.test.mjs tests/github-check.test.mjs tests/reddit-block.test.mjs tests/github-map.test.mjs tests/render-result.test.mjs tests/fetch-error.test.mjs tests/fetch-progress.test.mjs tests/hardening.test.mjs tests/format.test.mjs tests/webfetch-summary.test.mjs tests/chunker.test.mjs tests/prune-markdown.test.mjs tests/integration.test.mjs",
+    "test:all": "node --experimental-strip-types --test tests/unit.test.mjs tests/new-features.test.mjs tests/paywall.test.mjs tests/github-check.test.mjs tests/reddit-block.test.mjs tests/github-map.test.mjs tests/render-result.test.mjs tests/fetch-error.test.mjs tests/fetch-progress.test.mjs tests/hardening.test.mjs tests/fingerprint.test.mjs tests/format.test.mjs tests/webfetch-summary.test.mjs tests/chunker.test.mjs tests/prune-markdown.test.mjs tests/integration.test.mjs",
     "check:lockfile": "node scripts/check-lockfile-sync.mjs",
     "changelog:check": "node scripts/changelog-release.mjs --check",
     "changelog:release": "node scripts/changelog-release.mjs",
     "changelog:extract": "node scripts/changelog-extract.mjs",
-    "release:backfill-notes": "node scripts/backfill-github-releases.mjs"
+    "release:backfill-notes": "node scripts/backfill-github-releases.mjs",
+    "diagnose:fingerprint": "node --experimental-strip-types scripts/fingerprint-diagnostics.mjs"
   },
   "dependencies": {
     "@earendil-works/pi-tui": "^0.79.0",

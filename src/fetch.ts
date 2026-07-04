@@ -257,7 +257,7 @@ const PLAYWRIGHT_STEALTH_SCRIPT = `
 })();
 `;
 
-async function applyStealth(page: any) {
+export async function applyStealth(page: any) {
 	try {
 		await page.addInitScript(PLAYWRIGHT_STEALTH_SCRIPT);
 	} catch {
@@ -529,8 +529,13 @@ export async function smartFetch(
 	options: FetchOpts = {},
 ): Promise<SmartFetchResult | null> {
 	const startedAt = Date.now();
-	const rlHost = new URL(url).hostname;
-	await getRateLimiter(rlHost).acquire();
+	let parsedUrl: URL;
+	try {
+		parsedUrl = new URL(url);
+	} catch {
+		return null;
+	}
+	await getRateLimiter(parsedUrl.hostname).acquire();
 
 	if (url.startsWith("http://")) {
 		url = "https://" + url.slice(7);
