@@ -129,12 +129,19 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 
 			// Outer timeout must cover Chrome cold-start (≤30s) + actual search.
 			const OUTER_TIMEOUT = chromeReady ? 40000 : SEARCH_TIMEOUT;
-			const timeoutPromise = new Promise<null>((r) =>
-				setTimeout(() => r(null), OUTER_TIMEOUT),
-			);
+			let timeoutHandle: ReturnType<typeof setTimeout>;
+			const timeoutPromise = new Promise<null>((r) => {
+				timeoutHandle = setTimeout(() => r(null), OUTER_TIMEOUT);
+				timeoutHandle.unref?.();
+			});
 
 			const allPromise = Promise.all([httpPromise, googlePromise]);
-			const result = await Promise.race([allPromise, timeoutPromise]);
+			let result: Awaited<typeof allPromise> | null;
+			try {
+				result = await Promise.race([allPromise, timeoutPromise]);
+			} finally {
+				clearTimeout(timeoutHandle!);
+			}
 
 			let httpResults: SearchResult[] = [];
 			let googleResults: SearchResult[] = [];
