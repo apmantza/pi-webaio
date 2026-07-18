@@ -3,7 +3,11 @@
 // Returns structured errors for blocked/rate-limited posts instead of
 // bypassing anti-bot controls.
 
+import { readResponseTextWithProgress } from "../fetch.ts";
 import type { VerticalResult } from "./types.ts";
+
+/** Bound on each block-detection probe — connect/headers and body read. */
+const PROBE_TIMEOUT_MS = 10_000;
 
 export function matchesReddit(url: string): boolean {
 	return /^https?:\/\/(www\.)?reddit\.com\/r\/[^/]+\/comments\/[^/]+/i.test(
@@ -44,11 +48,19 @@ async function detectRedditBlock(url: string): Promise<string | null> {
 								"pi-webaio:0.5.0 (https://github.com/apmantza/pi-webaio)",
 						},
 						redirect: "follow",
+						// Bound the connect/headers phase — a hung socket must
+						// never hang the whole Promise.all (issue #41).
+						signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
 					});
-					// Read full body — Reddit's 403 block page puts the
-					// diagnostic message at the END of a 190KB doc that's
-					// mostly CSS, so truncating to 4KB misses the marker.
-					const text = await res.text();
+					// Stream-read the body with a byte cap and a deadline —
+					// Reddit's 403 block page puts the diagnostic message at
+					// the END of a 190KB doc that's mostly CSS, so truncating
+					// to 4KB misses the marker, but an unbounded res.text()
+					// read can hang forever on a stalled connection.
+					const { text } = await readResponseTextWithProgress(
+						res,
+						PROBE_TIMEOUT_MS,
+					);
 					return { url: u, status: res.status, text };
 				} catch {
 					return { url: u, status: 0, text: "" };
