@@ -32,7 +32,16 @@ import {
 	parseDuckDuckGoResults,
 } from "../src/search.ts";
 import { scanForSecrets } from "../src/security.ts";
-import { normalizeCacheKey } from "../src/session-store.ts";
+import {
+	normalizeCacheKey,
+	summaryCache,
+	searchCache,
+	storeSearchResults,
+	cleanupSessionCache,
+	MAX_SUMMARY_CACHE_ENTRIES,
+	MAX_SEARCH_CACHE_ENTRIES,
+	SEARCH_CACHE_TTL_MS,
+} from "../src/session-store.ts";
 import { frontmatter } from "../src/tools/utils.ts";
 import { isLikelyBotProtection } from "../src/bot-detection.ts";
 import { compileContextPackage } from "../src/context-package.ts";
@@ -331,6 +340,65 @@ test("normalizeCacheKey leaves https URLs unchanged", () => {
 });
 
 // ─── isRetryableNetworkError ───────────────────────────────────────
+
+// ─── Cache bounding (summaryCache / searchCache) ───────────────────
+
+test("summaryCache evicts oldest entry once over the cap", () => {
+	summaryCache.clear();
+	for (let i = 0; i < MAX_SUMMARY_CACHE_ENTRIES + 5; i++) {
+		summaryCache.set(`https://example.com/${i}`, `summary-${i}`);
+	}
+	assert.strictEqual(summaryCache.size, MAX_SUMMARY_CACHE_ENTRIES);
+	assert.strictEqual(summaryCache.has("https://example.com/0"), false);
+	assert.strictEqual(
+		summaryCache.has(
+			`https://example.com/${MAX_SUMMARY_CACHE_ENTRIES + 4}`,
+		),
+		true,
+	);
+});
+
+test("summaryCache re-setting an existing key doesn't evict", () => {
+	summaryCache.clear();
+	for (let i = 0; i < MAX_SUMMARY_CACHE_ENTRIES; i++) {
+		summaryCache.set(`https://example.com/${i}`, `summary-${i}`);
+	}
+	summaryCache.set("https://example.com/0", "updated");
+	assert.strictEqual(summaryCache.size, MAX_SUMMARY_CACHE_ENTRIES);
+	assert.strictEqual(summaryCache.get("https://example.com/0"), "updated");
+});
+
+test("storeSearchResults evicts oldest query once over the cap", () => {
+	searchCache.clear();
+	for (let i = 0; i < MAX_SEARCH_CACHE_ENTRIES + 3; i++) {
+		storeSearchResults(`query-${i}`, []);
+	}
+	assert.strictEqual(searchCache.size, MAX_SEARCH_CACHE_ENTRIES);
+	assert.strictEqual(searchCache.has("query-0"), false);
+	assert.strictEqual(
+		searchCache.has(`query-${MAX_SEARCH_CACHE_ENTRIES + 2}`),
+		true,
+	);
+	searchCache.clear();
+});
+
+test("cleanupSessionCache prunes expired searchCache entries", () => {
+	searchCache.clear();
+	searchCache.set("stale-query", {
+		query: "stale-query",
+		results: [],
+		timestamp: Date.now() - SEARCH_CACHE_TTL_MS - 1000,
+	});
+	searchCache.set("fresh-query", {
+		query: "fresh-query",
+		results: [],
+		timestamp: Date.now(),
+	});
+	cleanupSessionCache();
+	assert.strictEqual(searchCache.has("stale-query"), false);
+	assert.strictEqual(searchCache.has("fresh-query"), true);
+	searchCache.clear();
+});
 
 test("isRetryableNetworkError detects ECONNRESET", () => {
 	const err = new Error("fetch failed: ECONNRESET");

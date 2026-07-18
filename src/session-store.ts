@@ -29,6 +29,9 @@ export const SESSION_CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
 export const MAX_SESSION_CACHE_ENTRIES = 100;
 export const SESSION_CACHE_CLEANUP_MS = 5 * 60 * 1000; // 5 minutes
 
+export const MAX_SUMMARY_CACHE_ENTRIES = 100;
+export const MAX_SEARCH_CACHE_ENTRIES = 100;
+
 // ─── Caches ────────────────────────────────────────────────────────
 
 export const sessionStore = new Map<string, StoredContent>();
@@ -38,7 +41,36 @@ export const searchCache = new Map<
 	{ query: string; results: SearchResult[]; timestamp: number }
 >();
 
-export const summaryCache = new Map<string, string>(); // url -> AI summary, session-scoped
+// Bounded Map: same get/set/has/delete/size surface as a plain Map, but
+// evicts the oldest entry (insertion order) once the cap is reached, so a
+// long-lived process can't grow this without limit. Mirrors the eviction
+// pattern used for `sessionStore` above (see storeContent).
+class BoundedMap<K, V> extends Map<K, V> {
+	private readonly maxEntries: number;
+
+	constructor(maxEntries: number) {
+		super();
+		this.maxEntries = maxEntries;
+	}
+
+	override set(key: K, value: V): this {
+		// Re-inserting an existing key just refreshes its value in place;
+		// only new keys count against the cap.
+		if (!this.has(key)) {
+			while (this.size >= this.maxEntries) {
+				const oldest = this.keys().next().value;
+				if (oldest === undefined) break;
+				this.delete(oldest);
+			}
+		}
+		return super.set(key, value);
+	}
+}
+
+export const summaryCache: Map<string, string> = new BoundedMap<
+	string,
+	string
+>(MAX_SUMMARY_CACHE_ENTRIES); // url -> AI summary, session-scoped
 
 // ─── Cache key normalization ───────────────────────────────────────
 
@@ -146,8 +178,22 @@ function pruneExpiredSessionEntries(now = Date.now()): void {
 	}
 }
 
+function pruneExpiredSearchEntries(now = Date.now()): void {
+	for (const [query, entry] of searchCache) {
+		if (now - entry.timestamp > SEARCH_CACHE_TTL_MS) {
+			searchCache.delete(query);
+		}
+	}
+}
+
+// Extends cleanup to every in-memory cache in this module so that if this
+// is ever wired up (e.g. behind SESSION_CACHE_CLEANUP_MS), it does the
+// full job. `summaryCache` self-bounds via BoundedMap so there's nothing
+// to expire there beyond its size cap; sweeping is a no-op unless entries
+// exceed the cap, which `.set` already prevents.
 export function cleanupSessionCache(): void {
 	pruneExpiredSessionEntries();
+	pruneExpiredSearchEntries();
 }
 
 // ─── Disk persistence (content cache) ──────────────────────────────
@@ -243,10 +289,36 @@ export function setSearchContext(query: string): void {
 
 // ─── Search result caching (memory + disk) ─────────────────────────
 
+const SEARCH_CACHE_WRITE_DEBOUNCE_MS = 500;
+let searchCacheWriteTimer: NodeJS.Timeout | null = null;
+
+// Coalesces bursts of storeSearchResults() calls (e.g. several searches in
+// quick succession) into a single disk write instead of rewriting the
+// whole cache file per store. Timer is unref'd so it never keeps the
+// process alive on its own.
+function scheduleSearchCacheWrite(): void {
+	if (searchCacheWriteTimer) return;
+	searchCacheWriteTimer = setTimeout(() => {
+		searchCacheWriteTimer = null;
+		saveSearchCacheToDisk().catch(() => {});
+	}, SEARCH_CACHE_WRITE_DEBOUNCE_MS);
+	searchCacheWriteTimer.unref?.();
+}
+
 export function storeSearchResults(query: string, results: SearchResult[]) {
 	const entry = { query, results, timestamp: Date.now() };
+	pruneExpiredSearchEntries();
+	// Enforce max size with simple oldest-first eviction (insertion order),
+	// mirroring the sessionStore cap in storeContent above.
+	if (!searchCache.has(query)) {
+		while (searchCache.size >= MAX_SEARCH_CACHE_ENTRIES) {
+			const oldest = searchCache.keys().next().value;
+			if (oldest === undefined) break;
+			searchCache.delete(oldest);
+		}
+	}
 	searchCache.set(query, entry);
-	saveSearchCacheToDisk().catch(() => {});
+	scheduleSearchCacheWrite();
 }
 
 export function getCachedSearch(query: string): SearchResult[] | null {
