@@ -1,7 +1,11 @@
 import { spawn } from "node:child_process";
 import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { smartFetch } from "./fetch.ts";
+import {
+	DEFAULT_TIMEOUT_MS,
+	readResponseTextWithProgress,
+	smartFetch,
+} from "./fetch.ts";
 import {
 	ghFetch,
 	getGithubToken,
@@ -1058,12 +1062,17 @@ async function pullGitHubFeature(url: string): Promise<PullResult | null> {
 							try {
 								const logRes = await fetch(job.logs_url || `${job.url}/logs`, {
 									headers: { Accept: "text/plain", "User-Agent": "pi-webaio" },
+									signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
 								});
 								if (
 									logRes.ok &&
 									logRes.headers.get("content-type")?.includes("text/plain")
 								) {
-									const logText = await logRes.text();
+									// CI logs can be multi-MB; only a tail/excerpt is ever
+									// used below, so stream-read with a byte cap instead
+									// of buffering the whole log via res.text().
+									const { text: logText } =
+										await readResponseTextWithProgress(logRes);
 									// Extract lines that look like errors or the last 50 lines
 									const lines = logText.split("\n");
 									const errorLines = lines.filter((l) =>
@@ -1434,12 +1443,21 @@ function detectArchitectureSignals(paths: string[]): string {
 	return `\n## Architecture\n\n${lines.join("\n")}\n`;
 }
 
+// Cap on how many paths a cloned working tree walk will enumerate. A repo
+// with hundreds of thousands of files (e.g. an accidental node_modules
+// commit, a monorepo dump) must not OOM the process building this markdown.
+const MAX_TREE_PATHS = 20_000;
+
 async function buildRepoMarkdown(outDir: string): Promise<string> {
 	// Build a file tree and include README
 	const { readdir } = await import("node:fs/promises");
 	const allPaths: string[] = [];
+	let treeTruncated = false;
+	let treeEntryCount = 0;
+	let pathsTruncated = false;
 
 	async function tree(dir: string, prefix = ""): Promise<string> {
+		if (treeTruncated) return "";
 		const entries = await readdir(dir, { withFileTypes: true });
 		const lines: string[] = [];
 		const sorted = entries
@@ -1450,10 +1468,18 @@ async function buildRepoMarkdown(outDir: string): Promise<string> {
 				return a.name.localeCompare(b.name);
 			});
 		for (let i = 0; i < sorted.length; i++) {
+			if (treeTruncated) break;
 			const e = sorted[i]!;
 			const isLast = i === sorted.length - 1;
 			const branch = isLast ? "└── " : "├── ";
 			lines.push(`${prefix}${branch}${e.name}`);
+			if (++treeEntryCount >= MAX_TREE_PATHS) {
+				treeTruncated = true;
+				lines.push(
+					`${prefix}${isLast ? "    " : "│   "}… (truncated at ${MAX_TREE_PATHS} entries)`,
+				);
+				break;
+			}
 			if (e.isDirectory()) {
 				const ext = isLast ? "    " : "│   ";
 				lines.push(await tree(join(dir, e.name), prefix + ext));
@@ -1464,9 +1490,14 @@ async function buildRepoMarkdown(outDir: string): Promise<string> {
 
 	// First pass: collect all file paths
 	async function collectPaths(dir: string, rel: string): Promise<void> {
+		if (pathsTruncated) return;
 		try {
 			const entries = await readdir(dir, { withFileTypes: true });
 			for (const e of entries) {
+				if (allPaths.length >= MAX_TREE_PATHS) {
+					pathsTruncated = true;
+					return;
+				}
 				const relPath = rel ? `${rel}/${e.name}` : e.name;
 				allPaths.push(relPath);
 				if (e.isDirectory()) {
@@ -1491,6 +1522,10 @@ async function buildRepoMarkdown(outDir: string): Promise<string> {
 	// Architecture detection from file tree
 	const arch = detectArchitectureSignals(allPaths);
 	if (arch) md += arch;
+
+	if (pathsTruncated) {
+		md += `\n_(file list truncated at ${MAX_TREE_PATHS} entries — architecture detection above may be incomplete)_\n`;
+	}
 
 	md += "\n";
 

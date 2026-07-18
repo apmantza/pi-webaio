@@ -11,7 +11,11 @@
  */
 
 import { spawn, spawnSync } from "node:child_process";
-import { isRetryableNetworkError } from "./fetch.ts";
+import {
+	DEFAULT_TIMEOUT_MS,
+	isRetryableNetworkError,
+	readResponseTextWithProgress,
+} from "./fetch.ts";
 
 const API_BASE = "https://api.github.com";
 
@@ -72,6 +76,11 @@ const RETRYABLE_API_STATUSES = new Set([429, 500, 502, 503, 504]);
 const API_RETRY_INITIAL_MS = 1000;
 const MAX_API_RETRIES = 2;
 
+// `gh` child-process output/time bounds — `gh run view --log` can emit many
+// MB and a hung `gh` invocation must not hang the process forever.
+const EXEC_GH_MAX_BYTES = 10 * 1024 * 1024; // 10MB
+const EXEC_GH_TIMEOUT_MS = 60_000;
+
 /**
  * Call the GitHub REST API with exponential backoff for 429/5xx/network errors.
  * Returns parsed JSON. Works with or without auth (unauthenticated = 60 req/hr).
@@ -97,11 +106,15 @@ export async function ghFetch<T = unknown>(path: string): Promise<T> {
 			const res = await fetch(url, {
 				headers,
 				redirect: "follow",
+				signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
 			});
 
 			if (res.ok) {
 				if (res.status === 204) return {} as T;
-				return res.json() as Promise<T>;
+				// Stream-read with a byte cap — a hung/huge response body must
+				// not be buffered unbounded via res.json().
+				const { text } = await readResponseTextWithProgress(res);
+				return JSON.parse(text) as T;
 			}
 
 			// 429: check Retry-After header for server-specified backoff
@@ -119,14 +132,17 @@ export async function ghFetch<T = unknown>(path: string): Promise<T> {
 			// Other retryable statuses (5xx)
 			if (RETRYABLE_API_STATUSES.has(res.status) && attempt < MAX_API_RETRIES) {
 				const delayMs = API_RETRY_INITIAL_MS * 2 ** attempt;
-				// Drain body before retry to free connection
-				await res.text().catch(() => {});
+				// Drain body before retry to free connection (capped read —
+				// a hung/huge error body must not block forever)
+				await readResponseTextWithProgress(res).catch(() => {});
 				await new Promise((r) => setTimeout(r, delayMs));
 				continue;
 			}
 
 			// Non-retryable — fail immediately
-			const text = await res.text().catch(() => "");
+			const text = await readResponseTextWithProgress(res)
+				.then((r) => r.text)
+				.catch(() => "");
 			throw new Error(`GitHub API ${res.status}: ${text.slice(0, 500)}`);
 		} catch (err: unknown) {
 			// Network errors (fetch failed, ECONNRESET, etc.) are retryable
@@ -191,10 +207,41 @@ function execGh(
 		});
 		let stdout = "";
 		let stderr = "";
-		proc.stdout.on("data", (d: Buffer) => (stdout += d));
+		let stdoutBytes = 0;
+		let settled = false;
+
+		const timer: ReturnType<typeof setTimeout> = setTimeout(() => {
+			if (settled) return;
+			settled = true;
+			proc.kill();
+			reject(new Error(`gh ${args[0]} timed out after ${EXEC_GH_TIMEOUT_MS}ms`));
+		}, EXEC_GH_TIMEOUT_MS);
+
+		proc.stdout.on("data", (d: Buffer) => {
+			if (settled) return;
+			stdoutBytes += d.length;
+			if (stdoutBytes > EXEC_GH_MAX_BYTES) {
+				settled = true;
+				clearTimeout(timer);
+				proc.kill();
+				reject(
+					new Error(`gh ${args[0]} output exceeded ${EXEC_GH_MAX_BYTES} byte limit`),
+				);
+				return;
+			}
+			stdout += d;
+		});
 		proc.stderr.on("data", (d: Buffer) => (stderr += d));
-		proc.on("error", reject);
+		proc.on("error", (err) => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			reject(err);
+		});
 		proc.on("close", (code: number) => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
 			if (code === 0) resolve(stdout);
 			else
 				reject(
