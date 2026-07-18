@@ -20,6 +20,8 @@ import {
 	runPullFromQueue,
 } from "./utils.ts";
 
+const MAX_CRAWL_ITEMS = 500;
+
 export function registerWebpullTool(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: "aio-webpull",
@@ -43,7 +45,7 @@ export function registerWebpullTool(pi: ExtensionAPI): void {
 			),
 			max: Type.Optional(
 				Type.Number({
-					description: "Max pages to pull (default: 100)",
+					description: `Max pages to pull (default: 100, capped at ${MAX_CRAWL_ITEMS})`,
 					default: 100,
 				}),
 			),
@@ -144,7 +146,12 @@ export function registerWebpullTool(pi: ExtensionAPI): void {
 			const outDir = params.out
 				? safeResolveInBaseTemp(params.out)
 				: join(BASE_TEMP, url.hostname);
-			const max = params.max ?? 100;
+			const max = Math.min(
+				MAX_CRAWL_ITEMS,
+				Number.isFinite(params.max) && (params.max as number) > 0
+					? (params.max as number)
+					: 100,
+			);
 			const concurrency = Math.max(4, cpus().length * 2);
 			const browser = (params.browser as string) ?? getLatestChromeProfile();
 			const os = (params.os as string) ?? DEFAULT_OS;
