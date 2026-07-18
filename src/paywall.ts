@@ -14,7 +14,12 @@
 // cheap — safe to call on every page load.
 
 import { fetch as wreqFetch } from "wreq-js";
-import { fetchWithPlaywright, buildHeaders } from "./fetch.ts";
+import {
+	fetchWithPlaywright,
+	buildHeaders,
+	readResponseTextWithProgress,
+	DEFAULT_TIMEOUT_MS,
+} from "./fetch.ts";
 import { PAYWALL_SITES, PAYWALL_GROUPS } from "./paywall-sites.ts";
 
 // ─── Types ─────────────────────────────────────────────────────────
@@ -482,6 +487,8 @@ export async function tryBotUAFetch(
 		os?: string;
 		proxy?: string;
 		wreqSession?: any;
+		/** Remaining bypass budget (ms) — falls back to DEFAULT_TIMEOUT_MS. */
+		timeoutMs?: number;
 	},
 ): Promise<BypassFetchResult | null> {
 	const ua = botUAFor(strategy);
@@ -503,11 +510,12 @@ export async function tryBotUAFetch(
 			headers,
 			browser: (opts.browser ?? "chrome_145") as any,
 			os: (opts.os ?? "windows") as any,
+			timeout: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
 			...(opts.proxy ? { proxy: opts.proxy } : {}),
 		});
 		if (!res?.ok) return null;
 
-		const text = await res.text();
+		const { text } = await readResponseTextWithProgress(res, opts.timeoutMs);
 		const finalUrl = res.url ?? url;
 		const paywall = detectPaywall(text);
 
@@ -575,7 +583,7 @@ export async function tryArchiveOrgFetch(
 		clearTimeout(timer);
 		if (!res.ok) return null;
 
-		const text = await res.text();
+		const { text } = await readResponseTextWithProgress(res, WAYBACK_TIMEOUT_MS);
 		// Wayback sometimes returns its own 404 page
 		if (text.includes("Wayback Machine has not archived")) return null;
 
@@ -625,7 +633,10 @@ export async function tryArchivePhFetch(
 		clearTimeout(timer);
 		if (!res.ok) return null;
 
-		const text = await res.text();
+		const { text } = await readResponseTextWithProgress(
+			res,
+			ARCHIVE_PH_TIMEOUT_MS,
+		);
 		// archive.ph wraps the content — strip its chrome if present
 		const cleaned = stripArchivePhChrome(text);
 
@@ -854,21 +865,34 @@ export async function bypassUrl(
 
 		opts.onProgress?.(`[bypass] trying ${step}…`);
 
+		// Per-step fetch timeout: whatever's left of the overall bypass
+		// budget, so one hanging step can't outlive bypassUrl's own
+		// deadline. Falls back to DEFAULT_TIMEOUT_MS when no budget was
+		// given at all.
+		const stepTimeoutMs = opts.timeoutMs
+			? Math.max(1000, opts.timeoutMs - (Date.now() - start))
+			: DEFAULT_TIMEOUT_MS;
+		const stepOpts = { ...opts, timeoutMs: stepTimeoutMs };
+
 		let result: BypassFetchResult | null = null;
 
 		switch (step) {
 			case "ua:googlebot":
 			case "ua:bingbot":
 			case "ua:facebookbot":
-				result = await tryBotUAFetch(url, step, opts);
+				result = await tryBotUAFetch(url, step, stepOpts);
 				break;
 			case "ua:custom":
 				if (strategy?.useragentCustom) {
-					result = await tryCustomUAFetch(url, strategy.useragentCustom, opts);
+					result = await tryCustomUAFetch(
+						url,
+						strategy.useragentCustom,
+						stepOpts,
+					);
 				}
 				break;
 			case "referer:google":
-				result = await tryGoogleRefererFetch(url, opts);
+				result = await tryGoogleRefererFetch(url, stepOpts);
 				break;
 			case "block_js":
 				if (!opts.skipBrowser) {
@@ -887,7 +911,7 @@ export async function bypassUrl(
 				if (!result) result = await tryArchivePhFetch(url);
 				break;
 			case "cookies":
-				result = await tryNoCookiesFetch(url, strategy?.dropCookies, opts);
+				result = await tryNoCookiesFetch(url, strategy?.dropCookies, stepOpts);
 				break;
 			case "auto":
 				// Should not appear in steps; if it does, skip
@@ -927,10 +951,11 @@ async function tryCustomUAFetch(
 			},
 			browser: (opts.browser ?? "chrome_145") as any,
 			os: (opts.os ?? "windows") as any,
+			timeout: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
 			...(opts.proxy ? { proxy: opts.proxy } : {}),
 		});
 		if (!res?.ok) return null;
-		const text = await res.text();
+		const { text } = await readResponseTextWithProgress(res, opts.timeoutMs);
 		const paywall = detectPaywall(text);
 		return {
 			ok: !paywall.paywalled,
@@ -962,10 +987,11 @@ async function tryGoogleRefererFetch(
 			headers,
 			browser: (opts.browser ?? "chrome_145") as any,
 			os: (opts.os ?? "windows") as any,
+			timeout: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
 			...(opts.proxy ? { proxy: opts.proxy } : {}),
 		});
 		if (!res?.ok) return null;
-		const text = await res.text();
+		const { text } = await readResponseTextWithProgress(res, opts.timeoutMs);
 		const paywall = detectPaywall(text);
 		return {
 			ok: !paywall.paywalled,
@@ -998,10 +1024,11 @@ async function tryNoCookiesFetch(
 			headers,
 			browser: (opts.browser ?? "chrome_145") as any,
 			os: (opts.os ?? "windows") as any,
+			timeout: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
 			...(opts.proxy ? { proxy: opts.proxy } : {}),
 		});
 		if (!res?.ok) return null;
-		const text = await res.text();
+		const { text } = await readResponseTextWithProgress(res, opts.timeoutMs);
 		const paywall = detectPaywall(text);
 		return {
 			ok: !paywall.paywalled,
