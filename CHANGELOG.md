@@ -10,6 +10,24 @@ All notable changes to pi-webaio will be documented in this file.
 
 ### Fixed
 
+## [0.6.3] - 2026-07-18
+
+### Fixed
+
+- **Crash on hung response bodies** (`src/fetch.ts`) — a website that stopped responding mid-download could kill the entire pi process with an `uncaughtException` ([#41](https://github.com/apmantza/pi-webaio/issues/41)). Root cause: `reader.cancel()` on an errored stream returns a rejected promise that nothing handled, so the body-read error escaped as an unhandled rejection. Now guarded via `safeCancel()`, with regression tests asserting no unhandled rejection escapes on the exact error from the crash report.
+- **Leaked search race timer** (`src/tools/websearch.ts`) — the 40s timeout timer in the search `Promise.race` was never cleared when the real work won and wasn't `unref`'d, delaying process exit in one-shot runs.
+
+### Changed
+
+- **Every network path is now time- and size-bounded** — full sweep of the codebase for unbounded resource usage:
+  - Core fetch (`src/fetch.ts`): 30s wreq per-request timeout (`DEFAULT_TIMEOUT_MS`), 60s streaming body-read deadline (`DEFAULT_BODY_READ_MS`), and `fetchBuffer` now streams with the 10MB cap and deadline instead of an uncapped `arrayBuffer()`. New `FetchOpts.timeoutMs` lets callers override; `"timed out"` errors are treated as retryable.
+  - GitHub (`src/github-api.ts`, `src/github-pipeline.ts`): 30s `AbortSignal.timeout` on API and CI-log fetches with capped body reads; `execGh` child processes get a 60s kill timer and 10MB stdout cap; repo-tree walks stop at 20k entries with a truncation marker.
+  - Paywall bypass (`src/paywall.ts`): each UA-spoof strategy now gets a wreq timeout derived from the remaining bypass budget (a hung step can no longer stall past the overall deadline); all bypass and archive body reads go through the capped stream reader.
+  - Reddit block detection (`src/verticals/reddit.ts`): the three parallel probe fetches get 10s abort signals and capped reads; a timed-out probe still degrades to "no block detected".
+- **Sitemap discovery fan-out capped** (`src/discovery.ts`) — a hostile `<sitemapindex>` could trigger an exponential burst of concurrent fetches via raw `Promise.all`. Now ≤50 child sitemaps per level, fetched 5 at a time, with a 5000-URL overall backstop.
+- **In-memory caches bounded** (`src/session-store.ts`) — `summaryCache` and `searchCache` grew one entry per unique URL/query for the life of the process. Both now cap at 100 entries with oldest-first eviction; search-cache disk writes are debounced into one coalesced write per burst.
+- **Crawl size clamped** (`src/tools/webpull.ts`) — `max` is now hard-capped at 500 items with input validation.
+
 ## [0.6.2] - 2026-07-04
 
 ### Added
