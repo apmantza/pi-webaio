@@ -14,6 +14,10 @@ export const DEFAULT_BROWSER = "chrome_145";
 export const DEFAULT_OS = "windows";
 
 export const MAX_RESPONSE_BYTES = 10 * 1024 * 1024; // 10 MB — streaming cap
+/** Whole-request timeout handed to wreq (connect + headers + body). */
+export const DEFAULT_TIMEOUT_MS = 30_000;
+/** Ceiling on the streaming body read, independent of wreq's timeout. */
+export const DEFAULT_BODY_READ_MS = 60_000;
 const MAX_RETRIES = 2;
 const RETRY_INITIAL_DELAY_MS = 1000;
 const RETRYABLE_STATUS_CODES = new Set([429, 500, 502, 503, 504]);
@@ -34,6 +38,7 @@ export function isRetryableNetworkError(err: unknown): boolean {
 		msg.includes("ETIMEDOUT") ||
 		msg.includes("ECONNREFUSED") ||
 		msg.includes("timeout") ||
+		msg.includes("timed out") ||
 		msg.includes("ENOTFOUND") ||
 		msg.includes("getaddrinfo")
 	);
@@ -389,7 +394,74 @@ function throwResponseTooLarge(
 	throw err;
 }
 
-export async function readResponseTextWithProgress(response: any): Promise<{
+/**
+ * Cancel a stream reader without leaving a floating rejected promise.
+ * Per the WHATWG Streams spec, `cancel()` on an errored stream returns a
+ * promise rejected with the stream's stored error — an unhandled
+ * rejection there crashes the whole host process (Node's default
+ * `--unhandled-rejections=throw`). A sync try/catch does NOT catch an
+ * async rejection, so this must explicitly attach a no-op `.catch`.
+ */
+function safeCancel(reader: { cancel: () => unknown }): void {
+	try {
+		const p = reader.cancel() as Promise<unknown> | undefined;
+		if (p && typeof (p as any).catch === "function") {
+			(p as Promise<unknown>).catch(() => {});
+		}
+	} catch {
+		/* ignore */
+	}
+}
+
+/**
+ * Race a single `reader.read()` against an absolute deadline. Shared by
+ * the text and buffer streaming paths so both get the same timeout
+ * behavior without duplicating the race/cleanup logic. On timeout, the
+ * reader is cancelled (via {@link safeCancel}) and an ETIMEDOUT error is
+ * thrown whose message includes "timed out". The setTimeout is always
+ * cleared in `finally` so no timer is left dangling.
+ */
+async function readChunkWithDeadline(
+	reader: { read: () => Promise<any>; cancel: () => unknown },
+	deadlineAt: number,
+	startAt: number,
+	bytesReadSoFar: number,
+): Promise<any> {
+	const remaining = deadlineAt - Date.now();
+	if (remaining <= 0) {
+		safeCancel(reader);
+		const elapsed = Date.now() - startAt;
+		const err: any = new Error(
+			`Body read timed out after ${elapsed}ms (${bytesReadSoFar} bytes read)`,
+		);
+		err.code = "ETIMEDOUT";
+		throw err;
+	}
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	try {
+		return await Promise.race([
+			reader.read(),
+			new Promise((_, reject) => {
+				timer = setTimeout(() => {
+					safeCancel(reader);
+					const elapsed = Date.now() - startAt;
+					const err: any = new Error(
+						`Body read timed out after ${elapsed}ms (${bytesReadSoFar} bytes read)`,
+					);
+					err.code = "ETIMEDOUT";
+					reject(err);
+				}, remaining);
+			}),
+		]);
+	} finally {
+		if (timer) clearTimeout(timer);
+	}
+}
+
+export async function readResponseTextWithProgress(
+	response: any,
+	timeoutMs: number = DEFAULT_BODY_READ_MS,
+): Promise<{
 	text: string;
 	bytesRead: number;
 	contentLength: number | null;
@@ -418,13 +490,20 @@ export async function readResponseTextWithProgress(response: any): Promise<{
 	const decoder = new TextDecoder();
 	let result = "";
 	let bytesRead = 0;
+	const startAt = Date.now();
+	const deadlineAt = startAt + timeoutMs;
 	try {
 		while (true) {
-			const { done, value } = await reader.read();
+			const { done, value } = await readChunkWithDeadline(
+				reader,
+				deadlineAt,
+				startAt,
+				bytesRead,
+			);
 			if (done) break;
 			bytesRead += value.byteLength;
 			if (bytesRead > MAX_RESPONSE_BYTES) {
-				reader.cancel();
+				safeCancel(reader);
 				throwResponseTooLarge(bytesRead, declaredLen, MAX_RESPONSE_BYTES);
 			}
 			result += decoder.decode(value, { stream: true });
@@ -432,11 +511,7 @@ export async function readResponseTextWithProgress(response: any): Promise<{
 		result += decoder.decode();
 		return { text: result, bytesRead, contentLength: declaredLen };
 	} catch (err) {
-		try {
-			reader.cancel();
-		} catch {
-			/* ignore */
-		}
+		safeCancel(reader);
 		// Annotate with progress so callers can build a FetchError
 		if (err && typeof err === "object" && !(err as any).bytesRead) {
 			(err as any).bytesRead = bytesRead;
@@ -474,6 +549,7 @@ export async function fetchWithRetry(
 				},
 				browser: (options.browser ?? DEFAULT_BROWSER) as BrowserProfile,
 				os: (options.os ?? DEFAULT_OS) as EmulationOS,
+				timeout: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
 				...(options.proxy ? { proxy: options.proxy } : {}),
 			});
 
@@ -577,7 +653,7 @@ export async function smartFetch(
 	let bytesRead: number;
 	let declaredLen: number | null;
 	try {
-		const result = await readResponseTextWithProgress(res);
+		const result = await readResponseTextWithProgress(res, options.timeoutMs);
 		text = result.text;
 		bytesRead = result.bytesRead;
 		declaredLen = result.contentLength;
@@ -620,11 +696,15 @@ export async function smartFetch(
 				headers,
 				browser: fb as BrowserProfile,
 				os: (options.os ?? DEFAULT_OS) as EmulationOS,
+				timeout: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
 				...(options.proxy ? { proxy: options.proxy } : {}),
 			});
 			if (fbRes?.ok) {
 				try {
-					const fb = await readResponseTextWithProgress(fbRes);
+					const fb = await readResponseTextWithProgress(
+						fbRes,
+						options.timeoutMs,
+					);
 					if (!detectBotBlock(fb.text).blocked) {
 						return {
 							text: fb.text,
@@ -674,6 +754,54 @@ export async function fetchBuffer(
 
 	const res = await fetchWithRetry(url, options);
 	if (!res) return null;
+
+	const contentLengthHeader = res.headers?.get?.("content-length");
+	let declaredLen: number | null = null;
+	if (contentLengthHeader) {
+		const parsed = parseInt(contentLengthHeader, 10);
+		if (!isNaN(parsed) && parsed > 0) declaredLen = parsed;
+	}
+	if (declaredLen !== null && declaredLen > MAX_RESPONSE_BYTES) {
+		console.error(
+			`[FETCH] Response for ${url} exceeds ${MAX_RESPONSE_BYTES} byte limit ` +
+				`(Content-Length: ${(declaredLen / 1024 / 1024).toFixed(1)}MB)`,
+		);
+		return null;
+	}
+
+	if (res.body) {
+		const reader = res.body.getReader();
+		const timeoutMs = options.timeoutMs ?? DEFAULT_BODY_READ_MS;
+		const startAt = Date.now();
+		const deadlineAt = startAt + timeoutMs;
+		const chunks: Uint8Array[] = [];
+		let bytesRead = 0;
+		try {
+			while (true) {
+				const { done, value } = await readChunkWithDeadline(
+					reader,
+					deadlineAt,
+					startAt,
+					bytesRead,
+				);
+				if (done) break;
+				bytesRead += value.byteLength;
+				if (bytesRead > MAX_RESPONSE_BYTES) {
+					safeCancel(reader);
+					throwResponseTooLarge(bytesRead, declaredLen, MAX_RESPONSE_BYTES);
+				}
+				chunks.push(value);
+			}
+			return {
+				buffer: Buffer.concat(chunks),
+				url: normalizeFetchedUrl(res.url),
+				status: res.status,
+			};
+		} catch (err) {
+			safeCancel(reader);
+			throw err;
+		}
+	}
 
 	const arrayBuf = await res.arrayBuffer();
 	return {

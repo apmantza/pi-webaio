@@ -150,6 +150,12 @@ export interface FetchOpts {
 		| "cookies"
 		| "auto"
 	>;
+	/**
+	 * Whole-request timeout in ms (connect + headers + body), passed to
+	 * wreq and used as the body-read deadline. Defaults to
+	 * DEFAULT_TIMEOUT_MS / DEFAULT_BODY_READ_MS in fetch.ts.
+	 */
+	timeoutMs?: number;
 }
 
 export interface StoredContent {
