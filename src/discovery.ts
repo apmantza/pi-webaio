@@ -3,12 +3,20 @@
 
 import { parseHTML } from "linkedom";
 import { smartFetch } from "./fetch.ts";
+import { runInBatches } from "./tools/utils.ts";
 import type { FetchOpts } from "./types.ts";
 
 // ─── Constants ─────────────────────────────────────────────────────
 
 export const IGNORED =
 	/\.(png|jpe?g|gif|svg|webp|ico|pdf|zip|tar|gz|mp[34]|woff2?|ttf|eot|css|js|json|xml|rss|atom)$/i;
+
+// A hostile <sitemapindex> can list tens of thousands of nested sitemaps;
+// bound both the fan-out width per level and the concurrency so a single
+// hostile site can't exhaust sockets/memory or crash the process.
+const MAX_CHILD_SITEMAPS = 50;
+const SITEMAP_CONCURRENCY = 5;
+const MAX_SITEMAP_URLS = 5000;
 
 export const NAV_SELECTORS = [
 	"nav a[href]",
@@ -48,12 +56,16 @@ export async function fetchSitemap(url: string, depth = 0): Promise<string[]> {
 		(r.text.includes("<sitemap>") && !r.text.includes("<urlset"));
 
 	if (isIndex) {
-		const nested = await Promise.all(
-			locs.map((u) => fetchSitemap(u, depth + 1)),
+		// Cap fan-out width and run with bounded concurrency — an index
+		// listing thousands of nested sitemaps must not spawn an
+		// unbounded (and at depth 3, exponential) burst of fetches.
+		const children = locs.slice(0, MAX_CHILD_SITEMAPS);
+		const nested = await runInBatches(children, SITEMAP_CONCURRENCY, (u) =>
+			fetchSitemap(u, depth + 1),
 		);
-		return nested.flat();
+		return nested.flat().slice(0, MAX_SITEMAP_URLS);
 	}
-	return locs;
+	return locs.slice(0, MAX_SITEMAP_URLS);
 }
 
 export async function sitemapFromRobots(origin: string): Promise<string[]> {
@@ -63,8 +75,13 @@ export async function sitemapFromRobots(origin: string): Promise<string[]> {
 		(l: string) => l.replace(/^Sitemap:\s*/i, "").trim(),
 	);
 	if (!urls.length) return [];
-	const results = await Promise.all(urls.map((u) => fetchSitemap(u)));
-	return results.flat();
+	// robots.txt can list an arbitrary number of "Sitemap:" lines — bound
+	// the same way as nested sitemap indexes.
+	const sitemaps = urls.slice(0, MAX_CHILD_SITEMAPS);
+	const results = await runInBatches(sitemaps, SITEMAP_CONCURRENCY, (u) =>
+		fetchSitemap(u),
+	);
+	return results.flat().slice(0, MAX_SITEMAP_URLS);
 }
 
 // ─── Navigation link extraction ────────────────────────────────────
