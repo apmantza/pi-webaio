@@ -5,6 +5,11 @@
 import { parseHTML } from "linkedom";
 import { smartFetch } from "./fetch.ts";
 import { storeSearchResults, getCachedSearch } from "./session-store.ts";
+import {
+	recordEngineSearchSuccess,
+	recordEngineSearchFailure,
+	rankEngines,
+} from "./strategy-memory.ts";
 import type {
 	SearchResult,
 	EngineHealthRecord,
@@ -395,7 +400,7 @@ export async function searchWeb(query: string): Promise<{
 			"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
 	};
 
-	const engines = [
+	const enginesBase = [
 		{
 			id: "ddg" as const,
 			url: `https://html.duckduckgo.com/html/?q=${encoded}`,
@@ -417,6 +422,10 @@ export async function searchWeb(query: string): Promise<{
 			parser: parseBingResults,
 		},
 	];
+
+	// Reorder engines by persistent reliability stats (best first); engines
+	// with no history stay at their original relative position (score 0.5).
+	const engines = rankEngines(enginesBase);
 
 	const promises = engines.map((engine) => {
 		if (!isEngineAvailable(engine.id)) {
@@ -453,6 +462,7 @@ export async function searchWeb(query: string): Promise<{
 		if (!engine || !s.res || s.res.status >= 400) {
 			if (s.res && isQuotaError(s.res.status, s.res.text)) {
 				recordEngineFailure(s.id, `HTTP ${s.res.status}`);
+				recordEngineSearchFailure(s.id);
 			}
 			continue;
 		}
@@ -460,8 +470,10 @@ export async function searchWeb(query: string): Promise<{
 		const parsed = engine.parser(s.res.text);
 		if (parsed.length > 0) {
 			recordEngineSuccess(s.id, s.latencyMs);
+			recordEngineSearchSuccess(s.id, s.latencyMs);
 		} else {
 			recordEngineFailure(s.id, "no results parsed");
+			recordEngineSearchFailure(s.id);
 		}
 		counts[s.id] = parsed.length;
 
