@@ -91,6 +91,16 @@ export function normalizeCacheKey(url: string): string {
 
 // ─── Content store / retrieve ──────────────────────────────────────
 
+/**
+ * Peek at a session-store entry by URL without applying TTL eviction.
+ * Returns the raw entry (which may be expired) or null if absent.
+ * Used by revalidation and diff logic to inspect stale entries.
+ */
+export function peekStoredContent(url: string): StoredContent | null {
+	const key = normalizeCacheKey(url);
+	return sessionStore.get(key) ?? null;
+}
+
 export function getStoredContent(url: string): StoredContent | null {
 	const key = normalizeCacheKey(url);
 	const entry = sessionStore.get(key);
