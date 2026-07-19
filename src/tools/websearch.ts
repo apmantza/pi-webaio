@@ -17,6 +17,10 @@ import {
 	cdpAvailable as cdpAvailableGA,
 } from "../google-ai.ts";
 import type { SearchResult } from "../types.ts";
+import {
+	triggerPrefetch,
+	DEFAULT_PREFETCH_COUNT,
+} from "../prefetch.ts";
 
 export function registerWebsearchTool(pi: ExtensionAPI): void {
 	pi.registerTool({
@@ -48,6 +52,12 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 					default: true,
 				}),
 			),
+			prefetch: Type.Optional(
+				Type.Union([Type.Boolean(), Type.Number()], {
+					description:
+						"Opt-in speculative prefetch: background-fetch the top result URLs into the session cache while you read the results, so follow-up aio-webfetch calls are served instantly from cache. Pass true to prefetch the top 3 results, or a positive integer to prefetch that many. Default: false (off).",
+				}),
+			),
 		}),
 
 		async execute(_toolCallId, params, _signal, onUpdate) {
@@ -56,6 +66,15 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 			const max = params.max ?? 15;
 			const useGoogle = params.google ?? true;
 			const startedAt = Date.now();
+
+			// Resolve prefetch count: false/undefined → 0, true → default, number → clamp ≥ 0.
+			const prefetchParam = params.prefetch;
+			const prefetchCount: number =
+				prefetchParam === true
+					? DEFAULT_PREFETCH_COUNT
+					: typeof prefetchParam === "number" && prefetchParam > 0
+						? Math.floor(prefetchParam)
+						: 0;
 
 			const SEARCH_TIMEOUT = 7000;
 			// Chrome cold-start can take up to 30s; fire it in parallel so startup
@@ -199,6 +218,22 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 				engineLabel.push(`Google:${googleResults.length}`);
 			if (!engineLabel.length) engineLabel.push("HTTP");
 
+			// Trigger speculative prefetch of top-N result URLs in the background.
+			// This must happen before building the text so the note is included,
+			// but the actual network I/O is fire-and-forget (non-blocking).
+			const prefetchUrls = limited.slice(0, prefetchCount).map((r) => r.url);
+			if (prefetchUrls.length > 0) {
+				// triggerPrefetch returns a Promise that resolves when all prefetches
+				// finish, but we intentionally do NOT await it. Failures are swallowed
+				// inside the module. setImmediate inside triggerPrefetch is unref'd.
+				void triggerPrefetch(prefetchUrls, prefetchCount);
+			}
+
+			const prefetchNote =
+				prefetchUrls.length > 0
+					? `\n_(prefetching top ${prefetchUrls.length} result${prefetchUrls.length === 1 ? "" : "s"} in background — follow-up aio-webfetch will be served from cache)_`
+					: "";
+
 			const text = [
 				`Search results for "${query}" (${engineLabel.join(" + ")})`,
 				"",
@@ -210,6 +245,7 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 							: "";
 					return `${i + 1}. **${r.title}**${domainTag}${srcTag}\n   ${r.url}\n   ${r.snippet}`;
 				}),
+				prefetchNote,
 			].join("\n");
 
 			return {
@@ -220,6 +256,7 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 					...httpCounts,
 					googleCount: googleResults.length,
 					durationMs: Date.now() - startedAt,
+					prefetchCount: prefetchUrls.length,
 				},
 			};
 		},
