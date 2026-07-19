@@ -21,6 +21,7 @@ import {
 	formatInteractablesSection,
 } from "../interactive-elements.ts";
 import { pruneMarkdown } from "../prune-markdown.ts";
+import { createBM25Scorer } from "../bm25.ts";
 import {
 	BASE_TEMP,
 	getSearchContext,
@@ -215,6 +216,87 @@ export function maybeChunkMarkdown(
 	}
 }
 
+/** Default number of top chunks returned in answer mode. */
+export const DEFAULT_TOP_CHUNKS = 5;
+
+/**
+ * Apply query-focused answer mode to a markdown body.
+ *
+ * Chunks the markdown, scores each chunk by BM25 against the query,
+ * selects the top-k highest-scoring chunks (breaking ties by document
+ * position), re-orders them by original position, and prefixes each
+ * with its heading breadcrumb. A footer notes how many sections were
+ * omitted and that the full content is cached.
+ *
+ * Returns `undefined` when the body is empty, the query is empty, or
+ * chunking yields no results so the caller can fall back to full content.
+ *
+ * @internal Exported for unit tests only.
+ */
+export function applyQueryAnswerMode(
+	body: string,
+	query: string,
+	topK: number = DEFAULT_TOP_CHUNKS,
+	chunkOptions: { maxTokens?: number; overlapTokens?: number } = {},
+): string | undefined {
+	if (!body || !query?.trim()) return undefined;
+
+	let chunks: Chunk[];
+	try {
+		chunks = chunkMarkdown(body, chunkOptions);
+	} catch {
+		return undefined;
+	}
+	if (chunks.length === 0) return undefined;
+
+	// Score all chunks in one pass (better IDF than scoring one at a time).
+	const scorer = createBM25Scorer(query);
+	const texts = chunks.map((c) => c.text);
+	const scores = scorer.scoreAll(texts);
+
+	// Pair each chunk with its score and original index.
+	const scored = chunks.map((c, i) => ({ chunk: c, score: scores[i] ?? 0 }));
+
+	// Select top-k by score; preserve document order among ties.
+	const sorted = scored.slice().sort((a, b) => b.score - a.score);
+	const topK_ = Math.max(1, Math.floor(topK));
+	const selected = sorted.slice(0, topK_);
+
+	// Re-sort selected chunks by original document position.
+	selected.sort((a, b) => a.chunk.index - b.chunk.index);
+
+	const omitted = chunks.length - selected.length;
+
+	// Build a heading-breadcrumb for each chunk by scanning ALL chunks in
+	// document order (not just the selected ones) to track heading context.
+	// This correctly handles the case where the chunker splits a heading
+	// into a separate chunk from its body text, and also handles overlap
+	// prepending (which means chunk.text may not be verbatim in `body`).
+	const HEADING_INLINE_RE = /^#{1,6}\s+(.+)/m;
+
+	// Walk all chunks in order, tracking the last heading seen.
+	const headingByIndex = new Map<number, string>();
+	let currentHeadingCtx = "";
+	for (const c of chunks) {
+		const hm = c.text.match(HEADING_INLINE_RE);
+		if (hm) currentHeadingCtx = hm[1]!.trim();
+		headingByIndex.set(c.index, currentHeadingCtx);
+	}
+
+	const parts = selected.map(({ chunk }) => {
+		const heading = headingByIndex.get(chunk.index) ?? "";
+		const breadcrumb = heading ? `> **${heading}**\n\n` : "";
+		return `${breadcrumb}${chunk.text}`;
+	});
+
+	const footer =
+		omitted > 0
+			? `\n\n---\n_${omitted} section${omitted === 1 ? "" : "s"} omitted. Full content cached — retrieve with aio-webcontent by URL._`
+			: `\n\n---\n_Full content cached — retrieve with aio-webcontent by URL._`;
+
+	return parts.join("\n\n---\n\n") + footer;
+}
+
 export function registerWebfetchTool(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: "aio-webfetch",
@@ -222,7 +304,7 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 		description:
 			"Fetch a single URL (or batch of URLs) and convert to markdown with anti-bot TLS fingerprinting. Detects PDFs, GitHub repos, and Next.js RSC. Long content is automatically summarized via Gemini AI; full content always saved to file.",
 		promptSnippet:
-			"aio-webfetch(url|urls, mode?, browser?, os?, proxy?, prune?, query?, interactive?, bypass?, bypassStrategies?, compile?, out?, cacheTtlSeconds?, start_index?, max_length?, format?): fetch URL(s) with anti-bot TLS fingerprinting, defuddle extraction, and optional AI summary. Default `format=markdown` saves to disk; pass `format=html|text|json|raw` for an in-memory body. Use the read tool on the saved path for full text.",
+			"aio-webfetch(url|urls, mode?, browser?, os?, proxy?, prune?, query?, topChunks?, interactive?, bypass?, bypassStrategies?, compile?, out?, cacheTtlSeconds?, start_index?, max_length?, format?): fetch URL(s) with anti-bot TLS fingerprinting, defuddle extraction, and optional AI summary. Default `format=markdown` saves to disk; pass `format=html|text|json|raw` for an in-memory body. Use the read tool on the saved path for full text. Pass `query` alone for answer mode: returns top-k BM25-scored chunks with heading breadcrumbs; full content cached for aio-webcontent.",
 		promptGuidelines: [
 			"Use aio-webfetch when the user wants to retrieve specific webpage(s), article(s), or file(s).",
 			"Use aio-webpull when the user wants to download an entire site or docs collection.",
@@ -286,7 +368,14 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 			query: Type.Optional(
 				Type.String({
 					description:
-						"Optional relevance query used with prune. When set, pruning keeps sections most relevant to this query using BM25 scoring.",
+						"Relevance query for answer mode or query-aware pruning. When set without `prune`, activates answer mode: the page is chunked and only the top-k most relevant chunks (scored by BM25) are returned — ordered by document position with heading breadcrumbs. The full content is still cached so aio-webcontent can retrieve it by URL. When used with `prune`, keeps sections most relevant to this query during pruning.",
+				}),
+			),
+			topChunks: Type.Optional(
+				Type.Number({
+					description:
+						"Maximum number of top-scoring chunks to return in answer mode (query set, prune absent). Default 5. Min 1.",
+					minimum: 1,
 				}),
 			),
 			interactive: Type.Optional(
@@ -947,6 +1036,80 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 					const responseId = (r as any).responseId as string | undefined;
 					let summaryNotice: string;
 					let displayContent: string;
+
+					// ── Answer mode ──────────────────────────────────────────────
+					// When `query` is set without `prune`, return only the top-k
+					// most relevant chunks scored by BM25. Full content is already
+					// stored above; only the agent-visible display is narrowed.
+					const answerModeQuery = params.query as string | undefined;
+					const answerModePrune = params.prune as number | undefined;
+					const answerModeActive =
+						!!answerModeQuery && !answerModePrune && itemFormat === "markdown";
+					if (answerModeActive) {
+						const topK = (params.topChunks as number | undefined) ?? DEFAULT_TOP_CHUNKS;
+						const answerBody = applyQueryAnswerMode(
+							(r as any).body ?? preview,
+							answerModeQuery!,
+							topK,
+							{
+								maxTokens: params.maxTokens as number | undefined,
+								overlapTokens: params.overlapTokens as number | undefined,
+							},
+						);
+						if (answerBody !== undefined) {
+							summaryNotice = r.outPath
+								? `\n[Answer mode: top ${topK} chunks for "${answerModeQuery}". Full content (${preview.length} chars) saved to ${r.outPath}.]`
+								: `\n[Answer mode: top ${topK} chunks for "${answerModeQuery}". Full content cached (result ID ${responseId ?? "unavailable"}).]`;
+							displayContent = answerBody;
+							// Skip the normal summarize/truncate path.
+							const formatLabel =
+								`✓ Fetched and saved to ${r.outPath}${summaryNotice}`;
+							const chunks =
+								maybeChunkMarkdown((r as any).body, params, chunkingErrors);
+							const chunkFmt = formatChunksText(
+								chunks,
+								params.overlapTokens ?? DEFAULT_OVERLAP_TOKENS,
+							);
+							const text = [
+								formatLabel,
+								`\nTitle: ${r.title}`,
+								`URL: ${r.url}`,
+								`Format: ${itemFormat}`,
+								`Response ID: ${responseId}`,
+								chunkFmt.header ? `\n${chunkFmt.header}` : "",
+								"\n---\n",
+								displayContent,
+								chunkFmt.body
+									? ["\n\n---\n", `## Chunks (${chunks!.length})\n`, chunkFmt.body].join("\n")
+									: "",
+								chunkingErrors.length > 0
+									? `\n\n[WARN] Chunking failed: ${chunkingErrors.join("; ")}`
+									: "",
+							].join("\n");
+							return {
+								content: [{ type: "text", text }],
+								details: {
+									outPath: r.outPath,
+									title: r.title,
+									url: r.url,
+									responseId,
+									browser,
+									os,
+									proxy,
+									truncated: false,
+									summarized: false,
+									fullLength: preview.length,
+									status: "done",
+									progress: 1,
+									spinnerTick: details.spinnerTick,
+									content: displayContent,
+									format: itemFormat,
+									chunks,
+									items: details.items,
+								},
+							};
+						}
+					}
 
 					const compactJsonPreview = !summarized
 						? buildCompactJsonPreview(preview, {
