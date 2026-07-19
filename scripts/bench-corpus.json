@@ -1,0 +1,227 @@
+[
+  {
+    "url": "https://en.wikipedia.org/wiki/Python_(programming_language)",
+    "category": "wikipedia",
+    "description": "Wikipedia article on Python",
+    "markers": {
+      "title": "Python",
+      "required": ["Guido van Rossum", "interpreted", "object-oriented"]
+    }
+  },
+  {
+    "url": "https://arxiv.org/abs/1706.03762",
+    "category": "arxiv",
+    "description": "Attention Is All You Need",
+    "markers": {
+      "title": "Attention",
+      "required": ["transformer", "attention", "neural"]
+    }
+  },
+  {
+    "url": "https://news.ycombinator.com/item?id=35600379",
+    "category": "hackernews",
+    "description": "HN thread",
+    "markers": {
+      "title": "Ask HN",
+      "required": ["comments", "points"]
+    }
+  },
+  {
+    "url": "https://www.npmjs.com/package/lodash",
+    "category": "npm",
+    "description": "lodash npm package",
+    "markers": {
+      "title": "lodash",
+      "required": ["utility", "weekly downloads"]
+    }
+  },
+  {
+    "url": "https://pypi.org/project/requests/",
+    "category": "pypi",
+    "description": "requests PyPI package",
+    "markers": {
+      "title": "requests",
+      "required": ["HTTP", "Python"]
+    }
+  },
+  {
+    "url": "https://stackoverflow.com/questions/231767/what-does-the-yield-keyword-do-in-python",
+    "category": "stackexchange",
+    "description": "SO question on Python yield",
+    "markers": {
+      "title": "yield",
+      "required": ["generator", "iterable"]
+    }
+  },
+  {
+    "url": "https://openlibrary.org/works/OL45804W/Fantastic_Mr_Fox",
+    "category": "openlibrary",
+    "description": "Open Library book record",
+    "markers": {
+      "title": "Fantastic Mr Fox",
+      "required": ["Roald Dahl", "editions"]
+    }
+  },
+  {
+    "url": "https://dev.to/ben/how-to-create-a-good-pull-request-1l0c",
+    "category": "devto",
+    "description": "dev.to article on pull requests",
+    "markers": {
+      "title": "pull request",
+      "required": ["code", "review"]
+    }
+  },
+  {
+    "url": "https://crates.io/crates/serde",
+    "category": "cratesio",
+    "description": "serde crate",
+    "markers": {
+      "title": "serde",
+      "required": ["serialization", "Rust"]
+    }
+  },
+  {
+    "url": "https://rubygems.org/gems/rails",
+    "category": "rubygems",
+    "description": "rails Ruby gem",
+    "markers": {
+      "title": "rails",
+      "required": ["Ruby", "web framework"]
+    }
+  },
+  {
+    "url": "https://packagist.org/packages/laravel/framework",
+    "category": "packagist",
+    "description": "Laravel Packagist package",
+    "markers": {
+      "title": "laravel",
+      "required": ["PHP", "framework"]
+    }
+  },
+  {
+    "url": "https://pub.dev/packages/http",
+    "category": "pubdev",
+    "description": "Dart http package on pub.dev",
+    "markers": {
+      "title": "http",
+      "required": ["Dart", "HTTP"]
+    }
+  },
+  {
+    "url": "https://pkg.go.dev/net/http",
+    "category": "gopackages",
+    "description": "Go net/http package",
+    "markers": {
+      "title": "http",
+      "required": ["package http", "func"]
+    }
+  },
+  {
+    "url": "https://www.nuget.org/packages/Newtonsoft.Json",
+    "category": "nuget",
+    "description": "Newtonsoft.Json NuGet package",
+    "markers": {
+      "title": "Newtonsoft.Json",
+      "required": ["JSON", ".NET"]
+    }
+  },
+  {
+    "url": "https://gitlab.com/gitlab-org/gitlab",
+    "category": "gitlab",
+    "description": "GitLab main repo on GitLab",
+    "markers": {
+      "title": "gitlab",
+      "required": ["stars", "forks"]
+    }
+  },
+  {
+    "url": "https://www.reddit.com/r/programming/comments/12zzk5z/what_are_some_good_resources_for_learning_rust/",
+    "category": "reddit",
+    "description": "Reddit thread on Rust learning",
+    "markers": {
+      "title": "Rust",
+      "required": ["comments", "upvotes"]
+    }
+  },
+  {
+    "url": "https://docs.python.org/3/library/asyncio.html",
+    "category": "docsite",
+    "description": "Python asyncio docs",
+    "markers": {
+      "title": "asyncio",
+      "required": ["async", "event loop"]
+    }
+  },
+  {
+    "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise",
+    "category": "general-web",
+    "description": "MDN Promise docs",
+    "markers": {
+      "title": "Promise",
+      "required": ["asynchronous", "resolve"]
+    }
+  },
+  {
+    "url": "https://martinfowler.com/articles/continuousIntegration.html",
+    "category": "general-web",
+    "description": "Martin Fowler CI article",
+    "markers": {
+      "title": "Continuous Integration",
+      "required": ["build", "mainline"]
+    }
+  },
+  {
+    "url": "https://www.paulgraham.com/startupideas.html",
+    "category": "general-web",
+    "description": "Paul Graham startup ideas essay",
+    "markers": {
+      "title": "startup",
+      "required": ["idea", "problem"]
+    }
+  },
+  {
+    "url": "https://css-tricks.com/snippets/css/a-guide-to-flexbox/",
+    "category": "general-web",
+    "description": "CSS Tricks Flexbox guide",
+    "markers": {
+      "title": "Flexbox",
+      "required": ["flex", "container"]
+    }
+  },
+  {
+    "url": "https://www.typescriptlang.org/docs/handbook/2/types-from-types.html",
+    "category": "general-web",
+    "description": "TypeScript handbook",
+    "markers": {
+      "title": "TypeScript",
+      "required": ["type", "keyof"]
+    }
+  },
+  {
+    "url": "https://react.dev/learn/thinking-in-react",
+    "category": "general-web",
+    "description": "React docs - Thinking in React",
+    "markers": {
+      "title": "React",
+      "required": ["component", "state"]
+    }
+  },
+  {
+    "url": "https://httpbin.org/get",
+    "category": "general-web",
+    "description": "httpbin JSON endpoint (tests JSON extraction)",
+    "markers": {
+      "title": "httpbin",
+      "required": ["headers", "origin"]
+    }
+  },
+  {
+    "url": "https://github.com/nodejs/node",
+    "category": "general-web",
+    "description": "Node.js GitHub repo (tests GitHub via general pipeline)",
+    "markers": {
+      "title": "node",
+      "required": ["JavaScript", "stars"]
+    }
+  }
+]
