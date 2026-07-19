@@ -50,7 +50,7 @@
   "scripts": {
     "build": "tsc --project tsconfig.dist.json",
     "build:dist": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && tsc --project tsconfig.dist.json",
-    "prepare": "npm run build:dist",
+    "prepare": "node scripts/prepare.mjs",
     "lint": "tsc --project tsconfig.json",
     "watch": "tsc --watch",
     "test": "node --experimental-strip-types --test tests/unit.test.mjs",
