@@ -30,6 +30,9 @@
   ],
   "type": "module",
   "main": "./dist/index.js",
+  "bin": {
+    "pi-webaio-mcp": "bin/pi-webaio-mcp.mjs"
+  },
   "pi": {
     "extensions": [
       "./dist/index.js"
@@ -54,6 +57,7 @@
     "lint": "tsc --project tsconfig.json",
     "watch": "tsc --watch",
     "test": "node --experimental-strip-types --test tests/unit.test.mjs",
+    "test:mcp": "node --test tests/mcp-server.test.mjs",
     "test:integration": "node --experimental-strip-types --test tests/integration.test.mjs",
     "test:new": "node --experimental-strip-types --test tests/new-features.test.mjs",
     "test:paywall": "node --experimental-strip-types --test tests/paywall.test.mjs",
@@ -80,7 +84,9 @@
     "test:bench": "node --experimental-strip-types --test tests/bench-harness.test.mjs"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
     "@earendil-works/pi-tui": "^0.79.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@mozilla/readability": "^0.6.0",
     "defuddle": "^0.18.1",
     "linkedom": "^0.18.12",
