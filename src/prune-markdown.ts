@@ -22,7 +22,7 @@ const MIN_SECTION_CHARS = 80;
  * Split markdown into logical sections.
  * A section starts with a heading (# .. ## .. ###) or a horizontal rule (---).
  */
-function splitSections(markdown: string): Array<{
+export function splitSections(markdown: string): Array<{
 	heading: string;
 	level: number;
 	content: string;
@@ -380,6 +380,100 @@ export function pruneByRelevance(
 	return pruneMarkdown(markdown, { maxTokens, query }) as ReturnType<
 		typeof pruneByRelevance
 	>;
+}
+
+/**
+ * Apply a hard token-budget contract to already-processed content.
+ *
+ * Unlike `pruneMarkdown` (which operates on raw source), this function is
+ * designed to be applied *after* answer-mode or other transformations have
+ * already narrowed the content.  It:
+ *
+ * 1. Returns the content unchanged when it already fits.
+ * 2. Extracts a heading skeleton (all heading lines) to always preserve structure.
+ * 3. Drops lowest-value sections first:
+ *    - With a `query`: lowest-BM25-scored sections go first.
+ *    - Without a `query`: sections are dropped from the bottom up.
+ * 4. Appends a standardised footer noting how many sections were omitted
+ *    and that the full content is cached.
+ * 5. Re-measures after pruning and hard-trims if still over budget (footer
+ *    counts against the budget).
+ *
+ * @param content   Text to fit within the budget.
+ * @param budget    Hard token limit (minimum 100).
+ * @param query     Optional relevance query — drives BM25 section ordering.
+ * @param url       URL used in the footer so the agent knows where to retrieve
+ *                  the full content.
+ * @returns Pruned string that measures ≤ budget tokens.
+ */
+export function applyTokenBudget(
+	content: string,
+	budget: number,
+	query?: string,
+	url?: string,
+): string {
+	const effectiveBudget = Math.max(100, Math.floor(budget));
+	if (estimateTokens(content) <= effectiveBudget) return content;
+
+	// Extract heading skeleton — always preserved in the output.
+	const headingLines = content
+		.split("\n")
+		.filter((l) => /^#{1,6}\s/.test(l));
+
+	// Use pruneMarkdown to select sections within budget.
+	// Reserve tokens for the footer so the guarantee is hard after we append it.
+	const FOOTER_TOKEN_RESERVE = 30;
+	const contentBudget = Math.max(1, effectiveBudget - FOOTER_TOKEN_RESERVE);
+
+	const pruned = pruneMarkdown(content, {
+		maxTokens: contentBudget,
+		query,
+		// When a query is present, drop lowest-BM25 sections first (the
+		// default pruneMarkdown behaviour). Without a query the heuristic
+		// scorer drops lower-priority sections first, which effectively
+		// preserves the top of the document.
+	});
+
+	// Count sections in the original vs kept.
+	const originalSections = splitSections(content);
+	const prunedSections = splitSections(pruned.content);
+	const omitted = Math.max(0, originalSections.length - prunedSections.length);
+
+	const retrieveHint = url
+		? `retrieve via aio-webcontent with URL: ${url}`
+		: "retrieve via aio-webcontent by URL";
+
+	const footer =
+		omitted > 0
+			? `\n\n---\n_truncated to fit ${effectiveBudget}-token budget: ${omitted} section${omitted === 1 ? "" : "s"} omitted; full content cached — ${retrieveHint}._`
+			: `\n\n---\n_content fits ${effectiveBudget}-token budget; full content cached — ${retrieveHint}._`;
+
+	// Preserve heading skeleton even when most content was dropped.
+	// Prepend skeleton if none of the headings survived pruning.
+	let result = pruned.content;
+	if (headingLines.length > 0) {
+		const resultHasHeadings = /^#{1,6}\s/m.test(result);
+		if (!resultHasHeadings) {
+			const skeleton = headingLines.join("\n");
+			result = `${skeleton}\n\n${result}`;
+		}
+	}
+
+	result = result + footer;
+
+	// Hard guarantee: re-measure and trim character-level if still over.
+	if (estimateTokens(result) > effectiveBudget) {
+		// Trim content portion only, keep footer.
+		const footerIdx = result.lastIndexOf("\n\n---\n");
+		const body = footerIdx > 0 ? result.slice(0, footerIdx) : result;
+		const ft = footerIdx > 0 ? result.slice(footerIdx) : "";
+		const footerTokens = estimateTokens(ft);
+		const bodyBudget = Math.max(0, effectiveBudget - footerTokens);
+		const trimmedBody = truncateToBudget(body, bodyBudget);
+		result = trimmedBody + ft;
+	}
+
+	return result;
 }
 
 /**
