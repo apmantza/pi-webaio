@@ -96,7 +96,11 @@ test("applyTokenBudget: footer includes url when provided", () => {
 	]);
 	const url = "https://example.com/article";
 	const result = applyTokenBudget(doc, 100, undefined, url);
-	assert.ok(result.includes(url), "footer should include the provided URL");
+	assert.match(
+		result,
+		/retrieve via aio-webcontent with URL: https:\/\/example\.com\/article/,
+		"footer should include the provided URL",
+	);
 });
 
 test("applyTokenBudget: footer mentions sections omitted count", () => {
