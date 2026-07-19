@@ -13,7 +13,8 @@ Registered pi tools and parameters provided by pi-webaio.
 | `aio-webcontent` | Retrieve previously fetched content from session storage by URL. Returns **full untruncated content** — no data loss.                                                                                                                                                                                                                 |
 | `aio-webmap`     | Discovery-only tool — finds pages via robots.txt, sitemaps, navigation links, and llms.txt without fetching content. Returns structured URL list.                                                                                                                                                                                     |
 | `aio-webresult`  | Retrieve a previously fetched result by persistent response ID. Survives restarts. Shows recent results if ID not found.                                                                                                                                                                                                              |
-| `aio-webpull`    | Pull any public website or docs site into local markdown files. Discovers pages via sitemap, navigation links, or crawling. Rewrites internal links to relative `.md` paths. Supports `routes` for per-pattern routing, `resume` for checkpoint resume, `adaptive` selectors, and `bypass` for opt-in paywall bypass on every page.       |
+| `aio-webpull`    | Pull any public website or docs site into local markdown files. Discovers pages via sitemap, navigation links, or crawling. Rewrites internal links to relative `.md` paths. Supports `routes` for per-pattern routing, `resume` for checkpoint resume, `adaptive` selectors, and `bypass` for opt-in paywall bypass on every page. Automatically builds a BM25 index for offline search. |
+| `aio-webquery`   | BM25 full-text search over a corpus pulled by `aio-webpull`. No re-fetching — purely local, offline retrieval. Returns top-k chunks with source file, original URL, and heading breadcrumb. Requires running `aio-webpull` first to build the index.                                                                                   |
 
 ### Tool Parameters
 
@@ -86,3 +87,11 @@ Registered pi tools and parameters provided by pi-webaio.
 | `resume`  | `boolean` | `true`       | Resume from previous pull (auto-detected from output directory). Set `false` to force a fresh pull.   |
 | `routes`  | `object[]`| —            | URL pattern → fetcher mode routing. Each: `{ pattern: string, mode?: string, browser?: string, os?: string, extractor?: string }`. Pattern supports substring, glob (`*/docs/*`), or regex (`/^\/api\//`). First match wins. |
 | `adaptive`| `boolean` | `false`      | Enable adaptive content selectors that survive site redesigns via structural DOM fingerprinting.       |
+
+#### `aio-webquery`
+
+| Parameter | Type     | Default              | Description                                                                                         |
+| --------- | -------- | -------------------- | --------------------------------------------------------------------------------------------------- |
+| `query`   | `string` | —                    | Search query to run against the local corpus                                                        |
+| `dir`     | `string` | `<os-temp>/pi-webaio`| Directory containing a pulled corpus (output of `aio-webpull`). Defaults to the standard temp base. |
+| `topK`    | `number` | `8`                  | Number of top-ranked chunks to return                                                               |
