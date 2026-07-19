@@ -108,6 +108,8 @@ export interface PullResult {
 	description?: string;
 	wordCount?: number;
 	rawHtml?: string;
+	/** HTTP validators captured from the raw response (issue #46). */
+	httpValidators?: { etag?: string; lastModified?: string };
 }
 
 export type ScrapeMode = "fast" | "fingerprint" | "browser" | "auto";
@@ -170,6 +172,9 @@ export interface StoredContent {
 	site?: string;
 	language?: string;
 	wordCount?: number;
+	/** HTTP revalidation validators (issue #46) */
+	etag?: string;
+	lastModified?: string;
 }
 
 export interface SearchResult {

@@ -10,7 +10,7 @@ import {
 	formatChunksText,
 	type Chunk,
 } from "../chunker.ts";
-import { DEFAULT_OS, getLatestChromeProfile } from "../fetch.ts";
+import { DEFAULT_OS, getLatestChromeProfile, smartFetch } from "../fetch.ts";
 import {
 	cdpAvailable as cdpAvailableGA,
 	ensureChrome,
@@ -25,11 +25,23 @@ import { createBM25Scorer } from "../bm25.ts";
 import {
 	BASE_TEMP,
 	getSearchContext,
+	getStoredContent,
 	normalizeCacheKey,
+	peekStoredContent,
 	storeContent,
 	summaryCache,
 } from "../session-store.ts";
 import { storeResult } from "../storage.ts";
+import {
+	attachValidators,
+	buildConditionalHeaders,
+	drainCapturedValidators,
+	extractValidators,
+	hasValidators,
+	isExpiredEntry,
+	refreshEntryOnNotModified,
+} from "../http-validators.ts";
+import { diffContent } from "../content-diff.ts";
 import { estimateTokens } from "../token-count.ts";
 import type { ScrapeMode } from "../types.ts";
 import {
@@ -440,6 +452,12 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 					minimum: 100,
 				}),
 			),
+			diff: Type.Optional(
+				Type.Boolean({
+					description:
+						"When true and a previous version of the URL is cached, fetch fresh content and return a section-level diff (added/changed/removed sections by heading) instead of the full page. If content is unchanged (including a 304 Not Modified response), reports 'unchanged since <time>, 0 changes'. When nothing is cached, falls back to a normal full fetch with a note that no baseline exists. The new content replaces the cache so the next diff is against this fetch.",
+				}),
+			),
 		}),
 
 		async execute(
@@ -713,7 +731,151 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 							const bypassStrategies = params.bypassStrategies as
 								| string[]
 								| undefined;
+							const diffMode = params.diff === true;
+
+							// ── HTTP revalidation (issue #46) ─────────────────────────
+							// When the session-cache entry is present but TTL-expired and
+							// has stored validators (ETag/Last-Modified), send a
+							// conditional request before falling through to pullPageEnhanced.
+							// 304 → refresh TTL, serve cached entry, skip re-extraction.
+							// 200 → proceed as normal fresh fetch (validators updated below).
+							// Only applies to the plain/wreq rung (mode !== "browser") so we
+							// don't try to send HTTP headers via Playwright.
+							let notModifiedResult: {
+								ok: true;
+								url: string;
+								title?: string;
+								content: string;
+								fromCache: true;
+								notModified: true;
+								cachedAt: number;
+							} | null = null;
+
+							if (mode !== "browser") {
+								const cachedEntry = getStoredContent(url.href);
+								// getStoredContent returns null when TTL is still fresh
+								// (entry served directly from cache by the caller) OR when
+								// it doesn't exist. We need the raw Map lookup to detect
+								// expired-but-present entries; getStoredContent already
+								// deleted the key if expired, so we check before expiry.
+								// Re-look: peek without the TTL filter.
+								const rawEntry = peekStoredContent(url.href);
+
+								if (
+									rawEntry &&
+									isExpiredEntry(rawEntry) &&
+									hasValidators(rawEntry)
+								) {
+									// Entry is expired but has validators — attempt revalidation.
+									const condHeaders = buildConditionalHeaders(rawEntry);
+									const revalRes = await smartFetch(url.href, {
+										browser,
+										os,
+										proxy,
+										wreqSession,
+										headers: condHeaders,
+									});
+									if (revalRes && revalRes.status === 304) {
+										// Server confirmed content unchanged.
+										const newValidators = extractValidators(revalRes.headers);
+										refreshEntryOnNotModified(url.href, newValidators);
+										// Re-fetch the entry (TTL is now fresh again).
+										const refreshed = getStoredContent(url.href);
+										if (refreshed && refreshed.content) {
+											notModifiedResult = {
+												ok: true,
+												url: url.href,
+												title: refreshed.title,
+												content: refreshed.content,
+												fromCache: true,
+												notModified: true,
+												cachedAt: refreshed.timestamp,
+											};
+										}
+									}
+									// On 200 or other: fall through to normal pullPageEnhanced below.
+								}
+							}
+
 							updateItem(idx, { status: "loading", progress: 0.4 });
+
+							// ── Diff mode early-exit on 304 (issue #45 + #46 synergy) ──
+							if (notModifiedResult && diffMode) {
+								const cachedDate = new Date(notModifiedResult.cachedAt).toISOString();
+								const diffText = `Unchanged since ${cachedDate}, 0 changes (304 Not Modified — server confirmed content identical).`;
+								updateItem(idx, {
+									status: "done",
+									progress: 1,
+									elapsedMs: Date.now() - startedAt,
+								});
+								const responseId = await storeResult(
+									notModifiedResult.url,
+									notModifiedResult.content,
+									"webfetch",
+									{ title: notModifiedResult.title },
+								);
+								return {
+									ok: true,
+									url: notModifiedResult.url,
+									title: notModifiedResult.title,
+									outPath: undefined,
+									length: diffText.length,
+									responseId,
+									body: diffText,
+									format: "markdown",
+									savedToDisk: false,
+									diffResult: diffText,
+								};
+							}
+
+							// ── Serve from 304 cache (no diff mode) ─────────────────────
+							if (notModifiedResult && !diffMode) {
+								updateItem(idx, {
+									status: "done",
+									progress: 1,
+									elapsedMs: Date.now() - startedAt,
+								});
+								const responseId = await storeResult(
+									notModifiedResult.url,
+									notModifiedResult.content,
+									"webfetch",
+									{ title: notModifiedResult.title },
+								);
+								return {
+									ok: true,
+									url: notModifiedResult.url,
+									title: notModifiedResult.title,
+									outPath: undefined,
+									length: notModifiedResult.content.length,
+									responseId,
+									body: notModifiedResult.content,
+									format: "markdown",
+									savedToDisk: false,
+								};
+							}
+
+							// ── Capture old content for diff (issue #45) ─────────────────
+							// Before the fresh fetch, record current cached content if
+							// diff mode is on and there is a baseline.
+							let diffBaseline: string | null = null;
+							let diffBaselineTimestamp: number | null = null;
+							if (diffMode) {
+								// Try fresh from cache (non-expired entry).
+								const existing = getStoredContent(url.href);
+								if (existing && existing.content) {
+									diffBaseline = existing.content;
+									diffBaselineTimestamp = existing.timestamp;
+								} else {
+									// Check raw map for expired entries too (we want to diff
+									// even if cache expired — new content replaces it below).
+									const raw = peekStoredContent(url.href);
+									if (raw && raw.content) {
+										diffBaseline = raw.content;
+										diffBaselineTimestamp = raw.timestamp;
+									}
+								}
+							}
+
 							let result = await pullPageEnhanced(url.href, {
 								browser,
 								os,
@@ -850,7 +1012,35 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 										wordCount: result.wordCount,
 									},
 								);
+								// Drain HTTP validators captured by pullPage's internal
+								// smartFetch call via the side channel in http-validators.ts
+								// and persist them with the session-cache entry (issue #46).
+								const captured = drainCapturedValidators(result.url!);
+								if (captured) {
+									attachValidators(result.url!, captured);
+								}
+							} else if (formatted.format === "markdown") {
+								// Non-disk markdown (e.g. when savedToDisk is false but format
+								// is still markdown): store in session cache for diff baseline.
+								storeContent(
+									result.url!,
+									result.title,
+									formatted.body,
+									undefined,
+									{
+										author: result.author,
+										published: result.published,
+										site: result.site,
+										language: result.language,
+										wordCount: result.wordCount,
+									},
+								);
+								const capturedNonDisk = drainCapturedValidators(result.url!);
+								if (capturedNonDisk) {
+									attachValidators(result.url!, capturedNonDisk);
+								}
 							}
+
 							const responseId = await storeResult(
 								result.url!,
 								formatted.body,
@@ -864,6 +1054,39 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 									},
 								},
 							);
+
+							// ── Diff mode return (issue #45) ──────────────────────────────
+							if (diffMode && formatted.format === "markdown") {
+								let diffText: string;
+								if (diffBaseline === null) {
+									diffText = `No baseline cached for ${result.url!} — fetched fresh content (${formatted.body.length} chars). Diff will be available on the next call.`;
+								} else {
+									const dr = diffContent(diffBaseline, formatted.body);
+									if (dr.unchanged) {
+										const baseDate = diffBaselineTimestamp
+											? new Date(diffBaselineTimestamp).toISOString()
+											: "unknown";
+										diffText = `Unchanged since ${baseDate}, 0 changes.`;
+									} else {
+										const baseDate = diffBaselineTimestamp
+											? new Date(diffBaselineTimestamp).toISOString()
+											: "unknown";
+										diffText = `Changes vs cached version from ${baseDate}:\n\n${dr.summary}`;
+									}
+								}
+								return {
+									ok: true,
+									url: result.url!,
+									title: result.title || url.pathname,
+									outPath,
+									length: diffText.length,
+									responseId,
+									body: diffText,
+									format: "markdown",
+									savedToDisk: formatted.savedToDisk,
+									diffResult: diffText,
+								};
+							}
 
 							return {
 								ok: true,

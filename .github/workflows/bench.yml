@@ -1,0 +1,62 @@
+name: Extraction Benchmark
+
+# Not wired into per-PR CI — this is a network-dependent benchmark.
+# Run manually via workflow_dispatch, or on a weekly schedule.
+on:
+  workflow_dispatch:
+    inputs:
+      filter:
+        description: "Category filter (comma-separated, e.g. wikipedia,arxiv)"
+        required: false
+        default: ""
+      concurrency:
+        description: "Number of parallel fetches"
+        required: false
+        default: "2"
+      timeout:
+        description: "Per-URL timeout in ms"
+        required: false
+        default: "30000"
+  schedule:
+    # Weekly on Monday at 06:00 UTC
+    - cron: "0 6 * * 1"
+
+jobs:
+  bench:
+    name: Extraction quality benchmark
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Build
+        run: npm run build
+
+      - name: Run benchmark
+        run: |
+          FILTER="${{ github.event.inputs.filter }}"
+          CONCURRENCY="${{ github.event.inputs.concurrency || '2' }}"
+          TIMEOUT="${{ github.event.inputs.timeout || '30000' }}"
+          ARGS="--concurrency $CONCURRENCY --timeout $TIMEOUT"
+          if [ -n "$FILTER" ]; then
+            ARGS="$ARGS --filter $FILTER"
+          fi
+          node --experimental-strip-types scripts/bench-extraction.mjs $ARGS --json > bench-results.json
+          # Also print human-readable scorecard
+          node --experimental-strip-types scripts/bench-extraction.mjs $ARGS || true
+
+      - name: Upload scorecard artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-scorecard-${{ github.run_number }}
+          path: bench-results.json
+          retention-days: 90

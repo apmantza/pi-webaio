@@ -10,6 +10,7 @@ import { Defuddle } from "defuddle/node";
 import { detectBotBlock } from "./bot-detection.ts";
 import { extractDataIslands } from "./data-islands.ts";
 import { smartFetch, fetchWithPlaywright, fetchBuffer } from "./fetch.ts";
+import { captureResponseValidators } from "./http-validators.ts";
 import {
 	runVerticalExtractor,
 	findVerticalExtractor,
@@ -753,6 +754,12 @@ export async function pullPage(
 			...opts?.headers,
 		},
 	});
+	// Capture ETag / Last-Modified for HTTP revalidation (issue #46).
+	// Uses a module-level side channel so the validators are available to
+	// webfetch.ts without threading them through every return path below.
+	if (res && res.status < 400) {
+		captureResponseValidators(res.url, res.headers);
+	}
 	if (!res) {
 		const info: FetchErrorInfo = {
 			message: "Server unreachable or request failed after retries",
