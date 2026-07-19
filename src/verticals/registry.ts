@@ -1,7 +1,13 @@
 // ─── Vertical extractor registry ───────────────────────────────────
 // Pattern-matches URLs and routes to API-first extractors for known sites.
+// User-defined extractors (loaded from ~/.pi/agent/webaio/verticals/*.mjs)
+// are consulted BEFORE built-ins so users can override built-in behavior.
 
 import type { VerticalResult } from "./types.ts";
+import {
+	loadUserExtractors,
+	type RegisteredUserExtractor,
+} from "./user-loader.ts";
 import { matchesNpm, extractNpm } from "./npm.ts";
 import { matchesPyPI, extractPyPI } from "./pypi.ts";
 import { matchesHackerNews, extractHackerNews } from "./hackernews.ts";
@@ -25,6 +31,31 @@ import { matchesGitLab, extractGitLab } from "./gitlab.ts";
 export interface ExtractorMatch {
 	name: string;
 	matcher: (url: string) => boolean;
+}
+
+// ─── User extractor registry ─────────────────────────────────────────
+// Populated once at startup by calling initUserExtractors().
+// User extractors are checked BEFORE built-ins so users can override
+// built-in behavior for a given URL pattern.
+let _userExtractors: RegisteredUserExtractor[] = [];
+
+/**
+ * Load user extractors from the config directory and register them.
+ * Should be called once at extension startup. Safe to call multiple times;
+ * subsequent calls replace the previous set.
+ *
+ * @param dirPath Optional override for the config directory path (for tests).
+ */
+export async function initUserExtractors(dirPath?: string): Promise<void> {
+	_userExtractors = await loadUserExtractors(dirPath);
+}
+
+/**
+ * Returns a copy of the currently registered user extractors.
+ * Primarily useful for tests and diagnostics.
+ */
+export function getUserExtractors(): RegisteredUserExtractor[] {
+	return [..._userExtractors];
 }
 
 export const VERTICAL_EXTRACTORS: ExtractorMatch[] = [
@@ -51,8 +82,16 @@ export const VERTICAL_EXTRACTORS: ExtractorMatch[] = [
 
 /**
  * Find which vertical extractor matches a URL.
+ * User extractors are checked before built-ins.
  */
 export function findVerticalExtractor(url: string): string | null {
+	for (const u of _userExtractors) {
+		try {
+			if (u.match(url)) return u.name;
+		} catch {
+			// ignore matcher errors during attribution lookup
+		}
+	}
 	for (const v of VERTICAL_EXTRACTORS) {
 		if (v.matcher(url)) return v.name;
 	}
@@ -61,6 +100,9 @@ export function findVerticalExtractor(url: string): string | null {
 
 /**
  * Run the appropriate vertical extractor for a URL.
+ * User extractors are checked before built-ins.
+ * Runtime errors from user extractors are caught and logged; the function
+ * then falls through to the built-in pipeline rather than crashing.
  * Returns null if no extractor matches or extraction fails.
  */
 export async function runVerticalExtractor(
@@ -69,6 +111,30 @@ export async function runVerticalExtractor(
 	fetchText: (url: string) => Promise<string | null>,
 	fetchHtml: (url: string) => Promise<string | null>,
 ): Promise<VerticalResult | null> {
+	// User extractors take priority — checked before any built-in
+	for (const u of _userExtractors) {
+		let matches = false;
+		try {
+			matches = u.match(url);
+		} catch (err) {
+			console.warn(
+				`[user-verticals] ${u.name} (${u.filePath}) match() threw: ${(err as Error).message}`,
+			);
+			continue;
+		}
+		if (!matches) continue;
+
+		try {
+			const result = await u.extract(url, fetchJson, fetchText, fetchHtml);
+			if (result !== null) return result;
+		} catch (err) {
+			console.warn(
+				`[user-verticals] ${u.name} (${u.filePath}) extract() threw for ${url}: ${(err as Error).message} — falling through to built-in pipeline`,
+			);
+			// Fall through: do not return, continue to built-ins below
+		}
+	}
+
 	if (matchesNpm(url)) {
 		return extractNpm(url, fetchJson);
 	}
