@@ -39,6 +39,8 @@ pi install git:github.com/apmantza/pi-webaio
 
 - [Features](docs/features.md) — overview, extraction pipeline, GitHub/YouTube
   handling, output formats, chunking, errors, and search ranking
+- [Custom vertical extractors](docs/custom-verticals.md) — add your own site
+  extractors (company wikis, niche sites) without forking
 - [Usage guide](docs/usage.md) — common pi prompts and examples
 - [Tools reference](docs/tools.md) — tool names, parameters, and defaults
 - [Architecture](docs/architecture.md) — build, TUI rendering, FetchError system,
