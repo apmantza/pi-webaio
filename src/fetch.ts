@@ -7,6 +7,11 @@ import type { BrowserProfile, EmulationOS } from "wreq-js";
 import { detectBotBlock, detectLoginRedirect } from "./bot-detection.ts";
 import { isDangerousUrl, scanForSecrets } from "./security.ts";
 import type { FetchOpts } from "./types.ts";
+import {
+	getStartingStrategy,
+	recordDomainSuccess,
+	recordDomainFailure,
+} from "./strategy-memory.ts";
 
 // ─── Constants ─────────────────────────────────────────────────────
 
@@ -625,14 +630,63 @@ export async function smartFetch(
 		return null;
 	}
 
-	const res = await fetchWithRetry(url, options);
-	if (!res) {
+	const domain = parsedUrl.hostname;
+	const rememberedStrategy = getStartingStrategy(domain);
+
+	// ── Rung 2 fast-path: skip straight to browser if memory says so ──
+	// Only when we have a remembered "browser" strategy and are not re-probing.
+	if (rememberedStrategy === "browser") {
 		const pwHtml = await fetchWithPlaywright(
 			url,
 			options.browserPool,
 			options.wreqSession,
 		);
 		if (pwHtml) {
+			recordDomainSuccess(domain, "browser");
+			return {
+				text: pwHtml,
+				url,
+				status: 200,
+				headers: { get: () => "text/html" } as {
+					get(name: string): string | null;
+					has?(name: string): boolean;
+				},
+				downloadedBytes: pwHtml.length,
+				contentLength: pwHtml.length,
+				elapsedMs: Date.now() - startedAt,
+			};
+		}
+		// Browser failed — fall through to normal ladder
+		recordDomainFailure(domain, "browser");
+	}
+
+	// ── Rung 1: wreq plain/TLS fetch ──────────────────────────────────
+	// Skip this rung only when memory says "wreq" (bot-fallback profiles)
+	// or "browser", unless we are in a re-probe pass (rememberedStrategy===null
+	// after TTL/reprobeNext reset).
+	const skipPlain = rememberedStrategy === "wreq";
+
+	let res: any = null;
+	if (!skipPlain) {
+		res = await fetchWithRetry(url, options);
+	}
+
+	if (!res) {
+		// ── Rung 1b: wreq with alternate browser profiles (bot-fallback) ──
+		if (!skipPlain) {
+			// Only reach here if fetchWithRetry returned null (hard network fail);
+			// record as plain failure before trying browser.
+			recordDomainFailure(domain, "plain");
+		}
+
+		// ── Rung 2: Playwright browser fallback ───────────────────────────
+		const pwHtml = await fetchWithPlaywright(
+			url,
+			options.browserPool,
+			options.wreqSession,
+		);
+		if (pwHtml) {
+			recordDomainSuccess(domain, "browser");
 			return {
 				text: pwHtml,
 				url,
@@ -682,6 +736,9 @@ export async function smartFetch(
 	}
 
 	if (detectBotBlock(text).blocked) {
+		// Record plain fetch as blocked before trying alternate wreq profiles
+		recordDomainFailure(domain, "plain");
+
 		const fallbackBrowsers = ["firefox_147", "safari_26", "edge_145"];
 		const headers = {
 			...buildHeaders(undefined, options.os),
@@ -701,18 +758,19 @@ export async function smartFetch(
 			});
 			if (fbRes?.ok) {
 				try {
-					const fb = await readResponseTextWithProgress(
+					const fbData = await readResponseTextWithProgress(
 						fbRes,
 						options.timeoutMs,
 					);
-					if (!detectBotBlock(fb.text).blocked) {
+					if (!detectBotBlock(fbData.text).blocked) {
+						recordDomainSuccess(domain, "wreq");
 						return {
-							text: fb.text,
+							text: fbData.text,
 							url: normalizeFetchedUrl(fbRes.url),
 							status: fbRes.status,
 							headers: fbRes.headers,
-							downloadedBytes: fb.bytesRead,
-							contentLength: fb.contentLength,
+							downloadedBytes: fbData.bytesRead,
+							contentLength: fbData.contentLength,
 							elapsedMs: Date.now() - startedAt,
 						};
 					}
@@ -721,7 +779,34 @@ export async function smartFetch(
 				}
 			}
 		}
+
+		// All wreq profiles blocked; record wreq failure and try playwright
+		recordDomainFailure(domain, "wreq");
+		const pwHtml = await fetchWithPlaywright(
+			url,
+			options.browserPool,
+			options.wreqSession,
+		);
+		if (pwHtml) {
+			recordDomainSuccess(domain, "browser");
+			return {
+				text: pwHtml,
+				url,
+				status: 200,
+				headers: { get: () => "text/html" } as {
+					get(name: string): string | null;
+					has?(name: string): boolean;
+				},
+				downloadedBytes: pwHtml.length,
+				contentLength: pwHtml.length,
+				elapsedMs: Date.now() - startedAt,
+			};
+		}
+		return null;
 	}
+
+	// Plain wreq fetch succeeded without bot-block
+	recordDomainSuccess(domain, skipPlain ? "wreq" : "plain");
 
 	return {
 		text,
