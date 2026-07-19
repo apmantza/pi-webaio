@@ -19,6 +19,7 @@ import {
 	rewriteLinks,
 	runPullFromQueue,
 } from "./utils.ts";
+import { buildIndex } from "../webquery-index.ts";
 
 const MAX_CRAWL_ITEMS = 500;
 
@@ -392,9 +393,22 @@ export function registerWebpullTool(pi: ExtensionAPI): void {
 				}
 			}
 
+			// Build BM25 index from all markdown files currently on disk.
+			// A full rebuild keeps the index consistent even after resume/append pulls.
+			let indexBuilt = false;
+			if (ok > 0) {
+				try {
+					await buildIndex(outDir);
+					indexBuilt = true;
+				} catch {
+					/* best effort — pull result is still valid */
+				}
+			}
+
 			const summary = [
 				`✅ Pulled ${ok} pages to ${outDir}`,
 				err > 0 ? `⚠️ ${err} pages failed` : "",
+				indexBuilt ? `🔍 BM25 index built — use aio-webquery to search this corpus` : "",
 				``,
 				`Files:`,
 				...files.slice(0, 30).map((f) => `  - ${f}`),
@@ -466,6 +480,7 @@ export function registerWebpullTool(pi: ExtensionAPI): void {
 					proxy,
 					packagePath,
 					adaptive,
+					indexBuilt,
 					queueStats: queue?.stats(),
 					browserPoolStats: browserPool?.stats(),
 				},
