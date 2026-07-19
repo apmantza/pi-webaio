@@ -20,7 +20,7 @@ import {
 	extractInteractables,
 	formatInteractablesSection,
 } from "../interactive-elements.ts";
-import { pruneMarkdown } from "../prune-markdown.ts";
+import { pruneMarkdown, applyTokenBudget } from "../prune-markdown.ts";
 import { createBM25Scorer } from "../bm25.ts";
 import {
 	BASE_TEMP,
@@ -431,6 +431,13 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 					description:
 						"Tokens of tail-overlap from the previous chunk prepended to each chunk after the first. Default 50. Only used when chunks: true. Min 0.",
 					minimum: 0,
+				}),
+			),
+			budgetTokens: Type.Optional(
+				Type.Number({
+					description:
+						"Hard token budget for the content returned to the agent. When set, the output is guaranteed to fit within this many tokens — heading structure is preserved, lowest-value sections are dropped first (BM25-scored when query is also set), and a footer notes how many sections were omitted. Composes with query answer mode: the budget is applied to the answer-mode output. Full content is always cached before trimming. Min 100.",
+					minimum: 100,
 				}),
 			),
 		}),
@@ -1060,7 +1067,11 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 							summaryNotice = r.outPath
 								? `\n[Answer mode: top ${topK} chunks for "${answerModeQuery}". Full content (${preview.length} chars) saved to ${r.outPath}.]`
 								: `\n[Answer mode: top ${topK} chunks for "${answerModeQuery}". Full content cached (result ID ${responseId ?? "unavailable"}).]`;
-							displayContent = answerBody;
+							// Apply hard token budget after answer mode (composes cleanly).
+							const budgetTokens = params.budgetTokens as number | undefined;
+							displayContent = budgetTokens
+								? applyTokenBudget(answerBody, budgetTokens, answerModeQuery, r.url as string | undefined)
+								: answerBody;
 							// Skip the normal summarize/truncate path.
 							const formatLabel =
 								`✓ Fetched and saved to ${r.outPath}${summaryNotice}`;
@@ -1135,6 +1146,19 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 							? `\n[Preview truncated: ${preview.length} chars total, ${MAX_PREVIEW_CHARS} chars shown. Use the read tool for full content.]`
 							: `\n[Preview truncated: ${preview.length} chars total, ${MAX_PREVIEW_CHARS} chars shown. Full result ID: ${responseId ?? "unavailable"}.]`;
 						displayContent = preview.slice(0, MAX_PREVIEW_CHARS);
+					}
+
+					// Apply hard token budget to the display content if requested.
+					// Full content is already cached above — only the agent-visible
+					// portion is narrowed here. Only applied to markdown format.
+					const budgetTokens = params.budgetTokens as number | undefined;
+					if (budgetTokens && itemFormat === "markdown") {
+						displayContent = applyTokenBudget(
+							displayContent,
+							budgetTokens,
+							params.query as string | undefined,
+							r.url as string | undefined,
+						);
 					}
 
 					// For non-markdown formats, the content is in the response-id cache
