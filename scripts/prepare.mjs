@@ -1,12 +1,16 @@
-import { existsSync, rmSync } from 'fs';
+import { rmSync } from 'fs';
 import { execFileSync } from 'child_process';
-import { join } from 'path';
+import { createRequire } from 'module';
 
-const tscBin = join('node_modules', '.bin', 'tsc');
-if (!existsSync(tscBin)) {
+// Resolve the tsc JS entry directly: node_modules/.bin/tsc is a shell shim on
+// Windows, so it cannot be executed with node there.
+let tscPath;
+try {
+  tscPath = createRequire(import.meta.url).resolve('typescript/bin/tsc');
+} catch {
   // devDependencies not installed (e.g. npm install --omit=dev); dist is pre-built
   process.exit(0);
 }
 
 rmSync('dist', { recursive: true, force: true });
-execFileSync(process.execPath, [tscBin, '--project', 'tsconfig.dist.json'], { stdio: 'inherit' });
+execFileSync(process.execPath, [tscPath, '--project', 'tsconfig.dist.json'], { stdio: 'inherit' });
