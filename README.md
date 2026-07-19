@@ -43,6 +43,8 @@ pi install git:github.com/apmantza/pi-webaio
 - [Tools reference](docs/tools.md) — tool names, parameters, and defaults
 - [Architecture](docs/architecture.md) — build, TUI rendering, FetchError system,
   CI, and security notes
+- [MCP server](docs/mcp.md) — use the tools from Claude Code, Claude Desktop,
+  and other MCP clients without pi (`npx -y pi-webaio-mcp`)
 - [PageMap inspiration](docs/pagemap-inspiration.md) — future extraction and
   structured-output ideas
 
