@@ -6,6 +6,9 @@ All notable changes to pi-webaio will be documented in this file.
 
 ### Added
 
+- **Source-type classification for search ranking** (`src/search.ts`) — each merged `aio-websearch` result is classified into a source type (`official-docs` / `repo` / `academic` / `maintainer-blog` / `website` / `community` / `news` / `social`) via cheap domain/path/title heuristics, folded as a per-type priority into `scoreAndRankResults` alongside the existing engine-weight and consensus-bonus scoring, so official docs and repos outrank SEO blogspam and social results sink. `sourceType` is now exposed on result metadata for downstream tools ([#61](https://github.com/apmantza/pi-webaio/issues/61)).
+- **Preferred-domain inference boost** (`src/search.ts`) — a hardcoded query-keyword → canonical official-domain map (~35 entries: frameworks, languages, cloud/dev-tool vendors) boosts matching domains in the same ranking pass, so a query like "prisma migrate" surfaces `prisma.io` above lookalike results with equal engine consensus ([#63](https://github.com/apmantza/pi-webaio/issues/63)).
+
 ### Changed
 
 ### Fixed
