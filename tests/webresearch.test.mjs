@@ -21,9 +21,12 @@ import {
 	buildEvidenceMd,
 	buildClaimsMdScaffold,
 	buildGapsMd,
+	buildStanceMd,
 	buildManifest,
 	buildSourcesJson,
 	buildEvidenceJson,
+	buildStanceJson,
+	summarizeStance,
 	writeBundle,
 } from "../src/research.ts";
 
@@ -333,25 +336,31 @@ test("writeBundle: writes STATUS.md, reports/, and data/ with parseable JSON", a
 			bundleDir,
 		});
 
+		const stance = summarizeStance(summary.query, []);
+
 		await writeBundle({
 			bundleDir,
 			statusMd: buildStatusMd(summary),
 			evidenceMd: buildEvidenceMd([], summary.fetched),
 			claimsMd: buildClaimsMdScaffold(summary.query, summary.fetched),
 			gapsMd: buildGapsMd(summary, []),
+			stanceMd: buildStanceMd(stance),
 			manifest,
 			sourcesJson: buildSourcesJson([], summary.fetched),
 			evidenceJson: buildEvidenceJson([]),
+			stanceJson: buildStanceJson(stance),
 		});
 
 		const expectedFiles = [
 			"STATUS.md",
+			"STANCE.md",
 			join("reports", "EVIDENCE.md"),
 			join("reports", "CLAIMS.md"),
 			join("reports", "GAPS.md"),
 			join("data", "manifest.json"),
 			join("data", "sources.json"),
 			join("data", "evidence.json"),
+			join("data", "stance.json"),
 		];
 		for (const rel of expectedFiles) {
 			const st = await stat(join(bundleDir, rel));
@@ -373,6 +382,15 @@ test("writeBundle: writes STATUS.md, reports/, and data/ with parseable JSON", a
 			await readFile(join(bundleDir, "data", "evidence.json"), "utf8"),
 		);
 		assert.ok(Array.isArray(evidenceOnDisk.evidence));
+
+		const stanceOnDisk = JSON.parse(
+			await readFile(join(bundleDir, "data", "stance.json"), "utf8"),
+		);
+		assert.equal(stanceOnDisk.verdict, "insufficient_evidence");
+		assert.ok(Array.isArray(stanceOnDisk.sources));
+
+		const stanceMdOnDisk = await readFile(join(bundleDir, "STANCE.md"), "utf8");
+		assert.match(stanceMdOnDisk, /not semantic entailment/i);
 	} finally {
 		await rm(dir, { recursive: true, force: true });
 	}
