@@ -6,6 +6,8 @@ All notable changes to pi-webaio will be documented in this file.
 
 ### Added
 
+- **Source-type classification in search ranking** (`src/source-classifier.ts`, `src/search.ts`) — classifies merged search results into `official-docs` / `repo` / `academic` / `maintainer-blog` / `website` / `community` / `news` / `social` via domain/path heuristics, and folds a per-type priority into `scoreAndRankResults` alongside engine weight and consensus bonus so official docs and repos outrank generic blogspam, and social results sink even with multi-engine consensus. The classified `sourceType` is now exposed on `SearchResult` ([#61](https://github.com/apmantza/pi-webaio/issues/61)).
+
 ### Changed
 
 ### Fixed

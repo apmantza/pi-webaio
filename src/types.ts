@@ -177,12 +177,29 @@ export interface StoredContent {
 	lastModified?: string;
 }
 
+/**
+ * Coarse classification of a search result's source, used to fold a
+ * per-type priority into scoreAndRankResults (src/search.ts). See
+ * src/source-classifier.ts for the heuristics that assign this.
+ */
+export type SourceType =
+	| "official-docs"
+	| "repo"
+	| "academic"
+	| "maintainer-blog"
+	| "website"
+	| "community"
+	| "news"
+	| "social";
+
 export interface SearchResult {
 	title: string;
 	url: string;
 	snippet: string;
 	domain?: string;
 	sources?: string[];
+	/** Classified source type (issue #61), e.g. "official-docs" | "social". */
+	sourceType?: SourceType;
 }
 
 export interface EngineHealthRecord {

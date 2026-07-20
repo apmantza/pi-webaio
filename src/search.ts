@@ -10,6 +10,7 @@ import {
 	recordEngineSearchFailure,
 	rankEngines,
 } from "./strategy-memory.ts";
+import { classifySourceType, sourceTypePriority } from "./source-classifier.ts";
 import type {
 	SearchResult,
 	EngineHealthRecord,
@@ -338,6 +339,24 @@ export const ENGINE_WEIGHTS: Record<string, number> = {
 	yahoo: 1,
 };
 
+// Per-type priority (from source-classifier.ts) is multiplied by this factor
+// before being folded into the score. Tuned, together with ENGINE_WEIGHTS and
+// the consensus bonus below, to preserve this ordering:
+//
+//   query-relevant official source, #1 by a single engine (weight 5, e.g.
+//   google)   >   generic multi-engine consensus (2-3 engines, website type)
+//     >   single-engine community post   >   single-engine social result
+//
+// Worked example with SOURCE_TYPE_WEIGHT = 2:
+//   official-docs via google alone:  weightSum 5 + consensus 0 + type 5*2 = 15
+//   generic website via ddg+brave+yahoo: weightSum 5 + consensus 4 + type 2*2 = 13
+//   community via google alone:      weightSum 5 + consensus 0 + type 1*2 = 7
+//   social via ddg+brave+yahoo:      weightSum 5 + consensus 4 + type -6*2 = -3
+// 15 > 13 > 7 > -3, matching the invariant above. If a future preferred-domain
+// boost (issue #63) is added, it should add its own bonus term to `score`
+// alongside this one rather than replacing it.
+export const SOURCE_TYPE_WEIGHT = 2;
+
 export function scoreAndRankResults(
 	buckets: Map<string, EngineSource[]>,
 ): { result: SearchResult; score: number; sources: string[] }[] {
@@ -347,12 +366,21 @@ export function scoreAndRankResults(
 		const sources = entries.map((e) => e.engine);
 		const weightSum = entries.reduce((sum, e) => sum + e.weight, 0);
 		const consensusBonus = Math.max(0, sources.length - 1) * 2;
-		const score = weightSum + consensusBonus;
 
 		entries.sort((a, b) => b.weight - a.weight);
 		const best = entries[0]!.result;
 
-		scored.push({ result: { ...best, url, sources }, score, sources });
+		const domain = best.domain || extractDomain(url) || "";
+		const sourceType = classifySourceType(domain, best.title, url);
+		const typeBonus = sourceTypePriority(sourceType) * SOURCE_TYPE_WEIGHT;
+
+		const score = weightSum + consensusBonus + typeBonus;
+
+		scored.push({
+			result: { ...best, url, sources, sourceType },
+			score,
+			sources,
+		});
 	}
 
 	scored.sort((a, b) => b.score - a.score);
