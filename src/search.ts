@@ -14,6 +14,7 @@ import type {
 	SearchResult,
 	EngineHealthRecord,
 	EngineSource,
+	SourceType,
 } from "./types.ts";
 
 // ─── Engine health tracking ────────────────────────────────────────
@@ -328,6 +329,211 @@ export function parseBraveResults(html: string): SearchResult[] {
 	return results;
 }
 
+// ─── Source-type classification (issue #61) ────────────────────────
+// Cheap domain/path heuristics that bucket a result into a coarse source
+// type, so official docs and repos can outrank SEO blogspam and social
+// posts sink to the bottom regardless of how many engines surfaced them.
+
+const COMMUNITY_HOSTS = [
+	"dev.to",
+	"hashnode.com",
+	"medium.com",
+	"reddit.com",
+	"stackoverflow.com",
+	"stackexchange.com",
+	"substack.com",
+];
+
+const NEWS_HOSTS = [
+	"arstechnica.com",
+	"techcrunch.com",
+	"theverge.com",
+	"venturebeat.com",
+	"wired.com",
+	"zdnet.com",
+];
+
+const SOCIAL_HOSTS = [
+	"facebook.com",
+	"instagram.com",
+	"linkedin.com",
+	"pinterest.com",
+	"tiktok.com",
+	"twitter.com",
+	"x.com",
+];
+
+export function stripWww(domain: string): string {
+	return domain.replace(/^www\./, "");
+}
+
+function matchesHost(domain: string, hosts: string[]): boolean {
+	return hosts.some((host) => domain === host || domain.endsWith(`.${host}`));
+}
+
+/**
+ * Classify a result into a coarse source type via cheap domain/path/title
+ * heuristics. Adapted from greedysearch-pi's `classifySourceType`.
+ */
+export function classifySourceType(
+	domain: string,
+	title = "",
+	url = "",
+): SourceType {
+	const d = stripWww(domain.toLowerCase());
+	const lowerTitle = title.toLowerCase();
+	const lowerUrl = url.toLowerCase();
+
+	if (d === "github.com" || d === "gitlab.com") return "repo";
+	if (
+		d === "arxiv.org" ||
+		d === "doi.org" ||
+		d === "semanticscholar.org" ||
+		d.endsWith(".semanticscholar.org") ||
+		lowerUrl.includes("/paper/") ||
+		lowerUrl.includes("/pdf/")
+	) {
+		return "academic";
+	}
+	if (matchesHost(d, SOCIAL_HOSTS)) return "social";
+	if (matchesHost(d, COMMUNITY_HOSTS)) return "community";
+	if (matchesHost(d, NEWS_HOSTS)) return "news";
+	if (
+		d.startsWith("docs.") ||
+		d.startsWith("developer.") ||
+		d.startsWith("developers.") ||
+		d.startsWith("api.") ||
+		lowerTitle.includes("documentation") ||
+		lowerTitle.includes("docs") ||
+		lowerTitle.includes("reference") ||
+		lowerUrl.includes("/docs/") ||
+		lowerUrl.includes("/reference/") ||
+		lowerUrl.includes("/api/")
+	) {
+		return "official-docs";
+	}
+	if (d.startsWith("blog.") || lowerUrl.includes("/blog/"))
+		return "maintainer-blog";
+	return "website";
+}
+
+/**
+ * Per-type priority folded into the composite ranking score. Chosen so that
+ * a query-relevant official source ranked #1 by a single engine outranks
+ * generic multi-engine consensus, while multi-engine consensus still beats
+ * a single-engine community post — see `scoreAndRankResults`.
+ */
+export function sourceTypePriority(sourceType: SourceType): number {
+	switch (sourceType) {
+		case "official-docs":
+			return 5;
+		case "repo":
+			return 4;
+		case "academic":
+			return 4;
+		case "maintainer-blog":
+			return 3;
+		case "website":
+			return 2;
+		case "community":
+			return 1;
+		case "news":
+			return 0;
+		case "social":
+			return -6;
+		default:
+			return 0;
+	}
+}
+
+// ─── Preferred-domain inference (issue #63) ────────────────────────
+// Hardcoded query-keyword → canonical official-domain map. Crude but free:
+// when a query mentions a known tool/framework/vendor, boost results from
+// its canonical domain(s) so official sources surface above lookalikes and
+// SEO aggregators for the same query.
+
+interface PreferredDomainRule {
+	pattern: RegExp;
+	domains: string[];
+}
+
+const PREFERRED_DOMAIN_RULES: PreferredDomainRule[] = [
+	{
+		pattern: /\b(openai|gpt|chatgpt)\b/,
+		domains: ["openai.com", "platform.openai.com", "help.openai.com"],
+	},
+	{ pattern: /\b(anthropic|claude)\b/, domains: ["anthropic.com", "docs.anthropic.com"] },
+	{ pattern: /\bbun\b/, domains: ["bun.sh", "bun.com"] },
+	{ pattern: /\b(next\.js|nextjs)\b/, domains: ["nextjs.org", "vercel.com"] },
+	{ pattern: /\bplaywright\b/, domains: ["playwright.dev"] },
+	{ pattern: /\bsupabase\b/, domains: ["supabase.com", "supabase.io"] },
+	{ pattern: /\bprisma\b/, domains: ["prisma.io"] },
+	{ pattern: /\btailwind\b/, domains: ["tailwindcss.com"] },
+	{ pattern: /\bvite\b/, domains: ["vitejs.dev", "vite.dev"] },
+	{ pattern: /\bastro\b/, domains: ["astro.build"] },
+	{ pattern: /\bsvelte\b/, domains: ["svelte.dev"] },
+	{ pattern: /\bsolid(js)?\b/, domains: ["solidjs.com"] },
+	{ pattern: /\b(vue|nuxt)\b/, domains: ["vuejs.org", "nuxt.com"] },
+	{ pattern: /\breact(\s*native)?\b/, domains: ["react.dev", "reactnative.dev"] },
+	{ pattern: /\bangular\b/, domains: ["angular.io", "angular.dev"] },
+	{ pattern: /\bnode(\.js)?\b/, domains: ["nodejs.org", "nodejs.dev", "npmjs.com"] },
+	{ pattern: /\b(golang|go)\b/, domains: ["go.dev", "golang.org", "pkg.go.dev"] },
+	{ pattern: /\bdeno\b/, domains: ["deno.land", "deno.com"] },
+	{ pattern: /\bfresh\b/, domains: ["fresh.deno.dev"] },
+	{ pattern: /\btypescript\b/, domains: ["typescriptlang.org"] },
+	{ pattern: /\bpython\b/, domains: ["python.org", "docs.python.org"] },
+	{ pattern: /\brust\b/, domains: ["rust-lang.org", "docs.rs", "crates.io"] },
+	{ pattern: /\bzig\b/, domains: ["ziglang.org"] },
+	{ pattern: /\bdocker\b/, domains: ["docker.com", "docs.docker.com", "hub.docker.com"] },
+	{ pattern: /\b(kubernetes|k8s)\b/, domains: ["kubernetes.io", "k8s.io"] },
+	{
+		pattern: /\bpostgres(ql)?\b/,
+		domains: ["postgresql.org", "neon.tech", "supabase.com"],
+	},
+	{ pattern: /\bredis\b/, domains: ["redis.io"] },
+	{ pattern: /\bsqlite\b/, domains: ["sqlite.org"] },
+	{
+		pattern: /\bcloudflare\b/,
+		domains: ["developers.cloudflare.com", "cloudflare.com"],
+	},
+	{ pattern: /\bvercel\b/, domains: ["vercel.com", "nextjs.org"] },
+	{ pattern: /\bnetlify\b/, domains: ["netlify.com", "docs.netlify.com"] },
+	{ pattern: /\bstripe\b/, domains: ["stripe.com", "docs.stripe.com"] },
+	{ pattern: /\bgithub\b/, domains: ["github.com", "docs.github.com"] },
+	{ pattern: /\bgitlab\b/, domains: ["gitlab.com", "docs.gitlab.com"] },
+	{ pattern: /\baws\b/, domains: ["aws.amazon.com", "docs.aws.amazon.com"] },
+	{
+		pattern: /\bazure\b/,
+		domains: ["azure.microsoft.com", "learn.microsoft.com"],
+	},
+	{
+		pattern: /\b(gcp|google cloud)\b/,
+		domains: ["cloud.google.com", "developers.google.com"],
+	},
+	{
+		pattern: /\b(gemini|google ai)\b/,
+		domains: ["ai.google.dev", "developers.google.com"],
+	},
+];
+
+/** Boost applied to results whose domain matches an inferred preferred domain. */
+export const PREFERRED_DOMAIN_BONUS = 8;
+
+/** Infer canonical official domains implied by keywords in the query. */
+export function inferPreferredDomains(query: string): string[] {
+	const normalized = query.toLowerCase();
+	const matches: string[] = [];
+	for (const rule of PREFERRED_DOMAIN_RULES) {
+		if (rule.pattern.test(normalized)) matches.push(...rule.domains);
+	}
+	return [...new Set(matches)];
+}
+
+function domainMatchesPreferred(domain: string, preferred: string[]): boolean {
+	const d = stripWww(domain.toLowerCase());
+	return preferred.some((p) => d === p || d.endsWith(`.${p}`));
+}
+
 // ─── Cross-engine result scoring ───────────────────────────────────
 
 export const ENGINE_WEIGHTS: Record<string, number> = {
@@ -338,21 +544,48 @@ export const ENGINE_WEIGHTS: Record<string, number> = {
 	yahoo: 1,
 };
 
+/** Multiplier applied to `sourceTypePriority` when composing the score. */
+const SOURCE_TYPE_WEIGHT = 2;
+
+/**
+ * Merge cross-engine buckets into a ranked result list. Score composes:
+ *   engine weight sum + consensus bonus (existing) +
+ *   sourceType priority * SOURCE_TYPE_WEIGHT (#61) +
+ *   PREFERRED_DOMAIN_BONUS when the domain matches a query-inferred
+ *   canonical official domain (#63).
+ *
+ * `query` is optional so existing callers that don't have one (or don't
+ * care about preferred-domain boosting) keep working unchanged.
+ */
 export function scoreAndRankResults(
 	buckets: Map<string, EngineSource[]>,
+	query = "",
 ): { result: SearchResult; score: number; sources: string[] }[] {
+	const preferredDomains = inferPreferredDomains(query);
 	const scored: { result: SearchResult; score: number; sources: string[] }[] =
 		[];
 	for (const [url, entries] of buckets) {
 		const sources = entries.map((e) => e.engine);
 		const weightSum = entries.reduce((sum, e) => sum + e.weight, 0);
 		const consensusBonus = Math.max(0, sources.length - 1) * 2;
-		const score = weightSum + consensusBonus;
 
 		entries.sort((a, b) => b.weight - a.weight);
 		const best = entries[0]!.result;
 
-		scored.push({ result: { ...best, url, sources }, score, sources });
+		const domain = best.domain || extractDomain(url) || "";
+		const sourceType = classifySourceType(domain, best.title, url);
+		const typeBonus = sourceTypePriority(sourceType) * SOURCE_TYPE_WEIGHT;
+		const preferredBonus = domainMatchesPreferred(domain, preferredDomains)
+			? PREFERRED_DOMAIN_BONUS
+			: 0;
+
+		const score = weightSum + consensusBonus + typeBonus + preferredBonus;
+
+		scored.push({
+			result: { ...best, url, sources, sourceType },
+			score,
+			sources,
+		});
 	}
 
 	scored.sort((a, b) => b.score - a.score);
@@ -488,7 +721,7 @@ export async function searchWeb(query: string): Promise<{
 		}
 	}
 
-	const scored = scoreAndRankResults(engineResults);
+	const scored = scoreAndRankResults(engineResults, query);
 	const merged = scored.map((s) => s.result);
 
 	if (merged.length > 0) {

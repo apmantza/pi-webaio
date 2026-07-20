@@ -177,12 +177,29 @@ export interface StoredContent {
 	lastModified?: string;
 }
 
+/**
+ * Cheap heuristic classification of a search result's source, used to fold a
+ * per-type priority into cross-engine ranking (issue #61). Ordered roughly
+ * from most to least authoritative for technical queries.
+ */
+export type SourceType =
+	| "official-docs"
+	| "repo"
+	| "academic"
+	| "maintainer-blog"
+	| "website"
+	| "community"
+	| "news"
+	| "social";
+
 export interface SearchResult {
 	title: string;
 	url: string;
 	snippet: string;
 	domain?: string;
 	sources?: string[];
+	/** Classified source type (issue #61), exposed for downstream tools. */
+	sourceType?: SourceType;
 }
 
 export interface EngineHealthRecord {
