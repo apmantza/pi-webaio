@@ -18,6 +18,7 @@ All notable changes to pi-webaio will be documented in this file.
 
 ### Fixed
 
+- **MCP tools/list rejected by Claude Code** (`src/mcp-server.ts`) — `sanitizeJsonSchema` injected `type: "object"` into every nested object lacking a `type`, corrupting `properties` maps and `anyOf` unions into invalid JSON Schema; strict clients (Claude Code) reported "Connected · tools fetch failed". The `type` default is now applied only at the schema root, with regression tests. Also `serverInfo.version` now reads from package.json instead of a hardcoded string.
 - **Broken `pi install git:` on machines without devDependencies** (`package.json`, `scripts/prepare.mjs`) — pi installs packages with `npm install --omit=dev`, so the `prepare` build either failed (`'tsc' is not recognized`) or, after being made tolerant, silently skipped the build leaving no `dist/` at all — the extension registered zero (or stale) tools. `pi.extensions` now points directly at `./index.ts`, which pi loads natively; no build step is needed for git installs. The `dist/` build remains for the npm `main` entry and the MCP bin.
 
 ## [0.6.3] - 2026-07-18

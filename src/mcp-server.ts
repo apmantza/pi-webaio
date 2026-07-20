@@ -7,6 +7,7 @@
  *
  * stdout is the MCP protocol channel. All diagnostics go to stderr.
  */
+import { createRequire } from "node:module";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -70,6 +71,9 @@ function captureTools(): McpToolDef[] {
 			// Strip TypeBox metadata ($schema, $id, Symbol keys) that MCP clients
 			// may not understand. Keep the structural JSON Schema properties.
 			const inputSchema = sanitizeJsonSchema(rawSchema as Record<string, unknown>);
+			// MCP requires inputSchema to be type:"object" at the top level only —
+			// injecting `type` into nested nodes corrupts `properties` maps and unions.
+			if (!inputSchema["type"]) inputSchema["type"] = "object";
 
 			tools.push({
 				name: config.name,
@@ -120,9 +124,27 @@ function sanitizeJsonSchema(
 			cleaned[key] = value;
 		}
 	}
-	// MCP requires inputSchema to be type:"object" at the top level.
-	if (!cleaned["type"]) cleaned["type"] = "object";
 	return cleaned;
+}
+
+/**
+ * Read the package version for serverInfo. The compiled file lives at
+ * dist/src/mcp-server.js (two levels below the root) while the source lives at
+ * src/mcp-server.ts (one level), so try both relative locations.
+ */
+function readPackageVersion(): string {
+	const req = createRequire(import.meta.url);
+	for (const rel of ["../package.json", "../../package.json"]) {
+		try {
+			const pkg = req(rel) as { name?: string; version?: string };
+			if (pkg.name === "pi-webaio" && typeof pkg.version === "string") {
+				return pkg.version;
+			}
+		} catch {
+			// try next location
+		}
+	}
+	return "0.0.0";
 }
 
 // ─── MCP server ────────────────────────────────────────────────────────────
@@ -137,7 +159,7 @@ export async function startMcpServer(): Promise<void> {
 	const toolMap = new Map(tools.map((t) => [t.name, t]));
 
 	const server = new Server(
-		{ name: "pi-webaio", version: "0.6.3" },
+		{ name: "pi-webaio", version: readPackageVersion() },
 		{ capabilities: { tools: {} } },
 	);
 

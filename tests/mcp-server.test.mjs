@@ -149,6 +149,24 @@ test("MCP server lists all 7 aio-* tools with valid object inputSchema", async (
 				tool.inputSchema.properties && typeof tool.inputSchema.properties === "object",
 				`Tool ${tool.name} inputSchema has properties`,
 			);
+
+			// Regression (sanitizeJsonSchema): `type: "object"` must not be
+			// injected into non-schema nodes. A `properties` map is a plain
+			// dictionary of property-name → schema; a `type` key inside it means
+			// the sanitizer treated it as a schema and corrupted it.
+			assert.ok(
+				!("type" in tool.inputSchema.properties),
+				`Tool ${tool.name} properties map must not contain an injected "type" key`,
+			);
+			// Union params (anyOf) must not get a conflicting sibling type.
+			for (const [prop, schema] of Object.entries(tool.inputSchema.properties)) {
+				if (schema && typeof schema === "object" && Array.isArray(schema.anyOf)) {
+					assert.ok(
+						!("type" in schema),
+						`Tool ${tool.name} param ${prop}: anyOf schema must not have injected sibling "type"`,
+					);
+				}
+			}
 		}
 	} finally {
 		client.kill();
