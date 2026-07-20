@@ -6,6 +6,14 @@ All notable changes to pi-webaio will be documented in this file.
 
 ### Added
 
+### Changed
+
+### Fixed
+
+## [0.7.1] - 2026-07-20
+
+### Added
+
 - **`aio-webresearch` tool** (`src/research.ts`, `src/tools/webresearch.ts`) — single-round research bundle orchestrator: fans out `aio-websearch` over a query and optional sub-queries, ranks/dedupes sources, fetches the top-N through the webfetch pipeline, indexes them into a local BM25 corpus, and writes an auditable bundle (`STATUS.md`, `reports/EVIDENCE.md`/`CLAIMS.md`/`GAPS.md`, `sources/`, `data/manifest.json`/`sources.json`/`evidence.json`) under `.pi/webaio-research/`. Deterministic retrieval + bookkeeping only — no LLM calls inside the tool. Includes a citation/reachability audit that classifies anti-bot statuses (e.g. 403) as "skipped" rather than "dead". MVP is single-round; the iterative research loop is a follow-up ([#64](https://github.com/apmantza/pi-webaio/issues/64)).
 - **Source-type classification for search ranking** (`src/search.ts`) — each merged `aio-websearch` result is classified into a source type (`official-docs` / `repo` / `academic` / `maintainer-blog` / `website` / `community` / `news` / `social`) via cheap domain/path/title heuristics, folded as a per-type priority into `scoreAndRankResults` alongside the existing engine-weight and consensus-bonus scoring, so official docs and repos outrank SEO blogspam and social results sink. `sourceType` is now exposed on result metadata for downstream tools ([#61](https://github.com/apmantza/pi-webaio/issues/61)).
 - **Preferred-domain inference boost** (`src/search.ts`) — a hardcoded query-keyword → canonical official-domain map (~35 entries: frameworks, languages, cloud/dev-tool vendors) boosts matching domains in the same ranking pass, so a query like "prisma migrate" surfaces `prisma.io` above lookalike results with equal engine consensus ([#63](https://github.com/apmantza/pi-webaio/issues/63)).
