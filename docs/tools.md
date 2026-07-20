@@ -15,6 +15,7 @@ Registered pi tools and parameters provided by pi-webaio.
 | `aio-webresult`  | Retrieve a previously fetched result by persistent response ID. Survives restarts. Shows recent results if ID not found.                                                                                                                                                                                                              |
 | `aio-webpull`    | Pull any public website or docs site into local markdown files. Discovers pages via sitemap, navigation links, or crawling. Rewrites internal links to relative `.md` paths. Supports `routes` for per-pattern routing, `resume` for checkpoint resume, `adaptive` selectors, and `bypass` for opt-in paywall bypass on every page. Automatically builds a BM25 index for offline search. |
 | `aio-webquery`   | BM25 full-text search over a corpus pulled by `aio-webpull`. No re-fetching — purely local, offline retrieval. Returns top-k chunks with source file, original URL, and heading breadcrumb. Requires running `aio-webpull` first to build the index.                                                                                   |
+| `aio-webresearch`| Single-round research orchestrator: fans out `aio-websearch` over a query (and optional sub-queries), ranks/dedupes sources, fetches the top-N through the webfetch pipeline, builds a local BM25 corpus, and writes an auditable bundle (`STATUS.md`, `reports/`, `sources/`, `data/`) under `.pi/webaio-research/`. Deterministic retrieval + bookkeeping only — no LLM calls inside the tool; the calling agent writes `reports/CLAIMS.md`. Single-round MVP; iterative loop is a follow-up. |
 
 ### Tool Parameters
 
@@ -95,3 +96,13 @@ Registered pi tools and parameters provided by pi-webaio.
 | `query`   | `string` | —                    | Search query to run against the local corpus                                                        |
 | `dir`     | `string` | `<os-temp>/pi-webaio`| Directory containing a pulled corpus (output of `aio-webpull`). Defaults to the standard temp base. |
 | `topK`    | `number` | `8`                  | Number of top-ranked chunks to return                                                               |
+
+#### `aio-webresearch`
+
+| Parameter     | Type       | Default | Description                                                                                     |
+| ------------- | ---------- | ------- | ------------------------------------------------------------------------------------------------- |
+| `query`       | `string`   | —       | Primary research question or topic.                                                              |
+| `queries`     | `string[]` | —       | Optional agent-supplied sub-queries fanned out alongside `query` (capped at 6 total).             |
+| `maxSources`  | `number`   | `6`     | Max ranked sources to fetch and include in the bundle. Clamped to 3-12.                           |
+| `outDir`      | `string`   | `.pi/webaio-research/<timestamp>_<slug>/` | Output directory for the bundle, resolved relative to cwd.                  |
+| `writeBundle` | `boolean`  | `true`  | Write the bundle to disk. Set `false` to only search/fetch/rank in memory.                        |

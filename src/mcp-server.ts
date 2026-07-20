@@ -1,7 +1,7 @@
 /**
  * MCP stdio server adapter for pi-webaio.
  *
- * Exposes all seven aio-* tools to any MCP client (Claude Code, Claude Desktop, etc.)
+ * Exposes all eight aio-* tools to any MCP client (Claude Code, Claude Desktop, etc.)
  * without requiring the pi coding-agent runtime. All tool logic is shared with the
  * pi extension via a thin ExtensionAPI capture shim — no forking of business logic.
  *
@@ -28,6 +28,7 @@ import { registerWebsearchTool } from "./tools/websearch.ts";
 import { registerWebmapTool } from "./tools/webmap.ts";
 import { registerWebpullTool } from "./tools/webpull.ts";
 import { registerWebqueryTool } from "./tools/webquery.ts";
+import { registerWebresearchTool } from "./tools/webresearch.ts";
 
 // ─── Tool definition shape (subset of pi's registerTool config) ────────────
 
@@ -84,7 +85,7 @@ function captureTools(): McpToolDef[] {
 		},
 	};
 
-	// Register all seven tools via the same functions the pi extension uses.
+	// Register all eight tools via the same functions the pi extension uses.
 	// Cast to unknown first — pi is a peer-dep not required at MCP runtime;
 	// the shim satisfies the subset of the interface the tools actually call.
 	const pi = piShim as unknown as Parameters<typeof registerWebsearchTool>[0];
@@ -95,6 +96,7 @@ function captureTools(): McpToolDef[] {
 	registerWebmapTool(pi);
 	registerWebpullTool(pi);
 	registerWebqueryTool(pi);
+	registerWebresearchTool(pi);
 
 	return tools;
 }
