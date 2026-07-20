@@ -12,22 +12,27 @@ import {
 	bundleDirName,
 	clampMaxSources,
 	classifyReachability,
+	classifySourceStance,
 	extractEvidence,
 	isPrimarySource,
 	rankSources,
 	slugify,
+	summarizeStance,
 	buildStatusMd,
 	buildEvidenceMd,
 	buildClaimsMdScaffold,
 	buildGapsMd,
+	buildStanceMd,
 	buildManifest,
 	buildSourcesJson,
 	buildEvidenceJson,
+	buildStanceJson,
 	writeBundle,
 	type QueryResults,
 	type FetchedSourceRecord,
 	type EvidenceEntry,
 	type RankedSource,
+	type SourceStance,
 } from "../research.ts";
 
 /** Cap on the number of sub-queries fanned out to aio-websearch, to bound work. */
@@ -192,6 +197,7 @@ export function registerWebresearchTool(pi: ExtensionAPI): void {
 						errorMessage: result.ok ? undefined : (result.error ?? undefined),
 						reachability,
 						wordCount: result.ok ? result.wordCount : undefined,
+						publishedAt: result.ok ? result.published : undefined,
 					};
 
 					if (result.ok && shouldWrite) {
@@ -227,13 +233,28 @@ export function registerWebresearchTool(pi: ExtensionAPI): void {
 
 			// ── 5. Deterministic evidence extraction (BM25, no LLM) ──────────
 			const evidence: EvidenceEntry[] = [];
+			const sourceStances: SourceStance[] = [];
 			for (const f of fetched) {
 				const content = (f as any)._content as string | undefined;
 				delete (f as any)._content;
 				if (!f.ok || !content) continue;
 				const e = extractEvidence(f.id, f.url, f.title, content, query);
 				if (e) evidence.push(e);
+				sourceStances.push(
+					classifySourceStance({
+						sourceId: f.id,
+						url: f.url,
+						title: f.title,
+						text: content,
+						query,
+						primary: f.primary,
+						publishedAt: f.publishedAt,
+					}),
+				);
 			}
+
+			// ── 5b. Deterministic claim-stance pass (keyword/pattern-based, no LLM) ──
+			const stance = summarizeStance(query, sourceStances);
 
 			const finishedAt = new Date();
 			const summary = {
@@ -245,6 +266,7 @@ export function registerWebresearchTool(pi: ExtensionAPI): void {
 				consulted: ranked.length,
 				fetched,
 				unfetchedRanked,
+				stance,
 			};
 
 			// ── 6. Write the bundle ───────────────────────────────────────────
@@ -253,6 +275,7 @@ export function registerWebresearchTool(pi: ExtensionAPI): void {
 				const evidenceMd = buildEvidenceMd(evidence, fetched);
 				const claimsMd = buildClaimsMdScaffold(query, fetched);
 				const gapsMd = buildGapsMd(summary, zeroResultQueries);
+				const stanceMd = buildStanceMd(stance);
 				const manifest = buildManifest({
 					query,
 					queries: allQueries,
@@ -262,9 +285,11 @@ export function registerWebresearchTool(pi: ExtensionAPI): void {
 					consulted: ranked.length,
 					fetched,
 					bundleDir,
+					stance,
 				});
 				const sourcesJson = buildSourcesJson(ranked, fetched);
 				const evidenceJson = buildEvidenceJson(evidence);
+				const stanceJson = buildStanceJson(stance);
 
 				await writeBundle({
 					bundleDir,
@@ -272,9 +297,11 @@ export function registerWebresearchTool(pi: ExtensionAPI): void {
 					evidenceMd,
 					claimsMd,
 					gapsMd,
+					stanceMd,
 					manifest,
 					sourcesJson,
 					evidenceJson,
+					stanceJson,
 				});
 			}
 
@@ -292,8 +319,9 @@ export function registerWebresearchTool(pi: ExtensionAPI): void {
 				`Sources consulted: ${ranked.length}  |  fetched: ${fetched.length}  |  primary: ${primaryCount}`,
 				`Reachability: ${okCount} ok, ${skippedCount} skipped (anti-bot), ${deadCount} dead`,
 				indexBuilt ? `BM25 index built at ${join(bundleDir, "sources")} — query it with aio-webquery` : "",
+				`Claim stance (heuristic, non-authoritative): ${stance.verdict} (${stance.supportingCount} supporting, ${stance.conflictingCount} conflicting, ${stance.neutralCount} neutral) — keyword/pattern-based, not semantic entailment; verify before treating as fact.`,
 				shouldWrite
-					? `\nNext: read ${join(bundleDir, "reports", "EVIDENCE.md")} and fill in ${join(bundleDir, "reports", "CLAIMS.md")}.`
+					? `\nNext: read ${join(bundleDir, "reports", "EVIDENCE.md")} and fill in ${join(bundleDir, "reports", "CLAIMS.md")}. See ${join(bundleDir, "STANCE.md")} for a non-authoritative candidate stance.`
 					: "",
 			]
 				.filter(Boolean)
@@ -315,6 +343,7 @@ export function registerWebresearchTool(pi: ExtensionAPI): void {
 					indexBuilt,
 					sources: ranked,
 					fetched,
+					stance,
 				},
 			};
 		},

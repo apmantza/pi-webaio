@@ -301,6 +301,288 @@ export function extractEvidence(
 	};
 }
 
+// ─── Deterministic claim-stance classification (issue #70) ─────────────
+// NOT semantic entailment. This is a keyword-overlap + conflict-marker-word
+// + source-quality-tier + freshness heuristic — cheap, explainable, and
+// fully offline. It is meant as a *hint* for the calling agent, not a
+// fact-check. Always ship the caveat below alongside any stance output.
+
+export const STANCE_CAVEAT =
+	"Stance is keyword/pattern-based, not semantic entailment — verify before treating as fact.";
+
+/**
+ * English conflict-marker terms/phrases. Matched case-insensitively with
+ * word boundaries (see `buildConflictMarkerRegex`). Deliberately small and
+ * explicit rather than a statistical sentiment model — auditable, and easy
+ * to extend later for other languages.
+ */
+export const CONFLICT_MARKERS: readonly string[] = [
+	"false",
+	"debunked",
+	"debunks",
+	"denied",
+	"denies",
+	"deny",
+	"no evidence",
+	"lacks evidence",
+	"no proof",
+	"retracted",
+	"retraction",
+	"myth",
+	"disproven",
+	"disproved",
+	"disputed",
+	"refuted",
+	"refutes",
+	"refute",
+	"unfounded",
+	"baseless",
+	"misleading",
+	"hoax",
+	"fabricated",
+	"fake",
+	"incorrect",
+	"inaccurate",
+	"unsubstantiated",
+	"contradicts",
+	"contradicted",
+	"contrary to",
+	"not true",
+	"not supported",
+	"unproven",
+	"discredited",
+	"misinformation",
+	"disinformation",
+	"overstated",
+	"exaggerated",
+	"unverified",
+	"rebutted",
+	"rebuts",
+	"withdrawn",
+	"recanted",
+	"invalidated",
+	"erroneous",
+] as const;
+
+function escapeRegExp(s: string): string {
+	return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Build a single global, case-insensitive, word-boundary regex from a marker list. */
+function buildConflictMarkerRegex(markers: readonly string[]): RegExp {
+	const alternation = markers
+		.map((m) => escapeRegExp(m).replace(/\s+/g, "\\s+"))
+		.join("|");
+	return new RegExp(`\\b(${alternation})\\b`, "gi");
+}
+
+const CONFLICT_MARKER_REGEX = buildConflictMarkerRegex(CONFLICT_MARKERS);
+
+/**
+ * Count conflict-marker matches in `text` (word-boundary, case-insensitive).
+ * Returns the raw match count plus the distinct lowercased terms matched.
+ */
+export function countConflictMarkers(text: string | undefined): {
+	count: number;
+	matched: string[];
+} {
+	if (!text) return { count: 0, matched: [] };
+	const matches = text.match(CONFLICT_MARKER_REGEX) ?? [];
+	const matched = [...new Set(matches.map((m) => m.toLowerCase().replace(/\s+/g, " ")))].sort();
+	return { count: matches.length, matched };
+}
+
+/**
+ * Fraction (0..1) of the query's BM25-tokenized terms that appear
+ * (word-boundary, case-insensitive) in `text`. Reuses the same tokenizer
+ * `createBM25Scorer` uses internally, so results are consistent with the
+ * evidence-extraction pass above — this is keyword overlap, not semantic
+ * similarity.
+ */
+export function keywordOverlapRatio(query: string, text: string | undefined): number {
+	const scorer = createBM25Scorer(query);
+	if (scorer.queryTerms.length === 0 || !text?.trim()) return 0;
+	const lower = text.toLowerCase();
+	const present = scorer.queryTerms.filter((term) =>
+		new RegExp(`\\b${escapeRegExp(term)}\\b`, "i").test(lower),
+	);
+	return present.length / scorer.queryTerms.length;
+}
+
+/**
+ * Freshness score in [0, 1] from a (possibly missing/unparseable) published
+ * date. Unknown dates are neutral (0.5) rather than penalized — freshness
+ * is a soft signal, not a requirement.
+ */
+export function freshnessScore(publishedAt: string | undefined, now: Date = new Date()): number {
+	if (!publishedAt) return 0.5;
+	const t = Date.parse(publishedAt);
+	if (Number.isNaN(t)) return 0.5;
+	const ageDays = (now.getTime() - t) / (1000 * 60 * 60 * 24);
+	if (ageDays < 0) return 0.5; // future-dated — don't reward or punish
+	if (ageDays <= 365) return 1;
+	if (ageDays <= 3 * 365) return 0.7;
+	if (ageDays <= 7 * 365) return 0.4;
+	return 0.2;
+}
+
+export type SourceStanceLabel = "supporting" | "conflicting" | "neutral";
+
+export interface SourceStance {
+	sourceId: string;
+	url: string;
+	title: string;
+	label: SourceStanceLabel;
+	keywordOverlap: number;
+	conflictMarkerCount: number;
+	conflictMarkersMatched: string[];
+	primary: boolean;
+	freshness: number;
+	/** Signed magnitude: positive = supporting weight, negative = conflicting weight, 0 = neutral. */
+	evidenceStrength: number;
+}
+
+/** Minimum keyword overlap for a source to count as topically on-point at all. */
+const OVERLAP_NEUTRAL_FLOOR = 0.15;
+/** Overlap threshold (with no conflict markers) to call a source "supporting". */
+const OVERLAP_SUPPORT_THRESHOLD = 0.3;
+
+/**
+ * Classify a single fetched source's stance relative to the research query.
+ * Deterministic, no LLM calls: combines keyword overlap (BM25 tokenizer),
+ * conflict-marker matches, source-quality tier (`primary`), and freshness
+ * into a label + a signed `evidenceStrength`.
+ */
+export function classifySourceStance(input: {
+	sourceId: string;
+	url: string;
+	title: string;
+	text: string;
+	query: string;
+	primary: boolean;
+	publishedAt?: string;
+	now?: Date;
+}): SourceStance {
+	const overlap = keywordOverlapRatio(input.query, input.text);
+	const { count, matched } = countConflictMarkers(input.text);
+	const fresh = freshnessScore(input.publishedAt, input.now);
+
+	let label: SourceStanceLabel;
+	if (overlap < OVERLAP_NEUTRAL_FLOOR) {
+		label = "neutral";
+	} else if (count > 0) {
+		label = "conflicting";
+	} else if (overlap >= OVERLAP_SUPPORT_THRESHOLD) {
+		label = "supporting";
+	} else {
+		label = "neutral";
+	}
+
+	const qualityTier = input.primary ? 1.3 : 1.0;
+	const magnitude = (overlap * 0.6 + fresh * 0.4) * qualityTier;
+	const conflictBoost = 0.5 + Math.min(1, count * 0.15);
+
+	let evidenceStrength = 0;
+	if (label === "supporting") {
+		evidenceStrength = Math.round(magnitude * 1000) / 1000;
+	} else if (label === "conflicting") {
+		evidenceStrength = -Math.round(magnitude * conflictBoost * 1000) / 1000;
+	}
+
+	return {
+		sourceId: input.sourceId,
+		url: input.url,
+		title: input.title,
+		label,
+		keywordOverlap: Math.round(overlap * 1000) / 1000,
+		conflictMarkerCount: count,
+		conflictMarkersMatched: matched,
+		primary: input.primary,
+		freshness: fresh,
+		evidenceStrength,
+	};
+}
+
+export type StanceVerdict =
+	| "supported"
+	| "likely_supported"
+	| "contested"
+	| "likely_false"
+	| "insufficient_evidence";
+
+export interface StanceSummary {
+	query: string;
+	verdict: StanceVerdict;
+	supportScore: number;
+	conflictScore: number;
+	supportingCount: number;
+	conflictingCount: number;
+	neutralCount: number;
+	sources: SourceStance[];
+}
+
+/** Support-score + count threshold for a "strong" (non-"likely") verdict. */
+const STRONG_SCORE_THRESHOLD = 1.2;
+const STRONG_COUNT_THRESHOLD = 2;
+/** Ratio one side must exceed the other by to call the mixed case one-sided rather than contested. */
+const DOMINANCE_RATIO = 1.5;
+
+/**
+ * Aggregate per-source stances into a single categorical verdict.
+ * Purely threshold-based on `supportScore`/`conflictScore` (sums of the
+ * signed `evidenceStrength` values) — see module caveat: this is a
+ * heuristic hint, not a fact-check.
+ */
+export function summarizeStance(query: string, sources: SourceStance[]): StanceSummary {
+	const supportingCount = sources.filter((s) => s.label === "supporting").length;
+	const conflictingCount = sources.filter((s) => s.label === "conflicting").length;
+	const neutralCount = sources.filter((s) => s.label === "neutral").length;
+
+	const supportScore =
+		Math.round(
+			sources.filter((s) => s.evidenceStrength > 0).reduce((sum, s) => sum + s.evidenceStrength, 0) *
+				1000,
+		) / 1000;
+	const conflictScore =
+		Math.round(
+			Math.abs(
+				sources.filter((s) => s.evidenceStrength < 0).reduce((sum, s) => sum + s.evidenceStrength, 0),
+			) * 1000,
+		) / 1000;
+
+	let verdict: StanceVerdict;
+	if (supportingCount === 0 && conflictingCount === 0) {
+		verdict = "insufficient_evidence";
+	} else if (conflictingCount === 0) {
+		verdict =
+			supportScore >= STRONG_SCORE_THRESHOLD && supportingCount >= STRONG_COUNT_THRESHOLD
+				? "supported"
+				: "likely_supported";
+	} else if (supportingCount === 0) {
+		verdict =
+			conflictScore >= STRONG_SCORE_THRESHOLD && conflictingCount >= STRONG_COUNT_THRESHOLD
+				? "likely_false"
+				: "contested";
+	} else if (supportScore > conflictScore * DOMINANCE_RATIO) {
+		verdict = "likely_supported";
+	} else if (conflictScore > supportScore * DOMINANCE_RATIO) {
+		verdict = "likely_false";
+	} else {
+		verdict = "contested";
+	}
+
+	return {
+		query,
+		verdict,
+		supportScore,
+		conflictScore,
+		supportingCount,
+		conflictingCount,
+		neutralCount,
+		sources,
+	};
+}
+
 // ─── Bundle rendering (pure — returns strings, does not touch disk) ────
 
 export interface FetchedSourceRecord {
@@ -316,6 +598,8 @@ export interface FetchedSourceRecord {
 	reachability: ReachabilityStatus;
 	file?: string;
 	wordCount?: number;
+	/** Published/updated date as reported by the source, if any (used for freshness scoring). */
+	publishedAt?: string;
 }
 
 export interface BundleSummary {
@@ -327,6 +611,8 @@ export interface BundleSummary {
 	consulted: number;
 	fetched: FetchedSourceRecord[];
 	unfetchedRanked: RankedSource[];
+	/** Optional deterministic stance summary (issue #70) — rendered as a caveat + verdict line when present. */
+	stance?: StanceSummary;
 }
 
 export function buildStatusMd(summary: BundleSummary): string {
@@ -369,11 +655,28 @@ export function buildStatusMd(summary: BundleSummary): string {
 		);
 	}
 
+	if (summary.stance) {
+		lines.push(
+			`## Claim stance (heuristic, non-authoritative)`,
+			``,
+			`> ${STANCE_CAVEAT}`,
+			``,
+			`- **Verdict:** ${summary.stance.verdict}`,
+			`- **Support score:** ${summary.stance.supportScore}  |  **Conflict score:** ${summary.stance.conflictScore}`,
+			`- **Supporting / conflicting / neutral sources:** ${summary.stance.supportingCount} / ${summary.stance.conflictingCount} / ${summary.stance.neutralCount}`,
+			`- See \`STANCE.md\` and \`data/stance.json\` for the per-source breakdown.`,
+			``,
+		);
+	}
+
 	lines.push(
 		`## Next steps for the agent`,
 		``,
 		`- Fill in \`reports/CLAIMS.md\` with claims cited by source ID (S1, S2, ...), using \`reports/EVIDENCE.md\` and \`data/evidence.json\`.`,
 		`- Review \`reports/GAPS.md\` for sub-queries with weak or no coverage.`,
+		summary.stance
+			? `- \`STANCE.md\` offers a candidate (non-authoritative) stance per source — confirm before citing as fact.`
+			: ``,
 		`- This is a single-round MVP bundle — no iterative follow-up round was run.`,
 		``,
 	);
@@ -483,6 +786,66 @@ export function buildGapsMd(
 	return lines.filter((l, i, arr) => !(l === "" && arr[i - 1] === "")).join("\n");
 }
 
+export function buildStanceMd(summary: StanceSummary): string {
+	const lines: string[] = [
+		`# Claim Stance (heuristic, non-authoritative)`,
+		``,
+		`> ${STANCE_CAVEAT}`,
+		``,
+		`This is a deterministic, keyword/pattern-based heuristic — it does **not**`,
+		`perform semantic entailment or fact-checking. It combines keyword overlap`,
+		`with the query, English conflict-marker words, source-quality tier, and`,
+		`freshness into a per-source stance and an aggregate verdict. Treat every`,
+		`row below as a candidate lead for the agent to confirm, not a conclusion.`,
+		``,
+		`- **Research question:** ${summary.query}`,
+		`- **Verdict:** ${summary.verdict}`,
+		`- **Support score:** ${summary.supportScore}  |  **Conflict score:** ${summary.conflictScore}`,
+		`- **Supporting sources:** ${summary.supportingCount}  |  **Conflicting:** ${summary.conflictingCount}  |  **Neutral:** ${summary.neutralCount}`,
+		``,
+		`## Candidate claim table (non-authoritative — confirm before citing)`,
+		``,
+	];
+
+	if (summary.sources.length === 0) {
+		lines.push(`_No fetched sources with extractable content were available for stance classification._`, ``);
+		return lines.filter((l, i, arr) => !(l === "" && arr[i - 1] === "")).join("\n");
+	}
+
+	lines.push(
+		`| Source | Stance | Overlap | Conflict markers | Primary | Evidence strength |`,
+		`| --- | --- | --- | --- | --- | --- |`,
+		...summary.sources.map(
+			(s) =>
+				`| ${s.sourceId} | ${s.label} | ${s.keywordOverlap} | ${s.conflictMarkersMatched.join(", ") || "—"} | ${s.primary ? "yes" : "no"} | ${s.evidenceStrength} |`,
+		),
+		``,
+		`_Rows above are candidate leads only — always open the source and read`,
+		`\`reports/EVIDENCE.md\` before treating a "supporting"/"conflicting" label`,
+		`as fact._`,
+		``,
+	);
+
+	return lines.filter((l, i, arr) => !(l === "" && arr[i - 1] === "")).join("\n");
+}
+
+export function buildStanceJson(summary: StanceSummary): Record<string, unknown> {
+	return {
+		version: 1,
+		caveat: STANCE_CAVEAT,
+		query: summary.query,
+		verdict: summary.verdict,
+		supportScore: summary.supportScore,
+		conflictScore: summary.conflictScore,
+		counts: {
+			supporting: summary.supportingCount,
+			conflicting: summary.conflictingCount,
+			neutral: summary.neutralCount,
+		},
+		sources: summary.sources,
+	};
+}
+
 // ─── Manifest / registry JSON builders ─────────────────────────────────
 
 export interface CitationAuditDetail {
@@ -502,6 +865,8 @@ export function buildManifest(params: {
 	consulted: number;
 	fetched: FetchedSourceRecord[];
 	bundleDir: string;
+	/** Optional deterministic stance summary (issue #70) — extends `counts` when present. */
+	stance?: StanceSummary;
 }): Record<string, unknown> {
 	const audit: CitationAuditDetail[] = params.fetched.map((f) => ({
 		id: f.id,
@@ -516,6 +881,21 @@ export function buildManifest(params: {
 	const dead = audit.filter((a) => a.classification === "dead").length;
 	const primary = params.fetched.filter((f) => f.primary && f.ok).length;
 
+	const counts: Record<string, unknown> = {
+		sourcesConsulted: params.consulted,
+		sourcesFetched: params.fetched.length,
+		sourcesOk: ok,
+		sourcesSkipped: skipped,
+		sourcesDead: dead,
+		primarySources: primary,
+	};
+	if (params.stance) {
+		counts.stanceVerdict = params.stance.verdict;
+		counts.supportingSources = params.stance.supportingCount;
+		counts.conflictingSources = params.stance.conflictingCount;
+		counts.neutralSources = params.stance.neutralCount;
+	}
+
 	return {
 		version: 1,
 		tool: "aio-webresearch",
@@ -527,14 +907,7 @@ export function buildManifest(params: {
 		maxSources: params.maxSources,
 		stopReason: "single_round_complete",
 		bundleDir: params.bundleDir,
-		counts: {
-			sourcesConsulted: params.consulted,
-			sourcesFetched: params.fetched.length,
-			sourcesOk: ok,
-			sourcesSkipped: skipped,
-			sourcesDead: dead,
-			primarySources: primary,
-		},
+		counts,
 		citationAudit: {
 			checked: audit.length,
 			ok,
@@ -579,9 +952,11 @@ export interface WriteBundleInput {
 	evidenceMd: string;
 	claimsMd: string;
 	gapsMd: string;
+	stanceMd: string;
 	manifest: Record<string, unknown>;
 	sourcesJson: Record<string, unknown>;
 	evidenceJson: Record<string, unknown>;
+	stanceJson: Record<string, unknown>;
 }
 
 /** Write the full bundle skeleton to disk. Assumes `sources/*.md` were already written by the caller. */
@@ -593,6 +968,7 @@ export async function writeBundle(input: WriteBundleInput): Promise<void> {
 
 	await Promise.all([
 		writeFile(join(input.bundleDir, "STATUS.md"), input.statusMd, "utf8"),
+		writeFile(join(input.bundleDir, "STANCE.md"), input.stanceMd, "utf8"),
 		writeFile(join(reportsDir, "EVIDENCE.md"), input.evidenceMd, "utf8"),
 		writeFile(join(reportsDir, "CLAIMS.md"), input.claimsMd, "utf8"),
 		writeFile(join(reportsDir, "GAPS.md"), input.gapsMd, "utf8"),
@@ -609,6 +985,11 @@ export async function writeBundle(input: WriteBundleInput): Promise<void> {
 		writeFile(
 			join(dataDir, "evidence.json"),
 			JSON.stringify(input.evidenceJson, null, 2),
+			"utf8",
+		),
+		writeFile(
+			join(dataDir, "stance.json"),
+			JSON.stringify(input.stanceJson, null, 2),
 			"utf8",
 		),
 	]);
