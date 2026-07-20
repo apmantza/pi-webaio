@@ -14,7 +14,7 @@ jobs:
       version: ${{ steps.meta.outputs.version }}
       tag: ${{ steps.meta.outputs.tag }}
       should_release: ${{ steps.meta.outputs.should_release }}
-      has_npm_token: ${{ steps.meta.outputs.has_npm_token }}
+      needs_npm_publish: ${{ steps.meta.outputs.needs_npm_publish }}
     steps:
       # yamllint disable-line rule:line-length
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -24,36 +24,40 @@ jobs:
 
       - name: Compute release metadata
         id: meta
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         shell: bash
         run: |
           VERSION=$(node -p "require('./package.json').version")
           TAG="v$VERSION"
 
-          # Release if the version tag doesn't exist yet. The tag check is the
-          # sole guard — no need to also require package.json in the diff, which
-          # breaks when the version bump and changelog land in separate commits.
+          # Create a GitHub release if the version tag doesn't exist yet. The
+          # tag check is the sole guard — no need to also require package.json
+          # in the diff, which breaks when the version bump and changelog land
+          # in separate commits.
           if git rev-parse "$TAG" >/dev/null 2>&1; then
             SHOULD_RELEASE=false
           else
             SHOULD_RELEASE=true
           fi
 
-          # Check if NPM_TOKEN secret is configured
-          if [ -n "$NPM_TOKEN" ]; then
-            HAS_NPM_TOKEN=true
+          # Publish to npm if this version is not on the registry yet. Checked
+          # independently of the tag so a re-run (workflow_dispatch) can
+          # publish a version whose tag/release already exists — e.g. after
+          # configuring trusted publishing.
+          if npm view "pi-webaio@$VERSION" version >/dev/null 2>&1; then
+            NEEDS_NPM_PUBLISH=false
           else
-            HAS_NPM_TOKEN=false
+            NEEDS_NPM_PUBLISH=true
           fi
 
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "should_release=$SHOULD_RELEASE" >> "$GITHUB_OUTPUT"
-          echo "has_npm_token=$HAS_NPM_TOKEN" >> "$GITHUB_OUTPUT"
+          echo "needs_npm_publish=$NEEDS_NPM_PUBLISH" >> "$GITHUB_OUTPUT"
 
       - name: Verify changelog entry exists
-        if: steps.meta.outputs.should_release == 'true'
+        if: >
+          steps.meta.outputs.should_release == 'true' ||
+          steps.meta.outputs.needs_npm_publish == 'true'
         shell: bash
         env:
           VERSION: ${{ steps.meta.outputs.version }}
@@ -65,34 +69,24 @@ jobs:
 
       # yamllint disable-line rule:line-length
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
-        if: >
-          steps.meta.outputs.should_release == 'true' &&
-          steps.meta.outputs.has_npm_token == 'true'
+        if: steps.meta.outputs.needs_npm_publish == 'true'
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
 
       - name: Install dependencies
-        if: >
-          steps.meta.outputs.should_release == 'true' &&
-          steps.meta.outputs.has_npm_token == 'true'
+        if: steps.meta.outputs.needs_npm_publish == 'true'
         run: npm install --no-audit --no-fund
 
-      - name: Dry-run publish (validates tarball + registry auth)
-        if: >
-          steps.meta.outputs.should_release == 'true' &&
-          steps.meta.outputs.has_npm_token == 'true'
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Dry-run publish (validates tarball)
+        if: steps.meta.outputs.needs_npm_publish == 'true'
         run: npm publish --dry-run
 
       # The dry-run above runs prepare (tsc → dist/), so the compiled entry now
       # exists in the working tree. Load it to catch a broken/missing-dep entry
       # before we tag and publish.
       - name: Smoke-load compiled entry
-        if: >
-          steps.meta.outputs.should_release == 'true' &&
-          steps.meta.outputs.has_npm_token == 'true'
+        if: steps.meta.outputs.needs_npm_publish == 'true'
         shell: bash
         run: |
           ENTRY=$(node -p "require('./package.json').pi.extensions[0]")
@@ -139,14 +133,24 @@ jobs:
           gh release create "$TAG" --title "$TAG"
           --notes-file "$RUNNER_TEMP/release-notes.md"
 
+  # Publishes via npm trusted publishing (OIDC) — no NPM_TOKEN secret. The
+  # trusted publisher must be configured on npmjs.com for pi-webaio, pointing
+  # at this repo and this workflow file. npm >= 11.5.1 (bundled with Node 24)
+  # detects the GitHub Actions OIDC token automatically during `npm publish`.
   publish-npm:
     runs-on: ubuntu-latest
     needs: [prepare, release]
+    # `release` is skipped when the tag already exists; still publish as long
+    # as the version is missing from the registry and release didn't FAIL.
     if: >
-      needs.prepare.outputs.should_release == 'true' &&
-      needs.prepare.outputs.has_npm_token == 'true'
+      always() &&
+      needs.prepare.result == 'success' &&
+      needs.prepare.outputs.needs_npm_publish == 'true' &&
+      needs.release.result != 'failure' &&
+      needs.release.result != 'cancelled'
     permissions:
       contents: read
+      id-token: write
     steps:
       # yamllint disable-line rule:line-length
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -166,7 +170,5 @@ jobs:
       - name: Install dependencies
         run: npm install --no-audit --no-fund
 
-      - name: Publish to npm
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish # zizmor: ignore[use-trusted-publishing]
+      - name: Publish to npm (trusted publishing)
+        run: npm publish
