@@ -2,11 +2,16 @@
 // Extracted from index.ts. Rate-limited fetching with retries,
 // bot protection fallback, JS rendering fallback, and SSRF checks.
 
-import { existsSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
 import { fetch as wreqFetch, getProfiles as wreqGetProfiles } from "wreq-js";
 import type { BrowserProfile, EmulationOS } from "wreq-js";
+// The stealth script is the single shared module also used by the CDP-based
+// search extractors (extractors/common.mjs). It's imported via the
+// "#stealth-script" subpath defined in package.json "imports", which Node and
+// tsc (NodeNext) resolve relative to the nearest package.json — i.e. the
+// package root — so the specifier is correct whether this module runs as the
+// TypeScript source (tests, pi git-install) or as compiled dist/src/fetch.js,
+// which sit at different depths relative to extractors/.
+import { STEALTH_SCRIPT } from "#stealth-script";
 import { detectBotBlock, detectLoginRedirect } from "./bot-detection.ts";
 import { isDangerousUrl, scanForSecrets } from "./security.ts";
 import type { FetchOpts } from "./types.ts";
@@ -199,63 +204,15 @@ export function getRateLimiter(host: string): TokenBucket {
 let _pwWarned = false;
 
 // ─── Stealth patches for Playwright fallback ───────────────────────
-// Injected before page scripts run to mask headless automation signals.
-//
-// The script itself is NOT duplicated here: it lives in the single shared
-// module extractors/stealth-script.mjs, also consumed by the CDP-based
-// search extractors (extractors/common.mjs). That file ships as plain,
-// uncompiled ESM in both the source tree and the published npm package
-// (package.json "files" includes "extractors/"), so it's reachable at a
-// stable path from either location.
-//
-// src/fetch.ts, however, gets compiled by tsc into dist/src/fetch.js — one
-// directory level deeper relative to the package root than the source file
-// is. A static relative import baked in at authoring time would therefore
-// resolve correctly from only one of the two locations. To stay correct in
-// both, resolveStealthScriptPath() walks upward from wherever this module
-// actually runs from until it finds extractors/stealth-script.mjs, then the
-// result is loaded via a dynamic import() of that resolved path.
-function resolveStealthScriptPath(): string | null {
-	try {
-		const here = dirname(fileURLToPath(import.meta.url));
-		let dir = here;
-		for (let i = 0; i < 6; i++) {
-			const candidate = join(dir, "extractors", "stealth-script.mjs");
-			if (existsSync(candidate)) return candidate;
-			const parent = dirname(dir);
-			if (parent === dir) break;
-			dir = parent;
-		}
-	} catch {
-		/* best-effort */
-	}
-	return null;
-}
-
-let _stealthScriptPromise: Promise<string | null> | null = null;
-
-function loadStealthScript(): Promise<string | null> {
-	if (!_stealthScriptPromise) {
-		_stealthScriptPromise = (async () => {
-			const path = resolveStealthScriptPath();
-			if (!path) return null;
-			try {
-				const mod = await import(pathToFileURL(path).href);
-				return (mod as { STEALTH_SCRIPT?: string }).STEALTH_SCRIPT ?? null;
-			} catch {
-				return null;
-			}
-		})();
-	}
-	return _stealthScriptPromise;
-}
-
+// Inject the shared stealth script before page scripts run, to mask headless
+// automation signals. STEALTH_SCRIPT is imported statically at the top of this
+// module (see the "#stealth-script" note there); a resolution failure would
+// surface loudly at module load rather than silently disabling stealth.
 export async function applyStealth(page: any) {
 	try {
-		const script = await loadStealthScript();
-		if (script) await page.addInitScript(script);
+		if (STEALTH_SCRIPT) await page.addInitScript(STEALTH_SCRIPT);
 	} catch {
-		/* best-effort */
+		/* best-effort: never let stealth injection break a fetch */
 	}
 }
 
