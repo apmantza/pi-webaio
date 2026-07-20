@@ -6,6 +6,8 @@ All notable changes to pi-webaio will be documented in this file.
 
 ### Added
 
+- **Preferred-domain ranking boost** (`src/search.ts`) — `inferPreferredDomains` maps ~35 query keywords (framework/tool/vendor names) to canonical official domains (e.g. "prisma" → `prisma.io`, "anthropic"/"claude" → `anthropic.com`, `docs.anthropic.com`); `scoreAndRankResults` now boosts results whose host matches an inferred domain for the query, so official docs outrank generic SEO results with equal engine consensus ([#63](https://github.com/apmantza/pi-webaio/issues/63)).
+
 ### Changed
 
 ### Fixed

@@ -191,7 +191,7 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 				buckets.set(r.url, list);
 			}
 
-			const scored = scoreAndRankResults(buckets);
+			const scored = scoreAndRankResults(buckets, query);
 			const merged = scored.map((s) => s.result);
 
 			if (!merged.length) {

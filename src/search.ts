@@ -338,16 +338,108 @@ export const ENGINE_WEIGHTS: Record<string, number> = {
 	yahoo: 1,
 };
 
+// Query keyword → canonical official domain(s). Crude but free: when a query
+// clearly targets a known tool/framework/vendor, results hosted on its
+// official domain get a ranking boost over generic (e.g. SEO blogspam)
+// results with equal engine consensus.
+// Ported from greedysearch-pi's `inferPreferredDomains` (src/search/sources.mjs).
+const PREFERRED_DOMAIN_RULES: {
+	keywords: string[];
+	domains: string[];
+	test?: RegExp;
+}[] = [
+	{ keywords: ["openai", "gpt", "chatgpt"], domains: ["openai.com", "platform.openai.com", "help.openai.com"] },
+	{ keywords: ["anthropic", "claude"], domains: ["anthropic.com", "docs.anthropic.com"] },
+	{ keywords: ["bun"], domains: ["bun.sh", "bun.com"] },
+	{ keywords: ["next.js", "nextjs"], domains: ["nextjs.org", "vercel.com"] },
+	{ keywords: ["playwright"], domains: ["playwright.dev"] },
+	{ keywords: ["supabase"], domains: ["supabase.com", "supabase.io"] },
+	{ keywords: ["prisma"], domains: ["prisma.io"] },
+	{ keywords: ["tailwind"], domains: ["tailwindcss.com"] },
+	{ keywords: ["vite"], domains: ["vitejs.dev", "vite.dev"] },
+	{ keywords: ["astro"], domains: ["astro.build"] },
+	{ keywords: ["svelte"], domains: ["svelte.dev"] },
+	{ keywords: ["solid"], domains: ["solidjs.com"] },
+	{ keywords: ["vue", "nuxt"], domains: ["vuejs.org", "nuxt.com"] },
+	{ keywords: ["react", "react native"], domains: ["react.dev", "reactnative.dev"] },
+	{ keywords: ["angular"], domains: ["angular.io", "angular.dev"] },
+	{ keywords: ["node.js", "nodejs"], domains: ["nodejs.org", "nodejs.dev", "npmjs.com"] },
+	{ keywords: ["golang"], domains: ["go.dev", "golang.org", "pkg.go.dev"], test: /\bgo\b/ },
+	{ keywords: ["deno"], domains: ["deno.land", "deno.com"] },
+	{ keywords: ["fresh"], domains: ["fresh.deno.dev"] },
+	{ keywords: ["typescript"], domains: ["typescriptlang.org"] },
+	{ keywords: ["python"], domains: ["python.org", "docs.python.org"] },
+	{ keywords: ["rust"], domains: ["rust-lang.org", "docs.rs", "crates.io"] },
+	{ keywords: ["zig"], domains: ["ziglang.org"] },
+	{ keywords: ["docker"], domains: ["docker.com", "docs.docker.com", "hub.docker.com"] },
+	{ keywords: ["kubernetes", "k8s"], domains: ["kubernetes.io", "k8s.io"] },
+	{ keywords: ["postgres", "postgresql"], domains: ["postgresql.org", "neon.tech", "supabase.com"] },
+	{ keywords: ["redis"], domains: ["redis.io"] },
+	{ keywords: ["sqlite"], domains: ["sqlite.org"] },
+	{ keywords: ["cloudflare"], domains: ["developers.cloudflare.com", "cloudflare.com"] },
+	{ keywords: ["vercel"], domains: ["vercel.com", "nextjs.org"] },
+	{ keywords: ["netlify"], domains: ["netlify.com", "docs.netlify.com"] },
+	{ keywords: ["stripe"], domains: ["stripe.com", "docs.stripe.com"] },
+	{ keywords: ["github"], domains: ["github.com", "docs.github.com"] },
+	{ keywords: ["gitlab"], domains: ["gitlab.com", "docs.gitlab.com"] },
+	{ keywords: ["aws"], domains: ["aws.amazon.com", "docs.aws.amazon.com"] },
+	{ keywords: ["azure"], domains: ["azure.microsoft.com", "learn.microsoft.com"] },
+	{ keywords: ["gcp", "google cloud"], domains: ["cloud.google.com", "developers.google.com"] },
+	{ keywords: ["gemini", "google ai"], domains: ["ai.google.dev", "developers.google.com"] },
+];
+
+/**
+ * Infer canonical official domains implied by a search query's keywords
+ * (e.g. "prisma migrate guide" → ["prisma.io"]). Returns an empty array
+ * when nothing matches — callers should treat that as "no boost".
+ */
+export function inferPreferredDomains(query: string): string[] {
+	const normalized = query.toLowerCase();
+	const matches: string[] = [];
+
+	for (const rule of PREFERRED_DOMAIN_RULES) {
+		const matched =
+			rule.keywords.some((kw) => normalized.includes(kw)) ||
+			(rule.test?.test(normalized) ?? false);
+		if (matched) matches.push(...rule.domains);
+	}
+
+	return [...new Set(matches)];
+}
+
+function hostMatchesDomain(hostname: string, domain: string): boolean {
+	return hostname === domain || hostname.endsWith(`.${domain}`);
+}
+
+// Boost applied when a result's host matches a query-inferred preferred
+// domain. Chosen to be additive/small so it composes cleanly with the
+// existing engine-weight + consensus scoring instead of overriding it.
+export const PREFERRED_DOMAIN_BOOST = 4;
+
 export function scoreAndRankResults(
 	buckets: Map<string, EngineSource[]>,
+	query = "",
 ): { result: SearchResult; score: number; sources: string[] }[] {
+	const preferredDomains = inferPreferredDomains(query);
 	const scored: { result: SearchResult; score: number; sources: string[] }[] =
 		[];
 	for (const [url, entries] of buckets) {
 		const sources = entries.map((e) => e.engine);
 		const weightSum = entries.reduce((sum, e) => sum + e.weight, 0);
 		const consensusBonus = Math.max(0, sources.length - 1) * 2;
-		const score = weightSum + consensusBonus;
+
+		let domainBoost = 0;
+		if (preferredDomains.length > 0) {
+			const hostname = extractDomain(url)?.replace(/^www\./, "") || "";
+			if (
+				hostname &&
+				preferredDomains.some((d) => hostMatchesDomain(hostname, d))
+			) {
+				domainBoost = PREFERRED_DOMAIN_BOOST;
+			}
+		}
+
+		const score = weightSum + consensusBonus + domainBoost;
 
 		entries.sort((a, b) => b.weight - a.weight);
 		const best = entries[0]!.result;
@@ -488,7 +580,7 @@ export async function searchWeb(query: string): Promise<{
 		}
 	}
 
-	const scored = scoreAndRankResults(engineResults);
+	const scored = scoreAndRankResults(engineResults, query);
 	const merged = scored.map((s) => s.result);
 
 	if (merged.length > 0) {
