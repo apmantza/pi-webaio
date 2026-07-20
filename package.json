@@ -35,7 +35,7 @@
   },
   "pi": {
     "extensions": [
-      "./dist/index.js"
+      "./index.ts"
     ]
   },
   "files": [

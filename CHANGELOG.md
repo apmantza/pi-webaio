@@ -6,9 +6,19 @@ All notable changes to pi-webaio will be documented in this file.
 
 ### Added
 
-### Changed
+- **Query-focused fetch (answer mode)** (`src/tools/webfetch.ts`) — new `answerMode` behavior: when a `query` is provided, `aio-webfetch` can return only the sections that answer it, ranked by BM25, instead of the whole page ([#42](https://github.com/apmantza/pi-webaio/issues/42), [#51](https://github.com/apmantza/pi-webaio/pull/51)).
+- **Per-domain fetch strategy memory** (`src/strategy-memory.ts`) — remembers which rung of the fetch ladder (plain → TLS-fingerprinted → headless browser) worked per domain, with LRU capping at 500 domains, 7-day expiry, and periodic re-probe of cheaper strategies ([#43](https://github.com/apmantza/pi-webaio/issues/43), [#52](https://github.com/apmantza/pi-webaio/pull/52)).
+- **Hard token budget** (`src/prune-markdown.ts`, `src/tools/webfetch.ts`, `src/tools/webcontent.ts`) — new `budgetTokens` parameter enforces a hard output-size ceiling with heading-skeleton preservation, BM25 section ranking when a query is present, and a footer pointing at `aio-webcontent` for the full content ([#44](https://github.com/apmantza/pi-webaio/issues/44), [#53](https://github.com/apmantza/pi-webaio/pull/53)).
+- **`aio-webquery` tool** (`src/tools/webquery.ts`, `src/webquery-index.ts`) — BM25 search over a locally-pulled corpus (from `aio-webpull`), fully offline, no re-fetching ([#48](https://github.com/apmantza/pi-webaio/issues/48), [#54](https://github.com/apmantza/pi-webaio/pull/54)).
+- **HTTP revalidation and diff-aware refetch** (`src/http-validators.ts`, `src/content-diff.ts`) — conditional requests via stored ETag/Last-Modified with 304 handling, plus a `diff` parameter on `aio-webfetch` that returns only the changed sections since the cached copy ([#45](https://github.com/apmantza/pi-webaio/issues/45), [#56](https://github.com/apmantza/pi-webaio/pull/56)).
+- **Extraction quality benchmark harness** (`scripts/bench-extraction.mjs`, `.github/workflows/bench.yml`) — scored extraction benchmark over a fixed corpus with a CI workflow ([#50](https://github.com/apmantza/pi-webaio/issues/50), [#57](https://github.com/apmantza/pi-webaio/pull/57)).
+- **Speculative prefetch of top search results** (`src/prefetch.ts`) — opt-in warm-up of the content cache for the top `aio-websearch` hits ([#47](https://github.com/apmantza/pi-webaio/issues/47), [#58](https://github.com/apmantza/pi-webaio/pull/58)).
+- **User-defined vertical extractors** (`src/verticals/user-loader.ts`, `docs/custom-verticals.md`) — load custom extractors from `~/.pi/agent/webaio/verticals/` ([#49](https://github.com/apmantza/pi-webaio/issues/49), [#59](https://github.com/apmantza/pi-webaio/pull/59)).
+- **MCP stdio server** (`src/mcp-server.ts`, `bin/pi-webaio-mcp.mjs`, `docs/mcp.md`) — exposes all seven `aio-*` tools over the Model Context Protocol so non-pi agents (e.g. Claude Code) can use them ([#55](https://github.com/apmantza/pi-webaio/issues/55), [#60](https://github.com/apmantza/pi-webaio/pull/60)).
 
 ### Fixed
+
+- **Broken `pi install git:` on machines without devDependencies** (`package.json`, `scripts/prepare.mjs`) — pi installs packages with `npm install --omit=dev`, so the `prepare` build either failed (`'tsc' is not recognized`) or, after being made tolerant, silently skipped the build leaving no `dist/` at all — the extension registered zero (or stale) tools. `pi.extensions` now points directly at `./index.ts`, which pi loads natively; no build step is needed for git installs. The `dist/` build remains for the npm `main` entry and the MCP bin.
 
 ## [0.6.3] - 2026-07-18
 
