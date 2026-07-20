@@ -4,6 +4,14 @@
 
 import { fetch as wreqFetch, getProfiles as wreqGetProfiles } from "wreq-js";
 import type { BrowserProfile, EmulationOS } from "wreq-js";
+// The stealth script is the single shared module also used by the CDP-based
+// search extractors (extractors/common.mjs). It's imported via the
+// "#stealth-script" subpath defined in package.json "imports", which Node and
+// tsc (NodeNext) resolve relative to the nearest package.json — i.e. the
+// package root — so the specifier is correct whether this module runs as the
+// TypeScript source (tests, pi git-install) or as compiled dist/src/fetch.js,
+// which sit at different depths relative to extractors/.
+import { STEALTH_SCRIPT } from "#stealth-script";
 import { detectBotBlock, detectLoginRedirect } from "./bot-detection.ts";
 import { isDangerousUrl, scanForSecrets } from "./security.ts";
 import type { FetchOpts } from "./types.ts";
@@ -195,83 +203,16 @@ export function getRateLimiter(host: string): TokenBucket {
 
 let _pwWarned = false;
 
-// ─── Essential stealth patches for Playwright fallback ─────────────
-// Injected before page scripts run to mask headless automation signals.
-const PLAYWRIGHT_STEALTH_SCRIPT = `
-(function() {
-  try { delete window.__REBROWSER_RUNTIME_ENABLE; } catch(_) {}
-  try { delete window.__REBROWSER_DEVTOOLS; } catch(_) {}
-  try { delete window.__nightmare; } catch(_) {}
-  try { delete window.__phantom; } catch(_) {}
-  try { delete window.callPhantom; } catch(_) {}
-  try { delete window._phantom; } catch(_) {}
-
-  Object.defineProperty(navigator, 'webdriver', { get: () => undefined, configurable: true });
-  Object.defineProperty(navigator, 'vendor', { get: () => 'Google Inc.', configurable: true });
-  Object.defineProperty(navigator, 'platform', { get: () => 'Win32', configurable: true });
-  Object.defineProperty(navigator, 'maxTouchPoints', { get: () => 0, configurable: true });
-  Object.defineProperty(navigator, 'plugins', {
-    get: () => {
-      var p = [
-        { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
-        { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '' },
-        { name: 'Native Client', filename: 'internal-nacl-plugin', description: '' },
-      ];
-      p.length = 3;
-      return p;
-    },
-  });
-  Object.defineProperty(navigator, 'mimeTypes', {
-    get: () => {
-      var m = [
-        { type: 'application/pdf', suffixes: 'pdf', description: 'Portable Document Format', enabledPlugin: null },
-        { type: 'text/pdf', suffixes: 'pdf', description: 'Portable Document Format', enabledPlugin: null },
-      ];
-      m.item = function(i) { return m[i] || null; };
-      m.namedItem = function(name) { return m.find(function(x) { return x.type === name; }) || null; };
-      return m;
-    },
-    configurable: true,
-  });
-  Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'], configurable: true });
-
-  if (!window.chrome) {
-    window.chrome = {
-      app: { isInstalled: false, InstallState: {}, RunningState: {} },
-      runtime: { OnInstalledReason: {}, OnRestartRequiredReason: {}, PlatformArch: {}, PlatformNaclArch: {}, PlatformOs: {}, RequestUpdateCheckStatus: {}, connect: () => ({}), sendMessage: () => {}, onMessage: { addListener: () => {} } },
-      loadTimes: () => ({}),
-      csi: () => ({}),
-    };
-  }
-
-  try {
-    var getParam = WebGLRenderingContext.prototype.getParameter;
-    WebGLRenderingContext.prototype.getParameter = function(p) {
-      if (p === 37445) return 'Intel Inc.';
-      if (p === 37446) return 'Intel Iris OpenGL Engine';
-      return getParam.call(this, p);
-    };
-  } catch(_) {}
-  Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8, configurable: true });
-  Object.defineProperty(navigator, 'deviceMemory', { get: () => 8, configurable: true });
-
-  try {
-    if (!window.outerWidth)  Object.defineProperty(window, 'outerWidth',  { get: () => window.innerWidth  || 1920, configurable: true });
-    if (!window.outerHeight) Object.defineProperty(window, 'outerHeight', { get: () => window.innerHeight || 1080, configurable: true });
-  } catch(_) {}
-
-  try {
-    if (!screen.colorDepth) Object.defineProperty(screen, 'colorDepth', { get: () => 24, configurable: true });
-    if (!screen.pixelDepth) Object.defineProperty(screen, 'pixelDepth', { get: () => 24, configurable: true });
-  } catch(_) {}
-})();
-`;
-
+// ─── Stealth patches for Playwright fallback ───────────────────────
+// Inject the shared stealth script before page scripts run, to mask headless
+// automation signals. STEALTH_SCRIPT is imported statically at the top of this
+// module (see the "#stealth-script" note there); a resolution failure would
+// surface loudly at module load rather than silently disabling stealth.
 export async function applyStealth(page: any) {
 	try {
-		await page.addInitScript(PLAYWRIGHT_STEALTH_SCRIPT);
+		if (STEALTH_SCRIPT) await page.addInitScript(STEALTH_SCRIPT);
 	} catch {
-		/* best-effort */
+		/* best-effort: never let stealth injection break a fetch */
 	}
 }
 

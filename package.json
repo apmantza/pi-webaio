@@ -30,6 +30,9 @@
   ],
   "type": "module",
   "main": "./dist/index.js",
+  "imports": {
+    "#stealth-script": "./extractors/stealth-script.mjs"
+  },
   "bin": {
     "pi-webaio-mcp": "bin/pi-webaio-mcp.mjs"
   },

@@ -10,6 +10,8 @@ All notable changes to pi-webaio will be documented in this file.
 
 ### Changed
 
+- **Shared, hardened stealth script** (`extractors/stealth-script.mjs`) — ported the validated anti-detection patches from `greedysearch-pi`'s `injectHeadlessStealth` (Sannysoft 20/20 clean, identical CreepJS fingerprints headless vs visible) into one shared module now consumed by both the CDP-based search extractors (`extractors/common.mjs`) and webfetch's Playwright fallback (`src/fetch.ts`), removing the drift between two independently-maintained copies. Key fixes: `navigator.webdriver` removed from both instance and `Navigator.prototype` (not a stealth-tell getter), `Plugin`/`MimeType` objects with correct prototypes and `enabledPlugin` back-references, `Function.prototype.toString` masking so patched functions read as native code, canvas/AudioContext/WebGL fingerprint noise, a `permissions.query` notifications fix, and `navigator.connection`/`share`/`contentIndex`/`pdfViewerEnabled`/`productSub`/`product` plus realistic `chrome.loadTimes()`/`csi()` ([#62](https://github.com/apmantza/pi-webaio/issues/62)).
+
 ### Fixed
 
 ## [0.7.0] - 2026-07-20
