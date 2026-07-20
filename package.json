@@ -41,6 +41,8 @@
   "files": [
     "dist/",
     "bin/",
+    "index.ts",
+    "src/",
     "extractors/",
     "package.json",
     "README.md",
