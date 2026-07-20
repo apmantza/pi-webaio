@@ -35,14 +35,13 @@
   },
   "pi": {
     "extensions": [
-      "./index.ts"
+      "./pi-entry.mjs"
     ]
   },
   "files": [
     "dist/",
     "bin/",
-    "index.ts",
-    "src/",
+    "pi-entry.mjs",
     "extractors/",
     "package.json",
     "README.md",
