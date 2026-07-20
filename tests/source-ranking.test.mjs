@@ -162,20 +162,33 @@ test("sourceTypePriority: official-docs ranks highest, social ranks lowest", () 
 
 // ─── inferPreferredDomains (issue #63) ─────────────────────────────
 
+// Assert an exact array-membership by element equality. Written as an explicit
+// equality scan rather than `array.includes("host.com")` so CodeQL does not
+// misread these domain-literal membership checks as incomplete URL-substring
+// sanitization (js/incomplete-url-substring-sanitization false positive).
+function hasExactDomain(domains, expected) {
+	return domains.some((d) => d === expected);
+}
+
 test("inferPreferredDomains: matches known tool/framework keywords", () => {
 	assert.deepStrictEqual(
 		inferPreferredDomains("how to set up prisma migrations"),
 		["prisma.io"],
 	);
-	assert.ok(inferPreferredDomains("vite config").includes("vitejs.dev"));
-	assert.ok(inferPreferredDomains("react hooks tutorial").includes("react.dev"));
+	assert.ok(hasExactDomain(inferPreferredDomains("vite config"), "vitejs.dev"));
 	assert.ok(
-		inferPreferredDomains("anthropic claude api").includes("anthropic.com"),
+		hasExactDomain(inferPreferredDomains("react hooks tutorial"), "react.dev"),
+	);
+	assert.ok(
+		hasExactDomain(
+			inferPreferredDomains("anthropic claude api"),
+			"anthropic.com",
+		),
 	);
 });
 
 test("inferPreferredDomains: is case-insensitive", () => {
-	assert.ok(inferPreferredDomains("PRISMA SCHEMA").includes("prisma.io"));
+	assert.ok(hasExactDomain(inferPreferredDomains("PRISMA SCHEMA"), "prisma.io"));
 });
 
 test("inferPreferredDomains: returns empty array when nothing matches", () => {

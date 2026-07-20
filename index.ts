@@ -13,6 +13,7 @@ import { registerWebsearchTool } from "./src/tools/websearch.ts";
 import { registerWebmapTool } from "./src/tools/webmap.ts";
 import { registerWebpullTool } from "./src/tools/webpull.ts";
 import { registerWebqueryTool } from "./src/tools/webquery.ts";
+import { registerWebresearchTool } from "./src/tools/webresearch.ts";
 
 export default function (pi: ExtensionAPI) {
 	// Load user-defined vertical extractors from ~/.pi/agent/webaio/verticals/
@@ -30,7 +31,7 @@ export default function (pi: ExtensionAPI) {
 	// killed because the ref'd interval keeps the loop running.
 	setInterval(cleanupSessionCache, SESSION_CACHE_CLEANUP_MS).unref();
 
-	// Register all 7 tools
+	// Register all 8 tools
 	registerWebfetchTool(pi);
 	registerWebcontentTool(pi);
 	registerWebresultTool(pi);
@@ -38,4 +39,5 @@ export default function (pi: ExtensionAPI) {
 	registerWebmapTool(pi);
 	registerWebpullTool(pi);
 	registerWebqueryTool(pi);
+	registerWebresearchTool(pi);
 }

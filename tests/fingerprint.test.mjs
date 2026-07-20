@@ -5,6 +5,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+	applyStealth,
 	buildHeaders,
 	DEFAULT_BROWSER,
 	DEFAULT_OS,
@@ -12,6 +13,7 @@ import {
 	normalizeFetchedUrl,
 	smartFetch,
 } from "../src/fetch.ts";
+import { STEALTH_SCRIPT } from "#stealth-script";
 
 // ─────────────────────────────────────────────────────────────────────
 // Offline profile/header regression tests
@@ -115,4 +117,42 @@ test("live TLS fingerprint endpoint returns profile metadata (opt-in)", {
 	assert.ok(payload.tls, "expected tls object");
 	assert.equal(typeof payload.tls.ja3, "string");
 	assert.equal(typeof payload.tls.ja4, "string");
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// Shared stealth script regression tests
+// ─────────────────────────────────────────────────────────────────────
+// Guards the "#stealth-script" package subpath import used by fetch.ts (the
+// Playwright fallback) and extractors/common.mjs (CDP search extractors). If
+// the subpath ever fails to resolve, the import throws here rather than
+// silently disabling stealth in production.
+
+test("#stealth-script subpath resolves to a non-empty script with key patches", () => {
+	assert.equal(typeof STEALTH_SCRIPT, "string");
+	assert.ok(STEALTH_SCRIPT.length > 500, "stealth script should be substantial");
+	// Spot-check the hardened patches that distinguish this from the old
+	// inline version — a deleted webdriver property (not a getter tell) and
+	// native-code masking.
+	assert.match(STEALTH_SCRIPT, /delete navigator\.webdriver/);
+	assert.match(STEALTH_SCRIPT, /toString/);
+});
+
+test("applyStealth injects the shared script via addInitScript", async () => {
+	let injected = null;
+	const fakePage = {
+		addInitScript: async (script) => {
+			injected = script;
+		},
+	};
+	await applyStealth(fakePage);
+	assert.equal(injected, STEALTH_SCRIPT);
+});
+
+test("applyStealth never throws when addInitScript fails", async () => {
+	const fakePage = {
+		addInitScript: async () => {
+			throw new Error("page closed");
+		},
+	};
+	await applyStealth(fakePage);
 });
