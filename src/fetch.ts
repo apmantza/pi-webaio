@@ -20,6 +20,15 @@ import {
 	recordDomainSuccess,
 	recordDomainFailure,
 } from "./strategy-memory.ts";
+import {
+	cookieCacheKey,
+	cookiesToHeader,
+	getCachedCookies,
+	hasClearCookieSignal,
+	invalidateCachedCookies,
+	setCachedCookies,
+	type CachedCookie,
+} from "./cookie-cache.ts";
 
 // ─── Constants ─────────────────────────────────────────────────────
 
@@ -216,20 +225,43 @@ export async function applyStealth(page: any) {
 	}
 }
 
+/**
+ * Harvest cookies from a rendered Playwright page and (a) inject them into
+ * the current wreq-js session, if any, so the rest of *this* fetch call
+ * benefits, and (b) persist them into the cross-call per-origin cookie
+ * cache (see cookie-cache.ts) keyed by `cacheKey`, so a *later* fetch call
+ * to the same origin can skip straight to a cheap request instead of
+ * relaunching the browser. Harvesting for (b) does not require a
+ * wreqSession — only that the page exposes a browser context.
+ */
 async function injectCookiesFromPlaywright(
 	page: any,
 	url: string,
 	wreqSession?: any,
+	cacheKey?: string | null,
 ) {
-	if (!wreqSession || !page.context) return;
+	if (!page.context) return;
 	try {
 		const cookies = await page.context().cookies([url]);
-		for (const c of cookies) {
-			try {
-				wreqSession.setCookie(c.name, c.value, url);
-			} catch {
-				/* ignore individual cookie injection failures */
+		if (wreqSession) {
+			for (const c of cookies) {
+				try {
+					wreqSession.setCookie(c.name, c.value, url);
+				} catch {
+					/* ignore individual cookie injection failures */
+				}
 			}
+		}
+		if (cacheKey && Array.isArray(cookies) && cookies.length > 0) {
+			setCachedCookies(
+				cacheKey,
+				cookies.map((c: any) => ({
+					name: c.name,
+					value: c.value,
+					domain: c.domain,
+					path: c.path,
+				})) as CachedCookie[],
+			);
 		}
 	} catch {
 		/* best-effort */
@@ -240,6 +272,14 @@ export async function fetchWithPlaywright(
 	url: string,
 	pool?: FetchOpts["browserPool"],
 	wreqSession?: any,
+	/**
+	 * Per-origin cookie cache key (see cookie-cache.ts). When provided,
+	 * cookies harvested from the render are persisted here so a later,
+	 * separate fetch call to the same origin (+ proxy + browser profile)
+	 * can skip straight to a cheap request instead of relaunching
+	 * Playwright.
+	 */
+	cookieCacheKeyForOrigin?: string | null,
 ): Promise<string | null> {
 	// SSRF guard: block requests to private IPs / loopback / cloud
 	// metadata endpoints. fetchWithRetry does this; fetchWithPlaywright
@@ -260,7 +300,12 @@ export async function fetchWithPlaywright(
 				waitUntil: "domcontentloaded",
 				timeout: 15000,
 			});
-			await injectCookiesFromPlaywright(pooled.page, url, wreqSession);
+			await injectCookiesFromPlaywright(
+				pooled.page,
+				url,
+				wreqSession,
+				cookieCacheKeyForOrigin,
+			);
 			return await pooled.page.content();
 		} catch {
 			/* fall through to per-request browser below */
@@ -284,7 +329,12 @@ export async function fetchWithPlaywright(
 					waitUntil: "domcontentloaded",
 					timeout: 15000,
 				});
-				await injectCookiesFromPlaywright(page, url, wreqSession);
+				await injectCookiesFromPlaywright(
+					page,
+					url,
+					wreqSession,
+					cookieCacheKeyForOrigin,
+				);
 				return await page.content();
 			} catch {
 				/* try next launch option */
@@ -546,6 +596,97 @@ export type SmartFetchResult = {
 	elapsedMs: number;
 };
 
+/**
+ * Consult the per-origin cookie cache (cookie-cache.ts) and, if warm
+ * cookies exist for this origin + proxy + browser profile, try the cheap
+ * TLS-fingerprint tier with those cookies injected *before* the caller
+ * escalates to a headless browser. This is what lets a crawl reuse a
+ * cookie harvested by an earlier Playwright render — across separate
+ * `smartFetch` calls, even ones that remember a "browser" strategy for
+ * this domain — instead of relaunching Playwright every time.
+ *
+ * Returns null (never throws) when there's no cache entry, the warmed
+ * request still looks blocked/redirected, or anything goes wrong — in
+ * all those cases the caller falls through to its normal ladder.
+ */
+async function tryCookieWarmedFetch(
+	url: string,
+	domain: string,
+	cacheKey: string | null,
+	options: FetchOpts,
+	startedAt: number,
+): Promise<SmartFetchResult | null> {
+	if (!cacheKey) return null;
+	const cached = getCachedCookies(cacheKey);
+	if (!cached || cached.length === 0) return null;
+
+	const headers: Record<string, string> = { ...options.headers };
+	if (options.wreqSession) {
+		for (const c of cached) {
+			try {
+				options.wreqSession.setCookie(c.name, c.value, url);
+			} catch {
+				/* ignore individual cookie injection failures */
+			}
+		}
+	} else {
+		headers["Cookie"] = headers["Cookie"]
+			? `${headers["Cookie"]}; ${cookiesToHeader(cached)}`
+			: cookiesToHeader(cached);
+	}
+
+	let res: any;
+	try {
+		res = await fetchWithRetry(url, { ...options, headers });
+	} catch {
+		return null;
+	}
+	if (!res || !res.ok) return null;
+
+	let text: string;
+	let bytesRead: number;
+	let declaredLen: number | null;
+	try {
+		const result = await readResponseTextWithProgress(res, options.timeoutMs);
+		text = result.text;
+		bytesRead = result.bytesRead;
+		declaredLen = result.contentLength;
+	} catch {
+		return null;
+	}
+
+	const loginRedirect = detectLoginRedirect(
+		url,
+		normalizeFetchedUrl(res.url),
+		text,
+	);
+	if (loginRedirect) {
+		// The cached cookies clearly no longer establish a valid session.
+		invalidateCachedCookies(cacheKey);
+		return null;
+	}
+	if (detectBotBlock(text).blocked) {
+		// Cookies alone weren't enough (stale/insufficient) — leave the
+		// cache as-is (a concurrent warm render may still be valid) and
+		// let the normal ladder run.
+		return null;
+	}
+	if (hasClearCookieSignal(res.headers?.get?.("set-cookie"))) {
+		invalidateCachedCookies(cacheKey);
+	}
+
+	recordDomainSuccess(domain, "wreq");
+	return {
+		text,
+		url: normalizeFetchedUrl(res.url),
+		status: res.status,
+		headers: res.headers,
+		downloadedBytes: bytesRead,
+		contentLength: declaredLen,
+		elapsedMs: Date.now() - startedAt,
+	};
+}
+
 export async function smartFetch(
 	url: string,
 	options: FetchOpts = {},
@@ -573,6 +714,25 @@ export async function smartFetch(
 
 	const domain = parsedUrl.hostname;
 	const rememberedStrategy = getStartingStrategy(domain);
+	const cookieKey = cookieCacheKey(
+		url,
+		options.proxy,
+		options.browser ?? DEFAULT_BROWSER,
+	);
+
+	// ── Cookie-cache warm-path: reuse cookies from an earlier headless
+	// render of this same origin (+ proxy + browser profile) to try the
+	// cheap tier before escalating to a browser — even when memory says
+	// the last successful strategy here was "browser". Cheap no-op when
+	// there's no cache entry.
+	const warmed = await tryCookieWarmedFetch(
+		url,
+		domain,
+		cookieKey,
+		options,
+		startedAt,
+	);
+	if (warmed) return warmed;
 
 	// ── Rung 2 fast-path: skip straight to browser if memory says so ──
 	// Only when we have a remembered "browser" strategy and are not re-probing.
@@ -581,6 +741,7 @@ export async function smartFetch(
 			url,
 			options.browserPool,
 			options.wreqSession,
+			cookieKey,
 		);
 		if (pwHtml) {
 			recordDomainSuccess(domain, "browser");
@@ -625,6 +786,7 @@ export async function smartFetch(
 			url,
 			options.browserPool,
 			options.wreqSession,
+			cookieKey,
 		);
 		if (pwHtml) {
 			recordDomainSuccess(domain, "browser");
@@ -673,7 +835,11 @@ export async function smartFetch(
 	);
 	if (loginRedirect) {
 		console.error(`[BLOCKED] Login redirect detected: ${loginRedirect}`);
+		invalidateCachedCookies(cookieKey);
 		return null;
+	}
+	if (hasClearCookieSignal(res.headers?.get?.("set-cookie"))) {
+		invalidateCachedCookies(cookieKey);
 	}
 
 	if (detectBotBlock(text).blocked) {
@@ -727,6 +893,7 @@ export async function smartFetch(
 			url,
 			options.browserPool,
 			options.wreqSession,
+			cookieKey,
 		);
 		if (pwHtml) {
 			recordDomainSuccess(domain, "browser");
