@@ -3,6 +3,7 @@ import { join, resolve } from "node:path";
 import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { searchWeb } from "../search.ts";
+import { loadGoggles, type GogglesInput } from "../goggles.ts";
 import { pullPageEnhanced } from "../content.ts";
 import { getLatestChromeProfile, DEFAULT_OS } from "../fetch.ts";
 import { buildIndex } from "../webquery-index.ts";
@@ -92,6 +93,12 @@ export function registerWebresearchTool(pi: ExtensionAPI): void {
 					default: true,
 				}),
 			),
+			goggles: Type.Optional(
+				Type.Union([Type.String(), Type.Record(Type.String(), Type.Unknown())], {
+					description:
+						"Optional rerank profile applied additively to each fanned-out search on top of the normal ranking. Pass a built-in preset name ('docs-first', 'research', 'news-balanced'), a path to a JSON file of custom rules, an inline JSON string, or a rules object ({ rules: [{ domains?, domainMarkers?, urlMarkers?, titleTerms?, weight }] }). Omit for unchanged default ranking.",
+				}),
+			),
 		}),
 
 		async execute(_toolCallId, params: any, _signal, onUpdate) {
@@ -99,6 +106,7 @@ export function registerWebresearchTool(pi: ExtensionAPI): void {
 			const startedAt = new Date();
 			const shouldWrite = params.writeBundle !== false;
 			const maxSources = clampMaxSources(params.maxSources);
+			const goggles = await loadGoggles(params.goggles as GogglesInput);
 
 			const subQueries: string[] = Array.isArray(params.queries)
 				? params.queries.filter((q: unknown) => typeof q === "string" && q.trim())
@@ -121,7 +129,7 @@ export function registerWebresearchTool(pi: ExtensionAPI): void {
 			const perQuery: QueryResults[] = await Promise.all(
 				allQueries.map(async (q) => {
 					try {
-						const r = await searchWeb(q);
+						const r = await searchWeb(q, goggles);
 						return { query: q, results: r.results };
 					} catch {
 						return { query: q, results: [] };
@@ -344,6 +352,7 @@ export function registerWebresearchTool(pi: ExtensionAPI): void {
 					sources: ranked,
 					fetched,
 					stance,
+					goggles: goggles?.name,
 				},
 			};
 		},
