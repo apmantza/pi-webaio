@@ -4,7 +4,7 @@
  * Tests:
  *  1. Spawn the built MCP server (dist/src/mcp-server.js via bin entry).
  *  2. Run initialize → notifications/initialized → tools/list.
- *  3. Assert all 7 aio-* tools are listed with valid object inputSchema.
+ *  3. Assert all 8 aio-* tools are listed with valid object inputSchema.
  *  4. tools/call aio-webquery against a fixture corpus built with buildIndex.
  *     No live network is used.
  */
@@ -104,7 +104,7 @@ async function doHandshake(client) {
 
 // ─── Test 1: tools/list ───────────────────────────────────────────────────
 
-test("MCP server lists all 7 aio-* tools with valid object inputSchema", async () => {
+test("MCP server lists all 8 aio-* tools with valid object inputSchema", async () => {
 	const client = spawnMcpServer();
 	try {
 		await doHandshake(client);
@@ -122,10 +122,11 @@ test("MCP server lists all 7 aio-* tools with valid object inputSchema", async (
 			"aio-webmap",
 			"aio-webpull",
 			"aio-webquery",
+			"aio-webresearch",
 		];
 
 		const names = listResp.result.tools.map((t) => t.name);
-		assert.equal(listResp.result.tools.length, 7, "Exactly 7 tools listed");
+		assert.equal(listResp.result.tools.length, 8, "Exactly 8 tools listed");
 		for (const name of expected) {
 			assert.ok(names.includes(name), `Tool ${name} is present`);
 		}

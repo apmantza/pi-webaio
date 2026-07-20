@@ -1,7 +1,7 @@
 # pi-webaio MCP Server
 
 `pi-webaio` ships a stdio MCP (Model Context Protocol) server that exposes all
-seven `aio-*` tools to any MCP client — Claude Code, Claude Desktop, and any
+eight `aio-*` tools to any MCP client — Claude Code, Claude Desktop, and any
 other MCP-compatible host — **without requiring the pi coding-agent runtime**.
 
 > **Primary interface:** The pi extension (`index.ts`) remains the primary way
@@ -21,6 +21,7 @@ other MCP-compatible host — **without requiring the pi coding-agent runtime**.
 | `aio-webmap`     | Discover pages on a site (robots.txt, sitemaps, nav, llms.txt, GitHub tree) |
 | `aio-webpull`    | Pull an entire site into local markdown files |
 | `aio-webquery`   | BM25 offline search over a previously pulled corpus |
+| `aio-webresearch`| Single-round research bundle: fan out search, rank/dedupe sources, fetch top-N, write a cited evidence bundle to disk |
 
 ---
 
