@@ -63,7 +63,7 @@ export default {
 	const loaded = await loadUserExtractors(dir);
 	assert.strictEqual(loaded.length, 1);
 	assert.strictEqual(loaded[0].name, "example");
-	assert.strictEqual(typeof loaded[0].match, "function");
+	assert.strictEqual(typeof loaded[0].matchUrl, "function");
 	assert.strictEqual(typeof loaded[0].extract, "function");
 });
 

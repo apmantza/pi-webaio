@@ -87,7 +87,7 @@ export const VERTICAL_EXTRACTORS: ExtractorMatch[] = [
 export function findVerticalExtractor(url: string): string | null {
 	for (const u of _userExtractors) {
 		try {
-			if (u.match(url)) return u.name;
+			if (u.matchUrl(url)) return u.name;
 		} catch {
 			// ignore matcher errors during attribution lookup
 		}
@@ -115,7 +115,7 @@ export async function runVerticalExtractor(
 	for (const u of _userExtractors) {
 		let matches = false;
 		try {
-			matches = u.match(url);
+			matches = u.matchUrl(url);
 		} catch (err) {
 			console.warn(
 				`[user-verticals] ${u.name} (${u.filePath}) match() threw: ${(err as Error).message}`,

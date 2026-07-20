@@ -36,7 +36,12 @@ export interface UserExtractorModule {
 export interface RegisteredUserExtractor {
 	name: string;
 	filePath: string;
-	match: (url: string) => boolean;
+	/**
+	 * The user module's `match` export. Named `matchUrl` internally so call
+	 * sites don't read as `String.prototype.match` (CodeQL flags `u.match(url)`
+	 * as a string-to-RegExp coercion).
+	 */
+	matchUrl: (url: string) => boolean;
 	extract: UserExtractorModule["extract"];
 }
 
@@ -140,7 +145,7 @@ export async function loadUserExtractors(
 		loaded.push({
 			name: result.name,
 			filePath,
-			match: result.match,
+			matchUrl: result.match,
 			extract: result.extract,
 		});
 	}
