@@ -16,6 +16,7 @@ import type {
 	EngineSource,
 	SourceType,
 } from "./types.ts";
+import { computeGogglesBonus, type GogglesProfile } from "./goggles.ts";
 
 // ─── Engine health tracking ────────────────────────────────────────
 
@@ -552,14 +553,19 @@ const SOURCE_TYPE_WEIGHT = 2;
  *   engine weight sum + consensus bonus (existing) +
  *   sourceType priority * SOURCE_TYPE_WEIGHT (#61) +
  *   PREFERRED_DOMAIN_BONUS when the domain matches a query-inferred
- *   canonical official domain (#63).
+ *   canonical official domain (#63) +
+ *   goggles bonus when an optional named/custom rerank profile is active
+ *   (#72).
  *
  * `query` is optional so existing callers that don't have one (or don't
- * care about preferred-domain boosting) keep working unchanged.
+ * care about preferred-domain boosting) keep working unchanged. `goggles`
+ * is likewise optional and purely additive — omitting it leaves scoring
+ * byte-for-byte identical to before #72.
  */
 export function scoreAndRankResults(
 	buckets: Map<string, EngineSource[]>,
 	query = "",
+	goggles?: GogglesProfile,
 ): { result: SearchResult; score: number; sources: string[] }[] {
 	const preferredDomains = inferPreferredDomains(query);
 	const scored: { result: SearchResult; score: number; sources: string[] }[] =
@@ -578,14 +584,24 @@ export function scoreAndRankResults(
 		const preferredBonus = domainMatchesPreferred(domain, preferredDomains)
 			? PREFERRED_DOMAIN_BONUS
 			: 0;
+		const gogglesResult = goggles
+			? computeGogglesBonus(goggles, domain, best.title, url)
+			: undefined;
+		const gogglesBonus = gogglesResult?.bonus ?? 0;
 
-		const score = weightSum + consensusBonus + typeBonus + preferredBonus;
+		const score =
+			weightSum + consensusBonus + typeBonus + preferredBonus + gogglesBonus;
 
-		scored.push({
-			result: { ...best, url, sources, sourceType },
-			score,
-			sources,
-		});
+		const result: SearchResult = { ...best, url, sources, sourceType };
+		if (goggles && gogglesResult) {
+			result.goggles = {
+				profile: goggles.name,
+				bonus: gogglesResult.bonus,
+				matches: gogglesResult.matches,
+			};
+		}
+
+		scored.push({ result, score, sources });
 	}
 
 	scored.sort((a, b) => b.score - a.score);
@@ -608,7 +624,10 @@ export function buildResultBuckets(
 
 // ─── Search web (main entry point) ─────────────────────────────────
 
-export async function searchWeb(query: string): Promise<{
+export async function searchWeb(
+	query: string,
+	goggles?: GogglesProfile,
+): Promise<{
 	results: SearchResult[];
 	ddgCount: number;
 	braveCount: number;
@@ -721,7 +740,7 @@ export async function searchWeb(query: string): Promise<{
 		}
 	}
 
-	const scored = scoreAndRankResults(engineResults, query);
+	const scored = scoreAndRankResults(engineResults, query, goggles);
 	const merged = scored.map((s) => s.result);
 
 	if (merged.length > 0) {

@@ -200,6 +200,15 @@ export interface SearchResult {
 	sources?: string[];
 	/** Classified source type (issue #61), exposed for downstream tools. */
 	sourceType?: SourceType;
+	/**
+	 * Per-source goggles score breakdown (issue #72), attached only when a
+	 * goggles profile was active for the search that produced this result.
+	 */
+	goggles?: {
+		profile: string;
+		bonus: number;
+		matches: { label: string; weight: number }[];
+	};
 }
 
 export interface EngineHealthRecord {
