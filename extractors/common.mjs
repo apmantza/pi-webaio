@@ -5,6 +5,7 @@ import { randomInt } from "node:crypto";
 import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { STEALTH_SCRIPT } from "./stealth-script.mjs";
 
 const __dir = dirname(fileURLToPath(import.meta.url));
 const CDP = join(__dir, "..", "bin", "cdp.mjs");
@@ -114,222 +115,16 @@ export async function injectClipboardInterceptor(tab, globalVar) {
 /**
  * Inject anti-detection patches into a page in headless mode.
  * Based on production patterns from screenshotrun.com.
+ *
+ * The patch script itself lives in ./stealth-script.mjs (single source of
+ * truth shared with pi-webaio's Playwright fallback in src/fetch.ts).
  */
 export async function injectHeadlessStealth(tab) {
-	const code = `
-(function() {
-  // ── Runtime.enable / CDP detection masking ──────────────
-  try { delete window.__REBROWSER_RUNTIME_ENABLE; } catch(_) {}
-  try { delete window.__REBROWSER_DEVTOOLS; } catch(_) {}
-  try { delete window.__nightmare; } catch(_) {}
-  try { delete window.__phantom; } catch(_) {}
-  try { delete window.callPhantom; } catch(_) {}
-  try { delete window._phantom; } catch(_) {}
-  try { delete window.Buffer; } catch(_) {}
-
-  // Real Chrome without automation does not expose a useful webdriver value.
-  // A literal false value is itself a common stealth tell; prefer undefined and
-  // make the descriptor configurable like native browser properties.
-  Object.defineProperty(navigator, 'webdriver', { get: () => undefined, configurable: true });
-  Object.defineProperty(navigator, 'vendor', { get: () => 'Google Inc.', configurable: true });
-  Object.defineProperty(navigator, 'platform', { get: () => 'Win32', configurable: true });
-  Object.defineProperty(navigator, 'maxTouchPoints', { get: () => 0, configurable: true });
-  Object.defineProperty(navigator, 'pdfViewerEnabled', { get: () => true, configurable: true });
-  Object.defineProperty(navigator, 'plugins', {
-    get: () => {
-      var p = [
-        { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
-        { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '' },
-        { name: 'Native Client', filename: 'internal-nacl-plugin', description: '' },
-      ];
-      p.length = 3;
-      return p;
-    },
-  });
-  Object.defineProperty(navigator, 'mimeTypes', {
-    get: () => {
-      var m = [
-        { type: 'application/pdf', suffixes: 'pdf', description: 'Portable Document Format', enabledPlugin: null },
-        { type: 'text/pdf', suffixes: 'pdf', description: 'Portable Document Format', enabledPlugin: null },
-      ];
-      m.item = function(i) { return m[i] || null; };
-      m.namedItem = function(name) { return m.find(function(x) { return x.type === name; }) || null; };
-      return m;
-    },
-    configurable: true,
-  });
-  Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'], configurable: true });
-  try {
-    Object.defineProperty(navigator, 'connection', { get: () => ({ effectiveType: '4g', rtt: 50, downlink: 10, saveData: false }), configurable: true });
-  } catch(_) {}
-  if (!navigator.mediaDevices) {
-    Object.defineProperty(navigator, 'mediaDevices', {
-      get: () => ({
-        enumerateDevices: () => Promise.resolve([
-          { deviceId: 'default', kind: 'audioinput', label: '', groupId: 'default' },
-          { deviceId: 'default', kind: 'audiooutput', label: '', groupId: 'default' },
-          { deviceId: '', kind: 'videoinput', label: '', groupId: '' },
-        ]),
-        getUserMedia: () => Promise.reject(new DOMException('NotAllowedError')),
-        getDisplayMedia: () => Promise.reject(new DOMException('NotAllowedError')),
-      }),
-      configurable: true,
-    });
-  }
-  if (!window.chrome) {
-    window.chrome = {
-      app: { isInstalled: false, InstallState: {}, RunningState: {} },
-      runtime: {
-        OnInstalledReason: {}, OnRestartRequiredReason: {}, PlatformArch: {}, PlatformNaclArch: {}, PlatformOs: {}, RequestUpdateCheckStatus: {},
-        connect: () => ({}), sendMessage: () => {}, onMessage: { addListener: () => {} }
-      },
-      loadTimes: () => ({}),
-      csi: () => ({}),
-    };
-  }
-  var __greedyNativeFns = [];
-  function __markNative(fn) { try { __greedyNativeFns.push(fn); } catch(_) {} return fn; }
-
-  var origQuery = navigator.permissions?.query;
-  if (origQuery) {
-    navigator.permissions.query = __markNative(function query(params) {
-      if (params && params.name === 'notifications') return Promise.resolve({ state: Notification.permission || 'default', onchange: null });
-      return origQuery.apply(this, arguments);
-    });
-  }
-  try {
-    var getParam = WebGLRenderingContext.prototype.getParameter;
-    WebGLRenderingContext.prototype.getParameter = __markNative(function getParameter(p) {
-      if (p === 37445) return 'Intel Inc.';
-      if (p === 37446) return 'Intel Iris OpenGL Engine';
-      return getParam.call(this, p);
-    });
-  } catch(_) {}
-  Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8, configurable: true });
-  Object.defineProperty(navigator, 'deviceMemory', { get: () => 8, configurable: true });
-
-  // ── Canvas fingerprint noise ─────────────────────────
-  // Headless rendering engines produce slightly different canvas output
-  // than headed Chrome. Subtle noise breaks hash-based fingerprinting.
-  try {
-    var __canvasNoise = ((Date.now() % 997) + Math.floor(Math.random() * 997)) & 1;
-    var origFill = CanvasRenderingContext2D.prototype.fillText;
-    CanvasRenderingContext2D.prototype.fillText = __markNative(function fillText() {
-      this.globalAlpha = 0.9995;
-      return origFill.apply(this, arguments);
-    });
-  } catch(_) {}
-  try {
-    var origStroke = CanvasRenderingContext2D.prototype.strokeText;
-    CanvasRenderingContext2D.prototype.strokeText = __markNative(function strokeText() {
-      this.globalAlpha = 0.9995;
-      return origStroke.apply(this, arguments);
-    });
-  } catch(_) {}
-  try {
-    var origToDataURL = HTMLCanvasElement.prototype.toDataURL;
-    HTMLCanvasElement.prototype.toDataURL = __markNative(function toDataURL() {
-      var ctx = this.getContext('2d');
-      if (ctx) {
-        // Add 1px noise pixel in corner (invisible but changes hash)
-        var imgData = ctx.getImageData(0, 0, 1, 1);
-        if (imgData) imgData.data[0] ^= __canvasNoise;
-        ctx.putImageData(imgData, 0, 0);
-      }
-      return origToDataURL.apply(this, arguments);
-    });
-  } catch(_) {}
-
-  // ── window outer dimensions ──────────────────────────
-  // outerWidth/Height = 0 in headless — a well-known bot signal.
-  // Mirror innerWidth/Height (set by --window-size flag) so the ratio is sane.
-  try {
-    if (!window.outerWidth)  Object.defineProperty(window, 'outerWidth',  { get: () => window.innerWidth  || 1920, configurable: true });
-    if (!window.outerHeight) Object.defineProperty(window, 'outerHeight', { get: () => window.innerHeight || 1080, configurable: true });
-  } catch(_) {}
-
-  // ── screen properties ─────────────────────────────────
-  try {
-    if (!screen.colorDepth) Object.defineProperty(screen, 'colorDepth', { get: () => 24, configurable: true });
-    if (!screen.pixelDepth) Object.defineProperty(screen, 'pixelDepth', { get: () => 24, configurable: true });
-  } catch(_) {}
-
-  // ── navigator.userAgentData (UA Client Hints) ─────────
-  // Derive version from the UA string already set by --user-agent flag so the
-  // two APIs are always consistent. Removes any "HeadlessChrome" brand entry.
-  try {
-    var _uaMajor = (navigator.userAgent.match(new RegExp('Chrome/([0-9]+)')) || [])[1] || '136';
-    var _uaFull  = (navigator.userAgent.match(new RegExp('Chrome/([0-9.]+)')) || [])[1] || (_uaMajor + '.0.0.0');
-    var _brands  = [
-      { brand: 'Not)A;Brand',  version: '99' },
-      { brand: 'Google Chrome', version: _uaMajor },
-      { brand: 'Chromium',      version: _uaMajor },
-    ];
-    Object.defineProperty(navigator, 'userAgentData', {
-      get: function() {
-        return {
-          brands: _brands, mobile: false, platform: 'Windows',
-          getHighEntropyValues: function() {
-            return Promise.resolve({
-              architecture: 'x86', bitness: '64',
-              brands: _brands,
-              fullVersionList: [
-                { brand: 'Not)A;Brand',   version: '99.0.0.0' },
-                { brand: 'Google Chrome', version: _uaFull },
-                { brand: 'Chromium',      version: _uaFull },
-              ],
-              mobile: false, model: '', platform: 'Windows',
-              platformVersion: '15.0.0', uaFullVersion: _uaFull, wow64: false,
-            });
-          },
-          toJSON: function() { return { brands: _brands, mobile: false, platform: 'Windows' }; },
-        };
-      },
-      configurable: true,
-    });
-  } catch(_) {}
-
-  // ── CDP Runtime serialization guard ──────────────────
-  // Sites detect CDP by putting a getter on Error.prototype.stack
-  // and checking if console.log triggers it (only happens when
-  // Runtime domain is enabled). We monkey-patch console methods to
-  // strip custom getters from arguments before they reach CDP.
-  try {
-    var _origLog = console.log, _origError = console.error,
-        _origWarn = console.warn, _origDebug = console.debug,
-        _origInfo = console.info;
-    var _safeArg = function(a) {
-      if (a instanceof Error) {
-        try { return new Error(a.message); } catch(_) { return a; }
-      }
-      return a;
-    };
-    console.log = __markNative(function log() { return _origLog.apply(console, Array.prototype.map.call(arguments, _safeArg)); });
-    console.error = __markNative(function error() { return _origError.apply(console, Array.prototype.map.call(arguments, _safeArg)); });
-    console.warn = __markNative(function warn() { return _origWarn.apply(console, Array.prototype.map.call(arguments, _safeArg)); });
-    console.debug = __markNative(function debug() { return _origDebug.apply(console, Array.prototype.map.call(arguments, _safeArg)); });
-    console.info = __markNative(function info() { return _origInfo.apply(console, Array.prototype.map.call(arguments, _safeArg)); });
-  } catch(_) {}
-
-  // ── Native function masking ──────────────────────────
-  // Patched APIs should not stringify as user-defined stealth code.
-  try {
-    var __nativeToString = Function.prototype.toString;
-    Function.prototype.toString = function toString() {
-      if (__greedyNativeFns.indexOf(this) !== -1) {
-        var name = this.name || '';
-        return 'function ' + name + '() { [native code] }';
-      }
-      return __nativeToString.call(this);
-    };
-  } catch(_) {}
-})();
-`;
 	await cdp([
 		"evalraw",
 		tab,
 		"Page.addScriptToEvaluateOnNewDocument",
-		JSON.stringify({ source: code }),
+		JSON.stringify({ source: STEALTH_SCRIPT }),
 	]);
 }
 

@@ -2,6 +2,9 @@
 // Extracted from index.ts. Rate-limited fetching with retries,
 // bot protection fallback, JS rendering fallback, and SSRF checks.
 
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { fetch as wreqFetch, getProfiles as wreqGetProfiles } from "wreq-js";
 import type { BrowserProfile, EmulationOS } from "wreq-js";
 import { detectBotBlock, detectLoginRedirect } from "./bot-detection.ts";
@@ -195,81 +198,62 @@ export function getRateLimiter(host: string): TokenBucket {
 
 let _pwWarned = false;
 
-// ─── Essential stealth patches for Playwright fallback ─────────────
+// ─── Stealth patches for Playwright fallback ───────────────────────
 // Injected before page scripts run to mask headless automation signals.
-const PLAYWRIGHT_STEALTH_SCRIPT = `
-(function() {
-  try { delete window.__REBROWSER_RUNTIME_ENABLE; } catch(_) {}
-  try { delete window.__REBROWSER_DEVTOOLS; } catch(_) {}
-  try { delete window.__nightmare; } catch(_) {}
-  try { delete window.__phantom; } catch(_) {}
-  try { delete window.callPhantom; } catch(_) {}
-  try { delete window._phantom; } catch(_) {}
+//
+// The script itself is NOT duplicated here: it lives in the single shared
+// module extractors/stealth-script.mjs, also consumed by the CDP-based
+// search extractors (extractors/common.mjs). That file ships as plain,
+// uncompiled ESM in both the source tree and the published npm package
+// (package.json "files" includes "extractors/"), so it's reachable at a
+// stable path from either location.
+//
+// src/fetch.ts, however, gets compiled by tsc into dist/src/fetch.js — one
+// directory level deeper relative to the package root than the source file
+// is. A static relative import baked in at authoring time would therefore
+// resolve correctly from only one of the two locations. To stay correct in
+// both, resolveStealthScriptPath() walks upward from wherever this module
+// actually runs from until it finds extractors/stealth-script.mjs, then the
+// result is loaded via a dynamic import() of that resolved path.
+function resolveStealthScriptPath(): string | null {
+	try {
+		const here = dirname(fileURLToPath(import.meta.url));
+		let dir = here;
+		for (let i = 0; i < 6; i++) {
+			const candidate = join(dir, "extractors", "stealth-script.mjs");
+			if (existsSync(candidate)) return candidate;
+			const parent = dirname(dir);
+			if (parent === dir) break;
+			dir = parent;
+		}
+	} catch {
+		/* best-effort */
+	}
+	return null;
+}
 
-  Object.defineProperty(navigator, 'webdriver', { get: () => undefined, configurable: true });
-  Object.defineProperty(navigator, 'vendor', { get: () => 'Google Inc.', configurable: true });
-  Object.defineProperty(navigator, 'platform', { get: () => 'Win32', configurable: true });
-  Object.defineProperty(navigator, 'maxTouchPoints', { get: () => 0, configurable: true });
-  Object.defineProperty(navigator, 'plugins', {
-    get: () => {
-      var p = [
-        { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
-        { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '' },
-        { name: 'Native Client', filename: 'internal-nacl-plugin', description: '' },
-      ];
-      p.length = 3;
-      return p;
-    },
-  });
-  Object.defineProperty(navigator, 'mimeTypes', {
-    get: () => {
-      var m = [
-        { type: 'application/pdf', suffixes: 'pdf', description: 'Portable Document Format', enabledPlugin: null },
-        { type: 'text/pdf', suffixes: 'pdf', description: 'Portable Document Format', enabledPlugin: null },
-      ];
-      m.item = function(i) { return m[i] || null; };
-      m.namedItem = function(name) { return m.find(function(x) { return x.type === name; }) || null; };
-      return m;
-    },
-    configurable: true,
-  });
-  Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'], configurable: true });
+let _stealthScriptPromise: Promise<string | null> | null = null;
 
-  if (!window.chrome) {
-    window.chrome = {
-      app: { isInstalled: false, InstallState: {}, RunningState: {} },
-      runtime: { OnInstalledReason: {}, OnRestartRequiredReason: {}, PlatformArch: {}, PlatformNaclArch: {}, PlatformOs: {}, RequestUpdateCheckStatus: {}, connect: () => ({}), sendMessage: () => {}, onMessage: { addListener: () => {} } },
-      loadTimes: () => ({}),
-      csi: () => ({}),
-    };
-  }
-
-  try {
-    var getParam = WebGLRenderingContext.prototype.getParameter;
-    WebGLRenderingContext.prototype.getParameter = function(p) {
-      if (p === 37445) return 'Intel Inc.';
-      if (p === 37446) return 'Intel Iris OpenGL Engine';
-      return getParam.call(this, p);
-    };
-  } catch(_) {}
-  Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8, configurable: true });
-  Object.defineProperty(navigator, 'deviceMemory', { get: () => 8, configurable: true });
-
-  try {
-    if (!window.outerWidth)  Object.defineProperty(window, 'outerWidth',  { get: () => window.innerWidth  || 1920, configurable: true });
-    if (!window.outerHeight) Object.defineProperty(window, 'outerHeight', { get: () => window.innerHeight || 1080, configurable: true });
-  } catch(_) {}
-
-  try {
-    if (!screen.colorDepth) Object.defineProperty(screen, 'colorDepth', { get: () => 24, configurable: true });
-    if (!screen.pixelDepth) Object.defineProperty(screen, 'pixelDepth', { get: () => 24, configurable: true });
-  } catch(_) {}
-})();
-`;
+function loadStealthScript(): Promise<string | null> {
+	if (!_stealthScriptPromise) {
+		_stealthScriptPromise = (async () => {
+			const path = resolveStealthScriptPath();
+			if (!path) return null;
+			try {
+				const mod = await import(pathToFileURL(path).href);
+				return (mod as { STEALTH_SCRIPT?: string }).STEALTH_SCRIPT ?? null;
+			} catch {
+				return null;
+			}
+		})();
+	}
+	return _stealthScriptPromise;
+}
 
 export async function applyStealth(page: any) {
 	try {
-		await page.addInitScript(PLAYWRIGHT_STEALTH_SCRIPT);
+		const script = await loadStealthScript();
+		if (script) await page.addInitScript(script);
 	} catch {
 		/* best-effort */
 	}
