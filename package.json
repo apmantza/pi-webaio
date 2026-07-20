@@ -80,7 +80,7 @@
     "test:source-ranking": "node --experimental-strip-types --test tests/source-ranking.test.mjs",
     "test:webresearch": "node --experimental-strip-types --test tests/webresearch.test.mjs",
     "test:cookie-cache": "node --experimental-strip-types --test tests/cookie-cache.test.mjs",
-    "test:all": "node --experimental-strip-types --test tests/unit.test.mjs tests/new-features.test.mjs tests/paywall.test.mjs tests/github-check.test.mjs tests/reddit-block.test.mjs tests/github-map.test.mjs tests/render-result.test.mjs tests/fetch-error.test.mjs tests/fetch-progress.test.mjs tests/hardening.test.mjs tests/fingerprint.test.mjs tests/format.test.mjs tests/webfetch-summary.test.mjs tests/chunker.test.mjs tests/prune-markdown.test.mjs tests/integration.test.mjs tests/bench-harness.test.mjs tests/webresearch.test.mjs tests/source-ranking.test.mjs tests/cookie-cache.test.mjs",
+    "test:all": "node --experimental-strip-types --test tests/unit.test.mjs tests/new-features.test.mjs tests/paywall.test.mjs tests/github-check.test.mjs tests/reddit-block.test.mjs tests/github-map.test.mjs tests/render-result.test.mjs tests/fetch-error.test.mjs tests/fetch-progress.test.mjs tests/hardening.test.mjs tests/fingerprint.test.mjs tests/format.test.mjs tests/webfetch-summary.test.mjs tests/chunker.test.mjs tests/prune-markdown.test.mjs tests/integration.test.mjs tests/bench-harness.test.mjs tests/webresearch.test.mjs tests/source-ranking.test.mjs tests/cookie-cache.test.mjs tests/goggles.test.mjs",
     "check:lockfile": "node scripts/check-lockfile-sync.mjs",
     "changelog:check": "node scripts/changelog-release.mjs --check",
     "changelog:release": "node scripts/changelog-release.mjs",

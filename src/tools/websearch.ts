@@ -11,6 +11,7 @@ import {
 	scoreAndRankResults,
 	buildResultBuckets,
 } from "../search.ts";
+import { loadGoggles, type GogglesInput } from "../goggles.ts";
 import {
 	ensureChrome,
 	googleSearch,
@@ -58,6 +59,12 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 						"Opt-in speculative prefetch: background-fetch the top result URLs into the session cache while you read the results, so follow-up aio-webfetch calls are served instantly from cache. Pass true to prefetch the top 3 results, or a positive integer to prefetch that many. Default: false (off).",
 				}),
 			),
+			goggles: Type.Optional(
+				Type.Union([Type.String(), Type.Record(Type.String(), Type.Unknown())], {
+					description:
+						"Optional rerank profile applied additively on top of the normal ranking. Pass a built-in preset name ('docs-first', 'research', 'news-balanced'), a path to a JSON file of custom rules, an inline JSON string, or a rules object ({ rules: [{ domains?, domainMarkers?, urlMarkers?, titleTerms?, weight }] }). Omit for unchanged default ranking.",
+				}),
+			),
 		}),
 
 		async execute(_toolCallId, params, _signal, onUpdate) {
@@ -66,6 +73,7 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 			const max = params.max ?? 15;
 			const useGoogle = params.google ?? true;
 			const startedAt = Date.now();
+			const goggles = await loadGoggles(params.goggles as GogglesInput);
 
 			// Resolve prefetch count: false/undefined → 0, true → default, number → clamp ≥ 0.
 			const prefetchParam = params.prefetch;
@@ -95,7 +103,7 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 				],
 			});
 
-			const httpPromise = searchWeb(query).then(
+			const httpPromise = searchWeb(query, goggles).then(
 				(r) => ({
 					source: "http" as const,
 					results: r.results.slice(0, max),
@@ -191,7 +199,7 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 				buckets.set(r.url, list);
 			}
 
-			const scored = scoreAndRankResults(buckets, query);
+			const scored = scoreAndRankResults(buckets, query, goggles);
 			const merged = scored.map((s) => s.result);
 
 			if (!merged.length) {
@@ -234,8 +242,10 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 					? `\n_(prefetching top ${prefetchUrls.length} result${prefetchUrls.length === 1 ? "" : "s"} in background — follow-up aio-webfetch will be served from cache)_`
 					: "";
 
+			const gogglesNote = goggles ? ` — goggles: ${goggles.name}` : "";
+
 			const text = [
-				`Search results for "${query}" (${engineLabel.join(" + ")})`,
+				`Search results for "${query}" (${engineLabel.join(" + ")})${gogglesNote}`,
 				"",
 				...limited.map((r, i) => {
 					const domainTag = r.domain ? ` *(${r.domain})*` : "";
@@ -257,6 +267,7 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 					googleCount: googleResults.length,
 					durationMs: Date.now() - startedAt,
 					prefetchCount: prefetchUrls.length,
+					goggles: goggles?.name,
 				},
 			};
 		},
