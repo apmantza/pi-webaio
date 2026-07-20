@@ -1,6 +1,6 @@
 {
   "name": "pi-webaio",
-  "version": "0.6.3",
+  "version": "0.7.0",
   "description": "All-in-one web tools for pi with search (Google, Brave, DDG) and fetch with headless browser AI summarization",
   "license": "MIT",
   "repository": {
@@ -85,9 +85,8 @@
     "test:bench": "node --experimental-strip-types --test tests/bench-harness.test.mjs"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.0",
-    "@earendil-works/pi-tui": "^0.79.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@earendil-works/pi-tui": "^0.79.0",
     "@mozilla/readability": "^0.6.0",
     "defuddle": "^0.18.1",
     "linkedom": "^0.18.12",

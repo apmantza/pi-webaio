@@ -6,6 +6,14 @@ All notable changes to pi-webaio will be documented in this file.
 
 ### Added
 
+### Changed
+
+### Fixed
+
+## [0.7.0] - 2026-07-20
+
+### Added
+
 - **Query-focused fetch (answer mode)** (`src/tools/webfetch.ts`) — new `answerMode` behavior: when a `query` is provided, `aio-webfetch` can return only the sections that answer it, ranked by BM25, instead of the whole page ([#42](https://github.com/apmantza/pi-webaio/issues/42), [#51](https://github.com/apmantza/pi-webaio/pull/51)).
 - **Per-domain fetch strategy memory** (`src/strategy-memory.ts`) — remembers which rung of the fetch ladder (plain → TLS-fingerprinted → headless browser) worked per domain, with LRU capping at 500 domains, 7-day expiry, and periodic re-probe of cheaper strategies ([#43](https://github.com/apmantza/pi-webaio/issues/43), [#52](https://github.com/apmantza/pi-webaio/pull/52)).
 - **Hard token budget** (`src/prune-markdown.ts`, `src/tools/webfetch.ts`, `src/tools/webcontent.ts`) — new `budgetTokens` parameter enforces a hard output-size ceiling with heading-skeleton preservation, BM25 section ranking when a query is present, and a footer pointing at `aio-webcontent` for the full content ([#44](https://github.com/apmantza/pi-webaio/issues/44), [#53](https://github.com/apmantza/pi-webaio/pull/53)).
