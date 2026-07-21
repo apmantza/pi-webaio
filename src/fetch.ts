@@ -268,6 +268,40 @@ async function injectCookiesFromPlaywright(
 	}
 }
 
+// ─── Bot-protection wait loop ──────────────────────────────────────
+
+export interface BotWaitOpts {
+	timeoutMs?: number;
+	pollMs?: number;
+}
+
+/**
+ * After a Playwright `goto`, poll `page.content()` until the bot-protection
+ * challenge clears or the timeout expires. Returns the post-clearance HTML.
+ *
+ * On a clean render (no challenge) returns immediately with zero added
+ * latency. On timeout returns the last HTML seen — never throws.
+ */
+export async function waitForBotProtectionToClear(
+	page: { content(): Promise<string> },
+	{ timeoutMs = 15000, pollMs = 500 }: BotWaitOpts = {},
+): Promise<string> {
+	let html = await page.content();
+	let block = detectBotBlock(html);
+	// Only challenges the browser can resolve on its own are worth waiting
+	// for — a captcha (retryable: false) will never clear by polling.
+	if (!block.blocked || !block.retryable) return html;
+
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		await new Promise((r) => setTimeout(r, pollMs));
+		html = await page.content();
+		block = detectBotBlock(html);
+		if (!block.blocked || !block.retryable) return html;
+	}
+	return html;
+}
+
 export async function fetchWithPlaywright(
 	url: string,
 	pool?: FetchOpts["browserPool"],
@@ -300,13 +334,14 @@ export async function fetchWithPlaywright(
 				waitUntil: "domcontentloaded",
 				timeout: 15000,
 			});
+			const html = await waitForBotProtectionToClear(pooled.page);
 			await injectCookiesFromPlaywright(
 				pooled.page,
 				url,
 				wreqSession,
 				cookieCacheKeyForOrigin,
 			);
-			return await pooled.page.content();
+			return html;
 		} catch {
 			/* fall through to per-request browser below */
 		} finally {
@@ -329,13 +364,14 @@ export async function fetchWithPlaywright(
 					waitUntil: "domcontentloaded",
 					timeout: 15000,
 				});
+				const html = await waitForBotProtectionToClear(page);
 				await injectCookiesFromPlaywright(
 					page,
 					url,
 					wreqSession,
 					cookieCacheKeyForOrigin,
 				);
-				return await page.content();
+				return html;
 			} catch {
 				/* try next launch option */
 			} finally {

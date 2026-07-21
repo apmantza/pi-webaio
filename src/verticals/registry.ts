@@ -8,6 +8,12 @@ import {
 	loadUserExtractors,
 	type RegisteredUserExtractor,
 } from "./user-loader.ts";
+export {
+	initUserHooks,
+	getUserHooks,
+	runAfterFetchHooks,
+	runAfterExtractHooks,
+} from "../hooks.ts";
 import { matchesNpm, extractNpm } from "./npm.ts";
 import { matchesPyPI, extractPyPI } from "./pypi.ts";
 import { matchesHackerNews, extractHackerNews } from "./hackernews.ts";
