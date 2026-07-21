@@ -6,6 +6,8 @@ All notable changes to pi-webaio will be documented in this file.
 
 ### Added
 
+- **Active bot-protection wait loop in the Playwright fallback** (`src/fetch.ts`) — after `page.goto`, if the rendered HTML classifies as a self-resolvable challenge (`detectBotBlock` with `retryable: true` — Cloudflare/PerimeterX/DataDome JS challenges, Anubis proof-of-work, generic blocks), `waitForBotProtectionToClear` polls the DOM (500ms interval, 15s budget) until the challenge markers clear, then re-reads the page in the same session. Cookies are harvested *after* clearance so the per-origin cookie cache (#71) stores the cleared session for cheap follow-up fetches. Clean renders return immediately with zero added latency; non-retryable captcha pages skip the wait entirely; timeout returns the last HTML without throwing. Wired into both the pooled-page and one-shot Playwright paths ([#76](https://github.com/apmantza/pi-webaio/issues/76)).
+
 ### Changed
 
 ### Fixed
