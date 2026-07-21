@@ -15,6 +15,7 @@ import {
 	runVerticalExtractor,
 	findVerticalExtractor,
 } from "./verticals/registry.ts";
+import { runAfterFetchHooks, runAfterExtractHooks } from "./hooks.ts";
 import {
 	detectPaywall,
 	bypassUrl,
@@ -540,16 +541,17 @@ export async function runHtmlPipeline(
 		}
 	}
 
-	let cleaned = preCleanHtml(text);
+	const hookedText = await runAfterFetchHooks(url, { status: 200, headers: {}, html: text });
+	let cleaned = preCleanHtml(hookedText);
 	cleaned = compressHtml(cleaned);
-	const rawHtml = text;
+	const rawHtml = hookedText;
 
 	if (!(await isDangerousUrl(url))) {
 		const { fetchJina } = await import("./fetch-jina.ts");
 		const jina = await fetchJina(url);
 		if (jina) {
 			if (wordCount(jina.content || "") < MIN_ALTERNATE_FALLBACK_WORDS) {
-				const alt = await tryAlternateLinks(text, finalUrl, _opts);
+				const alt = await tryAlternateLinks(hookedText, finalUrl, _opts);
 				if (alt) return finalizePullResult(alt, redirectNotice);
 			}
 			return finalizePullResult(jina, redirectNotice);
@@ -559,13 +561,13 @@ export async function runHtmlPipeline(
 	const readability = extractReadability(cleaned, finalUrl);
 	if (readability) {
 		if (
-			text.length > 10000 &&
-			readability.content.length < 0.01 * text.length
+			hookedText.length > 10000 &&
+			readability.content.length < 0.01 * hookedText.length
 		) {
 			// skip — readability failed
 		} else {
 			if (wordCount(readability.content) < MIN_ALTERNATE_FALLBACK_WORDS) {
-				const alt = await tryAlternateLinks(text, finalUrl, _opts);
+				const alt = await tryAlternateLinks(hookedText, finalUrl, _opts);
 				if (alt) return finalizePullResult(alt, redirectNotice);
 			}
 			return finalizePullResult(
@@ -581,7 +583,7 @@ export async function runHtmlPipeline(
 		}
 	}
 
-	const rscContent = extractRSC(text);
+	const rscContent = extractRSC(hookedText);
 	if (rscContent) {
 		return finalizePullResult(
 			{
@@ -603,7 +605,7 @@ export async function runHtmlPipeline(
 		defContent = stripDefuddleComments(defContent);
 		defContent = cleanText(defContent);
 		if (wordCount(defContent) < MIN_ALTERNATE_FALLBACK_WORDS) {
-			const alt = await tryAlternateLinks(text, finalUrl, _opts);
+			const alt = await tryAlternateLinks(hookedText, finalUrl, _opts);
 			if (alt) return finalizePullResult(alt, redirectNotice);
 		}
 		return finalizePullResult(
@@ -623,7 +625,7 @@ export async function runHtmlPipeline(
 	} catch {
 		const { title, content } = fallbackExtract(cleaned);
 		if (wordCount(content) < MIN_ALTERNATE_FALLBACK_WORDS) {
-			const alt = await tryAlternateLinks(text, finalUrl, _opts);
+			const alt = await tryAlternateLinks(hookedText, finalUrl, _opts);
 			if (alt) return finalizePullResult(alt, redirectNotice);
 		}
 		return finalizePullResult(
@@ -963,12 +965,12 @@ export async function pullPageEnhanced(
 		// the regular HTML pipeline if the vertical failed and there's an
 		// error message to surface.
 		if (vertical.ok) {
-			return finalizePullResult({
+			return runAfterExtractHooks(url, finalizePullResult({
 				ok: true,
 				url,
 				title: vertical.title,
 				content: `> via ${findVerticalExtractor(url) ?? "vertical extractor"}\n\n${vertical.content}`,
-			});
+			}));
 		}
 		// Vertical reported a structured error. Surface it as a result so the
 		// user gets a clear explanation (e.g. "Reddit blocked our network")
@@ -1153,13 +1155,13 @@ export async function pullPageEnhanced(
 			}
 		}
 
-		return result;
+		return runAfterExtractHooks(url, result);
 	}
 
 	if (mode === "browser") {
 		const pwHtml = await fetchWithPlaywright(url, opts?.browserPool);
 		if (pwHtml) {
-			return pullPage(url, opts, _redirectCount, pwHtml);
+			return runAfterExtractHooks(url, await pullPage(url, opts, _redirectCount, pwHtml));
 		}
 		const pwInfo: FetchErrorInfo = {
 			message: "Playwright browser rendering failed",
@@ -1175,5 +1177,5 @@ export async function pullPageEnhanced(
 		};
 	}
 
-	return pullPage(url, opts, _redirectCount);
+	return runAfterExtractHooks(url, await pullPage(url, opts, _redirectCount));
 }
