@@ -84,6 +84,187 @@ export function isPrivateIp(ip: string): boolean {
 	return true; // unparseable = treat as dangerous
 }
 
+// ─── SSRF allow-list (CIDR ranges) ─────────────────────────────────
+
+export interface ParsedCidr {
+	bytes: Uint8Array; // network address, always 16 bytes (IPv6 or IPv4-mapped)
+	prefixLen: number; // 0–128
+}
+
+/** Expand a full 128-bit IPv6 address string into 16 bytes. */
+function ipv6ToBytes(ip: string): Uint8Array | null {
+	// Handle IPv4-mapped / IPv4-compat addresses embedded as ::ffff:a.b.c.d
+	const v4Mapped = ip.match(/^::(?:ffff:)?([\d.]+)$/i);
+	if (v4Mapped) {
+		const v4 = ipv4ToBytes(v4Mapped[1]!);
+		if (!v4) return null;
+		const out = new Uint8Array(16);
+		out[10] = 0xff;
+		out[11] = 0xff;
+		out.set(v4, 12);
+		return out;
+	}
+
+	// Expand :: shorthand
+	const halves = ip.split("::");
+	if (halves.length > 2) return null;
+
+	const left = halves[0] ? halves[0].split(":") : [];
+	const right = halves[1] ? halves[1].split(":") : [];
+
+	// Last group of right side might be an IPv4 literal (e.g. ::ffff:192.0.2.1)
+	let v4Tail: Uint8Array | null = null;
+	if (right.length > 0) {
+		const last = right[right.length - 1]!;
+		if (last.includes(".")) {
+			v4Tail = ipv4ToBytes(last);
+			if (!v4Tail) return null;
+			right.splice(right.length - 1, 1);
+		}
+	}
+
+	const totalGroups = 8 - (v4Tail ? 2 : 0);
+	const missing = totalGroups - left.length - right.length;
+	if (missing < 0 && halves.length === 1) return null;
+
+	const groups: number[] = [
+		...left.map((g) => parseInt(g, 16)),
+		...Array(halves.length === 2 ? missing : 0).fill(0),
+		...right.map((g) => parseInt(g, 16)),
+	];
+
+	if (groups.some((g) => Number.isNaN(g) || g < 0 || g > 0xffff)) return null;
+
+	const out = new Uint8Array(16);
+	for (let i = 0; i < groups.length; i++) {
+		out[i * 2] = (groups[i]! >> 8) & 0xff;
+		out[i * 2 + 1] = groups[i]! & 0xff;
+	}
+	if (v4Tail) {
+		out.set(v4Tail, 12);
+	}
+	return out;
+}
+
+/** Convert a dotted-decimal IPv4 string to 4 bytes. */
+function ipv4ToBytes(ip: string): Uint8Array | null {
+	const parts = ip.split(".").map(Number);
+	if (parts.length !== 4 || parts.some((x) => Number.isNaN(x) || x < 0 || x > 255))
+		return null;
+	return new Uint8Array(parts as number[]);
+}
+
+/**
+ * Parse a CIDR string (IPv4 or IPv6) into a canonical 16-byte form.
+ * Returns null for malformed input.
+ * /0 is treated as matching nothing (deny-all range is not a useful allow).
+ */
+export function parseCidr(cidr: string): ParsedCidr | null {
+	const slash = cidr.lastIndexOf("/");
+	if (slash === -1) return null;
+
+	const addr = cidr.slice(0, slash).trim();
+	const prefixStr = cidr.slice(slash + 1).trim();
+	const prefixLen = Number(prefixStr);
+
+	if (!Number.isInteger(prefixLen) || prefixLen < 1) return null;
+
+	const version = isIP(addr);
+	if (version === 4) {
+		if (prefixLen > 32) return null;
+		const v4 = ipv4ToBytes(addr);
+		if (!v4) return null;
+		// Embed as IPv4-mapped IPv6 for unified comparison
+		const bytes = new Uint8Array(16);
+		bytes[10] = 0xff;
+		bytes[11] = 0xff;
+		bytes.set(v4, 12);
+		// IPv4 prefix offset by 96 (the IPv4-mapped prefix is 96 bits)
+		return { bytes, prefixLen: 96 + prefixLen };
+	}
+
+	if (version === 6) {
+		if (prefixLen > 128) return null;
+		const bytes = ipv6ToBytes(addr);
+		if (!bytes) return null;
+		return { bytes, prefixLen };
+	}
+
+	return null;
+}
+
+/**
+ * Convert an IP address string to a 16-byte canonical representation.
+ * IPv4 addresses are embedded as IPv4-mapped IPv6 (::ffff:a.b.c.d).
+ */
+function ipToBytes(ip: string): Uint8Array | null {
+	const version = isIP(ip);
+	if (version === 4) {
+		const v4 = ipv4ToBytes(ip);
+		if (!v4) return null;
+		const out = new Uint8Array(16);
+		out[10] = 0xff;
+		out[11] = 0xff;
+		out.set(v4, 12);
+		return out;
+	}
+	if (version === 6) {
+		return ipv6ToBytes(ip);
+	}
+	return null;
+}
+
+/** Returns true if `ip` falls within the given CIDR range. */
+export function ipMatchesCidr(ip: string, cidr: ParsedCidr): boolean {
+	const ipBytes = ipToBytes(ip);
+	if (!ipBytes) return false;
+
+	let remaining = cidr.prefixLen;
+	for (let i = 0; i < 16; i++) {
+		if (remaining <= 0) break;
+		const bits = Math.min(remaining, 8);
+		const mask = 0xff & (0xff << (8 - bits));
+		if ((ipBytes[i]! & mask) !== (cidr.bytes[i]! & mask)) return false;
+		remaining -= bits;
+	}
+	return true;
+}
+
+/**
+ * Parse a comma-separated CIDR list string.
+ * Malformed entries are silently skipped.
+ */
+export function parseAllowRanges(str: string): ParsedCidr[] {
+	return str
+		.split(",")
+		.map((s) => parseCidr(s.trim()))
+		.filter((x): x is ParsedCidr => x !== null);
+}
+
+// Lazy-parsed cache from WEBAIO_SSRF_ALLOW_RANGES
+let _cachedRanges: ParsedCidr[] | null = null;
+let _testOverride: ParsedCidr[] | null = null;
+
+/** Override allow-ranges for testing without touching process.env. */
+export function setSsrfAllowRangesForTest(ranges: ParsedCidr[] | null): void {
+	_testOverride = ranges;
+	_cachedRanges = null;
+}
+
+function getAllowRanges(): ParsedCidr[] {
+	if (_testOverride !== null) return _testOverride;
+	if (_cachedRanges !== null) return _cachedRanges;
+	const raw = process.env["WEBAIO_SSRF_ALLOW_RANGES"] ?? "";
+	_cachedRanges = raw.trim() ? parseAllowRanges(raw) : [];
+	return _cachedRanges;
+}
+
+/** Returns true if `ip` is permitted by the configured allow-list. */
+function isAllowed(ip: string, ranges: ParsedCidr[]): boolean {
+	if (ranges.length === 0) return false;
+	return ranges.some((r) => ipMatchesCidr(ip, r));
+}
+
 /**
  * Deep SSRF check: resolves DNS and validates ALL returned IPs
  * against private/loopback/link-local ranges. Also blocks known
@@ -93,6 +274,7 @@ export async function isDangerousUrl(url: string): Promise<boolean> {
 	try {
 		const u = new URL(url);
 		const host = u.hostname.toLowerCase();
+		const ranges = getAllowRanges();
 
 		// Quick block: known dangerous hostnames
 		if (BLOCKED_HOSTS.has(host)) return true;
@@ -100,7 +282,10 @@ export async function isDangerousUrl(url: string): Promise<boolean> {
 		// Quick block: literal IP in private range
 		const cleanedIp = host.replace(/^\[|\]$/g, "");
 		if (isIP(cleanedIp)) {
-			return isPrivateIp(cleanedIp);
+			if (isPrivateIp(cleanedIp)) {
+				return !isAllowed(cleanedIp, ranges);
+			}
+			return false;
 		}
 
 		// Quick block: .local and obvious private prefixes (fast path)
@@ -115,7 +300,9 @@ export async function isDangerousUrl(url: string): Promise<boolean> {
 		try {
 			const records = await dnsLookup(host, { all: true, verbatim: true });
 			for (const record of records) {
-				if (isPrivateIp(record.address)) return true;
+				if (isPrivateIp(record.address) && !isAllowed(record.address, ranges)) {
+					return true;
+				}
 			}
 		} catch {
 			// DNS failure — treat as potentially dangerous
