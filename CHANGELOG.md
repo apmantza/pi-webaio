@@ -10,6 +10,8 @@ All notable changes to pi-webaio will be documented in this file.
 
 ### Fixed
 
+- **Source-loaded installs: `fetch-jina` dynamic import crash** (`src/content.ts`) — `runHtmlPipeline` dynamically imported `./fetch-jina.js` while the rest of the source tree uses `.ts` specifiers, so any install that loads the extension from source (e.g. pi loading a git clone via type stripping) threw `Cannot find module 'src/fetch-jina.js'` on every non-vertical HTML fetch. This broke `aio-webpull` ("Pulled 0 pages" / "No pages found") and `aio-webresearch` outright; `aio-webfetch` only appeared unaffected on vertical-routed URLs (e.g. GitHub). Now imports `./fetch-jina.ts`; the dist build is unchanged since `rewriteRelativeImportExtensions` rewrites it back to `.js` on emit.
+
 ## [0.7.1] - 2026-07-20
 
 ### Added

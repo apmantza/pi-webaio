@@ -545,7 +545,7 @@ export async function runHtmlPipeline(
 	const rawHtml = text;
 
 	if (!(await isDangerousUrl(url))) {
-		const { fetchJina } = await import("./fetch-jina.js");
+		const { fetchJina } = await import("./fetch-jina.ts");
 		const jina = await fetchJina(url);
 		if (jina) {
 			if (wordCount(jina.content || "") < MIN_ALTERNATE_FALLBACK_WORDS) {
