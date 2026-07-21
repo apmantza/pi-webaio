@@ -109,6 +109,10 @@
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "^0.79.0"
   },
+  "overrides": {
+    "brace-expansion": "^5.0.7",
+    "protobufjs": "^7.6.5"
+  },
   "optionalDependencies": {
     "playwright": "^1.55.0"
   },

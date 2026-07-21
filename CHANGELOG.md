@@ -14,6 +14,7 @@ All notable changes to pi-webaio will be documented in this file.
 
 ### Fixed
 
+- **CI dependency audit: transitive DoS advisories** (`package.json`, `package-lock.json`) — `overrides` pin `brace-expansion` to ≥5.0.7 ([GHSA-3jxr-9vmj-r5cp](https://github.com/advisories/GHSA-3jxr-9vmj-r5cp)) and `protobufjs` to ≥7.6.5 ([GHSA-j3f2-48v5-ccww](https://github.com/advisories/GHSA-j3f2-48v5-ccww)); both are nested under the `@earendil-works/pi-coding-agent` peer dependency and could not be bumped via `npm audit fix`. Lockfile regenerated (npm ignores override changes against an existing lockfile, [npm/cli#4139](https://github.com/npm/cli/issues/4139)).
 - **Source-loaded installs: `fetch-jina` dynamic import crash** (`src/content.ts`) — `runHtmlPipeline` dynamically imported `./fetch-jina.js` while the rest of the source tree uses `.ts` specifiers, so any install that loads the extension from source (e.g. pi loading a git clone via type stripping) threw `Cannot find module 'src/fetch-jina.js'` on every non-vertical HTML fetch. This broke `aio-webpull` ("Pulled 0 pages" / "No pages found") and `aio-webresearch` outright; `aio-webfetch` only appeared unaffected on vertical-routed URLs (e.g. GitHub). Now imports `./fetch-jina.ts`; the dist build is unchanged since `rewriteRelativeImportExtensions` rewrites it back to `.js` on emit.
 
 ## [0.7.1] - 2026-07-20
