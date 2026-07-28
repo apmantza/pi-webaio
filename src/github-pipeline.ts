@@ -16,6 +16,11 @@ import { BASE_TEMP } from "./session-store.ts";
 import type { GitHubRef, PullResult } from "./types.ts";
 import { resolveBinary } from "./tools/utils.ts";
 
+/** Sanitize a value for safe use as a filesystem path segment (B6/H1 hardening). */
+function safePathSegment(value: unknown): string {
+	return String(value).replace(/[^a-z0-9_-]/gi, "_");
+}
+
 export function parseGitHubUrl(url: string): GitHubRef | null {
 	const m = url.match(
 		/^https?:\/\/github\.com\/([^/]+)\/([^/]+)(?:\/(tree|blob)\/([^/]+)(?:\/(.*))?)?(?:\/(?!tree\/|blob\/)(.*))?/i,
@@ -120,12 +125,12 @@ async function pullGitHubActionsLogs(
 		md += `\`\`\`\n${excerpt}\n\`\`\`\n`;
 
 		try {
-			const safeOwner = owner.replace(/[^a-z0-9_-]/gi, "_");
-			const safeRepo = repo.replace(/[^a-z0-9_-]/gi, "_");
+			const safeOwner = safePathSegment(owner);
+			const safeRepo = safePathSegment(repo);
 			const outDir = `${BASE_TEMP}/github-logs/${safeOwner}-${safeRepo}`;
 			const fs = await import("node:fs/promises");
 			await fs.mkdir(outDir, { recursive: true });
-			const outFile = `${outDir}/run-${runId}.log`;
+			const outFile = `${outDir}/run-${safePathSegment(runId)}.log`;
 			await fs.writeFile(outFile, logText, "utf8");
 			md += `\n<details>\n<summary>📋 Full log saved to disk</summary>\n\n`;
 			md += `\`${outFile}\` (${logText.length.toLocaleString()} chars)\n`;
@@ -565,14 +570,17 @@ async function pullGitHubCheckLog(
 
 				// Save the filtered (or full) log to disk for reference
 				try {
-					const safeOwner = owner.replace(/[^a-z0-9_-]/gi, "_");
-					const safeRepo = repo.replace(/[^a-z0-9_-]/gi, "_");
+					const safeOwner = safePathSegment(owner);
+					const safeRepo = safePathSegment(repo);
 					const outDir = `${BASE_TEMP}/github-logs/${safeOwner}-${safeRepo}`;
 					const fs = await import("node:fs/promises");
 					await fs.mkdir(outDir, { recursive: true });
+					const safeCheckId = safePathSegment(checkId);
 					const suffix =
-						stepIndex && filterSucceeded ? `-step${stepIndex}` : "";
-					const outFile = `${outDir}/check-${checkId}${suffix}.log`;
+						stepIndex && filterSucceeded
+							? `-step${safePathSegment(stepIndex)}`
+							: "";
+					const outFile = `${outDir}/check-${safeCheckId}${suffix}.log`;
 					await fs.writeFile(outFile, filtered, "utf8");
 					md += `\n<details>\n<summary>📋 Log saved to disk</summary>\n\n\`${outFile}\` (${filtered.length.toLocaleString()} chars)\n</details>\n`;
 				} catch {

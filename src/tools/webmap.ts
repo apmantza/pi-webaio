@@ -108,7 +108,7 @@ export function registerWebmapTool(pi: ExtensionAPI): void {
 
 			// Build sources map for the generic path
 			const sources: Record<string, string[]> = {};
-			for (const u of urls) sources["sitemap-or-nav-or-crawl"] = urls;
+			if (urls.length) sources["sitemap-or-nav-or-crawl"] = urls;
 			if (llmsUrls.length) sources["llms.txt"] = llmsUrls;
 
 			const text = [

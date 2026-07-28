@@ -13,7 +13,6 @@
 //   npm run bench -- --concurrency 2 --timeout 30000
 
 import { readFile, writeFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { pullPageEnhanced } from "../src/content.ts";

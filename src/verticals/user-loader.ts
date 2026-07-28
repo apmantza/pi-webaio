@@ -47,10 +47,7 @@ export interface RegisteredUserExtractor {
 
 // ─── Validation ──────────────────────────────────────────────────────
 
-function validate(
-	mod: unknown,
-	filePath: string,
-): UserExtractorModule | string {
+function validate(mod: unknown): UserExtractorModule | string {
 	if (!mod || typeof mod !== "object") {
 		return "default export is not an object";
 	}
@@ -136,7 +133,7 @@ export async function loadUserExtractors(
 			(rawMod as Record<string, unknown>).default ??
 			(rawMod as Record<string, unknown>).extractor;
 
-		const result = validate(candidate, filePath);
+		const result = validate(candidate);
 		if (typeof result === "string") {
 			console.warn(`[user-verticals] Skipping ${filePath}: ${result}`);
 			continue;
