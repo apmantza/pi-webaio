@@ -30,8 +30,12 @@ jobs:
       # `npm install --omit=dev`). Scoped to high/critical to avoid blocking PRs on
       # fix-less moderate advisories; transitive moderate ones are handled by
       # Dependabot security updates. DevDeps are excluded — they never reach users.
+      # Peer deps are excluded as well: the only peer (pi-coding-agent) is
+      # host-provided, and npm overrides do NOT cascade into a peer's subtree,
+      # so its transitive brace-expansion@5.0.7 advisory (GHSA-mh99-v99m-4gvg)
+      # cannot be bumped from this repo — it is upstream's responsibility.
       - name: Audit production dependencies
-        run: npm audit --omit=dev --audit-level=high
+        run: npm audit --omit=dev --omit=peer --audit-level=high
 
       - name: TypeScript lint
         run: npm run lint
