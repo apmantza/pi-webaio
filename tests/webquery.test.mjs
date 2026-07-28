@@ -3,7 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, writeFile, mkdir, rm } from "node:fs/promises";
-import { join } from "node:path";
+import { join, isAbsolute } from "node:path";
 import { tmpdir as osTmpdir } from "node:os";
 import {
 	buildIndex,
@@ -11,6 +11,7 @@ import {
 	INDEX_VERSION,
 	INDEX_FILENAME,
 } from "../src/webquery-index.ts";
+import { resolveCorpusDir } from "../src/tools/webquery.ts";
 
 // ─── Helpers ──────────────────────────────────────────────────────────
 
@@ -35,7 +36,12 @@ async function writeMd(dir, relPath, url, body) {
 test("buildIndex: creates index file in outDir", async () => {
 	const dir = await makeTempDir();
 	try {
-		await writeMd(dir, "index.md", "https://example.com/", "Hello world. This is a test page about dogs.");
+		await writeMd(
+			dir,
+			"index.md",
+			"https://example.com/",
+			"Hello world. This is a test page about dogs.",
+		);
 		await buildIndex(dir);
 		const result = await loadIndex(dir);
 		assert.ok(result.ok, "index should load successfully");
@@ -59,7 +65,10 @@ test("buildIndex: chunks contain source file, URL, and text", async () => {
 		const result = await loadIndex(dir);
 		assert.ok(result.ok);
 		const chunk = result.index.chunks[0];
-		assert.ok(chunk.file.includes("intro.md"), `expected file path in chunk, got: ${chunk.file}`);
+		assert.ok(
+			chunk.file.includes("intro.md"),
+			`expected file path in chunk, got: ${chunk.file}`,
+		);
 		assert.equal(chunk.url, "https://example.com/docs/intro");
 		assert.ok(chunk.text.length > 0, "chunk text should not be empty");
 	} finally {
@@ -79,7 +88,9 @@ test("buildIndex: extracts heading breadcrumb from chunks", async () => {
 		await buildIndex(dir);
 		const result = await loadIndex(dir);
 		assert.ok(result.ok);
-		const headingChunk = result.index.chunks.find((c) => c.heading.includes("Getting Started"));
+		const headingChunk = result.index.chunks.find((c) =>
+			c.heading.includes("Getting Started"),
+		);
 		assert.ok(headingChunk, "should find a chunk with the heading");
 	} finally {
 		await rm(dir, { recursive: true, force: true });
@@ -89,8 +100,18 @@ test("buildIndex: extracts heading breadcrumb from chunks", async () => {
 test("buildIndex: multiple files are all indexed", async () => {
 	const dir = await makeTempDir();
 	try {
-		await writeMd(dir, "page-a.md", "https://example.com/a", "Content about apples and fruit.");
-		await writeMd(dir, "page-b.md", "https://example.com/b", "Content about bicycles and transport.");
+		await writeMd(
+			dir,
+			"page-a.md",
+			"https://example.com/a",
+			"Content about apples and fruit.",
+		);
+		await writeMd(
+			dir,
+			"page-b.md",
+			"https://example.com/b",
+			"Content about bicycles and transport.",
+		);
 		await buildIndex(dir);
 		const result = await loadIndex(dir);
 		assert.ok(result.ok);
@@ -105,14 +126,24 @@ test("buildIndex: multiple files are all indexed", async () => {
 test("buildIndex: full rebuild on second call keeps index consistent", async () => {
 	const dir = await makeTempDir();
 	try {
-		await writeMd(dir, "v1.md", "https://example.com/v1", "Version one content.");
+		await writeMd(
+			dir,
+			"v1.md",
+			"https://example.com/v1",
+			"Version one content.",
+		);
 		await buildIndex(dir);
 		const r1 = await loadIndex(dir);
 		assert.ok(r1.ok);
 		const countAfterFirst = r1.index.chunks.length;
 
 		// Add a second file, rebuild
-		await writeMd(dir, "v2.md", "https://example.com/v2", "Version two content.");
+		await writeMd(
+			dir,
+			"v2.md",
+			"https://example.com/v2",
+			"Version two content.",
+		);
 		await buildIndex(dir);
 		const r2 = await loadIndex(dir);
 		assert.ok(r2.ok);
@@ -133,7 +164,10 @@ test("loadIndex: returns missing error when no index file", async () => {
 		const result = await loadIndex(dir);
 		assert.ok(!result.ok);
 		assert.equal(result.reason, "missing");
-		assert.ok(result.message.includes("aio-webpull"), "message should mention aio-webpull");
+		assert.ok(
+			result.message.includes("aio-webpull"),
+			"message should mention aio-webpull",
+		);
 	} finally {
 		await rm(dir, { recursive: true, force: true });
 	}
@@ -154,12 +188,24 @@ test("loadIndex: returns corrupt error for invalid JSON", async () => {
 test("loadIndex: returns version_mismatch for wrong version", async () => {
 	const dir = await makeTempDir();
 	try {
-		const badIndex = { version: 999, builtAt: new Date().toISOString(), outDir: dir, chunks: [] };
-		await writeFile(join(dir, INDEX_FILENAME), JSON.stringify(badIndex), "utf8");
+		const badIndex = {
+			version: 999,
+			builtAt: new Date().toISOString(),
+			outDir: dir,
+			chunks: [],
+		};
+		await writeFile(
+			join(dir, INDEX_FILENAME),
+			JSON.stringify(badIndex),
+			"utf8",
+		);
 		const result = await loadIndex(dir);
 		assert.ok(!result.ok);
 		assert.equal(result.reason, "version_mismatch");
-		assert.ok(result.message.includes("Re-run aio-webpull"), "message should tell user to re-pull");
+		assert.ok(
+			result.message.includes("Re-run aio-webpull"),
+			"message should tell user to re-pull",
+		);
 	} finally {
 		await rm(dir, { recursive: true, force: true });
 	}
@@ -169,7 +215,11 @@ test("loadIndex: returns corrupt error for missing version field", async () => {
 	const dir = await makeTempDir();
 	try {
 		const badIndex = { builtAt: new Date().toISOString(), chunks: [] };
-		await writeFile(join(dir, INDEX_FILENAME), JSON.stringify(badIndex), "utf8");
+		await writeFile(
+			join(dir, INDEX_FILENAME),
+			JSON.stringify(badIndex),
+			"utf8",
+		);
 		const result = await loadIndex(dir);
 		assert.ok(!result.ok);
 		assert.equal(result.reason, "corrupt");
@@ -250,4 +300,18 @@ test("topK limits the number of results", async () => {
 	} finally {
 		await rm(dir, { recursive: true, force: true });
 	}
+});
+
+// ─── dir resolution (B5) ───────────────────────────────────────────
+
+test("resolveCorpusDir: relative paths resolve against the temp base (B5)", () => {
+	const base = join(osTmpdir(), "pi-webaio");
+	// undefined → the base itself
+	assert.equal(resolveCorpusDir(undefined), base);
+	// relative hostname subdir → base/<hostname>, matching aio-webpull's layout
+	assert.equal(resolveCorpusDir("example.com"), join(base, "example.com"));
+	assert.ok(isAbsolute(resolveCorpusDir("example.com")));
+	// absolute paths pass through unchanged
+	const abs = join(osTmpdir(), "somewhere-else");
+	assert.equal(resolveCorpusDir(abs), abs);
 });

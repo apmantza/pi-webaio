@@ -6,9 +6,17 @@ All notable changes to pi-webaio will be documented in this file.
 
 ### Added
 
+- **Omitted-sections index on markdown truncation** (`src/prune-markdown.ts`) — when `pruneMarkdown` drops sections to fit a token budget, the truncation footer now appends a mini table-of-contents of the omitted section headings (indented by heading level, in document order, capped at 20 entries with a "…N more" overflow line) so the agent knows *what* was left out, not just how many sections were cut. Two prune tests refined to assert on pruned section *bodies* (headings may legitimately survive in the index). Inspired by henyo-pi-web's residual-heading TOC (roadmap F7).
+
 ### Changed
 
+- **`aio-websearch` surfaces a requested-but-empty Google** (`src/tools/websearch.ts`) — when `google: true` is requested but Google yields nothing, the result now carries a `googleStatus` field (`disabled` / `unavailable (Chrome CDP not present)` / `unavailable (provider cooled down…)` / `empty (Google returned 0 results)` / `error (…)`) in `details` and appends a `_(Google: requested but returned nothing — <status>)_` note to the output, instead of silently dropping Google from the engine list. A silent zero no longer looks like Google was never attempted (roadmap B4).
+
 ### Fixed
+
+- **Wikipedia vertical rendered `## Content → [object Object]`** (`src/verticals/wikipedia.ts`) — the MediaWiki `action=parse` API returns `parse.text` as an object of the form `{ "*": "<html>" }`, but the extractor did `String(parse.text)`, stringifying the wrapper object itself. Now unwraps the `"*"` key (with a plain-string fallback) so the article body renders. Covered by a new offline test that mocks the MediaWiki response shape (roadmap B2).
+- **`aio-webresearch` aborted the whole run when a single source threw** (`src/tools/webresearch.ts`) — the per-source `pullPageEnhanced` call in the fetch batch had no try/catch and `runInBatches` uses a bare `Promise.all`, so one rejecting source (e.g. a URL mis-routed to the GitLab vertical whose API call times out) rejected the entire research run. The per-source fetch is now guarded: a throwing source is recorded as a `dead` record (`errorCode: "network"`, via `classifyReachability`) and the run continues. Locked by new `classifyReachability` tests (`network`/404/500 → `dead`, no-signal → `unknown`) (roadmap B3).
+- **`aio-webquery` `dir` resolution footgun** (`src/tools/webquery.ts`) — the default `dir` omitted the `<hostname>` segment the docs promised, and relative paths resolved against the current working directory instead of the temp base, so `dir: "example.com"` missed the pulled corpus. Relative paths now resolve against `<temp>/pi-webaio` (matching `aio-webpull`'s `<temp>/pi-webaio/<hostname>` layout) via a new exported `resolveCorpusDir` helper; absolute paths pass through unchanged; the missing-index error now includes a hint pointing at the resolved location. `tests/webquery.test.mjs` (with a new `resolveCorpusDir` test) is wired into `test:all` (roadmap B5).
 
 ## [0.7.2] - 2026-07-21
 

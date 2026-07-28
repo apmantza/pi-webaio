@@ -192,9 +192,11 @@ test("pruneMarkdown: with query, sections are scored by BM25 relevance", () => {
 		result.content.includes("Pricing Plans"),
 		"Pricing section should be kept",
 	);
+	// The Careers *body* should be pruned; its heading may still appear in the
+	// omitted-sections index appended on truncation (F7).
 	assert.ok(
-		!result.content.includes("Careers"),
-		"Careers section should be pruned (low relevance)",
+		!result.content.includes("Check our careers page"),
+		"Careers section body should be pruned (low relevance)",
 	);
 	assert.ok(Array.isArray(result.scores));
 	assert.equal(result.scores.length, 3);
@@ -299,8 +301,10 @@ test("pruneByRelevance convenience wrapper", () => {
 	const result = pruneByRelevance(md, "pricing", 80);
 
 	assert.ok(result.content.includes("Pricing"));
-	assert.ok(!result.content.includes("History"));
-	assert.ok(!result.content.includes("Careers"));
+	// Pruned section *bodies* are gone; headings may remain in the omitted
+	// sections index (F7), so assert on unique body text instead.
+	assert.ok(!result.content.includes("Founded in 2010 by two engineers"));
+	assert.ok(!result.content.includes("We are hiring engineers and designers"));
 	assert.ok(Array.isArray(result.scores));
 	assert.equal(result.scores.length, 3);
 	assert.ok(result.truncated);

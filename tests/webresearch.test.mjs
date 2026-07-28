@@ -38,7 +38,10 @@ async function makeTempDir() {
 
 test("slugify: lowercases, hyphenates, and truncates", () => {
 	assert.equal(slugify("What is BM25 Ranking?"), "what-is-bm25-ranking");
-	assert.equal(slugify("  leading/trailing--spaces  "), "leading-trailing-spaces");
+	assert.equal(
+		slugify("  leading/trailing--spaces  "),
+		"leading-trailing-spaces",
+	);
 	assert.ok(slugify("a".repeat(200)).length <= 48);
 	assert.equal(slugify(""), "query");
 });
@@ -50,7 +53,10 @@ test("timestampForBundle: filesystem-safe, sortable UTC format", () => {
 });
 
 test("bundleDirName: combines timestamp and slug", () => {
-	const name = bundleDirName("React Server Components", new Date("2026-07-20T15:30:05.000Z"));
+	const name = bundleDirName(
+		"React Server Components",
+		new Date("2026-07-20T15:30:05.000Z"),
+	);
 	assert.equal(name, "20260720-153005_react-server-components");
 });
 
@@ -74,14 +80,36 @@ test("classifyReachability: 403 (anti-bot) is 'skipped', not 'dead'", () => {
 
 test("classifyReachability: 429 and paywall/bot error codes are 'skipped'", () => {
 	assert.equal(classifyReachability({ ok: false, statusCode: 429 }), "skipped");
-	assert.equal(classifyReachability({ ok: false, errorCode: "bot_detected" }), "skipped");
-	assert.equal(classifyReachability({ ok: false, errorCode: "paywall" }), "skipped");
+	assert.equal(
+		classifyReachability({ ok: false, errorCode: "bot_detected" }),
+		"skipped",
+	);
+	assert.equal(
+		classifyReachability({ ok: false, errorCode: "paywall" }),
+		"skipped",
+	);
+});
+
+test("classifyReachability: generic network/HTTP error is 'dead' (B3 per-source guard relies on this)", () => {
+	assert.equal(
+		classifyReachability({ ok: false, errorCode: "network" }),
+		"dead",
+	);
+	assert.equal(classifyReachability({ ok: false, statusCode: 404 }), "dead");
+	assert.equal(classifyReachability({ ok: false, statusCode: 500 }), "dead");
+});
+
+test("classifyReachability: no status or error signal is 'unknown'", () => {
+	assert.equal(classifyReachability({ ok: false }), "unknown");
 });
 
 test("classifyReachability: 404/5xx and other errors are 'dead'", () => {
 	assert.equal(classifyReachability({ ok: false, statusCode: 404 }), "dead");
 	assert.equal(classifyReachability({ ok: false, statusCode: 500 }), "dead");
-	assert.equal(classifyReachability({ ok: false, errorCode: "dns_error" }), "dead");
+	assert.equal(
+		classifyReachability({ ok: false, errorCode: "dns_error" }),
+		"dead",
+	);
 });
 
 test("classifyReachability: no status/error info is 'unknown'", () => {
@@ -109,14 +137,32 @@ test("rankSources: dedupes the same URL across sub-queries and boosts consensus"
 		{
 			query: "q1",
 			results: [
-				{ title: "A", url: "https://a.example.com/", snippet: "a", domain: "a.example.com", sources: ["ddg"] },
-				{ title: "B", url: "https://b.example.com/", snippet: "b", domain: "b.example.com", sources: ["bing"] },
+				{
+					title: "A",
+					url: "https://a.example.com/",
+					snippet: "a",
+					domain: "a.example.com",
+					sources: ["ddg"],
+				},
+				{
+					title: "B",
+					url: "https://b.example.com/",
+					snippet: "b",
+					domain: "b.example.com",
+					sources: ["bing"],
+				},
 			],
 		},
 		{
 			query: "q2",
 			results: [
-				{ title: "A", url: "https://a.example.com/", snippet: "a", domain: "a.example.com", sources: ["brave"] },
+				{
+					title: "A",
+					url: "https://a.example.com/",
+					snippet: "a",
+					domain: "a.example.com",
+					sources: ["brave"],
+				},
 			],
 		},
 	];
@@ -129,7 +175,10 @@ test("rankSources: dedupes the same URL across sub-queries and boosts consensus"
 	assert.deepEqual(a.queries.sort(), ["q1", "q2"]);
 	assert.deepEqual(a.engines.sort(), ["brave", "ddg"]);
 	// A appeared in both sub-queries at rank 1 each time (plus consensus bonus) — should outrank B.
-	assert.ok(a.score > b.score, `expected A (${a.score}) to outrank B (${b.score})`);
+	assert.ok(
+		a.score > b.score,
+		`expected A (${a.score}) to outrank B (${b.score})`,
+	);
 	assert.equal(ranked[0].id, "S1");
 	assert.equal(ranked[1].id, "S2");
 });
@@ -139,13 +188,27 @@ test("rankSources: trailing slash / hash differences still dedupe", () => {
 		{
 			query: "q1",
 			results: [
-				{ title: "A", url: "https://a.example.com/page", snippet: "", domain: "a.example.com" },
-				{ title: "A again", url: "https://a.example.com/page/#section", snippet: "", domain: "a.example.com" },
+				{
+					title: "A",
+					url: "https://a.example.com/page",
+					snippet: "",
+					domain: "a.example.com",
+				},
+				{
+					title: "A again",
+					url: "https://a.example.com/page/#section",
+					snippet: "",
+					domain: "a.example.com",
+				},
 			],
 		},
 	];
 	const ranked = rankSources(perQuery);
-	assert.equal(ranked.length, 1, "hash/trailing-slash variants should dedupe to one source");
+	assert.equal(
+		ranked.length,
+		1,
+		"hash/trailing-slash variants should dedupe to one source",
+	);
 });
 
 // ─── extractEvidence: deterministic BM25 quote selection ────────────────
@@ -153,7 +216,8 @@ test("rankSources: trailing slash / hash differences still dedupe", () => {
 test("extractEvidence: picks the best-matching chunk for the query", () => {
 	// Padded so the two sections land in separate BM25-scored chunks
 	// (chunkMarkdown merges short adjacent paragraphs into one chunk).
-	const filler = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. ".repeat(40);
+	const filler =
+		"Lorem ipsum dolor sit amet, consectetur adipiscing elit. ".repeat(40);
 	const markdown = [
 		"## Introduction",
 		"",
@@ -164,7 +228,13 @@ test("extractEvidence: picks the best-matching chunk for the query", () => {
 		"The API enforces a rate limit of 100 requests per minute per API key.",
 	].join("\n");
 
-	const entry = extractEvidence("S1", "https://example.com/docs", "Docs", markdown, "API rate limit requests per minute");
+	const entry = extractEvidence(
+		"S1",
+		"https://example.com/docs",
+		"Docs",
+		markdown,
+		"API rate limit requests per minute",
+	);
 	assert.ok(entry, "should return an evidence entry");
 	assert.equal(entry.sourceId, "S1");
 	assert.match(entry.quote, /rate limit/i);
@@ -172,7 +242,10 @@ test("extractEvidence: picks the best-matching chunk for the query", () => {
 });
 
 test("extractEvidence: returns undefined for empty content", () => {
-	assert.equal(extractEvidence("S1", "https://example.com", "T", "", "query"), undefined);
+	assert.equal(
+		extractEvidence("S1", "https://example.com", "T", "", "query"),
+		undefined,
+	);
 });
 
 // ─── Bundle markdown renderers (pure) ────────────────────────────────────
@@ -220,7 +293,16 @@ function makeSummary() {
 			},
 		],
 		unfetchedRanked: [
-			{ id: "S4", url: "https://d.example.com/", title: "D", engines: [], queries: [], bestRank: 4, score: 0.1, primary: false },
+			{
+				id: "S4",
+				url: "https://d.example.com/",
+				title: "D",
+				engines: [],
+				queries: [],
+				bestRank: 4,
+				score: 0.1,
+				primary: false,
+			},
 		],
 	};
 }
@@ -235,7 +317,14 @@ test("buildStatusMd: reports counts and the fetch ledger", () => {
 
 test("buildEvidenceMd: renders each evidence entry with source id and quote", () => {
 	const evidence = [
-		{ sourceId: "S1", url: "https://a.example.com/", title: "A", heading: "Intro", quote: "Some evidence text.", score: 1.234 },
+		{
+			sourceId: "S1",
+			url: "https://a.example.com/",
+			title: "A",
+			heading: "Intro",
+			quote: "Some evidence text.",
+			score: 1.234,
+		},
 	];
 	const md = buildEvidenceMd(evidence, makeSummary().fetched);
 	assert.match(md, /\[S1\] A/);
@@ -291,7 +380,11 @@ test("buildManifest: shape is valid and citation audit classifies 403 as skipped
 
 	const s2 = manifest.citationAudit.details.find((d) => d.id === "S2");
 	assert.equal(s2.statusCode, 403);
-	assert.equal(s2.classification, "skipped", "403 must be classified as skipped, not dead");
+	assert.equal(
+		s2.classification,
+		"skipped",
+		"403 must be classified as skipped, not dead",
+	);
 
 	const s3 = manifest.citationAudit.details.find((d) => d.id === "S3");
 	assert.equal(s3.classification, "dead");
@@ -299,10 +392,28 @@ test("buildManifest: shape is valid and citation audit classifies 403 as skipped
 
 test("buildSourcesJson: registry entries carry rank + reachability data", () => {
 	const ranked = [
-		{ id: "S1", url: "https://a.example.com/", title: "A", engines: ["ddg"], queries: ["q"], bestRank: 1, score: 1, primary: false },
+		{
+			id: "S1",
+			url: "https://a.example.com/",
+			title: "A",
+			engines: ["ddg"],
+			queries: ["q"],
+			bestRank: 1,
+			score: 1,
+			primary: false,
+		},
 	];
 	const fetched = [
-		{ id: "S1", url: "https://a.example.com/", title: "A", ok: true, reachability: "ok", statusCode: undefined, file: "sources/01-a.md", wordCount: 42 },
+		{
+			id: "S1",
+			url: "https://a.example.com/",
+			title: "A",
+			ok: true,
+			reachability: "ok",
+			statusCode: undefined,
+			file: "sources/01-a.md",
+			wordCount: 42,
+		},
 	];
 	const json = buildSourcesJson(ranked, fetched);
 	assert.equal(json.version, 1);
@@ -313,7 +424,9 @@ test("buildSourcesJson: registry entries carry rank + reachability data", () => 
 });
 
 test("buildEvidenceJson: wraps evidence array with a version", () => {
-	const json = buildEvidenceJson([{ sourceId: "S1", url: "u", title: "t", quote: "q", score: 1 }]);
+	const json = buildEvidenceJson([
+		{ sourceId: "S1", url: "u", title: "t", quote: "q", score: 1 },
+	]);
 	assert.equal(json.version, 1);
 	assert.equal(json.evidence.length, 1);
 });

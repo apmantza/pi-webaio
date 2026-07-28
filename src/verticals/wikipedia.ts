@@ -105,7 +105,15 @@ export async function extractWikipedia(
 
 		if (pd.parse && typeof pd.parse === "object") {
 			const parse = pd.parse as Record<string, unknown>;
-			pageText = String(parse.text || "");
+			// MediaWiki's action=parse returns `text` as an object of the form
+			// { "*": "<html>" } in JSON format, not a plain string. String()-ing
+			// the object directly yields "[object Object]" — unwrap the "*" key.
+			const textNode = parse.text;
+			if (textNode && typeof textNode === "object") {
+				pageText = String((textNode as Record<string, unknown>)["*"] || "");
+			} else {
+				pageText = String(textNode || "");
+			}
 
 			// Sections
 			if (Array.isArray(parse.sections)) {

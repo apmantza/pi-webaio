@@ -42,7 +42,10 @@ const MAX_QUERIES = 6;
 /** Concurrency for fetching top-ranked sources. */
 const FETCH_CONCURRENCY = 3;
 
-function resolveOutDir(outDir: string | undefined, defaultName: string): string {
+function resolveOutDir(
+	outDir: string | undefined,
+	defaultName: string,
+): string {
 	if (outDir) return resolve(process.cwd(), outDir);
 	return resolve(process.cwd(), ".pi", "webaio-research", defaultName);
 }
@@ -94,10 +97,13 @@ export function registerWebresearchTool(pi: ExtensionAPI): void {
 				}),
 			),
 			goggles: Type.Optional(
-				Type.Union([Type.String(), Type.Record(Type.String(), Type.Unknown())], {
-					description:
-						"Optional rerank profile applied additively to each fanned-out search on top of the normal ranking. Pass a built-in preset name ('docs-first', 'research', 'news-balanced'), a path to a JSON file of custom rules, an inline JSON string, or a rules object ({ rules: [{ domains?, domainMarkers?, urlMarkers?, titleTerms?, weight }] }). Omit for unchanged default ranking.",
-				}),
+				Type.Union(
+					[Type.String(), Type.Record(Type.String(), Type.Unknown())],
+					{
+						description:
+							"Optional rerank profile applied additively to each fanned-out search on top of the normal ranking. Pass a built-in preset name ('docs-first', 'research', 'news-balanced'), a path to a JSON file of custom rules, an inline JSON string, or a rules object ({ rules: [{ domains?, domainMarkers?, urlMarkers?, titleTerms?, weight }] }). Omit for unchanged default ranking.",
+					},
+				),
 			),
 		}),
 
@@ -109,7 +115,9 @@ export function registerWebresearchTool(pi: ExtensionAPI): void {
 			const goggles = await loadGoggles(params.goggles as GogglesInput);
 
 			const subQueries: string[] = Array.isArray(params.queries)
-				? params.queries.filter((q: unknown) => typeof q === "string" && q.trim())
+				? params.queries.filter(
+						(q: unknown) => typeof q === "string" && q.trim(),
+					)
 				: [];
 			const allQueries = [query, ...subQueries]
 				.map((q) => q.trim())
@@ -167,22 +175,51 @@ export function registerWebresearchTool(pi: ExtensionAPI): void {
 				toFetch,
 				Math.min(FETCH_CONCURRENCY, Math.max(1, toFetch.length)),
 				async (source, idx) => {
-					let result = await pullPageEnhanced(source.url, {
-						browser,
-						os,
-						mode: "auto" as ScrapeMode,
-					});
-					if (!result.ok) {
-						const retryable =
-							result.errorInfo?.retryable || result.errorInfo?.code === "blocked";
-						if (retryable) {
-							const browserResult = await pullPageEnhanced(source.url, {
-								browser,
-								os,
-								mode: "browser" as ScrapeMode,
-							});
-							if (browserResult.ok) result = browserResult;
+					// Guard the per-source fetch so a single throwing source (e.g. a
+					// mis-routed vertical extractor whose own network call rejects) is
+					// classified "dead" instead of aborting the whole research run (B3).
+					let result: Awaited<ReturnType<typeof pullPageEnhanced>>;
+					try {
+						result = await pullPageEnhanced(source.url, {
+							browser,
+							os,
+							mode: "auto" as ScrapeMode,
+						});
+						if (!result.ok) {
+							const retryable =
+								result.errorInfo?.retryable ||
+								result.errorInfo?.code === "blocked";
+							if (retryable) {
+								const browserResult = await pullPageEnhanced(source.url, {
+									browser,
+									os,
+									mode: "browser" as ScrapeMode,
+								});
+								if (browserResult.ok) result = browserResult;
+							}
 						}
+					} catch (err) {
+						const errorMessage =
+							err instanceof Error ? err.message : String(err);
+						const deadRecord: FetchedSourceRecord = {
+							id: source.id,
+							url: source.url,
+							title: source.title,
+							domain: source.domain,
+							primary: isPrimarySource(source.domain),
+							ok: false,
+							statusCode: undefined,
+							errorCode: "network",
+							errorMessage,
+							reachability: classifyReachability({
+								ok: false,
+								statusCode: undefined,
+								errorCode: "network",
+							}),
+							wordCount: undefined,
+							publishedAt: undefined,
+						};
+						return deadRecord;
 					}
 
 					const statusCode = result.errorInfo?.statusCode;
@@ -209,7 +246,10 @@ export function registerWebresearchTool(pi: ExtensionAPI): void {
 					};
 
 					if (result.ok && shouldWrite) {
-						const fileSlug = slugify(record.title || source.domain || `source-${idx + 1}`, 40);
+						const fileSlug = slugify(
+							record.title || source.domain || `source-${idx + 1}`,
+							40,
+						);
 						const fileName = `${String(idx + 1).padStart(2, "0")}-${fileSlug}.md`;
 						const md =
 							frontmatter(record.title, source.url, {
@@ -314,7 +354,9 @@ export function registerWebresearchTool(pi: ExtensionAPI): void {
 			}
 
 			const okCount = fetched.filter((f) => f.ok).length;
-			const skippedCount = fetched.filter((f) => f.reachability === "skipped").length;
+			const skippedCount = fetched.filter(
+				(f) => f.reachability === "skipped",
+			).length;
 			const deadCount = fetched.filter((f) => f.reachability === "dead").length;
 			const primaryCount = fetched.filter((f) => f.primary && f.ok).length;
 
@@ -326,7 +368,9 @@ export function registerWebresearchTool(pi: ExtensionAPI): void {
 				`Query: "${query}"${allQueries.length > 1 ? ` (+${allQueries.length - 1} sub-quer${allQueries.length - 1 === 1 ? "y" : "ies"})` : ""}`,
 				`Sources consulted: ${ranked.length}  |  fetched: ${fetched.length}  |  primary: ${primaryCount}`,
 				`Reachability: ${okCount} ok, ${skippedCount} skipped (anti-bot), ${deadCount} dead`,
-				indexBuilt ? `BM25 index built at ${join(bundleDir, "sources")} — query it with aio-webquery` : "",
+				indexBuilt
+					? `BM25 index built at ${join(bundleDir, "sources")} — query it with aio-webquery`
+					: "",
 				`Claim stance (heuristic, non-authoritative): ${stance.verdict} (${stance.supportingCount} supporting, ${stance.conflictingCount} conflicting, ${stance.neutralCount} neutral) — keyword/pattern-based, not semantic entailment; verify before treating as fact.`,
 				shouldWrite
 					? `\nNext: read ${join(bundleDir, "reports", "EVIDENCE.md")} and fill in ${join(bundleDir, "reports", "CLAIMS.md")}. See ${join(bundleDir, "STANCE.md")} for a non-authoritative candidate stance.`

@@ -338,7 +338,27 @@ export function pruneMarkdown(
 
 	// Add truncation notice if we dropped sections
 	if (kept.length < sections.length) {
-		result += `\n\n---\n*Truncated to ~${estimateTokens(result)} tokens. ${sections.length - kept.length} sections omitted.*`;
+		// Build a mini table-of-contents of the omitted sections so the agent
+		// knows what was left out (not just how many). Headings are listed in
+		// document order, indented by level, and capped to avoid bloating the
+		// footer on very large documents. (F7)
+		const keptIndices = new Set(kept.map((s) => s.index));
+		const omitted = scored
+			.filter((s) => !keptIndices.has(s.index) && s.heading)
+			.sort((a, b) => a.index - b.index);
+		let omittedToc = "";
+		if (omitted.length > 0) {
+			const MAX_TOC = 20;
+			const tocLines = omitted.slice(0, MAX_TOC).map((s) => {
+				const indent = "  ".repeat(Math.max(0, s.level - 1));
+				return `${indent}- ${s.heading}`;
+			});
+			omittedToc = `\n\n*Omitted sections:*\n${tocLines.join("\n")}`;
+			if (omitted.length > MAX_TOC) {
+				omittedToc += `\n- … ${omitted.length - MAX_TOC} more`;
+			}
+		}
+		result += `\n\n---\n*Truncated to ~${estimateTokens(result)} tokens. ${sections.length - kept.length} sections omitted.*${omittedToc}`;
 	}
 
 	const prunedTokens = estimateTokens(result);

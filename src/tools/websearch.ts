@@ -87,10 +87,21 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 			const SEARCH_TIMEOUT = 7000;
 			// Chrome cold-start can take up to 30s; fire it in parallel so startup
 			// time does not consume the search-race window.
-			const chromeReady =
-				useGoogle && cdpAvailableGA() && isProviderAvailable("google")
-					? ensureChrome().catch(() => null)
-					: null;
+			const googleEnabled =
+				useGoogle && cdpAvailableGA() && isProviderAvailable("google");
+			// Track why Google produced no results so a silent zero is surfaced
+			// instead of looking like Google was never attempted (B4).
+			let googleStatus: string;
+			if (!useGoogle) googleStatus = "disabled (google: false)";
+			else if (!cdpAvailableGA())
+				googleStatus = "unavailable (Chrome CDP not present)";
+			else if (!isProviderAvailable("google"))
+				googleStatus =
+					"unavailable (provider cooled down after recent failures)";
+			else googleStatus = "pending";
+			const chromeReady = googleEnabled
+				? ensureChrome().catch(() => null)
+				: null;
 
 			const engineNames = ["DDG", "Brave", "Yahoo", "Bing"];
 			if (useGoogle) engineNames.push("Google");
@@ -133,17 +144,19 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 							timeoutMs: SEARCH_TIMEOUT,
 							maxResults: max,
 						});
-						return {
-							source: "google" as const,
-							results: g.results.map((r) => ({
-								title: r.title,
-								url: r.url,
-								snippet: r.snippet,
-								domain: extractDomain(r.url),
-							})),
-						};
+						const results = g.results.map((r) => ({
+							title: r.title,
+							url: r.url,
+							snippet: r.snippet,
+							domain: extractDomain(r.url),
+						}));
+						googleStatus = results.length
+							? "ok"
+							: "empty (Google returned 0 results)";
+						return { source: "google" as const, results };
 					} catch (err) {
 						recordProviderNetworkFailure("google", String(err));
+						googleStatus = `error (${String(err).slice(0, 120)})`;
 						return { source: "google" as const, results: [] };
 					}
 				})();
@@ -242,6 +255,14 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 					? `\n_(prefetching top ${prefetchUrls.length} result${prefetchUrls.length === 1 ? "" : "s"} in background — follow-up aio-webfetch will be served from cache)_`
 					: "";
 
+			// Surface a requested-but-empty Google so a silent zero is visible (B4).
+			const googleNote =
+				useGoogle &&
+				googleResults.length === 0 &&
+				googleStatus !== "disabled (google: false)"
+					? `\n_(Google: requested but returned nothing — ${googleStatus})_`
+					: "";
+
 			const gogglesNote = goggles ? ` — goggles: ${goggles.name}` : "";
 
 			const text = [
@@ -256,6 +277,7 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 					return `${i + 1}. **${r.title}**${domainTag}${srcTag}\n   ${r.url}\n   ${r.snippet}`;
 				}),
 				prefetchNote,
+				googleNote,
 			].join("\n");
 
 			return {
@@ -265,6 +287,7 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 					results: limited,
 					...httpCounts,
 					googleCount: googleResults.length,
+					googleStatus,
 					durationMs: Date.now() - startedAt,
 					prefetchCount: prefetchUrls.length,
 					goggles: goggles?.name,

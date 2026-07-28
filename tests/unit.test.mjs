@@ -23,6 +23,10 @@ import {
 import { fetchWithPlaywright, isRetryableNetworkError } from "../src/fetch.ts";
 import { parseGitHubUrl } from "../src/github-pipeline.ts";
 import {
+	extractWikipedia,
+	matchesWikipedia,
+} from "../src/verticals/wikipedia.ts";
+import {
 	detectPromptInjection,
 	applyInjectionAction,
 } from "../src/injection.ts";
@@ -351,9 +355,7 @@ test("summaryCache evicts oldest entry once over the cap", () => {
 	assert.strictEqual(summaryCache.size, MAX_SUMMARY_CACHE_ENTRIES);
 	assert.strictEqual(summaryCache.has("https://example.com/0"), false);
 	assert.strictEqual(
-		summaryCache.has(
-			`https://example.com/${MAX_SUMMARY_CACHE_ENTRIES + 4}`,
-		),
+		summaryCache.has(`https://example.com/${MAX_SUMMARY_CACHE_ENTRIES + 4}`),
 		true,
 	);
 });
@@ -1401,5 +1403,64 @@ test("matchesGitLab matches tree URL", () => {
 		/^https?:\/\/([^/]+)\/([^/]+(?:\/[^/]+)*)\/([^/]+)(?:\/(-\/blob\/|-\/tree\/)([^/]+)(?:\/(.+))?)?/i.test(
 			"https://gitlab.com/gitlab-org/gitlab-foss/-/tree/master/app",
 		),
+	);
+});
+
+// ─── Wikipedia vertical extractor (B2) ────────────────────────────
+
+test("matchesWikipedia matches article URLs across language editions", () => {
+	assert.ok(matchesWikipedia("https://en.wikipedia.org/wiki/Okapi_BM25"));
+	assert.ok(matchesWikipedia("https://de.wikipedia.org/wiki/Berlin"));
+	assert.ok(!matchesWikipedia("https://example.com/wiki/Foo"));
+});
+
+test("extractWikipedia unwraps MediaWiki parse.text { '*': html } object (B2 — no [object Object])", async () => {
+	const fetchJson = async (u) => {
+		if (u.includes("action=query")) {
+			return {
+				query: {
+					pages: {
+						123: {
+							pageid: 123,
+							title: "Okapi BM25",
+							displaytitle: "Okapi BM25",
+							extract: "BM25 is a ranking function.",
+							fullurl: "https://en.wikipedia.org/wiki/Okapi_BM25",
+							pagelanguage: "en",
+							lastrevid: 999,
+						},
+					},
+				},
+			};
+		}
+		if (u.includes("action=parse")) {
+			return {
+				parse: {
+					// MediaWiki returns `text` as an object { "*": html }, not a string.
+					text: { "*": "<p>Real article body content.</p>" },
+					sections: [{ line: "The ranking function", index: "1", number: "1" }],
+					categories: [{ "*": "Ranking_functions" }],
+				},
+			};
+		}
+		return null;
+	};
+	const result = await extractWikipedia(
+		"https://en.wikipedia.org/wiki/Okapi_BM25",
+		fetchJson,
+	);
+	assert.ok(result, "should return a result");
+	assert.ok(result.ok);
+	assert.ok(
+		!result.content.includes("[object Object]"),
+		"content must not contain [object Object]",
+	);
+	assert.ok(
+		result.content.includes("Real article body content."),
+		"content should include the unwrapped article body",
+	);
+	assert.ok(
+		result.content.includes("## Content"),
+		"should have a Content section",
 	);
 });

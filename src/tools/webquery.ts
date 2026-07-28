@@ -1,4 +1,4 @@
-import { join } from "node:path";
+import { join, isAbsolute, resolve } from "node:path";
 import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { tmpdir } from "node:os";
@@ -7,6 +7,21 @@ import { loadIndex } from "../webquery-index.ts";
 
 /** Default output directory matches webpull's default: <os-temp>/pi-webaio/<hostname> */
 const DEFAULT_BASE = join(tmpdir(), "pi-webaio");
+
+/**
+ * Resolve the corpus directory for aio-webquery (B5). Relative paths resolve
+ * against the standard temp base (<temp>/pi-webaio), matching aio-webpull's
+ * default output layout (<temp>/pi-webaio/<hostname>), so `dir: "example.com"`
+ * targets <temp>/pi-webaio/example.com instead of resolving against the
+ * current working directory. Absolute paths pass through unchanged.
+ */
+export function resolveCorpusDir(
+	rawDir: string | undefined,
+	base: string = DEFAULT_BASE,
+): string {
+	const candidate = rawDir ?? base;
+	return isAbsolute(candidate) ? candidate : resolve(base, candidate);
+}
 
 export function registerWebqueryTool(pi: ExtensionAPI): void {
 	pi.registerTool({
@@ -26,7 +41,7 @@ export function registerWebqueryTool(pi: ExtensionAPI): void {
 			}),
 			dir: Type.Optional(
 				Type.String({
-					description: `Directory containing a pulled corpus (output of aio-webpull). Defaults to the standard temp location: ${DEFAULT_BASE}/<hostname>`,
+					description: `Directory containing a pulled corpus (output of aio-webpull). Defaults to the standard temp location: ${DEFAULT_BASE}/<hostname>. Relative paths resolve against ${DEFAULT_BASE} (so dir="example.com" targets ${DEFAULT_BASE}/example.com).`,
 				}),
 			),
 			topK: Type.Optional(
@@ -44,14 +59,18 @@ export function registerWebqueryTool(pi: ExtensionAPI): void {
 					? Math.floor(params.topK)
 					: 8;
 
-			// Resolve directory
-			const dir: string = params.dir ?? DEFAULT_BASE;
+			// Resolve directory (relative paths resolve against the temp base — B5).
+			const dir: string = resolveCorpusDir(params.dir);
 
 			// Load the index
 			const loaded = await loadIndex(dir);
 			if (!loaded.ok) {
+				const hint =
+					loaded.reason === "missing"
+						? `\nHint: pass dir="<hostname>" (e.g. dir="example.com") or the absolute pull directory. Corpora live under ${DEFAULT_BASE}/<hostname>.`
+						: "";
 				return {
-					content: [{ type: "text", text: loaded.message }],
+					content: [{ type: "text", text: loaded.message + hint }],
 					details: { found: false, reason: loaded.reason, dir },
 				};
 			}
@@ -91,7 +110,12 @@ export function registerWebqueryTool(pi: ExtensionAPI): void {
 							text: `No relevant chunks found for query: "${query}"\n\nThe corpus at ${dir} has ${chunks.length} indexed chunks but none matched the query terms.`,
 						},
 					],
-					details: { found: true, chunkCount: chunks.length, matchCount: 0, dir },
+					details: {
+						found: true,
+						chunkCount: chunks.length,
+						matchCount: 0,
+						dir,
+					},
 				};
 			}
 
@@ -105,7 +129,9 @@ export function registerWebqueryTool(pi: ExtensionAPI): void {
 			for (let i = 0; i < ranked.length; i++) {
 				const { score, chunk } = ranked[i]!;
 				const heading = chunk.heading ? ` › ${chunk.heading}` : "";
-				lines.push(`--- [${i + 1}/${ranked.length}] score=${score.toFixed(3)} ---`);
+				lines.push(
+					`--- [${i + 1}/${ranked.length}] score=${score.toFixed(3)} ---`,
+				);
 				lines.push(`File: ${chunk.file}${heading}`);
 				if (chunk.url) lines.push(`URL: ${chunk.url}`);
 				lines.push("");
