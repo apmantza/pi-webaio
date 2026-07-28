@@ -22,9 +22,20 @@ Effort: **S** ≤ half-day, **M** ~1–2 days, **L** multi-day.
 | B5 | ✅ Fixed + tested | `resolveCorpusDir` in `src/tools/webquery.ts`; test in `tests/webquery.test.mjs` (now wired into `test:all`). |
 | H3 | ✅ Audited — clean | No enum-of-literals unions exist; existing unions are legitimate string/record + boolean/number. No change needed. |
 | F7 | ✅ Done + tested | Omitted-sections TOC in `src/prune-markdown.ts`. |
-| B6 | 🆕 New (discovered) | See Track A. Not yet fixed. |
+| B6 | ✅ Fixed + tested | GitLab host gating (`isKnownGitLabHost` + `WEBAIO_GITLAB_HOSTS` env) on repo-root URLs in `src/verticals/gitlab.ts`, plus a soft-fail try/catch in `extractGitLab` so a mis-routed host falls through to the HTML pipeline. Tests in `tests/unit.test.mjs`. |
+| B7 | ✅ Investigated — non-bug | Alleged "summary-cache collision" is a misdiagnosis: Wikipedia (a vertical) skips AI summarization entirely (`"> via "` prefix → `skipSummary`), the summary cache is keyed per-URL (no collision), and the display always uses the current result's own body. The only real bias is by-design search-context injection into *fresh* summaries (never a vertical). No change. |
+| B8 | ✅ Fixed + tested | `formatPullHeadline` in `src/tools/webpull.ts` distinguishes "0 new pages (N already completed — pass resume:false)" from a genuine zero-result pull. Tests in `tests/unit.test.mjs`. |
 
-Verification: `npm run lint` clean; full `test:all` = 765 tests, 0 failures; `dist/` rebuilt.
+Verification: `npm run lint` clean; full `test:all` = 770 tests, 0 failures; `dist/` rebuilt.
+
+### Also in this batch (dependencies / security / hygiene)
+
+- **Removed `sharp`** — declared but never imported (zero usages repo-wide); dropping it clears a high-severity libvips advisory and a heavy native binary.
+- **Bumped `@modelcontextprotocol/sdk` → ^1.30.0** and pinned **`@hono/node-server` ^2.0.5** via `overrides` (clears the moderate Windows path-traversal advisory).
+- **Bumped `brace-expansion` override → ^5.0.8** (clears the high DoS advisory at the top level; the copy nested under the `@earendil-works/pi-coding-agent` **peer** cannot be governed by our overrides — accepted as an upstream/transitive-peer advisory).
+- **Bumped peer `@earendil-works/pi-coding-agent` and dep `@earendil-works/pi-tui` → ^0.82.0** — the old `^0.79.0` (caret on `0.x` = `<0.80.0`) excluded the running pi (0.82.1).
+- **Added `.github/dependabot.yml`** — weekly scheduled npm + github-actions version updates (security-update PRs already existed but were unmerged; this adds proactive cadence).
+- **`lens_diagnostics` triage** — 42 blocking findings triaged via `lens_diagnostic_mark` (security false-positives confirmed, path-traversal flagged for the H1 pass, sonarcloud case-declarations confirmed already-braced).
 
 ---
 
@@ -38,6 +49,8 @@ Verification: `npm run lint` clean; full `test:all` = 765 tests, 0 failures; `di
 | B4   | `aio-websearch` with `google:true` silently returns zero Google results — no error surfaced                                                      | Report per-engine status/timeout in the result (source badges)                       | `src/tools/websearch.ts`, `src/google-ai.ts`       | S      |
 | B5   | `aio-webquery` `dir` footgun: default omits the hostname segment; relative paths resolve to cwd, not the temp base (docs say otherwise)           | Default to `<temp>/<hostname>` as documented; resolve relative dirs against the temp base; error shows the resolved path | `src/tools/webquery`                     | S      |
 | B6   | GitLab vertical matcher is over-greedy: `parseGitLabUrl` matches ANY two-segment path, so `https://handwiki.org/wiki/Okapi_BM25` is mis-routed to the GitLab API (`handwiki.org/api/v4/projects/...`) and times out. Affects `aio-webfetch` generally (it was the trigger for B3) | Tighten matching (require a known GitLab host or a successful API probe) without breaking self-hosted GitLab detection | `src/verticals/gitlab.ts`, `src/verticals/registry.ts` | M      |
+| B7   | Alleged "summary-cache collision": a second Wikipedia fetch reportedly showed the first fetch's AI-summary topic | **Non-bug** — Wikipedia verticals skip AI summarization (`"> via "` prefix), summary cache is keyed per-URL, display uses the current body; only real bias is by-design search-context injection into fresh summaries | `src/tools/webfetch.ts`, `src/session-store.ts` | —      |
+| B8   | `aio-webpull` of an already-pulled site prints "Pulled 0 pages" silently (resume defaults on; prior queue fully completed → 0 new) | `formatPullHeadline` reports "0 new pages (N already completed — pass resume:false to re-pull)" | `src/tools/webpull.ts` | S      |
 
 ## Track B — Security hardening
 
@@ -89,8 +102,8 @@ Verification: `npm run lint` clean; full `test:all` = 765 tests, 0 failures; `di
 
 ## Sequencing
 
-- **v0.7.3 (patch — DONE):** B2, B3, B4, B5, F7 fixed; H3 audited clean; B1 investigated (no defect). B6 discovered and deferred.
-- **Next patch:** B6 (GitLab vertical over-match).
+- **v0.7.3 (patch — DONE):** B2, B3, B4, B5, B6, B8, F7 fixed; H3 audited clean; B1 & B7 investigated (no defect). Dependency/security bumps (sharp removed; MCP SDK/hono/brace-expansion; pi peer 0.82) + `dependabot.yml` added; lens blocking findings triaged.
+- **Next patch:** H1 (SSRF DNS-pinning + the flagged github-pipeline path sanitization), H2 (secret redaction).
 - **v0.8.0 (feature release):** F1 + F2 (centerpiece — grading feeds the loop), H1, H2, F4.
 - **v0.8.x:** F3, F5, F6, F8, F9.
 - **Backlog:** F10–F13.

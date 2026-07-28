@@ -26,6 +26,8 @@ import {
 	extractWikipedia,
 	matchesWikipedia,
 } from "../src/verticals/wikipedia.ts";
+import { matchesGitLab } from "../src/verticals/gitlab.ts";
+import { formatPullHeadline } from "../src/tools/webpull.ts";
 import {
 	detectPromptInjection,
 	applyInjectionAction,
@@ -1463,4 +1465,47 @@ test("extractWikipedia unwraps MediaWiki parse.text { '*': html } object (B2 —
 		result.content.includes("## Content"),
 		"should have a Content section",
 	);
+});
+
+// ─── GitLab vertical host gating (B6) ─────────────────────────────
+
+test("matchesGitLab matches gitlab.com repo roots and marked URLs", () => {
+	assert.ok(matchesGitLab("https://gitlab.com/user/project"));
+	assert.ok(matchesGitLab("https://gitlab.com/gitlab-org/gitlab-foss"));
+	assert.ok(matchesGitLab("https://gitlab.com/group/sub/project"));
+	assert.ok(
+		matchesGitLab("https://gitlab.com/user/project/-/blob/master/README.md"),
+	);
+	assert.ok(matchesGitLab("https://gitlab.com/user/project/-/tree/master/app"));
+});
+
+test("matchesGitLab rejects non-GitLab two-segment paths (B6 — was mis-routing handwiki.org)", () => {
+	assert.ok(!matchesGitLab("https://handwiki.org/wiki/Okapi_BM25"));
+	assert.ok(!matchesGitLab("https://example.com/blog"));
+	assert.ok(!matchesGitLab("https://example.com/"));
+});
+
+test("matchesGitLab honors WEBAIO_GITLAB_HOSTS for self-hosted repo roots (B6)", () => {
+	process.env.WEBAIO_GITLAB_HOSTS = "git.example.com, code.internal.io";
+	try {
+		assert.ok(matchesGitLab("https://git.example.com/user/project"));
+		assert.ok(matchesGitLab("https://code.internal.io/team/repo"));
+		assert.ok(!matchesGitLab("https://other.example.org/foo/bar"));
+	} finally {
+		delete process.env.WEBAIO_GITLAB_HOSTS;
+	}
+});
+
+// ─── webpull headline (B8) ────────────────────────────────────────
+
+test("formatPullHeadline: normal pull reports the page count", () => {
+	assert.equal(formatPullHeadline(5, 0, "/tmp/x"), "✅ Pulled 5 pages to /tmp/x");
+	assert.equal(formatPullHeadline(0, 0, "/tmp/x"), "✅ Pulled 0 pages to /tmp/x");
+});
+
+test("formatPullHeadline: zero new pages with prior completed explains resume (B8)", () => {
+	const msg = formatPullHeadline(0, 3, "/tmp/x");
+	assert.ok(msg.includes("0 new pages"));
+	assert.ok(msg.includes("3 already completed"));
+	assert.ok(msg.includes("resume:false"));
 });

@@ -23,6 +23,23 @@ import { buildIndex } from "../webquery-index.ts";
 
 const MAX_CRAWL_ITEMS = 500;
 
+/**
+ * Headline line for the pull summary (B8). Distinguishes a pull that fetched
+ * nothing new because a previous pull already completed everything (resume
+ * defaults on) from a genuine zero-result pull, so "Pulled 0 pages" no longer
+ * looks like a silent failure.
+ */
+export function formatPullHeadline(
+	ok: number,
+	priorCompleted: number,
+	outDir: string,
+): string {
+	if (ok === 0 && priorCompleted > 0) {
+		return `✅ 0 new pages (${priorCompleted} already completed from a previous pull — pass resume:false to re-pull) in ${outDir}`;
+	}
+	return `✅ Pulled ${ok} pages to ${outDir}`;
+}
+
 export function registerWebpullTool(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: "aio-webpull",
@@ -194,10 +211,12 @@ export function registerWebpullTool(pi: ExtensionAPI): void {
 				routes.length > 0 ? new SessionRouter(parseRoutes(routes)) : null;
 
 			let queue: RequestQueue | null = null;
+			let priorCompleted = 0;
 			if (resume && hasQueueFile(outDir)) {
 				queue = await RequestQueue.resume(outDir);
 				if (queue) {
 					const s = queue.stats();
+					priorCompleted = s.completed;
 					onUpdate?.({
 						content: [
 							{
@@ -406,7 +425,7 @@ export function registerWebpullTool(pi: ExtensionAPI): void {
 			}
 
 			const summary = [
-				`✅ Pulled ${ok} pages to ${outDir}`,
+				formatPullHeadline(ok, priorCompleted, outDir),
 				err > 0 ? `⚠️ ${err} pages failed` : "",
 				indexBuilt ? `🔍 BM25 index built — use aio-webquery to search this corpus` : "",
 				``,

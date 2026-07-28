@@ -1,0 +1,28 @@
+# Scheduled dependency version updates (proactive cadence).
+# Security updates already open PRs reactively via Dependabot alerts; this adds
+# regular version bumps so deps don't drift and vulnerabilities get picked up
+# on a predictable schedule. Keep the groups so lockfile-only churn is batched.
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    groups:
+      # Batch minor/patch production deps into one PR to reduce noise.
+      npm-minor-patch:
+        update-types: ["minor", "patch"]
+    labels:
+      - "dependencies"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "ci"

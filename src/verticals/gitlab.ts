@@ -16,6 +16,33 @@ interface GitLabRef {
 	type: "repo" | "blob" | "tree";
 }
 
+// ─── Host gating (B6) ─────────────────────────────────────────────
+// The repo-root pattern `/host/ns/project` is ambiguous — it matches ANY
+// two-segment path (e.g. `handwiki.org/wiki/Okapi_BM25`), which used to
+// mis-route unrelated URLs to the GitLab API and hang on a dead host. Blob/tree
+// URLs carry an unambiguous `/-/blob|tree/` marker, so they still match any host
+// (self-hosted GitLab included). Repo-root URLs only match a known GitLab host,
+// plus any hosts listed in WEBAIO_GITLAB_HOSTS (comma-separated) for self-hosted
+// instances whose repo roots have no marker.
+
+const KNOWN_GITLAB_HOSTS = new Set(["gitlab.com", "www.gitlab.com"]);
+
+function extraGitLabHosts(): Set<string> {
+	const raw = process.env.WEBAIO_GITLAB_HOSTS;
+	if (!raw) return new Set();
+	return new Set(
+		raw
+			.split(",")
+			.map((h) => h.trim().toLowerCase())
+			.filter(Boolean),
+	);
+}
+
+function isKnownGitLabHost(host: string): boolean {
+	const h = host.toLowerCase();
+	return KNOWN_GITLAB_HOSTS.has(h) || extraGitLabHosts().has(h);
+}
+
 function parseGitLabUrl(url: string): GitLabRef | null {
 	// 1. Try blob/tree URLs first (more specific)
 	const blobTreeMatch = url.match(
@@ -40,6 +67,9 @@ function parseGitLabUrl(url: string): GitLabRef | null {
 	const repoMatch = url.match(/^https?:\/\/([^/]+)\/(.+?)\/([^/]+)\/?$/i);
 	if (repoMatch) {
 		const [, host, namespace, project] = repoMatch;
+		// B6: reject non-GitLab hosts — the two-segment pattern alone is not
+		// enough to identify a GitLab repo root (see host-gating note above).
+		if (!isKnownGitLabHost(host)) return null;
 		if (project.startsWith("-")) return null;
 		if (/\.(png|jpg|jpeg|gif|svg|pdf|zip|tar|gz)$/i.test(project)) return null;
 
@@ -81,14 +111,23 @@ export async function extractGitLab(
 	const ref = parseGitLabUrl(url);
 	if (!ref) return null;
 
-	switch (ref.type) {
-		case "blob":
-			return fetchGitLabBlob(ref, fetchText);
-		case "tree":
-			return fetchGitLabTree(ref, fetchJson);
-		case "repo":
-			return fetchGitLabRepo(ref, fetchJson, fetchText);
+	// B6 (defense in depth): if the host turns out not to be a GitLab instance
+	// (e.g. a mis-routed URL whose API probe times out or returns non-JSON),
+	// fail soft and return null so the normal HTML pipeline handles the page
+	// instead of the error propagating out of the fetch.
+	try {
+		switch (ref.type) {
+			case "blob":
+				return await fetchGitLabBlob(ref, fetchText);
+			case "tree":
+				return await fetchGitLabTree(ref, fetchJson);
+			case "repo":
+				return await fetchGitLabRepo(ref, fetchJson, fetchText);
+		}
+	} catch {
+		return null;
 	}
+	return null;
 }
 
 async function fetchGitLabBlob(
