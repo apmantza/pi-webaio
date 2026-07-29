@@ -222,12 +222,12 @@ pi-webaio/
 
 ### New Modules (v0.5.0)
 
-| Module                          | Role                                                                                            |
+| Module | Role |
 | ------------------------------- | ----------------------------------------------------------------------------------------------- |
-| `src/chunker.ts`                | RAG chunking. `chunkMarkdown(md, { maxTokens, overlapTokens })` returns `Chunk[]`. `formatChunksText()` renders numbered chunks. CJK-aware token estimation. 31 unit tests. |
-| `src/tools/render-result.ts`   | TUI components. `createCallComponent()`, `createProgressComponent()` (real-time spinner + elapsed time + per-item status), `createResultComponent()` (expanded preview with responseId, format, browser/os, package path, chunk count, error details). `applyFormat()` handles markdown/html/text/json/raw output. `markdownToText()` for TUI display. 411 LOC, 39 unit tests. |
-| `src/tools/fetch-error.ts`     | Phase-aware FetchError system. 25 failure codes × 10 fetch phases × 7 categories. `createFetchError()` produces frozen rich error objects. `classifyError()` maps Node errors. `buildUserFacingFetchErrorSummary()` produces agent-friendly messages. `suggestRetryTimeoutMs()` extrapolates from partial download. `toFetchErrorInfo()` / `fetchErrorInfoFromUnknown()` bridge to legacy FetchErrorInfo. 564 LOC, 50 unit tests. |
-| `src/tools/utils.ts`           | Shared helpers: `frontmatter()`, `runInBatches()`, `safeResolveInBaseTemp()` (path-traversal guard). |
+| `src/chunker.ts` | RAG chunking. `chunkMarkdown(md, { maxTokens, overlapTokens })` returns `Chunk[]`. `formatChunksText()` renders numbered chunks. CJK-aware token estimation. 31 unit tests. |
+| `src/tools/render-result.ts` | TUI components. `createCallComponent()`, `createProgressComponent()` (real-time spinner + elapsed time + per-item status), `createResultComponent()` (expanded preview with responseId, format, browser/os, package path, chunk count, error details). `applyFormat()` handles markdown/html/text/json/raw output. `markdownToText()` for TUI display. 411 LOC, 39 unit tests. |
+| `src/tools/fetch-error.ts` | Phase-aware FetchError system. 25 failure codes × 10 fetch phases × 7 categories. `createFetchError()` produces frozen rich error objects. `classifyError()` maps Node errors. `buildUserFacingFetchErrorSummary()` produces agent-friendly messages. `suggestRetryTimeoutMs()` extrapolates from partial download. `toFetchErrorInfo()` / `fetchErrorInfoFromUnknown()` bridge to legacy FetchErrorInfo. 564 LOC, 50 unit tests. |
+| `src/tools/utils.ts` | Shared helpers: `frontmatter()`, `runInBatches()`, `safeResolveInBaseTemp()` (path-traversal guard). |
 | `scripts/check-lockfile-sync.mjs` | Fails CI if `package-lock.json`'s root entry drifts from `package.json`'s declared dependency specs. Catches the class of bug where someone edits `package.json` without regenerating the lock, which would make `npm ci` wipe `node_modules` and hard-fail for downstream users. |
 
 ### New Modules (v0.4.0)
@@ -241,10 +241,10 @@ pi-webaio/
 
 ### New Modules (v0.4.1 — paywall bypass, gh CLI fallback, check log handler)
 
-| Module                  | Role                                                                                                                                              |
+| Module | Role |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/paywall.ts`        | Paywall bypass engine. `detectPaywall()` (vendor + text marker detection, confidence-scored), `findStrategy()` (curated → group → generic), `bypassUrl()` (orchestrates strategy chain), `stripPaywallText()` (removes residual tails). 1014 LOC. |
-| `src/paywall-sites.ts`  | Top-50+ paywall site strategy catalog (`PAYWALL_SITES`, `PAYWALL_GROUPS`, `GENERIC_STRATEGY`). Covers NYT, WSJ, FT, WaPo, The Economist, Le Monde, FAZ, SMH, etc. + group entries for Hearst, Gannett, Advance Local, DPG Media, Condé Nast. 235 LOC. |
+| `src/paywall.ts` | Paywall bypass engine. `detectPaywall()` (vendor + text marker detection, confidence-scored), `findStrategy()` (curated → group → generic), `bypassUrl()` (orchestrates strategy chain), `stripPaywallText()` (removes residual tails). 1014 LOC. |
+| `src/paywall-sites.ts` | Top-50+ paywall site strategy catalog (`PAYWALL_SITES`, `PAYWALL_GROUPS`, `GENERIC_STRATEGY`). Covers NYT, WSJ, FT, WaPo, The Economist, Le Monde, FAZ, SMH, etc. + group entries for Hearst, Gannett, Advance Local, DPG Media, Condé Nast. 235 LOC. |
 | `src/github-api.ts` | Added `ghRunLogs()`, `ghApiCall()`, `ghFetchWithFallback()` for gh CLI invocation. `ghRunLogs()` is critical for Actions logs (handles 302→S3 zip redirect + auth internally). `ghApiCall()` is a generic `gh api <path>` wrapper. `ghFetchWithFallback()` wraps `ghFetch()` with a gh CLI fallback for 4xx/5xx errors. Set `PI_WEBAIO_GH_FALLBACK=0` to disable child-process spawning. |
 | `src/github-pipeline.ts` (v0.4.1 + v0.5.0) | Added `parseGitHubCheckLogUrl()` and `pullGitHubCheckLog()` for `/commit/{sha}/checks/{check_id}/logs/{step?}` URLs. Added `parseGitHubActionsLogsApiUrl()` and `pullGitHubActionsLogs()` (v0.5.0) for `api.github.com/repos/{owner}/{repo}/actions/runs/{runId}/logs` URLs — routes through `ghRunLogs()` so auth + 302→S3 redirects are handled. Fixed `fetchGitHubRepo()` to return `ok:false` with clear "Repository not found or inaccessible" for non-existent repos (was returning empty directory listing). |
 
@@ -253,7 +253,7 @@ pi-webaio/
 When `bypass: true` is passed to `aio-webfetch` or `aio-webpull`, and `detectPaywall()` returns `paywalled: true` (confidence ≥ 0.45), `bypassUrl()` runs each step in order and returns the first response that no longer contains paywall markers:
 
 | Step | Mechanism | Cost | Bypasses ~ |
-|------|-----------|------|-----------|
+| ------ | ----------- | ------ | ----------- |
 | `archive` | Wayback Machine (`web.archive.org/web/2/{url}`) then `archive.ph/newest/{url}` | ~1-2s, free | 80% (most articles have at least one snapshot) |
 | `ua:googlebot` | Fetch with `Googlebot/2.1` UA + no `Sec-Ch-Ua` | ~500ms, free | 40% (Google News partners + soft paywalls) |
 | `ua:bingbot` | Fetch with `Bingbot/2.0` UA | ~500ms, free | ~20% (sites that whitelist both) |

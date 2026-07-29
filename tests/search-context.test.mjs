@@ -78,6 +78,71 @@ test("gate: threshold is exported and positive", () => {
 	assert.ok(SEARCH_CONTEXT_RELATEDNESS_THRESHOLD > 0);
 });
 
+// ─── (b2) real-world-shaped inputs (hyphenated/underscore URL slugs) ─
+//
+// The original synthetic tests used clean titles/headings, so they never
+// exercised the case that breaks in the wild: a page whose only usable
+// signal is a hyphenated/underscored URL slug (title is just the site
+// name, heading absent). The BM25 tokenizer keeps `-`/`_`, so without
+// normalization the slug stays one token and the gate always skips.
+
+test("gate: injects on a hyphenated URL slug with a site-name title", () => {
+	// weaviate.io blog: title is just the domain, signal lives in the slug.
+	assert.equal(
+		shouldInjectSearchContext("retrieval evaluation metrics precision recall ndcg", {
+			url: "https://weaviate.io/blog/retrieval-evaluation-metrics",
+			title: "weaviate.io",
+		}),
+		true,
+	);
+});
+
+test("gate: injects on an underscore URL slug", () => {
+	assert.equal(
+		shouldInjectSearchContext("retrieval evaluation metrics", {
+			url: "https://example.com/docs/retrieval_evaluation_metrics",
+			title: "Docs",
+		}),
+		true,
+	);
+});
+
+test("gate: skips an unrelated page despite a retrieval-ish slug word", () => {
+	// Unrelated query vs an information-retrieval article: no real overlap.
+	assert.equal(
+		shouldInjectSearchContext("typescript 7 release notes", {
+			url: "https://handwiki.org/wiki/Information_retrieval",
+			title: "handwiki.org",
+		}),
+		false,
+	);
+});
+
+test("gate: skips a single generic-term overlap (heading only)", () => {
+	// Adding a heading of one generic query term still leaves only a single
+	// distinct overlap → below the conservative threshold → skip.
+	assert.equal(
+		shouldInjectSearchContext("typescript 7 release notes", {
+			url: "https://handwiki.org/wiki/Information_retrieval",
+			title: "handwiki.org",
+			heading: "release",
+		}),
+		false,
+	);
+});
+
+test("gate: skips an unrelated query against the same slug", () => {
+	// Same weaviate slug as the INJECT case above, but a cooking query —
+	// confirms the gate keys off query↔page overlap, not the slug alone.
+	assert.equal(
+		shouldInjectSearchContext("best pasta recipes", {
+			url: "https://weaviate.io/blog/retrieval-evaluation-metrics",
+			title: "weaviate.io",
+		}),
+		false,
+	);
+});
+
 // ─── (c) annotation present when injected, absent when not ──────────
 
 test("annotation: includes the query and is non-empty", () => {

@@ -33,7 +33,11 @@ function words(word, count) {
 test("applyTokenBudget: no-op when content fits", () => {
 	const content = "## Hello\n\nShort content.";
 	const result = applyTokenBudget(content, 5000);
-	assert.equal(result, content, "content should be unchanged when under budget");
+	assert.equal(
+		result,
+		content,
+		"content should be unchanged when under budget",
+	);
 });
 
 // ─── Budget is respected ──────────────────────────────────────────────
@@ -85,8 +89,14 @@ test("applyTokenBudget: footer present when content is trimmed", () => {
 	const result = applyTokenBudget(doc, budget);
 
 	// Footer should contain budget reference and aio-webcontent hint
-	assert.ok(result.includes("token budget"), `footer should mention token budget; got: ${result.slice(-200)}`);
-	assert.ok(result.includes("aio-webcontent"), `footer should mention aio-webcontent; got: ${result.slice(-200)}`);
+	assert.ok(
+		result.includes("token budget"),
+		`footer should mention token budget; got: ${result.slice(-200)}`,
+	);
+	assert.ok(
+		result.includes("aio-webcontent"),
+		`footer should mention aio-webcontent; got: ${result.slice(-200)}`,
+	);
 });
 
 test("applyTokenBudget: footer includes url when provided", () => {
@@ -232,8 +242,14 @@ test("applyTokenBudget: content unchanged when content fits budget", () => {
 
 test("applyTokenBudget: keeps most relevant section when query provided", () => {
 	const doc = makeDoc([
-		{ heading: "Pricing", body: "monthly billing subscription price cost plans tiers free pro enterprise" },
-		{ heading: "Installation", body: words("install setup wizard download", 30) },
+		{
+			heading: "Pricing",
+			body: "monthly billing subscription price cost plans tiers free pro enterprise",
+		},
+		{
+			heading: "Installation",
+			body: words("install setup wizard download", 30),
+		},
 		{ heading: "Support", body: words("help contact email phone", 30) },
 	]);
 
@@ -243,10 +259,13 @@ test("applyTokenBudget: keeps most relevant section when query provided", () => 
 	// The pricing section should be preferred over others
 	assert.ok(
 		result.toLowerCase().includes("pricing") ||
-		result.toLowerCase().includes("billing") ||
-		result.toLowerCase().includes("price"),
+			result.toLowerCase().includes("billing") ||
+			result.toLowerCase().includes("price"),
 		`expected pricing content to be kept; result: ${result}`,
 	);
 	const resultTokens = estimateTokens(result);
-	assert.ok(resultTokens <= budget, `budget violated: ${resultTokens} > ${budget}`);
+	assert.ok(
+		resultTokens <= budget,
+		`budget violated: ${resultTokens} > ${budget}`,
+	);
 });

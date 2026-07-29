@@ -803,7 +803,9 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 
 							// ── Diff mode early-exit on 304 (issue #45 + #46 synergy) ──
 							if (notModifiedResult && diffMode) {
-								const cachedDate = new Date(notModifiedResult.cachedAt).toISOString();
+								const cachedDate = new Date(
+									notModifiedResult.cachedAt,
+								).toISOString();
 								const diffText = `Unchanged since ${cachedDate}, 0 changes (304 Not Modified — server confirmed content identical).`;
 								updateItem(idx, {
 									status: "done",
@@ -1301,7 +1303,8 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 					const answerModeActive =
 						!!answerModeQuery && !answerModePrune && itemFormat === "markdown";
 					if (answerModeActive) {
-						const topK = (params.topChunks as number | undefined) ?? DEFAULT_TOP_CHUNKS;
+						const topK =
+							(params.topChunks as number | undefined) ?? DEFAULT_TOP_CHUNKS;
 						const answerBody = applyQueryAnswerMode(
 							(r as any).body ?? preview,
 							answerModeQuery!,
@@ -1318,13 +1321,20 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 							// Apply hard token budget after answer mode (composes cleanly).
 							const budgetTokens = params.budgetTokens as number | undefined;
 							displayContent = budgetTokens
-								? applyTokenBudget(answerBody, budgetTokens, answerModeQuery, r.url as string | undefined)
+								? applyTokenBudget(
+										answerBody,
+										budgetTokens,
+										answerModeQuery,
+										r.url as string | undefined,
+									)
 								: answerBody;
 							// Skip the normal summarize/truncate path.
-							const formatLabel =
-								`✓ Fetched and saved to ${r.outPath}${summaryNotice}`;
-							const chunks =
-								maybeChunkMarkdown((r as any).body, params, chunkingErrors);
+							const formatLabel = `✓ Fetched and saved to ${r.outPath}${summaryNotice}`;
+							const chunks = maybeChunkMarkdown(
+								(r as any).body,
+								params,
+								chunkingErrors,
+							);
 							const chunkFmt = formatChunksText(
 								chunks,
 								params.overlapTokens ?? DEFAULT_OVERLAP_TOKENS,
@@ -1339,7 +1349,11 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 								"\n---\n",
 								displayContent,
 								chunkFmt.body
-									? ["\n\n---\n", `## Chunks (${chunks!.length})\n`, chunkFmt.body].join("\n")
+									? [
+											"\n\n---\n",
+											`## Chunks (${chunks!.length})\n`,
+											chunkFmt.body,
+										].join("\n")
 									: "",
 								chunkingErrors.length > 0
 									? `\n\n[WARN] Chunking failed: ${chunkingErrors.join("; ")}`

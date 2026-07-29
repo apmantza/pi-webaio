@@ -416,6 +416,36 @@ export function fallbackExtract(html: string): {
 	};
 }
 
+// ─── Title resolution ──────────────────────────────────────────────
+
+/**
+ * Resolve a human-readable title from raw HTML, trying og:title, then
+ * <title>, then the first <h1>, before falling back to the hostname.
+ * Hostname is the true last resort — used only when every real signal
+ * is empty.
+ */
+export function resolveHtmlTitle(html: string, finalUrl: string): string {
+	try {
+		const { document } = parseHTML(html);
+		const og = document
+			.querySelector('meta[property="og:title"]')
+			?.getAttribute("content")
+			?.trim();
+		if (og) return og;
+		const title = document.querySelector("title")?.textContent?.trim();
+		if (title) return title;
+		const h1 = document.querySelector("h1")?.textContent?.trim();
+		if (h1) return h1;
+	} catch {
+		// fall through to hostname fallback
+	}
+	try {
+		return new URL(finalUrl).hostname;
+	} catch {
+		return "";
+	}
+}
+
 // ─── Inject detection & trust boundaries ─────────────────────────
 
 export function finalizePullResult(
@@ -589,7 +619,9 @@ export async function runHtmlPipeline(
 			{
 				ok: true,
 				url: finalUrl,
-				title: new URL(finalUrl).hostname,
+				// Derive a real title from the HTML (og:title → <title> →
+				// <h1>) instead of hardcoding the hostname for Next.js SPAs.
+				title: resolveHtmlTitle(hookedText, finalUrl),
 				content: rscContent,
 			},
 			redirectNotice,

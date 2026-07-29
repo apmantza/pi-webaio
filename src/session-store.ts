@@ -329,8 +329,15 @@ export function shouldInjectSearchContext(
 	threshold: number = SEARCH_CONTEXT_RELATEDNESS_THRESHOLD,
 ): boolean {
 	if (!query || !query.trim()) return false;
+	// Collapse hyphens/underscores to spaces so URL slugs tokenize into
+	// words. The BM25 tokenizer (src/bm25.ts) keeps `-`/`_` and splits on
+	// whitespace only, so a slug like `retrieval-evaluation-metrics` would
+	// otherwise stay one token and never match query words. Since a page's
+	// title is often just the site name and headings are often absent, the
+	// URL is frequently this gate's only usable signal — don't discard it.
 	const doc = [page.url ?? "", page.title ?? "", page.heading ?? ""]
 		.join(" ")
+		.replace(/[-_]+/g, " ")
 		.trim();
 	if (!doc) return false;
 	return scoreRelevance(doc, query) >= threshold;
