@@ -77,6 +77,38 @@ export function splitSections(markdown: string): Array<{
 }
 
 /**
+ * Build the "Omitted sections:" mini-TOC footer fragment shared by BOTH
+ * truncation paths — the `prune` param (pruneMarkdown) and the `budgetTokens`
+ * contract (applyTokenBudget). Keeping this in one place means the two
+ * footers can no longer drift apart. (F7)
+ *
+ * Lists the dropped headings in the order supplied (callers pass them in
+ * document order), indented by heading level, and capped so very large
+ * documents don't bloat the footer.
+ *
+ * @param omitted Dropped sections (heading + level). Headingless entries are
+ *                skipped — there is nothing useful to list for them.
+ * @returns The TOC fragment (leading blank lines included), or "" when no
+ *          omitted section has a heading.
+ */
+export function buildOmittedSectionsToc(
+	omitted: Array<{ heading: string; level: number }>,
+): string {
+	const withHeadings = omitted.filter((s) => s.heading);
+	if (withHeadings.length === 0) return "";
+	const MAX_TOC = 20;
+	const tocLines = withHeadings.slice(0, MAX_TOC).map((s) => {
+		const indent = "  ".repeat(Math.max(0, s.level - 1));
+		return `${indent}- ${s.heading}`;
+	});
+	let toc = `\n\n*Omitted sections:*\n${tocLines.join("\n")}`;
+	if (withHeadings.length > MAX_TOC) {
+		toc += `\n- … ${withHeadings.length - MAX_TOC} more`;
+	}
+	return toc;
+}
+
+/**
  * Score a section for importance (heuristic, non-query path).
  * Higher score = more likely to be kept.
  *
@@ -341,23 +373,13 @@ export function pruneMarkdown(
 		// Build a mini table-of-contents of the omitted sections so the agent
 		// knows what was left out (not just how many). Headings are listed in
 		// document order, indented by level, and capped to avoid bloating the
-		// footer on very large documents. (F7)
+		// footer on very large documents. Shared with applyTokenBudget so the
+		// two truncation footers stay identical. (F7)
 		const keptIndices = new Set(kept.map((s) => s.index));
 		const omitted = scored
-			.filter((s) => !keptIndices.has(s.index) && s.heading)
+			.filter((s) => !keptIndices.has(s.index))
 			.sort((a, b) => a.index - b.index);
-		let omittedToc = "";
-		if (omitted.length > 0) {
-			const MAX_TOC = 20;
-			const tocLines = omitted.slice(0, MAX_TOC).map((s) => {
-				const indent = "  ".repeat(Math.max(0, s.level - 1));
-				return `${indent}- ${s.heading}`;
-			});
-			omittedToc = `\n\n*Omitted sections:*\n${tocLines.join("\n")}`;
-			if (omitted.length > MAX_TOC) {
-				omittedToc += `\n- … ${omitted.length - MAX_TOC} more`;
-			}
-		}
+		const omittedToc = buildOmittedSectionsToc(omitted);
 		result += `\n\n---\n*Truncated to ~${estimateTokens(result)} tokens. ${sections.length - kept.length} sections omitted.*${omittedToc}`;
 	}
 
@@ -436,9 +458,7 @@ export function applyTokenBudget(
 	if (estimateTokens(content) <= effectiveBudget) return content;
 
 	// Extract heading skeleton — always preserved in the output.
-	const headingLines = content
-		.split("\n")
-		.filter((l) => /^#{1,6}\s/.test(l));
+	const headingLines = content.split("\n").filter((l) => /^#{1,6}\s/.test(l));
 
 	// Use pruneMarkdown to select sections within budget.
 	// Reserve tokens for the footer so the guarantee is hard after we append it.
@@ -454,23 +474,41 @@ export function applyTokenBudget(
 		// preserves the top of the document.
 	});
 
-	// Count sections in the original vs kept.
+	// pruneMarkdown appends its own "Truncated to ~N tokens … Omitted sections"
+	// footer. Strip it so the budget path emits a SINGLE unified footer (the
+	// budget footer below, which carries the same shared TOC) instead of two
+	// redundant footers back-to-back.
+	const prunedContent = pruned.content.replace(
+		/\n\n---\n\*Truncated to ~[\s\S]*$/,
+		"",
+	);
+
+	// Count sections in the original vs kept, and identify WHICH headings were
+	// dropped so the footer can list them (same mini-TOC as the prune path).
 	const originalSections = splitSections(content);
-	const prunedSections = splitSections(pruned.content);
+	const prunedSections = splitSections(prunedContent);
 	const omitted = Math.max(0, originalSections.length - prunedSections.length);
+	const keptHeadings = new Set(prunedSections.map((s) => s.heading));
+	const omittedSections = originalSections.filter(
+		(s) => !keptHeadings.has(s.heading),
+	);
+	const omittedToc = buildOmittedSectionsToc(omittedSections);
 
 	const retrieveHint = url
 		? `retrieve via aio-webcontent with URL: ${url}`
 		: "retrieve via aio-webcontent by URL";
 
+	// The budget footer keeps its "full content cached — retrieve via
+	// aio-webcontent" hint AND appends the omitted-sections TOC, so the two
+	// truncation paths emit the same heading list. (F7)
 	const footer =
 		omitted > 0
-			? `\n\n---\n_truncated to fit ${effectiveBudget}-token budget: ${omitted} section${omitted === 1 ? "" : "s"} omitted; full content cached — ${retrieveHint}._`
+			? `\n\n---\n_truncated to fit ${effectiveBudget}-token budget: ${omitted} section${omitted === 1 ? "" : "s"} omitted; full content cached — ${retrieveHint}._${omittedToc}`
 			: `\n\n---\n_content fits ${effectiveBudget}-token budget; full content cached — ${retrieveHint}._`;
 
 	// Preserve heading skeleton even when most content was dropped.
 	// Prepend skeleton if none of the headings survived pruning.
-	let result = pruned.content;
+	let result = prunedContent;
 	if (headingLines.length > 0) {
 		const resultHasHeadings = /^#{1,6}\s/m.test(result);
 		if (!resultHasHeadings) {
@@ -486,7 +524,14 @@ export function applyTokenBudget(
 		// Trim content portion only, keep footer.
 		const footerIdx = result.lastIndexOf("\n\n---\n");
 		const body = footerIdx > 0 ? result.slice(0, footerIdx) : result;
-		const ft = footerIdx > 0 ? result.slice(footerIdx) : "";
+		let ft = footerIdx > 0 ? result.slice(footerIdx) : "";
+		// If the footer + TOC alone exceeds the budget (tiny budget, many
+		// omitted headings), drop the TOC first — the "N sections omitted"
+		// count line is more important than the heading list. This keeps the
+		// hard budget contract intact now that the footer carries the TOC.
+		if (estimateTokens(ft) > effectiveBudget) {
+			ft = ft.replace(/\n\n\*Omitted sections:\*[\s\S]*$/, "");
+		}
 		const footerTokens = estimateTokens(ft);
 		const bodyBudget = Math.max(0, effectiveBudget - footerTokens);
 		const trimmedBody = truncateToBudget(body, bodyBudget);

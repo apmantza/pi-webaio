@@ -504,6 +504,80 @@ test("isRetryableCode: matches the default matrix", () => {
 	assert.equal(isRetryableCode("private_ip"), false);
 });
 
+// ─── blocked_ssrf (SSRF guard block) ─────────────────────────────
+
+test("createFetchError: blocked_ssrf has validation phase + category, not retryable", () => {
+	const err = createFetchError(
+		"blocked_ssrf",
+		"[SECURITY] Blocked request to private/internal URL: https://169.254.169.254/",
+		{ url: "https://169.254.169.254/", phase: "validation" },
+		{ retryable: false },
+	);
+	assert.equal(err.code, "blocked_ssrf");
+	assert.equal(err.phase, "validation");
+	assert.equal(err.category, "validation");
+	assert.equal(err.retryable, false);
+});
+
+test("createFetchError: blocked_ssrf category mirrors blocked_secret", () => {
+	assert.equal(makeErr({ code: "blocked_ssrf" }).category, "validation");
+	assert.equal(
+		makeErr({ code: "blocked_ssrf" }).category,
+		makeErr({ code: "blocked_secret" }).category,
+	);
+});
+
+test("isRetryableCode: blocked_ssrf is not retryable", () => {
+	assert.equal(isRetryableCode("blocked_ssrf"), false);
+});
+
+test("classifyError: SSRF block message → blocked_ssrf (validation)", () => {
+	const err = classifyError(
+		new Error(
+			"[SECURITY] Blocked request to private/internal URL: https://169.254.169.254/latest/meta-data/",
+		),
+		{ url: "https://169.254.169.254/latest/meta-data/" },
+	);
+	assert.equal(err.code, "blocked_ssrf");
+	assert.equal(err.phase, "validation");
+	assert.equal(err.category, "validation");
+	assert.equal(err.retryable, false);
+});
+
+test("classifyError: fetchWithPlaywright 'Blocked unsafe URL' → blocked_ssrf", () => {
+	const err = classifyError(
+		new Error("Blocked unsafe URL: https://10.0.0.1/"),
+		{
+			url: "https://10.0.0.1/",
+		},
+	);
+	assert.equal(err.code, "blocked_ssrf");
+	assert.equal(err.phase, "validation");
+	assert.equal(err.retryable, false);
+});
+
+test("buildUserFacingFetchErrorSummary: blocked_ssrf renders a clear message", () => {
+	const err = makeErr({
+		code: "blocked_ssrf",
+		phase: "validation",
+		message:
+			"[SECURITY] Blocked request to private/internal URL: https://169.254.169.254/",
+	});
+	const summary = buildUserFacingFetchErrorSummary(err);
+	assert.match(summary, /private\/internal/i);
+	assert.match(summary, /blocked/i);
+	assert.ok(summary.length <= 200);
+});
+
+test("toFetchErrorInfo: blocked_ssrf maps to legacy invalid_url", () => {
+	const info = toFetchErrorInfo(
+		makeErr({ code: "blocked_ssrf", phase: "validation" }),
+	);
+	assert.equal(info.code, "invalid_url");
+	assert.equal(info.phase, "validation");
+	assert.equal(info.retryable, false);
+});
+
 // ─── Integration: full pipeline ─────────────────────────────────
 
 test("integration: thrown Node ENOTFOUND → user-friendly summary + retryable", () => {

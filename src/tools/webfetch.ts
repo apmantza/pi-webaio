@@ -24,12 +24,14 @@ import { pruneMarkdown, applyTokenBudget } from "../prune-markdown.ts";
 import { createBM25Scorer } from "../bm25.ts";
 import {
 	BASE_TEMP,
+	focusedSummaryAnnotation,
 	getSearchContext,
 	getStoredContent,
-	normalizeCacheKey,
 	peekStoredContent,
+	shouldInjectSearchContext,
 	storeContent,
 	summaryCache,
+	summaryCacheKey,
 } from "../session-store.ts";
 import { storeResult } from "../storage.ts";
 import {
@@ -1234,10 +1236,27 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 					const skipSummary = isGitHubUrl || preview.includes("> via ");
 
 					const searchCtx = getSearchContext()?.query;
+					// Only inject the prior search query into the summary prompt
+					// when it is actually related to this page (relatedness gate).
+					// Otherwise an unrelated query would bias the summary.
+					const pageHeading = preview
+						.split("\n")
+						.find((l) => /^#{1,6}\s/.test(l))
+						?.replace(/^#{1,6}\s*/, "");
+					const injectSearchCtx =
+						!!searchCtx &&
+						shouldInjectSearchContext(searchCtx, {
+							url: r.url as string | undefined,
+							title: r.title,
+							heading: pageHeading,
+						});
 
 					const isShort = preview.length <= MAX_PREVIEW_CHARS;
 					if (!skipSummary && !isShort && cdpAvailableGA()) {
-						const cacheKey = normalizeCacheKey(r.url as string);
+						const cacheKey = summaryCacheKey(
+							r.url as string,
+							injectSearchCtx ? searchCtx : undefined,
+						);
 						const cached = summaryCache.get(cacheKey);
 						if (cached) {
 							summary = cached;
@@ -1247,9 +1266,15 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 								await ensureChrome();
 								summary = await summarizeUrl(r.url as string, {
 									timeoutMs: 15000,
-									context: searchCtx,
+									context: injectSearchCtx ? searchCtx : undefined,
 								});
 								if (summary) {
+									// Annotate focused summaries so downstream agents
+									// know the summary is not neutral. Cached with the
+									// annotation so re-serves are consistent.
+									if (injectSearchCtx) {
+										summary += focusedSummaryAnnotation(searchCtx as string);
+									}
 									summarized = true;
 									summaryCache.set(cacheKey, summary);
 								}

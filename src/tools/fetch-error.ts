@@ -16,7 +16,7 @@
 import type { FetchErrorInfo, FetchOpts } from "../types.ts";
 import { redactSecrets } from "../redact.ts";
 
-// ─── Codes (25) ───────────────────────────────────────────────────
+// ─── Codes (26) ───────────────────────────────────────────────────
 
 /** A specific failure category. Independent of WHERE it happened. */
 export type FetchErrorCode =
@@ -24,6 +24,7 @@ export type FetchErrorCode =
 	| "invalid_url"
 	| "private_ip"
 	| "blocked_secret"
+	| "blocked_ssrf"
 	| "redirect_loop"
 	// connect (couldn't establish a connection)
 	| "dns_error"
@@ -127,6 +128,7 @@ const CATEGORY_BY_CODE: Record<FetchErrorCode, FetchErrorCategory> = {
 	invalid_url: "validation",
 	private_ip: "validation",
 	blocked_secret: "validation",
+	blocked_ssrf: "validation",
 	redirect_loop: "client",
 	dns_error: "network",
 	connect_error: "network",
@@ -310,6 +312,22 @@ export function classifyError(err: unknown, ctx: ClassifyContext): FetchError {
 		});
 	}
 
+	// ── SSRF guard block (fetchWithRetry / fetchWithPlaywright throw a
+	// plain Error when isDangerousUrl / validateUrlForSsrf denies a URL).
+	// Recognise the message so it surfaces as a precise blocked_ssrf code
+	// instead of degrading to the generic unknown/downloading fallback.
+	if (
+		lower.includes("blocked request to private/internal url") ||
+		lower.includes("blocked unsafe url")
+	) {
+		return createFetchError(
+			"blocked_ssrf",
+			msg,
+			{ ...ctx, phase: "validation" },
+			{ retryable: false },
+		);
+	}
+
 	// ── Fallback
 	return createFetchError("unknown", msg, { ...ctx, phase: "downloading" });
 }
@@ -362,6 +380,8 @@ function prefixFor(err: FetchError): string {
 			return `Requests to private/internal addresses are blocked for safety.`;
 		case "blocked_secret":
 			return `We blocked the request — it appeared to contain a secret or token.`;
+		case "blocked_ssrf":
+			return `We blocked the request — it targeted a private/internal address.`;
 		case "redirect_loop":
 			return `The page kept redirecting in a loop and we gave up.`;
 		case "dns_error":
@@ -537,7 +557,7 @@ export function fetchErrorInfoFromUnknown(
 	return toFetchErrorInfo(fe);
 }
 
-// Legacy code mapping — collapses the 25-code union back to the 10
+// Legacy code mapping — collapses the 26-code union back to the 10
 // legacy codes. Best-effort; any new code maps to its category's
 // legacy code.
 function legacyCodeFromFetchErrorCode(
@@ -547,6 +567,7 @@ function legacyCodeFromFetchErrorCode(
 		case "invalid_url":
 		case "private_ip":
 		case "blocked_secret":
+		case "blocked_ssrf":
 		case "redirect_loop":
 			return "invalid_url";
 		case "dns_error":

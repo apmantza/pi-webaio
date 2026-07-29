@@ -12,7 +12,7 @@ When you search, pi-webaio queries 5 engines in parallel (DuckDuckGo, Brave, Yah
 
 Long pages are automatically **AI-summarized** via Google AI Mode (headless Chrome) — you get a concise overview instantly, while the full content is always saved to disk for later inspection. For sites with API-first extractors (GitHub, YouTube, npm, PyPI, crates.io, RubyGems, Packagist, pub.dev, Go, NuGet, Reddit, Hacker News, arXiv, Stack Exchange, Wikipedia, Open Library, DEV.to, SonarCloud, docs sites), pi-webaio bypasses HTML scraping entirely and pulls structured data directly.
 
-For RAG pipelines, fetches can be returned as **paragraph-bounded chunks with overlap** (CJK-aware token estimation). All 6 tools ship with polished **TUI rendering** (real-time progress, elapsed time, phase/category badges, retry hints) and a **phase-aware error system** (25 failure codes × 10 fetch phases × 7 categories) that includes smart retry-timeout suggestions based on partial download progress.
+For RAG pipelines, fetches can be returned as **paragraph-bounded chunks with overlap** (CJK-aware token estimation). All 6 tools ship with polished **TUI rendering** (real-time progress, elapsed time, phase/category badges, retry hints) and a **phase-aware error system** (26 failure codes × 10 fetch phases × 7 categories) that includes smart retry-timeout suggestions based on partial download progress.
 
 It's built for agents that need to:
 
@@ -179,7 +179,7 @@ The chunks are also formatted as a readable numbered text section in the tool ou
 
 ## Error handling
 
-`aio-webfetch` uses a **phase-aware FetchError system** with 25 failure codes × 10 fetch phases × 7 categories. Each error carries:
+`aio-webfetch` uses a **phase-aware FetchError system** with 26 failure codes × 10 fetch phases × 7 categories. Each error carries:
 
 - `code` (e.g. `http_error`, `tls_error`, `timeout`, `blocked`, `paywall`, `security_blocked`)
 - `phase` (e.g. `connecting`, `loading`, `headers`, `downloading`, `processing`)

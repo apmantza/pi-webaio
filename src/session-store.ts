@@ -15,6 +15,7 @@ import { readFileSync } from "node:fs";
 
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { scoreRelevance } from "./bm25.ts";
 import type { StoredContent, SearchResult } from "./types.ts";
 
 // ─── Constants ─────────────────────────────────────────────────────
@@ -295,6 +296,71 @@ export function setSearchContext(query: string): void {
 		content: JSON.stringify({ query }),
 		timestamp: Date.now(),
 	});
+}
+
+// ─── Search-context relatedness gate ───────────────────────────────
+//
+// The prior search query is only injected into a page's AI summary when
+// it is actually related to that page. Relatedness is scored with the
+// same BM25 machinery used for query-aware pruning (src/bm25.ts), run
+// over a tiny "document" built from the page's URL + title + first
+// heading.
+//
+// With a single-document corpus one overlapping query term scores ~0.29
+// and a strong match (repeated term, or several overlapping terms) scores
+// ~0.4-1.0+. A threshold of 0.35 sits between those: a lone weak/ambiguous
+// term overlap is skipped, while a genuine topical match injects. This is
+// deliberately conservative: a false skip only loses a "focused" summary,
+// whereas a false injection biases the summary toward an unrelated topic
+// (the bug this gate fixes).
+export const SEARCH_CONTEXT_RELATEDNESS_THRESHOLD = 0.35;
+
+/**
+ * Decide whether the prior search `query` is related enough to `page`
+ * that it should be injected into the page's AI summary prompt.
+ *
+ * Pure and side-effect free (unit-testable). Returns false for an empty
+ * query, a page with no signal to match against, or a BM25 overlap score
+ * below `threshold`.
+ */
+export function shouldInjectSearchContext(
+	query: string,
+	page: { url?: string; title?: string; heading?: string },
+	threshold: number = SEARCH_CONTEXT_RELATEDNESS_THRESHOLD,
+): boolean {
+	if (!query || !query.trim()) return false;
+	const doc = [page.url ?? "", page.title ?? "", page.heading ?? ""]
+		.join(" ")
+		.trim();
+	if (!doc) return false;
+	return scoreRelevance(doc, query) >= threshold;
+}
+
+/**
+ * Annotation appended to a summary that was focused on a prior search
+ * query, so a downstream agent knows the summary is not neutral. Returns
+ * the empty string for an empty query (callers append unconditionally).
+ */
+export function focusedSummaryAnnotation(query: string): string {
+	const q = query?.trim();
+	if (!q) return "";
+	return `\n\n_[focused on prior search: "${q}"]_`;
+}
+
+// ─── Summary cache keying ────────────────────────────────────────────
+//
+// A summary produced WITH a search context is focused/biased toward that
+// context, so it must never be served for a context-free request (or for
+// a different context). Key the summary cache by URL + normalized context
+// so each context gets its own slot. The no-context case maps to the bare
+// normalized URL, which can never collide with a context key because
+// context keys always carry the `\u0000ctx:` separator (a null byte never
+// appears in a real URL).
+export function summaryCacheKey(url: string, context?: string): string {
+	const base = normalizeCacheKey(url);
+	if (!context || !context.trim()) return base;
+	const norm = context.trim().toLowerCase().replace(/\s+/g, " ");
+	return `${base}\u0000ctx:${norm}`;
 }
 
 // ─── Search result caching (memory + disk) ─────────────────────────

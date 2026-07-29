@@ -7,7 +7,11 @@ import {
 	scoreRelevance,
 	scoreAllRelevance,
 } from "../src/bm25.ts";
-import { pruneMarkdown, pruneByRelevance } from "../src/prune-markdown.ts";
+import {
+	pruneMarkdown,
+	pruneByRelevance,
+	buildOmittedSectionsToc,
+} from "../src/prune-markdown.ts";
 
 // ─────────────────────────────────────────────────────────────────────
 // BM25 unit tests
@@ -323,6 +327,61 @@ test("pruneMarkdown: under budget returns unchanged regardless of query", () => 
 	const result = pruneMarkdown(md, { maxTokens: 5000, query: "pricing" });
 	assert.equal(result.truncated, false);
 	assert.equal(result.content, md);
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// F7: omitted-sections mini-TOC (shared by prune + budget paths)
+// ─────────────────────────────────────────────────────────────────────
+
+test("buildOmittedSectionsToc: lists headings indented by level", () => {
+	const toc = buildOmittedSectionsToc([
+		{ heading: "Top", level: 1 },
+		{ heading: "Nested", level: 2 },
+		{ heading: "", level: 0 }, // headingless — skipped
+	]);
+	assert.ok(toc.includes("*Omitted sections:*"));
+	assert.ok(toc.includes("\n- Top"), "level 1 → no indent");
+	assert.ok(toc.includes("\n  - Nested"), "level 2 → 2-space indent");
+});
+
+test("buildOmittedSectionsToc: empty string when no headed sections", () => {
+	assert.equal(buildOmittedSectionsToc([]), "");
+	assert.equal(buildOmittedSectionsToc([{ heading: "", level: 0 }]), "");
+});
+
+test("buildOmittedSectionsToc: caps very long lists with a 'more' line", () => {
+	const many = Array.from({ length: 25 }, (_, i) => ({
+		heading: `Section ${i}`,
+		level: 1,
+	}));
+	const toc = buildOmittedSectionsToc(many);
+	assert.ok(toc.includes("- Section 19"), "keeps first 20");
+	assert.ok(!toc.includes("- Section 20"), "drops past the cap");
+	assert.match(toc, /5 more/);
+});
+
+test("pruneMarkdown: truncation appends omitted-sections TOC (F7)", () => {
+	const md = [
+		"# Alpha",
+		"",
+		"First section body text with enough words to count as real content for the pruner to weigh when deciding what to keep or drop.",
+		"# Bravo",
+		"",
+		"Second section body text with enough words to count as real content for the pruner to weigh when deciding what to keep or drop.",
+		"# Charlie",
+		"",
+		"Third section body text with enough words to count as real content for the pruner to weigh when deciding what to keep or drop.",
+	].join("\n");
+	const result = pruneMarkdown(md, { maxTokens: 60 });
+	assert.ok(result.truncated);
+	assert.ok(
+		result.content.includes("*Omitted sections:*"),
+		"should append the omitted-sections TOC",
+	);
+	// Omitted headings are listed as markdown list items.
+	assert.match(result.content, /\n- (Alpha|Bravo|Charlie)/);
+	// The count line is present alongside the TOC.
+	assert.match(result.content, /\d+ sections omitted/);
 });
 
 test("pruneMarkdown: scores array is sorted by document order", () => {

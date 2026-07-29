@@ -118,6 +118,38 @@ test("applyTokenBudget: footer mentions sections omitted count", () => {
 	);
 });
 
+test("applyTokenBudget: footer includes omitted-sections heading TOC (F7)", () => {
+	const doc = makeDoc([
+		{ heading: "Alpha", body: words("alpha", 100) },
+		{ heading: "Bravo", body: words("beta", 100) },
+		{ heading: "Charlie", body: words("gamma", 100) },
+	]);
+
+	const budget = 150;
+	const result = applyTokenBudget(doc, budget);
+
+	// The budget footer must carry the SAME omitted-sections mini-TOC as the
+	// prune path (F7) — not just a bare count.
+	assert.ok(
+		result.includes("*Omitted sections:*"),
+		`budget footer should include the omitted-sections TOC; got: ${result.slice(-300)}`,
+	);
+	// At least one dropped heading is listed as an indented list item.
+	assert.match(result, /\n\s*- (Alpha|Bravo|Charlie)/);
+	// The "full content cached — retrieve via aio-webcontent" hint survives
+	// alongside the TOC (not replaced by it).
+	assert.ok(
+		result.includes("aio-webcontent"),
+		"retrieve hint must survive alongside the TOC",
+	);
+	// A single unified footer — not two redundant "---" footers back-to-back.
+	assert.equal(
+		(result.match(/\n\n---\n/g) || []).length,
+		1,
+		"budget output should contain exactly one footer separator",
+	);
+});
+
 // ─── Composition with query answer mode ──────────────────────────────
 
 test("applyTokenBudget: composes with applyQueryAnswerMode output", () => {

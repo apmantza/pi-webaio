@@ -21,6 +21,7 @@ import {
 	validateUrlForSsrf,
 } from "./security.ts";
 import type { FetchOpts } from "./types.ts";
+import { createFetchError } from "./tools/fetch-error.ts";
 import {
 	getStartingStrategy,
 	recordDomainSuccess,
@@ -347,7 +348,12 @@ export async function fetchWithPlaywright(
 	// via --host-resolver-rules. Fail-closed: any guard error => throw.
 	const ssrf = await validateUrlForSsrf(url);
 	if (ssrf.dangerous) {
-		throw new Error(`Blocked unsafe URL: ${url}`);
+		throw createFetchError(
+			"blocked_ssrf",
+			`[SECURITY] Blocked request to private/internal URL: ${url}`,
+			{ url, phase: "validation" },
+			{ retryable: false },
+		);
 	}
 	let pinnedHost = "";
 	try {
@@ -610,10 +616,16 @@ export async function fetchWithRetry(
 	url: string,
 	options: FetchOpts = {},
 ): Promise<any> {
-	// SSRF check — block local/private URLs
+	// SSRF check — block local/private URLs. Throw a phase-aware FetchError
+	// (code=blocked_ssrf, phase=validation) so the block surfaces precisely
+	// instead of degrading to the generic unknown/downloading fallback when
+	// the worker classifies the thrown error.
 	if (await isDangerousUrl(url)) {
-		throw new Error(
+		throw createFetchError(
+			"blocked_ssrf",
 			`[SECURITY] Blocked request to private/internal URL: ${url}`,
+			{ url, phase: "validation" },
+			{ retryable: false },
 		);
 	}
 
