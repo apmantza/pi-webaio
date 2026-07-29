@@ -99,10 +99,14 @@ export function validateCorpusEntry(entry) {
 		return "missing or empty category";
 	if (!entry.markers || typeof entry.markers !== "object")
 		return "missing markers object";
-	if (!Array.isArray(entry.markers.required) || entry.markers.required.length === 0)
+	if (
+		!Array.isArray(entry.markers.required) ||
+		entry.markers.required.length === 0
+	)
 		return "markers.required must be a non-empty array";
 	for (const m of entry.markers.required) {
-		if (typeof m !== "string" || !m) return `marker must be a non-empty string, got: ${JSON.stringify(m)}`;
+		if (typeof m !== "string" || !m)
+			return `marker must be a non-empty string, got: ${JSON.stringify(m)}`;
 	}
 	return null;
 }
@@ -123,7 +127,10 @@ export function validateCorpus(corpus) {
  * Run extraction for a single corpus entry with a timeout + one retry.
  * Returns a BenchResult. Exported for unit tests (can be mocked).
  */
-export async function benchmarkUrl(entry, { timeout = 30_000, runExtraction = null } = {}) {
+export async function benchmarkUrl(
+	entry,
+	{ timeout = 30_000, runExtraction = null } = {},
+) {
 	const extractFn = runExtraction ?? defaultExtraction;
 	const start = Date.now();
 
@@ -217,7 +224,12 @@ async function defaultExtraction(url) {
 // ─── Batch runner with concurrency ─────────────────────────────────
 
 export async function runBenchmark(corpus, opts = {}) {
-	const { concurrency = 2, timeout = 30_000, runExtraction = null, onProgress = null } = opts;
+	const {
+		concurrency = 2,
+		timeout = 30_000,
+		runExtraction = null,
+		onProgress = null,
+	} = opts;
 	const results = [];
 	let idx = 0;
 
@@ -230,7 +242,10 @@ export async function runBenchmark(corpus, opts = {}) {
 		}
 	}
 
-	const workers = Array.from({ length: Math.min(concurrency, corpus.length) }, worker);
+	const workers = Array.from(
+		{ length: Math.min(concurrency, corpus.length) },
+		worker,
+	);
 	await Promise.all(workers);
 	return results;
 }
@@ -262,7 +277,10 @@ export function computeScorecard(results) {
 	const extractionFails = results.filter((r) => !r.success && !r.networkError);
 
 	const allMarkerHits = results.flatMap((r) => r.markersFound).length;
-	const allMarkers = results.flatMap((r) => [...r.markersFound, ...r.markersMissed]).length;
+	const allMarkers = results.flatMap((r) => [
+		...r.markersFound,
+		...r.markersMissed,
+	]).length;
 
 	const sorted = [...results].sort((a, b) => a.latencyMs - b.latencyMs);
 	const tokenSorted = [...results]
@@ -278,7 +296,14 @@ export function computeScorecard(results) {
 	const byCategory = {};
 	for (const r of results) {
 		if (!byCategory[r.category]) {
-			byCategory[r.category] = { total: 0, success: 0, markerHits: 0, markers: 0, tokens: [], latencies: [] };
+			byCategory[r.category] = {
+				total: 0,
+				success: 0,
+				markerHits: 0,
+				markers: 0,
+				tokens: [],
+				latencies: [],
+			};
 		}
 		const cat = byCategory[r.category];
 		cat.total++;
@@ -464,7 +489,9 @@ async function main() {
 		const raw = await readFile(args.corpus, "utf8");
 		corpus = JSON.parse(raw);
 	} catch (err) {
-		process.stderr.write(`Failed to load corpus from ${args.corpus}: ${err.message}\n`);
+		process.stderr.write(
+			`Failed to load corpus from ${args.corpus}: ${err.message}\n`,
+		);
 		process.exit(1);
 	}
 
@@ -478,7 +505,9 @@ async function main() {
 	if (args.filter) {
 		corpus = corpus.filter((e) => args.filter.includes(e.category));
 		if (corpus.length === 0) {
-			process.stderr.write(`No corpus entries match filter: ${args.filter.join(",")}\n`);
+			process.stderr.write(
+				`No corpus entries match filter: ${args.filter.join(",")}\n`,
+			);
 			process.exit(1);
 		}
 	}
@@ -490,12 +519,16 @@ async function main() {
 			const raw = await readFile(args.baseline, "utf8");
 			baseline = JSON.parse(raw);
 		} catch (err) {
-			process.stderr.write(`Failed to load baseline from ${args.baseline}: ${err.message}\n`);
+			process.stderr.write(
+				`Failed to load baseline from ${args.baseline}: ${err.message}\n`,
+			);
 			process.exit(1);
 		}
 	}
 
-	process.stdout.write(`Running benchmark on ${corpus.length} URLs (concurrency=${args.concurrency}, timeout=${ms(args.timeout)})...\n`);
+	process.stdout.write(
+		`Running benchmark on ${corpus.length} URLs (concurrency=${args.concurrency}, timeout=${ms(args.timeout)})...\n`,
+	);
 
 	const results = await runBenchmark(corpus, {
 		concurrency: args.concurrency,
@@ -509,7 +542,9 @@ async function main() {
 	const regressions = baseline ? diffAgainstBaseline(results, baseline) : null;
 
 	if (args.json) {
-		process.stdout.write(JSON.stringify({ scorecard, regressions }, null, 2) + "\n");
+		process.stdout.write(
+			JSON.stringify({ scorecard, regressions }, null, 2) + "\n",
+		);
 	} else {
 		process.stdout.write(formatScorecard(scorecard, regressions));
 	}
@@ -517,7 +552,11 @@ async function main() {
 	if (args.updateBaseline) {
 		const baselinePath =
 			args.baseline ?? join(__dirname, "bench-baseline.json");
-		await writeFile(baselinePath, JSON.stringify(results, null, 2) + "\n", "utf8");
+		await writeFile(
+			baselinePath,
+			JSON.stringify(results, null, 2) + "\n",
+			"utf8",
+		);
 		process.stdout.write(`Baseline written to ${baselinePath}\n`);
 	}
 
