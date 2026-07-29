@@ -97,7 +97,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
-    "@earendil-works/pi-tui": "^0.82.0",
+    "@earendil-works/pi-tui": "^0.83.0",
     "@mozilla/readability": "^0.6.0",
     "defuddle": "^0.19.2",
     "linkedom": "^0.18.12",
@@ -110,7 +110,7 @@
     "youtube-transcript-plus": "^2.0.0"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "^0.82.0"
+    "@earendil-works/pi-coding-agent": "^0.83.0"
   },
   "overrides": {
     "brace-expansion": "^5.0.8",
