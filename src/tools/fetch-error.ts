@@ -14,6 +14,7 @@
 //   packages/core/src/tool.ts    (smart-fetch)
 
 import type { FetchErrorInfo, FetchOpts } from "../types.ts";
+import { redactSecrets } from "../redact.ts";
 
 // ─── Codes (25) ───────────────────────────────────────────────────
 
@@ -338,8 +339,15 @@ export function buildUserFacingFetchErrorSummary(err: FetchError): string {
 	// Combine, cap to a sane line length, single space between segments.
 	const line = `${core}${tail}`.replace(/\s+/g, " ").trim();
 
+	// H2: never let a secret surface in user-facing error output. The
+	// fallback prefix echoes err.message and the status tail can echo
+	// err.cause.message — either may carry a credential (e.g. an
+	// Authorization header or token in an underlying error). Masking
+	// here is a no-op on secret-free messages.
+	const redacted = redactSecrets(line);
+
 	// Hard cap: TUI may have narrow widths.
-	return line.length > 200 ? `${line.slice(0, 197)}…` : line;
+	return redacted.length > 200 ? `${redacted.slice(0, 197)}…` : redacted;
 }
 
 function prefixFor(err: FetchError): string {

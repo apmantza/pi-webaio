@@ -22,6 +22,7 @@ import {
 	Spacer,
 	Text,
 } from "@earendil-works/pi-tui";
+import { redactSecrets } from "../redact.ts";
 
 /** Spinner frames for the in-flight progress glyph. */
 export const SPINNER_FRAMES = [
@@ -425,7 +426,12 @@ function renderProgressRow(
 	);
 
 	const glyph = renderStatusGlyph(item.status, spinnerTick + item.index, theme);
-	const url = theme.fg("accent", truncateMiddle(item.url, urlWidth));
+	// H2: mask any credential embedded in the echoed URL (e.g.
+	// https://user:pass@host or ?api_key=…). No-op on clean URLs.
+	const url = theme.fg(
+		"accent",
+		truncateMiddle(redactSecrets(item.url), urlWidth),
+	);
 	const bar = renderProgressBar(
 		item.progress,
 		item.status,
@@ -493,7 +499,7 @@ export function createProgressComponent(
 		}
 		return (
 			theme.fg("toolTitle", theme.bold("aio-webfetch ")) +
-			theme.fg("accent", truncateMiddle(item.url, 60))
+			theme.fg("accent", truncateMiddle(redactSecrets(item.url), 60))
 		);
 	}
 
@@ -503,7 +509,7 @@ export function createProgressComponent(
 			.map((item) => {
 				const base = renderProgressRow(item, width, spinnerTick, theme);
 				if (item.error) {
-					return `${base}\n  ${theme.fg("error", `error: ${item.error}`)}`;
+					return `${base}\n  ${theme.fg("error", `error: ${redactSecrets(item.error)}`)}`;
 				}
 				return base;
 			})
@@ -595,7 +601,8 @@ function buildResultMetadataLines(
 ): string[] {
 	const rows: Array<[label: string, value: string | number | undefined]> = [
 		["Title", details.title],
-		["URL", details.url],
+		// H2: mask credentials embedded in the echoed URL.
+		["URL", details.url ? redactSecrets(details.url) : details.url],
 	];
 	if (details.responseId) {
 		rows.push(["Response ID", details.responseId]);
@@ -666,8 +673,9 @@ export function createResultComponent(
 	// Error path: show a one-line red summary. The full error lives in
 	// `result.content[0].text` for the agent, so the TUI can be terse.
 	if (details.userErrorSummary || details.errorText) {
-		const summary =
-			details.userErrorSummary ?? details.errorText ?? "Fetch failed";
+		const summary = redactSecrets(
+			details.userErrorSummary ?? details.errorText ?? "Fetch failed",
+		);
 		container.addChild(new Text(theme.fg("error", summary), 0, 0));
 		// Phase / category badge — helps the agent decide whether to retry
 		// with a different mode (e.g. switch to browser on 'blocked').
@@ -711,17 +719,23 @@ export function createResultComponent(
 	}
 
 	if (expanded) {
+		// H2: mask high-precision secrets in the rendered body preview.
+		// Only unambiguous shapes (JWTs, private keys, auth headers,
+		// password-URLs, real secret assignments) are masked, so
+		// legitimate documentation prose is left intact.
+		const safeContent = redactSecrets(content);
 		if (shouldHighlight(details.format)) {
-			container.addChild(new Markdown(content, 0, 0, markdownTheme));
+			container.addChild(new Markdown(safeContent, 0, 0, markdownTheme));
 		} else {
-			container.addChild(new Text(content, 0, 0));
+			container.addChild(new Text(safeContent, 0, 0));
 		}
 	} else {
 		const { previewContent, remainingLines } = buildCollapsedPreview(details);
+		const safePreview = redactSecrets(previewContent);
 		if (shouldHighlight(details.format)) {
-			container.addChild(new Markdown(previewContent, 0, 0, markdownTheme));
+			container.addChild(new Markdown(safePreview, 0, 0, markdownTheme));
 		} else {
-			container.addChild(new Text(previewContent, 0, 0));
+			container.addChild(new Text(safePreview, 0, 0));
 		}
 
 		if (remainingLines > 0) {
@@ -754,8 +768,9 @@ export function createCallComponent(
 		"...";
 	const count = Array.isArray(args.urls) ? args.urls.length : 1;
 	const label = count > 1 ? `aio-webfetch ×${count}` : "aio-webfetch";
+	// H2: mask any credential embedded in the echoed URL.
 	return new Text(
-		`${theme.fg("toolTitle", theme.bold(label))} ${theme.fg("accent", url)}`,
+		`${theme.fg("toolTitle", theme.bold(label))} ${theme.fg("accent", redactSecrets(url))}`,
 		0,
 		0,
 	);
