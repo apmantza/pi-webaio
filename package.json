@@ -95,7 +95,7 @@
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@earendil-works/pi-tui": "^0.82.0",
     "@mozilla/readability": "^0.6.0",
-    "defuddle": "^0.18.1",
+    "defuddle": "^0.19.2",
     "linkedom": "^0.18.12",
     "mathml-to-latex": "^1.5.0",
     "pdf-parse": "^2.4.5",
