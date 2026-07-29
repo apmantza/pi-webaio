@@ -10,8 +10,8 @@ Effort: **S** ≤ half-day, **M** ~1–2 days, **L** multi-day.
 
 ## v0.7.3 bugfix batch — status
 
-> The package is currently at **0.7.2** (AGENTS.md's "0.6.2" is stale), so this
-> bugfix batch lands as **~0.7.3**, not v0.6.3 as originally labelled below.
+> **Shipped as 0.7.3** (released 2026-07-29). The batch was originally labelled
+> v0.6.3 below; it landed as 0.7.3.
 
 | ID | Status | Notes |
 | -- | ------ | ----- |
@@ -26,7 +26,7 @@ Effort: **S** ≤ half-day, **M** ~1–2 days, **L** multi-day.
 | B7 | ✅ Investigated — non-bug | Alleged "summary-cache collision" is a misdiagnosis: Wikipedia (a vertical) skips AI summarization entirely (`"> via "` prefix → `skipSummary`), the summary cache is keyed per-URL (no collision), and the display always uses the current result's own body. The only real bias is by-design search-context injection into *fresh* summaries (never a vertical). No change. |
 | B8 | ✅ Fixed + tested | `formatPullHeadline` in `src/tools/webpull.ts` distinguishes "0 new pages (N already completed — pass resume:false)" from a genuine zero-result pull. Tests in `tests/unit.test.mjs`. |
 
-Verification: `npm run lint` clean; full `test:all` = 770 tests, 0 failures; `dist/` rebuilt.
+Verification: `npm run lint` clean; full `test:all` = 931 tests, 0 failures (2 expected skips); `dist/` rebuilt.
 
 ### Also in this batch (dependencies / security / hygiene)
 
@@ -67,7 +67,7 @@ Verification: `npm run lint` clean; full `test:all` = 770 tests, 0 failures; `di
 | ID  | Feature                                   | Detail                                                                                                                                                  | Effort |
 | --- | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
 | F1  | **Iterative cited-report research loop**  | Bounded coordinator/evaluator: `answer / answer-with-caveat / search-again / headless-escalate` under a fixed budget; synthesizes CLAIMS.md instead of leaving it to the agent *(pi-web-agent + pi-research)* | L      |
-| F2  | **Source trust-tier + evidence-quality grading** | `classifySourceProfile()` (official-docs/api/issue/forum/community) + caveat reasons (`community-only`, `low-diversity`, `bot-check`, `possible-conflict`); feeds F1 + source selection *(pi-web-agent, henyo)* | M      |
+| F2  | **Source trust-tier + evidence-quality grading** ✅ | `classifySourceProfile()` (official-docs/api/issue/forum/community) + caveat reasons (`community-only`, `low-diversity`, `bot-check`, `possible-conflict`); feeds F1 + source selection *(pi-web-agent, henyo)* | M      |
 | F3  | **Stateful fetching**                     | Per-host cookie jar (auto-store/inject `Set-Cookie`, clear on session end) and/or persistent named login profiles; strengthens the paywall `cookies` strategy *(pi-webxp, pi-stef, BetterWright)* | M/L    |
 | F4  | **Backend `doctor`**                      | `npm run diagnose:backends` probing search engines / `gh auth` / Playwright with 3s timeouts *(pi-web-agent, BetterWright)*                              | S/M    |
 
@@ -103,7 +103,8 @@ Verification: `npm run lint` clean; full `test:all` = 770 tests, 0 failures; `di
 ## Sequencing
 
 - **v0.7.3 (patch — DONE):** B2, B3, B4, B5, B6, B8, F7 fixed; H3 audited clean; B1 & B7 investigated (no defect). Dependency/security bumps (sharp removed; MCP SDK/hono/brace-expansion; pi peer 0.82) + `dependabot.yml` added; lens blocking findings triaged.
-- **Security patch (DONE — on master, pending 0.7.3 cut):** H1 (SSRF DNS-pinning + fail-closed + metadata floor; the flagged github-pipeline path sanitization was verified already fixed by `08e64ae`) + H2 (secret redaction in output/errors). 51 new offline tests (30 ssrf-hardening + 21 redact); full suite 821 / 0 fail. Caveat: `wreq-js` (primary fetcher) is a native binding with no `lookup` hook, so DNS-pinning is enforced on the Playwright path while the primary path keeps the fail-closed pre-flight check.
-- **v0.8.0 (feature release):** F1 + F2 (centerpiece — grading feeds the loop), F4.
+- **Security patch (DONE — shipped in 0.7.3):** H1 (SSRF DNS-pinning + fail-closed + metadata floor; the flagged github-pipeline path sanitization was verified already fixed by `08e64ae`) + H2 (secret redaction in output/errors). 51 new offline tests (30 ssrf-hardening + 21 redact). Caveat: `wreq-js` (primary fetcher) is a native binding with no `lookup` hook, so DNS-pinning is enforced on the Playwright path while the primary path keeps the fail-closed pre-flight check.
+- **Pre-0.8.0 feature work (DONE — on master):** F2 (source trust-tier + evidence-quality grading; `src/source-trust.ts` + opt-in `rankSources` `trustBoost`) and F4 (backend `doctor`; `npm run diagnose:backends`). 69 new tests; full suite 931 / 0 fail.
+- **v0.8.0 (feature release):** F1 (iterative cited-report research loop — the centerpiece; F2's grading feeds it).
 - **v0.8.x:** F3, F5, F6, F8, F9.
-- **Backlog:** F10–F13.
+- **Backlog:** F10–F14.

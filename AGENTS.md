@@ -49,6 +49,7 @@ pi-webaio/
 │   ├── prefetch.ts           ← Speculative prefetch of top search results into the content cache (v0.7.0)
 │   ├── goggles.ts            ← Search rerank presets/rules (docs-first, research, news-balanced, custom) (v0.7.1)
 │   ├── research.ts           ← Single-round research bundle orchestrator + claim-stance classifier (v0.7.1)
+│   ├── source-trust.ts       ← Source trust-tier + evidence-quality grading (classifySourceProfile + caveat reasons) (post-0.7.3)
 │   ├── webquery-index.ts     ← BM25 index builder/loader for the aio-webpull corpus (v0.7.0)
 │   ├── hooks.ts              ← User lifecycle hooks (afterFetch/afterExtract) loaded from ~/.pi/agent/webaio/hooks/ (v0.7.2)
 │   ├── mcp-server.ts         ← MCP stdio server adapter exposing all 8 tools to non-pi clients (v0.7.0)
@@ -106,11 +107,12 @@ pi-webaio/
 │   ├── changelog-release.mjs ← Promotes [Unreleased] to a dated version section
 │   ├── backfill-github-releases.mjs ← Retroactively updates GitHub releases with CHANGELOG content
 │   ├── bench-extraction.mjs  ← Scored extraction benchmark over a fixed corpus
-│   └── fingerprint-diagnostics.mjs ← Opt-in live TLS/SannySoft/CreepJS diagnostics
+│   ├── fingerprint-diagnostics.mjs ← Opt-in live TLS/SannySoft/CreepJS diagnostics
+│   └── diagnose-backends.mjs ← Opt-in backend doctor: probes gh CLI / Playwright / Chrome (offline) + search engines / Jina (--live)
 ├── types/
 │   ├── pi-coding-agent.d.ts  ← Minimal ExtensionAPI type declaration
 │   └── playwright.d.ts       ← Playwright type stub (optional dep)
-├── tests/                    ← 30 suites wired into test:all (862 tests) + standalone suites (mcp, etc.)
+├── tests/                    ← 32 suites wired into test:all (931 tests) + standalone suites (mcp, etc.)
 ├── tsconfig.json             ← Lint config (noEmit, strict, ES2022)
 ├── tsconfig.dist.json        ← Build config (emits to dist/, includes types/**/*.d.ts)
 ├── package.json              ← type: "module", pi extension manifest, v0.7.3
@@ -250,7 +252,7 @@ pi-webaio/
 - **`pi.extensions` → `./pi-entry.mjs`** (v0.7.0): a loader that prefers the compiled `./dist/index.js` (npm installs, no transpile cost) and falls back to the TypeScript source `./index.ts` (git installs, which have no `dist/` and no devDeps). No build step is needed for git installs.
 - **`prepare` hook**: `scripts/prepare.mjs` runs on `npm install`. It locates `tsc` by resolving the always-exported `typescript/package.json` and joining `bin/tsc` (TypeScript 7's exports map no longer exposes `./bin/tsc`), then builds `dist/`. The catch is narrowed so only a genuine "typescript not installed" skips the build; any other resolution error fails loudly (v0.7.3).
 - **MCP bin**: `bin/pi-webaio-mcp.mjs` ships in `files` and is declared under `bin`.
-- **Scripts**: `build`, `build:dist`, `prepare`, `lint` (`tsc --project tsconfig.json`), `watch`, `check:lockfile`, `bench`, `diagnose:fingerprint`, plus `changelog:*` release helpers.
+- **Scripts**: `build`, `build:dist`, `prepare`, `lint` (`tsc --project tsconfig.json`), `watch`, `check:lockfile`, `bench`, `diagnose:fingerprint`, `diagnose:backends`, plus `changelog:*` release helpers.
 
 ### New Modules (v0.7.0–v0.7.3)
 
@@ -267,6 +269,7 @@ pi-webaio/
 | `src/hooks.ts` | User lifecycle hooks (`afterFetch`/`afterExtract`) loaded from `~/.pi/agent/webaio/hooks/`; throwing hooks are logged and skipped, never failing the fetch (v0.7.2). |
 | `src/mcp-server.ts` | MCP stdio adapter exposing all eight tools to non-pi clients (v0.7.0). |
 | `src/redact.ts` | Output secret redaction — masks Authorization headers, JWTs, private-key blocks, password-in-URL userinfo, and entropy-guarded key-value credentials in error messages and TUI previews. Additive to the pre-flight blocker (v0.7.3). |
+| `src/source-trust.ts` | Source trust-tier + evidence-quality grading — `classifySourceProfile()` maps the existing `sourceType` to trust tiers (authoritative/credible/mixed/community) and emits caveats (community-only, low-diversity, bot-check, possible-conflict) plus diversity metrics; `research.ts` `rankSources()` gains an opt-in `trustBoost` (default off). Feeds the planned F1 research loop (post-0.7.3, unreleased). |
 | `src/verticals/user-loader.ts` | Loads user-defined vertical extractors from `~/.pi/agent/webaio/verticals/` (v0.7.0). |
 
 ### New Modules (v0.5.0)
@@ -427,11 +430,12 @@ TUI result rendering for all tools; phase-aware FetchError system; `format` para
 ## Testing
 
 - `npm test` → runs unit tests (`tests/unit.test.mjs`, 156 tests)
-- `npm run test:all` → runs all 30 wired suites (862 tests total, 0 fail, 2 expected skips: a live-network Jina test that skips on external HTTP 403, and an opt-in live TLS test)
+- `npm run test:all` → runs all 32 wired suites (931 tests total, 0 fail, 2 expected skips: a live-network Jina test that skips on external HTTP 403, and an opt-in live TLS test)
 - `npm run test:mcp` → MCP server tests (standalone, not in test:all)
 - Specialized suites (each `npm run test:<name>`): `new` (new-features, 31), `paywall` (65), `check` (github-check, 35), `render` (render-result, 40), `fetcherror` (fetch-error, 57), `fetchprogress` (9), `hardening` (16), `redact` (21), `ssrf` (ssrf-hardening, 30), `fingerprint` (14), `format` (18), `webfetch-summary` (13), `search-context` (20), `chunker` (31), `prune` (prune-markdown, 25), `github-map` (50), `reddit` (reddit-block, 7), `source-ranking` (16), `webresearch` (26), `stance` (24), `cookie-cache` (25), `title-extraction` (10), `integration` (5), `bench` (bench-harness, 35)
 - Additional suites present in `tests/` (run via test:all or directly): goggles (14), bot-wait (6), ssrf-allowlist (37), lifecycle-hooks (14), webquery (12), plus diff-refetch, query-mode, revalidation, strategy-memory, prefetch, token-budget, user-verticals
 - `npm run diagnose:fingerprint` → opt-in live TLS/SannySoft/CreepJS diagnostics
+- `npm run diagnose:backends` → opt-in backend doctor (gh CLI / Playwright / Chrome offline; search engines + Jina behind `--live`)
 - `npm run check:lockfile` → fails if package-lock.json drifts from package.json
 - `npm run build` → compiles TypeScript to `dist/`
 - `npm run lint` → runs `tsc --project tsconfig.json` as type-check

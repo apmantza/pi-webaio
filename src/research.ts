@@ -11,6 +11,8 @@ import { join } from "node:path";
 import type { SearchResult } from "./types.ts";
 import { chunkMarkdown } from "./chunker.ts";
 import { createBM25Scorer } from "./bm25.ts";
+import { trustTierBoost, trustTierForSourceType } from "./source-trust.ts";
+import type { SourceType } from "./types.ts";
 
 // ─── Filesystem-safe naming ─────────────────────────────────────────────
 
@@ -145,6 +147,15 @@ export interface QueryResults {
 	results: SearchResult[];
 }
 
+/**
+ * Optional ranking toggles for `rankSources`. `trustBoost` folds a small
+ * additive trust-tier bonus (roadmap F2) into the reciprocal-rank score.
+ * Off by default so the historical ranking is unchanged unless opted in.
+ */
+export interface RankSourcesOpts {
+	trustBoost?: boolean;
+}
+
 export interface RankedSource {
 	id: string;
 	url: string;
@@ -172,7 +183,7 @@ function normalizeUrlForDedupe(url: string): string {
 		const u = new URL(url);
 		u.hash = "";
 		// Strip a trailing slash for dedupe purposes only (display uses original url).
-		let p = u.pathname.replace(/\/$/, "");
+		const p = u.pathname.replace(/\/$/, "");
 		return `${u.origin}${p}${u.search}`;
 	} catch {
 		return url;
@@ -186,7 +197,10 @@ function normalizeUrlForDedupe(url: string): string {
  * than one sub-query — mirroring the reciprocal-rank-fusion approach
  * already used for cross-engine scoring in search.ts.
  */
-export function rankSources(perQuery: QueryResults[]): RankedSource[] {
+export function rankSources(
+	perQuery: QueryResults[],
+	opts: RankSourcesOpts = {},
+): RankedSource[] {
 	interface Acc {
 		url: string;
 		title: string;
@@ -196,6 +210,7 @@ export function rankSources(perQuery: QueryResults[]): RankedSource[] {
 		queries: Set<string>;
 		bestRank: number;
 		score: number;
+		sourceType?: SourceType;
 	}
 	const byKey = new Map<string, Acc>();
 
@@ -223,12 +238,17 @@ export function rankSources(perQuery: QueryResults[]): RankedSource[] {
 			acc.score += 1 / rank;
 			if (!acc.title && r.title) acc.title = r.title;
 			if (!acc.snippet && r.snippet) acc.snippet = r.snippet;
+			if (!acc.sourceType && r.sourceType) acc.sourceType = r.sourceType;
 		});
 	}
 
 	const list = [...byKey.values()].map((acc) => {
 		const consensusBonus = Math.max(0, acc.queries.size - 1) * 0.5;
-		return { ...acc, score: acc.score + consensusBonus };
+		const trustBonus =
+			opts.trustBoost && acc.sourceType
+				? trustTierBoost(trustTierForSourceType(acc.sourceType))
+				: 0;
+		return { ...acc, score: acc.score + consensusBonus + trustBonus };
 	});
 
 	list.sort((a, b) => b.score - a.score);
