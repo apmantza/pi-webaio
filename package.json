@@ -120,7 +120,7 @@
     "playwright": "^1.55.0"
   },
   "devDependencies": {
-    "@types/node": "^25.6.0",
+    "@types/node": "^26.1.2",
     "typescript": "^6.0.3"
   }
 }
