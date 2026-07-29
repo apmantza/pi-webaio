@@ -56,8 +56,8 @@ Verification: `npm run lint` clean; full `test:all` = 770 tests, 0 failures; `di
 
 | ID  | Item                                  | Detail                                                                                                                            | File(s)                                  | Effort |
 | --- | ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- | ------ |
-| H1  | SSRF: DNS-pinning + fail-closed + metadata floor | `createPinnedLookup()` pins the *validated* IP into the request (closes re-resolve TOCTOU); deny on any guard exception; un-overridable cloud-metadata floor | `src/security.ts`, `src/fetch.ts` | M      |
-| H2  | Secret redaction in output/errors     | Complement the existing block-on-secret scanner: strip `api_key`/`token`/jwt/credentials from returned text and error messages     | new `src/redact.ts` + `fetch-error.ts`/`render-result.ts` | S/M    |
+| H1  | ✅ SSRF: DNS-pinning + fail-closed + metadata floor | `createPinnedLookup()` pins the *validated* IP into the request (closes re-resolve TOCTOU); deny on any guard exception; un-overridable cloud-metadata floor | `src/security.ts`, `src/fetch.ts` | M      |
+| H2  | ✅ Secret redaction in output/errors     | Complement the existing block-on-secret scanner: strip `api_key`/`token`/jwt/credentials from returned text and error messages     | new `src/redact.ts` + `fetch-error.ts`/`render-result.ts` | S/M    |
 | H3  | Typebox schema audit                  | Use `Type.String({enum})` not `Type.Union(Type.Literal…)` (some providers drop `anyOf/const`)                                      | tool schemas in `src/tools/*`            | S      |
 
 ## Track C — New features
@@ -103,7 +103,7 @@ Verification: `npm run lint` clean; full `test:all` = 770 tests, 0 failures; `di
 ## Sequencing
 
 - **v0.7.3 (patch — DONE):** B2, B3, B4, B5, B6, B8, F7 fixed; H3 audited clean; B1 & B7 investigated (no defect). Dependency/security bumps (sharp removed; MCP SDK/hono/brace-expansion; pi peer 0.82) + `dependabot.yml` added; lens blocking findings triaged.
-- **Next patch:** H1 (SSRF DNS-pinning + the flagged github-pipeline path sanitization), H2 (secret redaction).
-- **v0.8.0 (feature release):** F1 + F2 (centerpiece — grading feeds the loop), H1, H2, F4.
+- **Security patch (DONE — on master, pending 0.7.3 cut):** H1 (SSRF DNS-pinning + fail-closed + metadata floor; the flagged github-pipeline path sanitization was verified already fixed by `08e64ae`) + H2 (secret redaction in output/errors). 51 new offline tests (30 ssrf-hardening + 21 redact); full suite 821 / 0 fail. Caveat: `wreq-js` (primary fetcher) is a native binding with no `lookup` hook, so DNS-pinning is enforced on the Playwright path while the primary path keeps the fail-closed pre-flight check.
+- **v0.8.0 (feature release):** F1 + F2 (centerpiece — grading feeds the loop), F4.
 - **v0.8.x:** F3, F5, F6, F8, F9.
 - **Backlog:** F10–F13.
