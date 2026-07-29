@@ -4,6 +4,7 @@
 
 import { fetch as wreqFetch, getProfiles as wreqGetProfiles } from "wreq-js";
 import type { BrowserProfile, EmulationOS } from "wreq-js";
+import { isIP } from "node:net";
 // The stealth script is the single shared module also used by the CDP-based
 // search extractors (extractors/common.mjs). It's imported via the
 // "#stealth-script" subpath defined in package.json "imports", which Node and
@@ -13,7 +14,12 @@ import type { BrowserProfile, EmulationOS } from "wreq-js";
 // which sit at different depths relative to extractors/.
 import { STEALTH_SCRIPT } from "#stealth-script";
 import { detectBotBlock, detectLoginRedirect } from "./bot-detection.ts";
-import { isDangerousUrl, scanForSecrets } from "./security.ts";
+import {
+	createPinnedLookup,
+	isDangerousUrl,
+	scanForSecrets,
+	validateUrlForSsrf,
+} from "./security.ts";
 import type { FetchOpts } from "./types.ts";
 import {
 	getStartingStrategy,
@@ -212,6 +218,22 @@ export function getRateLimiter(host: string): TokenBucket {
 
 let _pwWarned = false;
 
+/**
+ * Build Chromium `--host-resolver-rules` launch args that pin `hostname` to
+ * the first validated IP, so the headless browser dials the exact address
+ * that passed SSRF validation (closing the re-resolve TOCTOU on the
+ * Playwright fallback path). Returns [] when there is nothing to pin (IP
+ * literal host, or no validated IPs). The companion primitive for
+ * socket-level fetchers is {@link createPinnedLookup}.
+ */
+export function buildHostResolverRules(
+	hostname: string,
+	pinnedIps: string[],
+): string[] {
+	if (isIP(hostname) || pinnedIps.length === 0) return [];
+	return [`--host-resolver-rules=MAP ${hostname} ${pinnedIps[0]}`];
+}
+
 // ─── Stealth patches for Playwright fallback ───────────────────────
 // Inject the shared stealth script before page scripts run, to mask headless
 // automation signals. STEALTH_SCRIPT is imported statically at the top of this
@@ -319,9 +341,21 @@ export async function fetchWithPlaywright(
 	// metadata endpoints. fetchWithRetry does this; fetchWithPlaywright
 	// was missing the check, so a malicious URL could pivot through
 	// the headless browser to internal networks.
-	if (await isDangerousUrl(url)) {
+	//
+	// H1: use validateUrlForSsrf (not just the boolean) so we also get the
+	// validated IPs, which we pin into the per-request browser launch below
+	// via --host-resolver-rules. Fail-closed: any guard error => throw.
+	const ssrf = await validateUrlForSsrf(url);
+	if (ssrf.dangerous) {
 		throw new Error(`Blocked unsafe URL: ${url}`);
 	}
+	let pinnedHost = "";
+	try {
+		pinnedHost = new URL(url).hostname.toLowerCase();
+	} catch {
+		/* leave empty — pinning is best-effort */
+	}
+	const pinnedLaunchArgs = buildHostResolverRules(pinnedHost, ssrf.pinnedIps);
 	if (pool) {
 		let pooled: Awaited<
 			ReturnType<NonNullable<FetchOpts["browserPool"]>["acquirePage"]>
@@ -357,6 +391,10 @@ export async function fetchWithPlaywright(
 				browser = await chromium.launch({
 					...opts,
 					headless: true,
+					// Pin the validated IP (H1). Only the per-request launch
+					// is pinnable — the pooled path above is launched by the
+					// pool and cannot take per-page args.
+					...(pinnedLaunchArgs.length ? { args: pinnedLaunchArgs } : {}),
 				});
 				const page = await browser.newPage();
 				await applyStealth(page);
@@ -555,6 +593,19 @@ export async function readResponseTextWithProgress(
 
 // ─── Core fetch with retry ─────────────────────────────────────────
 
+// H1 — DNS-pinning limitation (primary fetcher):
+// wreq-js (the primary fetcher) is a native Rust/NAPI binding. Its
+// RequestInit / CreateTransportOptions / CreateSessionOptions expose NO
+// dispatcher / agent / connect / `lookup` hook — DNS resolution and TCP
+// connect happen entirely inside the native layer. We therefore cannot
+// inject createPinnedLookup() into this path, so a small re-resolve TOCTOU
+// window remains between the pre-flight validateUrlForSsrf() check below and
+// wreq's own connect. Mitigations in place: (a) the pre-flight check is
+// fail-closed and validates ALL resolved IPs incl. the absolute cloud-
+// metadata floor; (b) redirect hops are re-validated by the caller; (c) the
+// Playwright fallback path IS pinned via --host-resolver-rules (see
+// fetchWithPlaywright / buildHostResolverRules). If wreq-js ever exposes a
+// connect hook, wire createPinnedLookup(validation.pinnedIps) here.
 export async function fetchWithRetry(
 	url: string,
 	options: FetchOpts = {},

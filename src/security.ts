@@ -84,6 +84,40 @@ export function isPrivateIp(ip: string): boolean {
 	return true; // unparseable = treat as dangerous
 }
 
+// ─── Cloud-metadata floor (absolute, un-overridable) ───────────────
+// Instance-metadata endpoints are the single highest-value SSRF target
+// (they hand out IAM credentials). Blocking them is a HARD FLOOR: unlike
+// the RFC1918/CGN/link-local ranges below, this block can NEVER be relaxed
+// by the config-driven CIDR allow-list (WEBAIO_SSRF_ALLOW_RANGES) or any
+// env override. evaluateIp() checks this before consulting the allow-list,
+// and createPinnedLookup() re-enforces it so a pinned IP can never be a
+// metadata address even if a caller mistakenly pins one.
+
+/** IPv4 cloud instance-metadata addresses (AWS/GCP/Azure/DigitalOcean). */
+const METADATA_IPV4 = new Set(["169.254.169.254"]);
+/** IPv6 cloud instance-metadata addresses (AWS IMDSv2). */
+const METADATA_IPV6 = new Set(["fd00:ec2::254"]);
+
+/**
+ * Returns true if `ip` is a cloud instance-metadata endpoint. This is an
+ * absolute deny floor — it is evaluated independently of, and takes
+ * precedence over, the SSRF allow-list.
+ */
+export function isCloudMetadataIp(ip: string): boolean {
+	const version = isIP(ip);
+	if (version === 4) return METADATA_IPV4.has(ip);
+	if (version === 6) {
+		const n = ip.toLowerCase();
+		if (METADATA_IPV6.has(n)) return true;
+		// IPv4-mapped (::ffff:a.b.c.d) / IPv4-compatible (::a.b.c.d) forms
+		// embedding a metadata IPv4 address.
+		const embedded = n.match(/^::(?:ffff:)?([\d.]+)$/);
+		if (embedded) return METADATA_IPV4.has(embedded[1]!);
+		return false;
+	}
+	return false;
+}
+
 // ─── SSRF allow-list (CIDR ranges) ─────────────────────────────────
 
 export interface ParsedCidr {
@@ -266,53 +300,230 @@ function isAllowed(ip: string, ranges: ParsedCidr[]): boolean {
 }
 
 /**
- * Deep SSRF check: resolves DNS and validates ALL returned IPs
- * against private/loopback/link-local ranges. Also blocks known
- * metadata endpoints and cloud magic hostnames.
+ * Evaluate a single IP against the SSRF policy.
+ *
+ * Order matters for the security guarantees:
+ *  1. Cloud-metadata floor — absolute deny, ignores the allow-list.
+ *  2. Private/loopback/link-local ranges — denied UNLESS explicitly
+ *     permitted by the config-driven CIDR allow-list.
+ *  3. Everything else (public IPs) — allowed.
  */
-export async function isDangerousUrl(url: string): Promise<boolean> {
+function evaluateIp(
+	ip: string,
+	ranges: ParsedCidr[],
+): { dangerous: boolean; reason?: string } {
+	if (isCloudMetadataIp(ip)) {
+		return { dangerous: true, reason: "cloud-metadata" };
+	}
+	if (isPrivateIp(ip)) {
+		if (isAllowed(ip, ranges)) return { dangerous: false };
+		return { dangerous: true, reason: "private-range" };
+	}
+	return { dangerous: false };
+}
+
+/** A DNS resolver returning every resolved address for a host. */
+export type DnsResolver = (
+	host: string,
+) => Promise<Array<{ address: string; family: number }>>;
+
+/** Default resolver backed by node:dns/promises `lookup`. */
+const defaultDnsResolver: DnsResolver = async (host) => {
+	const records = await dnsLookup(host, { all: true, verbatim: true });
+	return records.map((r) => ({ address: r.address, family: r.family }));
+};
+
+export interface SsrfValidation {
+	/** True when the URL must be blocked. */
+	dangerous: boolean;
+	/** Machine-readable reason when dangerous (e.g. "cloud-metadata"). */
+	reason?: string;
+	/**
+	 * The validated, safe IPs that DNS resolved to — i.e. the exact
+	 * addresses that passed validation. Callers feed these to
+	 * {@link createPinnedLookup} so the outbound socket dials the same IP
+	 * that was validated, closing the re-resolve TOCTOU gap. Empty whenever
+	 * the URL is dangerous (or blocked before resolution).
+	 */
+	pinnedIps: string[];
+}
+
+/**
+ * Deep SSRF validation. Resolves DNS exactly once and validates ALL
+ * returned IPs against the cloud-metadata floor and the
+ * private/loopback/link-local ranges (subject to the CIDR allow-list).
+ * Also blocks known metadata hostnames and cloud magic hostnames.
+ *
+ * FAIL-CLOSED: every abnormal condition — unparseable URL, DNS resolution
+ * error, an empty answer set, or any unexpected throw — yields
+ * `dangerous: true`. There is no path through this function that fails
+ * open.
+ *
+ * The `resolve` parameter is dependency-injected so tests can exercise the
+ * DNS-dependent branches (pinning, fail-closed, metadata floor on resolved
+ * IPs) offline without touching the network.
+ */
+export async function validateUrlForSsrf(
+	url: string,
+	resolve: DnsResolver = defaultDnsResolver,
+): Promise<SsrfValidation> {
 	try {
 		const u = new URL(url);
 		const host = u.hostname.toLowerCase();
 		const ranges = getAllowRanges();
 
-		// Quick block: known dangerous hostnames
-		if (BLOCKED_HOSTS.has(host)) return true;
+		// Quick block: known dangerous hostnames (includes
+		// metadata.google.internal — absolute, pre-allow-list).
+		if (BLOCKED_HOSTS.has(host)) {
+			return { dangerous: true, reason: "blocked-host", pinnedIps: [] };
+		}
 
-		// Quick block: literal IP in private range
+		// Quick block: literal IP hostnames.
 		const cleanedIp = host.replace(/^\[|\]$/g, "");
 		if (isIP(cleanedIp)) {
-			if (isPrivateIp(cleanedIp)) {
-				return !isAllowed(cleanedIp, ranges);
-			}
-			return false;
+			const ev = evaluateIp(cleanedIp, ranges);
+			return {
+				dangerous: ev.dangerous,
+				reason: ev.reason,
+				pinnedIps: ev.dangerous ? [] : [cleanedIp],
+			};
 		}
 
-		// Quick block: .local and obvious private prefixes (fast path)
-		if (host.endsWith(".local")) return true;
-		if (host.startsWith("192.168.") || host.startsWith("10.")) return true;
+		// Quick block: .local and obvious private prefixes (fast path).
+		if (host.endsWith(".local")) {
+			return { dangerous: true, reason: "dot-local", pinnedIps: [] };
+		}
+		if (host.startsWith("192.168.") || host.startsWith("10.")) {
+			return { dangerous: true, reason: "private-prefix", pinnedIps: [] };
+		}
 		if (host.startsWith("172.")) {
 			const octet = Number.parseInt(host.split(".")[1] ?? "0", 10);
-			if (octet >= 16 && octet <= 31) return true;
-		}
-
-		// Deep check: resolve DNS and validate every IP
-		try {
-			const records = await dnsLookup(host, { all: true, verbatim: true });
-			for (const record of records) {
-				if (isPrivateIp(record.address) && !isAllowed(record.address, ranges)) {
-					return true;
-				}
+			if (octet >= 16 && octet <= 31) {
+				return { dangerous: true, reason: "private-prefix", pinnedIps: [] };
 			}
-		} catch {
-			// DNS failure — treat as potentially dangerous
-			return true;
 		}
 
-		return false;
+		// Deep check: resolve DNS ONCE and validate every IP. The same
+		// resolution result is returned as `pinnedIps` so the caller can
+		// pin the validated addresses into the actual connection.
+		let records: Array<{ address: string; family: number }>;
+		try {
+			records = await resolve(host);
+		} catch {
+			// DNS failure — fail closed.
+			return { dangerous: true, reason: "dns-error", pinnedIps: [] };
+		}
+		// An empty answer set is not a safe answer — fail closed.
+		if (!Array.isArray(records) || records.length === 0) {
+			return { dangerous: true, reason: "dns-empty", pinnedIps: [] };
+		}
+
+		const pinnedIps: string[] = [];
+		for (const record of records) {
+			const ev = evaluateIp(record.address, ranges);
+			if (ev.dangerous) {
+				// Any single bad address poisons the whole answer set.
+				return { dangerous: true, reason: ev.reason, pinnedIps: [] };
+			}
+			pinnedIps.push(record.address);
+		}
+
+		return { dangerous: false, pinnedIps };
 	} catch {
-		return true; // unparseable URL = dangerous
+		// Unparseable URL or any unexpected throw — fail closed.
+		return { dangerous: true, reason: "unparseable", pinnedIps: [] };
 	}
+}
+
+/**
+ * Deep SSRF check: resolves DNS and validates ALL returned IPs
+ * against private/loopback/link-local ranges. Also blocks known
+ * metadata endpoints and cloud magic hostnames.
+ *
+ * Thin boolean wrapper over {@link validateUrlForSsrf} for callers that
+ * only need the allow/deny decision. Fail-closed.
+ */
+export async function isDangerousUrl(url: string): Promise<boolean> {
+	return (await validateUrlForSsrf(url)).dangerous;
+}
+
+// ─── DNS pinning ───────────────────────────────────────────────────
+
+/**
+ * Build a Node-style DNS `lookup` function (the signature accepted by
+ * `net.connect`, `http.request`, and undici `Agent({ connect: { lookup } })`)
+ * that ignores the resolver and returns only the supplied, already-validated
+ * IPs.
+ *
+ * This is what closes the re-resolve TOCTOU: validation resolves DNS once
+ * (see {@link validateUrlForSsrf} → `pinnedIps`); the connector then uses
+ * this lookup so the socket dials the exact IP that passed validation,
+ * instead of re-resolving and potentially getting a different (internal)
+ * address between validation and connect.
+ *
+ * Defense in depth: metadata IPs are filtered out unconditionally, so a
+ * pinned lookup can never hand out a cloud-metadata address even if a
+ * caller mistakenly pins one.
+ *
+ * The returned function supports all three Node call shapes:
+ *   lookup(host, cb)                 → cb(null, address, family)
+ *   lookup(host, family, cb)         → cb(null, address, family)
+ *   lookup(host, { all: true }, cb)  → cb(null, [{ address, family }])
+ * If no pinned address matches the requested family it fails closed with
+ * an ENOTFOUND error rather than falling back to the real resolver.
+ */
+export function createPinnedLookup(
+	pinnedIps: string[],
+): (hostname: string, options: unknown, callback?: unknown) => void {
+	const pins = pinnedIps
+		.map((ip) => ({ address: ip, family: isIP(ip) }))
+		.filter((p) => p.family !== 0)
+		.filter((p) => !isCloudMetadataIp(p.address));
+
+	return function pinnedLookup(
+		hostname: string,
+		options: unknown,
+		callback?: unknown,
+	): void {
+		let opts: { family?: number; all?: boolean } = {};
+		let cb = callback as (
+			err: NodeJS.ErrnoException | null,
+			address?: string | Array<{ address: string; family: number }>,
+			family?: number,
+		) => void;
+		if (typeof options === "function") {
+			cb = options as typeof cb;
+			opts = {};
+		} else if (typeof options === "number") {
+			opts = { family: options };
+		} else if (options && typeof options === "object") {
+			opts = options as { family?: number; all?: boolean };
+		}
+
+		const family = opts.family ?? 0;
+		const matches = family
+			? pins.filter((p) => p.family === family)
+			: pins;
+
+		if (matches.length === 0) {
+			const err = new Error(
+				`No pinned address available for ${hostname}`,
+			) as NodeJS.ErrnoException;
+			err.code = "ENOTFOUND";
+			(err as { hostname?: string }).hostname = hostname;
+			cb(err);
+			return;
+		}
+
+		if (opts.all === true) {
+			cb(
+				null,
+				matches.map((p) => ({ address: p.address, family: p.family })),
+			);
+			return;
+		}
+		cb(null, matches[0]!.address, matches[0]!.family);
+	};
 }
 
 // ─── Secret scanning ───────────────────────────────────────────────
