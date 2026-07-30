@@ -645,7 +645,10 @@ function buildResultMetadataLines(
  * UX1: build the compact outline rendering for the TUI (one line per heading,
  * level conveyed by indentation, per-section word counts parenthesized).
  */
-function buildOutlineLines(details: WebfetchDetails, theme: ThemeLike): string[] {
+function buildOutlineLines(
+	details: WebfetchDetails,
+	theme: ThemeLike,
+): string[] {
 	const headings = details.outline ?? [];
 	const lines: string[] = [
 		theme.fg(
@@ -745,7 +748,9 @@ export function createResultComponent(
 		if (metadataLines.length > 0) {
 			container.addChild(new Spacer(1));
 		}
-		container.addChild(new Text(buildOutlineLines(details, theme).join("\n"), 0, 0));
+		container.addChild(
+			new Text(buildOutlineLines(details, theme).join("\n"), 0, 0),
+		);
 		return container;
 	}
 

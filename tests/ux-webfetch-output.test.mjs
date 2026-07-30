@@ -29,7 +29,10 @@ import {
 	FRUGAL_PREVIEW_THRESHOLD_CHARS,
 	trimPreviewFrontmatter,
 } from "../src/tools/webfetch.ts";
-import { applyFormat, createResultComponent } from "../src/tools/render-result.ts";
+import {
+	applyFormat,
+	createResultComponent,
+} from "../src/tools/render-result.ts";
 import {
 	getStoredContent,
 	normalizeCacheKey,
@@ -109,7 +112,8 @@ test("extractOutline: nested levels are preserved (flat list encodes the tree)",
 });
 
 test("extractOutline: ignores headings inside fenced code blocks", () => {
-	const md = "# Real\n\n```bash\n# this is a comment, not a heading\n## nor is this\n```\n\n## AlsoReal";
+	const md =
+		"# Real\n\n```bash\n# this is a comment, not a heading\n## nor is this\n```\n\n## AlsoReal";
 	const { headings } = extractOutline(md);
 	assert.deepEqual(
 		headings.map((h) => h.text),
@@ -118,7 +122,12 @@ test("extractOutline: ignores headings inside fenced code blocks", () => {
 });
 
 test("extractOutline: strips frontmatter + safety markers from the analysis", () => {
-	const md = wrap("T", "https://x", "# Heading\n\nbody words here", "\nauthor: \"A\"\nsite: \"S\"");
+	const md = wrap(
+		"T",
+		"https://x",
+		"# Heading\n\nbody words here",
+		'\nauthor: "A"\nsite: "S"',
+	);
 	const { headings, totalWords } = extractOutline(md);
 	assert.deepEqual(
 		headings.map((h) => h.text),
@@ -134,7 +143,8 @@ test("extractOutline: strips an optional ATX closing hash sequence", () => {
 });
 
 test("splitSections: exposes section bodies for the frugal preview", () => {
-	const md = "# A\n\nsmall\n\n## B\n\nthe largest body by far goes here and here";
+	const md =
+		"# A\n\nsmall\n\n## B\n\nthe largest body by far goes here and here";
 	const sections = splitSections(md);
 	assert.equal(sections.length, 2);
 	assert.equal(sections[0].body, "small");
@@ -143,7 +153,9 @@ test("splitSections: exposes section bodies for the frugal preview", () => {
 });
 
 test("renderOutlineText: compact one-line-per-heading render with word counts", () => {
-	const outline = extractOutline("# Top\n\n## Sub\n\n" + "word ".repeat(10).trim());
+	const outline = extractOutline(
+		"# Top\n\n## Sub\n\n" + "word ".repeat(10).trim(),
+	);
 	const text = renderOutlineText(outline);
 	assert.match(text, /^Outline: \d+ words, 2 sections/);
 	assert.ok(text.includes("- Top"));
@@ -154,7 +166,10 @@ test("renderOutlineText: compact one-line-per-heading render with word counts", 
 // ─── UX1: outline-only display mode ──────────────────────────────────
 
 test("buildOutlineDisplay: returns the outline, NOT the body, with safety markers", () => {
-	const body = "# Intro\n\n" + "uniquebodyphrase ".repeat(50).trim() + "\n\n## API\n\nmore text";
+	const body =
+		"# Intro\n\n" +
+		"uniquebodyphrase ".repeat(50).trim() +
+		"\n\n## API\n\nmore text";
 	const md = wrap("T", "https://x", body);
 	const display = buildOutlineDisplay(md, { url: "https://x" });
 	// Outline content is present…
@@ -213,7 +228,10 @@ test("frugal preview: long doc returns outline + largest section, not a blind 18
 	assert.ok(display.includes("- Introduction"));
 	assert.ok(display.includes("- ZetaAppendix"));
 	const blindHead = md.slice(0, MAX_PREVIEW_CHARS);
-	assert.ok(!blindHead.includes("ZetaAppendix"), "sanity: blind head misses it");
+	assert.ok(
+		!blindHead.includes("ZetaAppendix"),
+		"sanity: blind head misses it",
+	);
 
 	// The largest section's body is shown (DeepReferenceGuide is the biggest).
 	assert.ok(display.includes("## DeepReferenceGuide"));
@@ -251,7 +269,11 @@ test("frugal preview: threshold gates the behavior (short docs are unaffected)",
 	assert.ok(shortDoc.length < FRUGAL_PREVIEW_THRESHOLD_CHARS);
 	// A medium doc (over the teaser size but under the frugal threshold) still
 	// takes the fixed-teaser path, not the frugal one.
-	const mediumDoc = wrap("M", "https://x", "# H\n\n" + "w ".repeat(1500).trim());
+	const mediumDoc = wrap(
+		"M",
+		"https://x",
+		"# H\n\n" + "w ".repeat(1500).trim(),
+	);
 	assert.ok(mediumDoc.length > MAX_PREVIEW_CHARS);
 	assert.ok(mediumDoc.length < FRUGAL_PREVIEW_THRESHOLD_CHARS);
 });
@@ -288,7 +310,10 @@ test("composeFetchText: default markdown render omits the Response ID line", () 
 		displayContent: "body",
 	});
 	assert.ok(!text.includes("Response ID:"), "no standalone Response ID line");
-	assert.ok(!text.includes("rid-secret-123"), "id not leaked into markdown text");
+	assert.ok(
+		!text.includes("rid-secret-123"),
+		"id not leaked into markdown text",
+	);
 	// Title/URL/Format header lines remain.
 	assert.ok(text.includes("Title: T"));
 	assert.ok(text.includes("URL: https://x"));
@@ -339,7 +364,12 @@ test("UX5: responseId is retained in details (TUI metadata) and in format:json",
 // ─── UX6: trim low-value frontmatter from the preview ────────────────
 
 test("trimPreviewFrontmatter: drops low-value fields, keeps title + url + markers", () => {
-	const md = wrap("My Title", "https://x", "# H\n\nbody", "\nauthor: \"Alice\"\npublished: \"2026\"\nsite: \"Example\"\nlanguage: \"en\"\nword_count: 42");
+	const md = wrap(
+		"My Title",
+		"https://x",
+		"# H\n\nbody",
+		'\nauthor: "Alice"\npublished: "2026"\nsite: "Example"\nlanguage: "en"\nword_count: 42',
+	);
 	const trimmed = trimPreviewFrontmatter(md);
 	assert.ok(trimmed.includes('title: "My Title"'));
 	assert.ok(trimmed.includes('url: "https://x"'));
@@ -355,7 +385,8 @@ test("trimPreviewFrontmatter: drops low-value fields, keeps title + url + marker
 });
 
 test("trimPreviewFrontmatter: no-op when there is no leading frontmatter", () => {
-	const md = "[UNTRUSTED WEB CONTENT START]\n# H\n\nbody\n[UNTRUSTED WEB CONTENT END]";
+	const md =
+		"[UNTRUSTED WEB CONTENT START]\n# H\n\nbody\n[UNTRUSTED WEB CONTENT END]";
 	assert.equal(trimPreviewFrontmatter(md), md);
 	const prose = "Just a summary with no frontmatter.";
 	assert.equal(trimPreviewFrontmatter(prose), prose);

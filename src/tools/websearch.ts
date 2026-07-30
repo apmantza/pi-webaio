@@ -29,7 +29,7 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 		name: "aio-websearch",
 		label: "Web Search",
 		description:
-			"Search the web using DuckDuckGo, Brave, Yahoo, Bing, and Google in parallel (no API keys required). Returns a compact list of results with title, URL, and snippet. Capped at ~7s — returns whatever is available by then.",
+			"Search the web; returns deduped, cross-engine ranked results with title, url, snippet, and sourceType (official-docs/repo/academic/maintainer-blog/website/community/news/social). No API keys — runs DDG, Brave, Yahoo, Bing, and Google in parallel, capped at ~7s (returns whatever is ready). Common: query, max. Situational: compact:true for URL-scouting (one line per result — title + url + sourceType, no snippet), goggles to rerank additively (presets: docs-first, research, news-balanced, or custom rules), prefetch to warm the cache with the top hits, google:false to skip Google.",
 		promptSnippet: "Search the web for current information or references",
 		promptGuidelines: [
 			"Use aio-websearch when the user asks a question that requires current or external information not in your training data.",

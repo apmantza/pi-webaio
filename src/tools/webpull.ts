@@ -130,7 +130,7 @@ export function registerWebpullTool(pi: ExtensionAPI): void {
 		name: "aio-webpull",
 		label: "Webpull",
 		description:
-			"Pull any public website or docs site into local markdown files with anti-bot TLS fingerprinting. Discovers pages via sitemap, navigation links, or crawling. Writes files preserving URL structure with YAML frontmatter.",
+			"Pull a whole site into local markdown files (offline-queryable via aio-webquery). Discovers pages via sitemap, navigation links, or crawling; writes files preserving URL structure with YAML frontmatter, with anti-bot TLS fingerprinting. Common: url, max, out. Situational: compile (bundle into one context package), resume (checkpoint/resume, auto by default — pass false to force fresh), routes (per-URL-pattern fetcher routing), adaptive (survive site redesigns), bypass (opt-in paywall bypass). Advanced: mode/browser/os/proxy.",
 		promptSnippet: "Pull an entire website into local markdown files",
 		promptGuidelines: [
 			"Use aio-websearch when the user wants to find information online. Returns compact search results.",

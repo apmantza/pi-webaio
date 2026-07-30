@@ -23,6 +23,10 @@ import {
 import { pruneMarkdown, applyTokenBudget } from "../prune-markdown.ts";
 import { createBM25Scorer } from "../bm25.ts";
 import {
+	formatMultiSourceAnswer,
+	rankChunksAcrossSources,
+} from "../multi-answer.ts";
+import {
 	extractOutline,
 	renderOutlineText,
 	splitSections,
@@ -438,6 +442,25 @@ export function maybeChunkMarkdown(
 export const DEFAULT_TOP_CHUNKS = 5;
 
 /**
+ * UX11: resolve the fetch target list from the `url` + `urls` params.
+ *
+ * `url` accepts a single URL string OR an array of strings (additive). `urls`
+ * is the array form and takes precedence when both are given (unchanged
+ * behavior). Pure + side-effect free (unit-tested offline).
+ */
+export function resolveFetchTargets(
+	urlParam: string | string[] | undefined,
+	urls: string[] | undefined,
+): string[] {
+	const urlParamTargets: string[] = Array.isArray(urlParam)
+		? urlParam
+		: urlParam
+			? [urlParam]
+			: [];
+	return urls ?? urlParamTargets;
+}
+
+/**
  * Apply query-focused answer mode to a markdown body.
  *
  * Chunks the markdown, scores each chunk by BM25 against the query,
@@ -659,9 +682,11 @@ export function composeFetchText(parts: FetchTextParts): string {
 	lines.push("\n---\n", parts.displayContent);
 	if (parts.chunkBody) {
 		lines.push(
-			["\n\n---\n", `## Chunks (${parts.chunkCount ?? 0})\n`, parts.chunkBody].join(
-				"\n",
-			),
+			[
+				"\n\n---\n",
+				`## Chunks (${parts.chunkCount ?? 0})\n`,
+				parts.chunkBody,
+			].join("\n"),
 		);
 	}
 	if (parts.warning) lines.push(parts.warning);
@@ -673,25 +698,28 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 		name: "aio-webfetch",
 		label: "Web Fetch",
 		description:
-			"Fetch a single URL (or batch of URLs) and convert to markdown with anti-bot TLS fingerprinting. Detects PDFs, GitHub repos, and Next.js RSC. Long content is automatically summarized via Gemini AI; full content always saved to file.",
+			"Fetch URL(s) and convert to markdown with anti-bot TLS fingerprinting (detects PDFs, GitHub repos, Next.js RSC). Full content is ALWAYS saved to disk + cached; these controls only change what is RETURNED to keep token use low.\n\nCommon patterns:\n- Fetch one page: aio-webfetch(url).\n- Focused answer from one page: aio-webfetch(url, query) — returns the top-k BM25-ranked chunks (with heading breadcrumbs) that answer the query, not the whole page.\n- Cited multi-source answer: aio-webfetch(urls:[...], query) — pools chunks from ALL pages, ranks them, and returns the top-k each labeled with its source URL + heading (verifiable cited retrieval, not a generated answer).\n- One document from many pages: aio-webfetch(urls:[...], compile) — compiles the batch into a single markdown package.\n\nOutput controls:\n- outline:true — ~50-token heading outline (the page's shape) instead of the body.\n- budgetTokens — HARD output ceiling; guarantees the returned text fits N tokens (heading skeleton preserved).\n- format — markdown (default, saved to disk) | html | text | json | raw (in-memory).\n- summarize:true — OPT-IN AI summary for long content. Off by default: long content returns the frugal outline+largest-section preview instead (cheaper, lossless). Full content is saved either way.\n\nThree output-limit knobs (pick one): prune = score-based relevance pruning to a token budget (drops low-value sections, query-aware); budgetTokens = hard output ceiling (guaranteed fit); max_length = raw character window (pagination with start_index).\n\nAdvanced (rarely needed): mode/browser/os/proxy (fetch tuning), chunks/maxTokens/overlapTokens/topChunks (RAG), start_index/max_length (pagination), bypass/bypassStrategies (opt-in paywall bypass), cacheTtlSeconds, interactive, localCheck, diff.",
 		promptSnippet:
-			"aio-webfetch(url|urls, mode?, browser?, os?, proxy?, prune?, query?, topChunks?, interactive?, bypass?, bypassStrategies?, compile?, out?, cacheTtlSeconds?, start_index?, max_length?, format?, outline?): fetch URL(s) with anti-bot TLS fingerprinting, defuddle extraction, and optional AI summary. Default `format=markdown` saves to disk; pass `format=html|text|json|raw` for an in-memory body. Use the read tool on the saved path for full text. Pass `query` alone for answer mode: returns top-k BM25-scored chunks with heading breadcrumbs; full content cached for aio-webcontent. Pass `outline: true` for a ~50-token heading outline (shape of the page) instead of the body; full content still cached.",
+			"aio-webfetch(url|urls, query?, outline?, budgetTokens?, summarize?, compile?, format?, prune?, topChunks?, …): fetch URL(s) with anti-bot TLS fingerprinting + defuddle extraction. Full content always saved to disk + cached. `url` accepts a string OR an array; `urls` is the array form. `query` alone → single-page answer mode (top-k BM25 chunks w/ breadcrumbs); `urls:[…]+query` → cited multi-source answer (top-k chunks each labeled with its source URL). `outline:true` → ~50-token heading outline. `summarize:true` → opt-in AI summary (off by default; long content otherwise gets the frugal outline+largest-section preview). `format=html|text|json|raw` for an in-memory body. Use the read tool on the saved path for full text.",
 		promptGuidelines: [
 			"Use aio-webfetch when the user wants to retrieve specific webpage(s), article(s), or file(s).",
 			"Use aio-webpull when the user wants to download an entire site or docs collection.",
 			"After aio-webfetch completes, use the built-in read tool to inspect the generated markdown file(s).",
-			"Pass `urls: [...]` (not `url`) to fetch multiple pages in one call — returns per-item progress in the TUI.",
+			"Pass `urls: [...]` (or `url` with an array) to fetch multiple pages in one call — returns per-item progress in the TUI.",
+			"For a question answered by several pages, pass `urls:[...]` WITH `query` to get a cited multi-source answer (each chunk labeled with its source URL).",
+			"AI summarization is opt-in: pass `summarize: true` only when you actually want a lossy summary; otherwise the frugal preview / outline is cheaper and lossless.",
 		],
 		parameters: Type.Object({
 			url: Type.Optional(
-				Type.String({
+				Type.Union([Type.String(), Type.Array(Type.String())], {
 					description:
-						"Single URL to fetch. Use either 'url' or 'urls', not both.",
+					"URL to fetch. Accepts a single URL string OR an array of URL strings (additive — `urls` still works and takes precedence if both are given).",
 				}),
 			),
 			urls: Type.Optional(
 				Type.Array(Type.String(), {
-					description: "Multiple URLs to fetch in parallel.",
+						description:
+						"Multiple URLs to fetch in parallel. Takes precedence over `url` if both are given.",
 				}),
 			),
 			out: Type.Optional(
@@ -829,6 +857,12 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 						"Opt-in outline/TOC mode. After fetching, return ONLY a compact heading outline (total word count + per-section word counts, ~50 tokens) instead of the body, so you can see a page's shape and then fetch just the section you want (via `query`) or the whole page (via aio-webcontent). The full content is still saved to disk + cached as normal; only what is RETURNED changes. Applies to format: markdown.",
 				}),
 			),
+			summarize: Type.Optional(
+				Type.Boolean({
+					description:
+						"Opt-in AI summarization for long content (via Google AI Mode). Default false: long content returns the frugal outline + largest-section preview instead, which is cheaper and lossless. When true, the relatedness-gated focused-summary behavior is preserved (a recent related search query is injected and the summary is annotated `_[focused on prior search]_`), and an `AI-summarized… full content saved` footer is added. The FULL content is ALWAYS saved to disk + cached regardless of this flag.",
+				}),
+			),
 		}),
 
 		async execute(
@@ -841,7 +875,9 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 			// Per-execution chunking error tracker (avoids module-level
 			// state contamination across concurrent requests).
 			const chunkingErrors: string[] = [];
-			const targets: string[] = params.urls ?? (params.url ? [params.url] : []);
+			// UX11: `url` accepts a string OR an array (additive). `urls` still
+			// works and takes precedence when both are given (unchanged).
+			const targets: string[] = resolveFetchTargets(params.url, params.urls);
 			if (!targets.length) {
 				throw new Error("Provide either 'url' or 'urls'");
 			}
@@ -1206,7 +1242,8 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 									savedToDisk: false,
 									diffResult: diffText,
 									outline: extractOutline(notModifiedResult.content).headings,
-									wordCount: extractOutline(notModifiedResult.content).totalWords,
+									wordCount: extractOutline(notModifiedResult.content)
+										.totalWords,
 								};
 							}
 
@@ -1234,7 +1271,8 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 									format: "markdown",
 									savedToDisk: false,
 									outline: extractOutline(notModifiedResult.content).headings,
-									wordCount: extractOutline(notModifiedResult.content).totalWords,
+									wordCount: extractOutline(notModifiedResult.content)
+										.totalWords,
 								};
 							}
 
@@ -1683,7 +1721,19 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 						});
 
 					const isShort = preview.length <= MAX_PREVIEW_CHARS;
-					if (!outlineMode && !skipSummary && !isShort && cdpAvailableGA()) {
+					// UX9: AI summarization is OPT-IN. When `summarize` is not true we
+					// skip the lossy/latency-heavy Google AI summary entirely and let
+					// the frugal preview (UX2) / outline be the default for long
+					// content. Full content is already saved + cached by the worker
+					// above regardless of this flag.
+					const summarizeOptIn = params.summarize === true;
+					if (
+						summarizeOptIn &&
+						!outlineMode &&
+						!skipSummary &&
+						!isShort &&
+						cdpAvailableGA()
+					) {
 						const cacheKey = summaryCacheKey(
 							r.url as string,
 							injectSearchCtx ? searchCtx : undefined,
@@ -1950,6 +2000,105 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 							items: details.items,
 						},
 					};
+				}
+
+				// UX8: multi-source focused answer mode (cited retrieval). When MORE
+				// than one URL is fetched WITH a `query` (and no `prune`), pool the
+				// chunks from every page, BM25-rank the pool, and return the top-k
+				// chunks each labeled with its source URL + heading breadcrumb. This
+				// is verifiable cited RETRIEVAL, not a generated answer. Single-URL
+				// answer mode (handled above) is unchanged. Full content for every
+				// page was already saved + cached by the worker.
+				const multiAnswerQuery = params.query as string | undefined;
+				const multiAnswerPrune = params.prune as number | undefined;
+				const multiAnswerActive =
+					targets.length > 1 &&
+					!!multiAnswerQuery &&
+					!multiAnswerPrune &&
+					okResults.length > 0 &&
+					okResults.every(
+						(r) => ((r as any).format ?? "markdown") === "markdown",
+					);
+				if (multiAnswerActive) {
+					const sources = okResults
+						.filter((r) => r.url && (r as any).body)
+						.map((r) => ({
+							url: r.url as string,
+							title: r.title as string | undefined,
+							content: (r as any).body as string,
+						}));
+					const topK =
+						(params.topChunks as number | undefined) ?? DEFAULT_TOP_CHUNKS;
+					const ranked = rankChunksAcrossSources(
+						sources,
+						multiAnswerQuery!,
+						{
+							topK,
+							chunkOptions: {
+								maxTokens: params.maxTokens as number | undefined,
+								overlapTokens: params.overlapTokens as number | undefined,
+							},
+						},
+					);
+					if (ranked.length > 0) {
+						// Render the inner cited-answer text (no markers), apply an
+						// optional hard token budget, THEN wrap in fresh safety
+						// markers so the [UNTRUSTED WEB CONTENT] guard always survives
+						// the budget transform.
+						let inner = formatMultiSourceAnswer(
+							ranked,
+							multiAnswerQuery!,
+							{ sourcesCount: sources.length, wrap: false },
+						);
+						const budgetTokens = params.budgetTokens as number | undefined;
+						if (budgetTokens) {
+							inner = applyTokenBudget(
+								inner,
+								budgetTokens,
+								multiAnswerQuery,
+							);
+						}
+						const displayContent = wrapUntrusted(inner);
+						const header = `Fetched ${okResults.length}/${targets.length} URLs.`;
+						const notice =
+							`\n[Multi-source answer mode: top ${ranked.length} cited chunk(s) across ` +
+							`${sources.length} sources for "${multiAnswerQuery}". Each chunk is labeled ` +
+							`with its source URL — verify against that source. Full content for every ` +
+							`page is cached — retrieve any page in full via aio-webcontent by URL.]`;
+						return {
+							content: [
+								{
+									type: "text",
+									text:
+										header +
+										notice +
+										"\n\n" +
+										displayContent +
+										localKnowledgeNote,
+								},
+							],
+							details: {
+								results,
+								...(localKnowledge ? { localKnowledge } : {}),
+								browser,
+								os,
+								proxy,
+								multiAnswer: ranked,
+								multiAnswerQuery,
+								summarized: false,
+								status: "done",
+								progress: 1,
+								spinnerTick: details.spinnerTick,
+								content: displayContent,
+								format: "markdown",
+								items: details.items,
+								total: targets.length,
+								completed: details.completed,
+								succeeded: details.succeeded,
+								failed: details.failed,
+							},
+						};
+					}
 				}
 
 				let packagePath: string | undefined;
