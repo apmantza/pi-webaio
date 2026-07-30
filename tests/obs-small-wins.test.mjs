@@ -30,7 +30,10 @@ test("backfillMissingResults: all slots present → unchanged", () => {
 
 test("backfillMissingResults: one undefined slot → explicit error for that target", () => {
 	const targets = ["https://a.example/", "https://b.example/"];
-	const results = [{ ok: true, url: "https://a.example/", title: "A" }, undefined];
+	const results = [
+		{ ok: true, url: "https://a.example/", title: "A" },
+		undefined,
+	];
 	const out = backfillMissingResults(results, targets);
 	assert.strictEqual(out.length, targets.length);
 	assert.strictEqual(out[0].ok, true);
@@ -40,9 +43,16 @@ test("backfillMissingResults: one undefined slot → explicit error for that tar
 });
 
 test("backfillMissingResults: length always === targets.length", () => {
-	const targets = ["https://a.example/", "https://b.example/", "https://c.example/"];
+	const targets = [
+		"https://a.example/",
+		"https://b.example/",
+		"https://c.example/",
+	];
 	// Shorter results array (a URL was dropped entirely).
-	const out = backfillMissingResults([{ ok: true, url: "https://a.example/" }], targets);
+	const out = backfillMissingResults(
+		[{ ok: true, url: "https://a.example/" }],
+		targets,
+	);
 	assert.strictEqual(out.length, targets.length);
 	assert.strictEqual(out[1].ok, false);
 	assert.strictEqual(out[1].url, "https://b.example/");
@@ -80,8 +90,37 @@ test("detectErrorMisattribution: no URL in text → false", () => {
 });
 
 test("detectErrorMisattribution: empty inputs → false", () => {
-	assert.strictEqual(detectErrorMisattribution(undefined, "https://x.example/"), false);
-	assert.strictEqual(detectErrorMisattribution("https://x.example/", undefined), false);
+	assert.strictEqual(
+		detectErrorMisattribution(undefined, "https://x.example/"),
+		false,
+	);
+	assert.strictEqual(
+		detectErrorMisattribution("https://x.example/", undefined),
+		false,
+	);
+});
+
+test("detectErrorMisattribution: http→https auto-upgrade is NOT mis-attribution", () => {
+	// The tool upgrades http→https internally, so a blocked http:// URL's error
+	// legitimately names its https:// form — this must not flag (was a false
+	// positive on every blocked http:// URL).
+	assert.strictEqual(
+		detectErrorMisattribution(
+			"http://169.254.169.254/latest/meta-data/",
+			"Blocked request to private/internal URL: https://169.254.169.254/latest/meta-data/ [blocked_ssrf]",
+		),
+		false,
+	);
+});
+
+test("detectErrorMisattribution: trailing-slash difference is NOT mis-attribution", () => {
+	assert.strictEqual(
+		detectErrorMisattribution(
+			"https://example.com",
+			"Server responded with HTTP 404: https://example.com/",
+		),
+		false,
+	);
 });
 
 // ─── P6: throwing loader produces a console.warn ───────────────────
@@ -99,7 +138,11 @@ test("initUserExtractors: a throwing loader warns and leaves registry empty", as
 	}
 	assert.strictEqual(getUserExtractors().length, 0);
 	assert.ok(
-		warnings.some((w) => w.includes("[user-verticals]") && w.includes("bad path or syntax error")),
+		warnings.some(
+			(w) =>
+				w.includes("[user-verticals]") &&
+				w.includes("bad path or syntax error"),
+		),
 		`expected a user-verticals load warning, got: ${JSON.stringify(warnings)}`,
 	);
 });

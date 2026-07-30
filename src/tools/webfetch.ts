@@ -133,14 +133,21 @@ const ERROR_URL_RE = /https?:\/\/[^\s"'<>)\]]+/gi;
  * rather than render a misleading `✗ <url>: <other url's error>` line.
  *
  * Pure. Returns false when the text carries no URL, or every URL it carries
- * matches `url` (compared case-insensitively, ignoring trailing punctuation).
+ * matches `url` (compared case-insensitively, treating http and https as
+ * equivalent — the tool auto-upgrades http→https, so a blocked `http://` URL's
+ * error legitimately names its `https://` form — and ignoring trailing slashes
+ * and sentence punctuation).
  */
 export function detectErrorMisattribution(
 	url: string | undefined,
 	errorText: string | undefined,
 ): boolean {
 	if (!url || !errorText) return false;
-	const norm = (u: string): string => u.toLowerCase().replace(/[.,;:!?]+$/, "");
+	const norm = (u: string): string =>
+		u
+			.toLowerCase()
+			.replace(/^https?:\/\//, "") // http == https (auto-upgrade)
+			.replace(/[/.,;:!?]+$/, ""); // trailing slash + punctuation
 	const target = norm(url);
 	const mentioned = errorText.match(ERROR_URL_RE);
 	if (!mentioned) return false;
