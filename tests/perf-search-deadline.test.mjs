@@ -145,7 +145,10 @@ test("a slow engine that exceeds the deadline is recorded as timeout (429 retry 
 	const elapsed = Date.now() - start;
 
 	assert.strictEqual(r.engineStatus.brave.status, "timeout");
-	assert.ok(elapsed < 1000, `deadline should bound the search, took ${elapsed}ms`);
+	assert.ok(
+		elapsed < 1000,
+		`deadline should bound the search, took ${elapsed}ms`,
+	);
 });
 
 test("engineStatusNotes renders a timeout note with the measured latency", async () => {

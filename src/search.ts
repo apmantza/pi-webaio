@@ -972,11 +972,19 @@ export async function searchWeb(
 			deadlineHandle.unref?.();
 		});
 		const attempt = fetchFn(engine.url, { headers: commonHeaders })
-			.then((res) => ({ res, timedOut: false as const, err: undefined as unknown }))
+			.then((res) => ({
+				res,
+				timedOut: false as const,
+				err: undefined as unknown,
+			}))
 			.catch((err) => ({ res: null, timedOut: false as const, err }));
 		return Promise.race([
 			attempt,
-			deadline.then(() => ({ res: null, timedOut: true as const, err: undefined as unknown })),
+			deadline.then(() => ({
+				res: null,
+				timedOut: true as const,
+				err: undefined as unknown,
+			})),
 		]).then((outcome) => {
 			clearTimeout(deadlineHandle);
 			const latencyMs = Date.now() - start;

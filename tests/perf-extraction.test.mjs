@@ -93,14 +93,24 @@ test("local-first: a page that extracts well locally never calls Jina", async ()
 	const calls = installJinaSpy(null);
 	const url = "https://93.184.216.34/articles/continuousIntegration.html";
 
-	const result = await runHtmlPipeline(articleHtml(), url, url, undefined, undefined);
+	const result = await runHtmlPipeline(
+		articleHtml(),
+		url,
+		url,
+		undefined,
+		undefined,
+	);
 
 	assert.strictEqual(result.ok, true);
 	assert.ok(
 		wordCount(result.content) >= MIN_LOCAL_WORDS,
 		`expected a substantial local extraction, got ${wordCount(result.content)} words`,
 	);
-	assert.strictEqual(calls.length, 0, "Jina must not be called for a locally-extractable page");
+	assert.strictEqual(
+		calls.length,
+		0,
+		"Jina must not be called for a locally-extractable page",
+	);
 });
 
 test("fallback: a page that yields too few words locally calls Jina", async () => {
@@ -109,16 +119,32 @@ test("fallback: a page that yields too few words locally calls Jina", async () =
 
 	await runHtmlPipeline(SPA_SHELL, url, url, undefined, undefined);
 
-	assert.strictEqual(calls.length, 1, "Jina must be tried when local extraction is too thin");
+	assert.strictEqual(
+		calls.length,
+		1,
+		"Jina must be tried when local extraction is too thin",
+	);
 	assert.strictEqual(calls[0], url);
 });
 
 test("fallback: a successful Jina result is preferred over a thin local pass", async () => {
-	const jinaContent = "Title: Real Article\n\n" + "recovered content word ".repeat(80);
-	installJinaSpy({ ok: true, url: "x", title: "Real Article", content: jinaContent });
+	const jinaContent =
+		"Title: Real Article\n\n" + "recovered content word ".repeat(80);
+	installJinaSpy({
+		ok: true,
+		url: "x",
+		title: "Real Article",
+		content: jinaContent,
+	});
 	const url = "https://93.184.216.34/post";
 
-	const result = await runHtmlPipeline(SPA_SHELL, url, url, undefined, undefined);
+	const result = await runHtmlPipeline(
+		SPA_SHELL,
+		url,
+		url,
+		undefined,
+		undefined,
+	);
 
 	assert.strictEqual(result.ok, true);
 	assert.ok(result.content.includes("recovered content"));
@@ -132,25 +158,56 @@ test("negative cache: a domain that returned null is skipped on the next page", 
 	const domain = "https://93.184.216.34";
 
 	// First page on the domain: Jina is attempted and fails.
-	await runHtmlPipeline(SPA_SHELL, `${domain}/page-1`, `${domain}/page-1`, undefined, undefined);
+	await runHtmlPipeline(
+		SPA_SHELL,
+		`${domain}/page-1`,
+		`${domain}/page-1`,
+		undefined,
+		undefined,
+	);
 	assert.strictEqual(calls.length, 1, "first page should attempt Jina");
-	assert.ok(isJinaNegativeCached(`${domain}/anything`), "domain should be negatively cached");
+	assert.ok(
+		isJinaNegativeCached(`${domain}/anything`),
+		"domain should be negatively cached",
+	);
 
 	// Second page on the SAME domain: Jina is skipped via the negative cache.
-	await runHtmlPipeline(SPA_SHELL, `${domain}/page-2`, `${domain}/page-2`, undefined, undefined);
-	assert.strictEqual(calls.length, 1, "second page on the same domain must skip Jina");
+	await runHtmlPipeline(
+		SPA_SHELL,
+		`${domain}/page-2`,
+		`${domain}/page-2`,
+		undefined,
+		undefined,
+	);
+	assert.strictEqual(
+		calls.length,
+		1,
+		"second page on the same domain must skip Jina",
+	);
 
 	// A different domain is unaffected and still attempts Jina.
-	await runHtmlPipeline(SPA_SHELL, "https://93.184.216.35/x", "https://93.184.216.35/x", undefined, undefined);
-	assert.strictEqual(calls.length, 2, "a fresh domain should still attempt Jina");
+	await runHtmlPipeline(
+		SPA_SHELL,
+		"https://93.184.216.35/x",
+		"https://93.184.216.35/x",
+		undefined,
+		undefined,
+	);
+	assert.strictEqual(
+		calls.length,
+		2,
+		"a fresh domain should still attempt Jina",
+	);
 });
 
 // ─── P0: Jina timeout is bounded ───────────────────────────────────
 
-test("Jina transport is bounded by a short timeout (not smartFetch's 30s)", () =>
-{
+test("Jina transport is bounded by a short timeout (not smartFetch's 30s)", () => {
 	assert.ok(JINA_TIMEOUT_MS > 0);
-	assert.ok(JINA_TIMEOUT_MS <= 6000, `Jina timeout ${JINA_TIMEOUT_MS}ms should be a few seconds`);
+	assert.ok(
+		JINA_TIMEOUT_MS <= 6000,
+		`Jina timeout ${JINA_TIMEOUT_MS}ms should be a few seconds`,
+	);
 });
 
 test("a hanging Jina transport resolves to null within the timeout", async () => {
@@ -160,17 +217,29 @@ test("a hanging Jina transport resolves to null within the timeout", async () =>
 	const url = "https://93.184.216.34/a";
 
 	const started = Date.now();
-	const result = await runHtmlPipeline(SPA_SHELL, url, url, undefined, undefined);
+	const result = await runHtmlPipeline(
+		SPA_SHELL,
+		url,
+		url,
+		undefined,
+		undefined,
+	);
 	const elapsed = Date.now() - started;
 
 	assert.strictEqual(result.ok, true); // falls back to the (thin) local result
-	assert.ok(elapsed < JINA_TIMEOUT_MS + 2000, `pipeline should not hang (took ${elapsed}ms)`);
+	assert.ok(
+		elapsed < JINA_TIMEOUT_MS + 2000,
+		`pipeline should not hang (took ${elapsed}ms)`,
+	);
 });
 
 // ─── P1: Defuddle timeout tightened ────────────────────────────────
 
 test("DEFUDDLE_TIMEOUT is tightened from the previous 8000ms", () => {
-	assert.ok(DEFUDDLE_TIMEOUT < 8000, "Defuddle timeout should be tighter than the old 8s");
+	assert.ok(
+		DEFUDDLE_TIMEOUT < 8000,
+		"Defuddle timeout should be tighter than the old 8s",
+	);
 	assert.strictEqual(DEFUDDLE_TIMEOUT, 4000);
 });
 
@@ -181,9 +250,15 @@ test("readabilityRatioFailed: just below vs just above the ratio on large HTML",
 	const threshold = READABILITY_MIN_RATIO * htmlLength; // 500 chars
 
 	// Just BELOW the ratio → flagged as failed.
-	assert.strictEqual(readabilityRatioFailed(Math.floor(threshold) - 1, htmlLength), true);
+	assert.strictEqual(
+		readabilityRatioFailed(Math.floor(threshold) - 1, htmlLength),
+		true,
+	);
 	// Just ABOVE the ratio → accepted.
-	assert.strictEqual(readabilityRatioFailed(Math.ceil(threshold) + 1, htmlLength), false);
+	assert.strictEqual(
+		readabilityRatioFailed(Math.ceil(threshold) + 1, htmlLength),
+		false,
+	);
 });
 
 test("readabilityRatioFailed: small HTML is never ratio-failed", () => {

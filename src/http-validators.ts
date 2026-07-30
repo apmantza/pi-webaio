@@ -27,7 +27,10 @@ export interface HttpValidators {
  * Persist ETag / Last-Modified alongside a cached entry so future
  * fetches can send conditional requests and handle 304 cheaply.
  */
-export function attachValidators(url: string, validators: HttpValidators): void {
+export function attachValidators(
+	url: string,
+	validators: HttpValidators,
+): void {
 	const key = normalizeCacheKey(url);
 	const entry = sessionStore.get(key);
 	if (!entry) return;

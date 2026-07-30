@@ -38,11 +38,7 @@ import {
 
 test("countDistinctHosts: counts unique hosts across http/https", () => {
 	assert.equal(
-		countDistinctHosts([
-			"https://a.com/x",
-			"https://a.com/y",
-			"http://b.com/",
-		]),
+		countDistinctHosts(["https://a.com/x", "https://a.com/y", "http://b.com/"]),
 		2,
 	);
 });
@@ -52,10 +48,7 @@ test("countDistinctHosts: empty input is 0", () => {
 });
 
 test("countDistinctHosts: ignores unparseable URLs", () => {
-	assert.equal(
-		countDistinctHosts(["not a url ::", "https://c.com/"]),
-		1,
-	);
+	assert.equal(countDistinctHosts(["not a url ::", "https://c.com/"]), 1);
 });
 
 // ─── computePullConcurrency: single host ────────────────────────────────
@@ -71,12 +64,19 @@ test("computePullConcurrency: single host, many URLs → ~8-12 (not 32)", () => 
 });
 
 test("computePullConcurrency: single host is independent of URL count", () => {
-	const few = computePullConcurrency(["https://x.com/1", "https://x.com/2"], 16);
+	const few = computePullConcurrency(
+		["https://x.com/1", "https://x.com/2"],
+		16,
+	);
 	const many = computePullConcurrency(
 		Array.from({ length: 500 }, (_, i) => `https://x.com/${i}`),
 		16,
 	);
-	assert.equal(few, many, "same host → same worker count regardless of URL count");
+	assert.equal(
+		few,
+		many,
+		"same host → same worker count regardless of URL count",
+	);
 });
 
 // ─── computePullConcurrency: multi host scales up ───────────────────────
@@ -97,7 +97,10 @@ test("computePullConcurrency: more distinct hosts → more workers", () => {
 test("computePullConcurrency: floor ≥4 respected (low-CPU multi-host)", () => {
 	const urls = ["https://a.com/", "https://b.com/", "https://c.com/"];
 	const n = computePullConcurrency(urls, 1);
-	assert.ok(n >= PULL_CONCURRENCY_FLOOR, `expected ≥${PULL_CONCURRENCY_FLOOR}, got ${n}`);
+	assert.ok(
+		n >= PULL_CONCURRENCY_FLOOR,
+		`expected ≥${PULL_CONCURRENCY_FLOOR}, got ${n}`,
+	);
 	assert.equal(n, PULL_CONCURRENCY_FLOOR);
 });
 
@@ -106,7 +109,10 @@ test("computePullConcurrency: empty input still yields a sane floored value", ()
 });
 
 test("computePullConcurrency: respects the ceiling (huge multi-host + many CPUs)", () => {
-	const urls = Array.from({ length: 100 }, (_, i) => `https://host${i}.example.com/`);
+	const urls = Array.from(
+		{ length: 100 },
+		(_, i) => `https://host${i}.example.com/`,
+	);
 	const n = computePullConcurrency(urls, 64);
 	assert.equal(n, PULL_CONCURRENCY_CEILING);
 	assert.ok(n <= PULL_CONCURRENCY_CEILING);
@@ -168,7 +174,11 @@ test("contrast: getStoredContent DELETES an expired entry (why peek-first is req
 	const key = normalizeCacheKey(url);
 	// getStoredContent treats expired as a miss and evicts the entry...
 	assert.equal(getStoredContent(url), null);
-	assert.equal(sessionStore.has(key), false, "getStoredContent evicts expired entries");
+	assert.equal(
+		sessionStore.has(key),
+		false,
+		"getStoredContent evicts expired entries",
+	);
 	// ...so calling it before the peek (the old code) left nothing to
 	// revalidate. getRevalidationCandidate must therefore peek, not get.
 });

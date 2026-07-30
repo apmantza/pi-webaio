@@ -75,8 +75,15 @@ test("fetchWithPlaywright: blocks a dangerous URL fail-closed (no pool, no brows
 		threw = err;
 	}
 	assert.ok(threw, "must throw on a dangerous URL");
-	assert.match(String(threw.message), /Blocked request to private\/internal URL/i);
-	assert.equal(threw.code, "blocked_ssrf", "surfaces as a blocked_ssrf FetchError");
+	assert.match(
+		String(threw.message),
+		/Blocked request to private\/internal URL/i,
+	);
+	assert.equal(
+		threw.code,
+		"blocked_ssrf",
+		"surfaces as a blocked_ssrf FetchError",
+	);
 });
 
 // ─── SSRF: per-page redirect guard still installed on pooled pages ───
@@ -182,7 +189,9 @@ test("BrowserPool: warm acquire is far faster than cold launch (Playwright-gated
 		);
 	} catch {
 		// Browser binaries may not be installed — not a failure of this unit.
-		t.skip("playwright launch unavailable (browsers not installed?) — UNMEASURED");
+		t.skip(
+			"playwright launch unavailable (browsers not installed?) — UNMEASURED",
+		);
 	} finally {
 		await pool.drain();
 	}

@@ -153,7 +153,9 @@ export function __setJinaTransportForTests(fn: JinaTransport | null): void {
 }
 
 /** Race a promise against the Jina timeout without dangling rejections. */
-function withJinaTimeout(promise: Promise<PullResult | null>): Promise<PullResult | null> {
+function withJinaTimeout(
+	promise: Promise<PullResult | null>,
+): Promise<PullResult | null> {
 	return new Promise<PullResult | null>((resolve) => {
 		const timer = setTimeout(() => resolve(null), JINA_TIMEOUT_MS);
 		promise.then(

@@ -69,8 +69,7 @@ export function readabilityRatioFailed(
 	htmlLength: number,
 ): boolean {
 	return (
-		htmlLength > 10000 &&
-		contentLength < READABILITY_MIN_RATIO * htmlLength
+		htmlLength > 10000 && contentLength < READABILITY_MIN_RATIO * htmlLength
 	);
 }
 
@@ -602,7 +601,11 @@ export async function runHtmlPipeline(
 		}
 	}
 
-	const hookedText = await runAfterFetchHooks(url, { status: 200, headers: {}, html: text });
+	const hookedText = await runAfterFetchHooks(url, {
+		status: 200,
+		headers: {},
+		html: text,
+	});
 	let cleaned = preCleanHtml(hookedText);
 	cleaned = compressHtml(cleaned);
 	const rawHtml = hookedText;
@@ -611,7 +614,12 @@ export async function runHtmlPipeline(
 	// the HTML we already downloaded. The Jina proxy reader re-fetches the
 	// same page server-side, so it is a *fallback* for genuinely JS-heavy
 	// pages that yield too few words locally — not the first step.
-	const local = await runLocalExtraction(cleaned, hookedText, finalUrl, rawHtml);
+	const local = await runLocalExtraction(
+		cleaned,
+		hookedText,
+		finalUrl,
+		rawHtml,
+	);
 
 	let chosen = local;
 	const localWords = wordCount(local.content || "");
@@ -1032,12 +1040,15 @@ export async function pullPageEnhanced(
 		// the regular HTML pipeline if the vertical failed and there's an
 		// error message to surface.
 		if (vertical.ok) {
-			return runAfterExtractHooks(url, finalizePullResult({
-				ok: true,
+			return runAfterExtractHooks(
 				url,
-				title: vertical.title,
-				content: `> via ${findVerticalExtractor(url) ?? "vertical extractor"}\n\n${vertical.content}`,
-			}));
+				finalizePullResult({
+					ok: true,
+					url,
+					title: vertical.title,
+					content: `> via ${findVerticalExtractor(url) ?? "vertical extractor"}\n\n${vertical.content}`,
+				}),
+			);
 		}
 		// Vertical reported a structured error. Surface it as a result so the
 		// user gets a clear explanation (e.g. "Reddit blocked our network")
@@ -1228,7 +1239,10 @@ export async function pullPageEnhanced(
 	if (mode === "browser") {
 		const pwHtml = await fetchWithPlaywright(url, opts?.browserPool);
 		if (pwHtml) {
-			return runAfterExtractHooks(url, await pullPage(url, opts, _redirectCount, pwHtml));
+			return runAfterExtractHooks(
+				url,
+				await pullPage(url, opts, _redirectCount, pwHtml),
+			);
 		}
 		const pwInfo: FetchErrorInfo = {
 			message: "Playwright browser rendering failed",

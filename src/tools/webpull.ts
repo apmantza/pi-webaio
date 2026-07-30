@@ -310,8 +310,7 @@ export function registerWebpullTool(pi: ExtensionAPI): void {
 						queue
 							.snapshot()
 							.filter(
-								(e) =>
-									e.status === "queued" || e.status === "in_progress",
+								(e) => e.status === "queued" || e.status === "in_progress",
 							)
 							.map((e) => e.url),
 						cpus().length,
@@ -530,7 +529,9 @@ export function registerWebpullTool(pi: ExtensionAPI): void {
 			const summary = [
 				formatPullHeadline(ok, priorCompleted, outDir),
 				err > 0 ? `⚠️ ${err} pages failed` : "",
-				indexBuilt ? `🔍 BM25 index built — use aio-webquery to search this corpus` : "",
+				indexBuilt
+					? `🔍 BM25 index built — use aio-webquery to search this corpus`
+					: "",
 				``,
 				`Files:`,
 				...files.slice(0, 30).map((f) => `  - ${f}`),
