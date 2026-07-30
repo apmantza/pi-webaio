@@ -14,6 +14,7 @@ import { isIP } from "node:net";
 // which sit at different depths relative to extractors/.
 import { STEALTH_SCRIPT } from "#stealth-script";
 import { detectBotBlock, detectLoginRedirect } from "./bot-detection.ts";
+import { BrowserPool } from "./browser-pool.ts";
 import {
 	createPinnedLookup,
 	fastSsrfBlock,
@@ -530,6 +531,83 @@ export async function fetchWithPlaywright(
 	return null;
 }
 
+// ─── Shared process-level browser pool (perf audit P2) ─────────────
+//
+// Every browser escalation in smartFetch — the remembered-"browser" fast-path,
+// the Rung-2 fallback, the Rung-1c soft-block-404 escalation, and the
+// bot-block fallback — used to call fetchWithPlaywright WITHOUT a pool unless
+// the caller passed one. Only aio-webpull passed a BrowserPool, so every
+// single escalated aio-webfetch paid a full launch+render+close (~808ms
+// measured) each time. A shared, lazily-created process-level pool lets single
+// fetches reuse a warm browser (~64ms measured) — ~740ms saved per escalation.
+//
+// SSRF tradeoff (option b — documented): the per-request launch path pins the
+// validated IP via Chromium --host-resolver-rules (buildHostResolverRules),
+// which a pooled launch cannot do (launch args are per-browser, not per-page).
+// The pooled render is still protected by the two controls that actually gate
+// the request, both of which run regardless of pooling:
+//   1. validateUrlForSsrf() — the fail-closed pre-flight check at the top of
+//      fetchWithPlaywright, which validates ALL resolved IPs incl. the
+//      absolute cloud-metadata floor and throws on any abnormal condition; and
+//   2. installSsrfRedirectGuard() — installed per-page in the pooled branch,
+//      re-validating every redirect hop + subresource via fastSsrfBlock().
+// The --host-resolver-rules pinning is defense-in-depth on top of the already
+// fail-closed pre-flight check (it only closes a re-resolve TOCTOU window), so
+// pooling the render does not regress the SSRF guarantee. As a further safety
+// net, fetchWithPlaywright's pooled branch falls through to a PINNED
+// per-request launch if the pooled render throws.
+//
+// The pool is lazy: getSharedBrowserPool() constructs the BrowserPool object
+// but launches NO browser until the first acquirePage(). Disable the shared
+// pool with PI_WEBAIO_SHARED_BROWSER_POOL=0. An explicit options.browserPool
+// always wins over the shared pool.
+
+let _sharedPool: BrowserPool | null = null;
+
+/**
+ * Return the process-level shared BrowserPool, creating it lazily on first
+ * call. Identity is stable across calls. Constructing the pool does NOT launch
+ * a browser — that happens on the first acquirePage().
+ */
+export function getSharedBrowserPool(): BrowserPool {
+	if (!_sharedPool) {
+		// A single shared browser is plenty for single-fetch escalations; the
+		// pool recycles it after maxPagesPerBrowser navigations.
+		_sharedPool = new BrowserPool({ maxBrowsers: 1 });
+	}
+	return _sharedPool;
+}
+
+/**
+ * Resolve the pool a fetch should render through: an explicit
+ * options.browserPool wins; otherwise the shared process-level pool, unless
+ * disabled via PI_WEBAIO_SHARED_BROWSER_POOL=0 (in which case undefined →
+ * fetchWithPlaywright uses its per-request pinned launch).
+ */
+function resolveBrowserPool(options: FetchOpts): FetchOpts["browserPool"] {
+	if (options.browserPool) return options.browserPool;
+	if (process.env.PI_WEBAIO_SHARED_BROWSER_POOL === "0") return undefined;
+	return getSharedBrowserPool();
+}
+
+/**
+ * Cleanup hook: drain the shared pool (close its browsers) so a long-lived
+ * host process doesn't leak browser instances. Safe to call repeatedly; resets
+ * the singleton so the next escalation lazily creates a fresh pool.
+ */
+export async function closeSharedBrowserPool(): Promise<void> {
+	const pool = _sharedPool;
+	_sharedPool = null;
+	if (pool) await pool.drain();
+}
+
+// Best-effort cleanup on process exit. exit handlers are synchronous so the
+// async drain() can only be fired-and-forgotten here — closeSharedBrowserPool()
+// is the reliable hook for callers that can await it.
+process.once("exit", () => {
+	if (_sharedPool) _sharedPool.drain().catch(() => {});
+});
+
 // ─── Response body reader (byte-budget capped) ─────────────────────
 
 export async function readResponseText(response: any): Promise<string> {
@@ -937,6 +1015,13 @@ export async function smartFetch(
 		options.browser ?? DEFAULT_BROWSER,
 	);
 
+	// Resolve the render pool once for every browser escalation below: an
+	// explicit options.browserPool wins, else the shared process-level pool
+	// (perf P2) — so single fetches reuse a warm browser instead of
+	// launch-close per request. See the shared-pool note above for the SSRF
+	// tradeoff this relies on.
+	const browserPool = resolveBrowserPool(options);
+
 	// ── Cookie-cache warm-path: reuse cookies from an earlier headless
 	// render of this same origin (+ proxy + browser profile) to try the
 	// cheap tier before escalating to a browser — even when memory says
@@ -956,7 +1041,7 @@ export async function smartFetch(
 	if (rememberedStrategy === "browser") {
 		const pwHtml = await fetchWithPlaywright(
 			url,
-			options.browserPool,
+			browserPool,
 			options.wreqSession,
 			cookieKey,
 		);
@@ -1001,7 +1086,7 @@ export async function smartFetch(
 		// ── Rung 2: Playwright browser fallback ───────────────────────────
 		const pwHtml = await fetchWithPlaywright(
 			url,
-			options.browserPool,
+			browserPool,
 			options.wreqSession,
 			cookieKey,
 		);
@@ -1040,7 +1125,7 @@ export async function smartFetch(
 		const statusOut = { status: 0 };
 		const pwHtml = await fetchWithPlaywright(
 			url,
-			options.browserPool,
+			browserPool,
 			options.wreqSession,
 			cookieKey,
 			statusOut,
@@ -1176,7 +1261,7 @@ export async function smartFetch(
 		const pwStatusOut = { status: 0 };
 		const pwHtml = await fetchWithPlaywright(
 			url,
-			options.browserPool,
+			browserPool,
 			options.wreqSession,
 			cookieKey,
 			pwStatusOut,

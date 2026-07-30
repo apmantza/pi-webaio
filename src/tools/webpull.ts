@@ -40,6 +40,91 @@ export function formatPullHeadline(
 	return `✅ Pulled ${ok} pages to ${outDir}`;
 }
 
+// ─── Pull concurrency sizing (P4) ────────────────────────────────────
+// A single-host pull is rate-limiter-bound, not CPU- or network-bound:
+// smartFetch's per-host TokenBucket (burst 10, 5/s refill) sustains ~6
+// req/s no matter how many workers dispatch into it. Measured: 32 workers
+// = 6.37 pages/s vs 4 workers = 4.03 pages/s — 8× workers bought only
+// 1.58× throughput, the surplus just queueing on the bucket lock and
+// burning memory. Right-size the worker count to the rate limit instead of
+// blindly using cpus×2 (which is 32 on a 16-core host).
+//
+// Multi-host pulls are the exception: every host has its OWN bucket, so
+// concurrency actually pays off across hosts. Scale the worker count with
+// the distinct-host count there, bounded by CPU headroom (parallel
+// extraction is CPU-bound) and a hard ceiling.
+
+/** Minimum workers for any pull (keeps tiny/odd inputs sane). */
+export const PULL_CONCURRENCY_FLOOR = 4;
+/** Hard ceiling so a huge multi-host pull cannot exhaust resources. */
+export const PULL_CONCURRENCY_CEILING = 32;
+/**
+ * Workers that saturate one host's 5 req/s bucket (burst 10) with headroom
+ * — the 8–12 range the perf audit (docs/perf-improvements.md, P4) measured
+ * as optimal for a single host.
+ */
+export const PULL_WORKERS_PER_HOST = 10;
+
+/**
+ * Count the distinct hostnames in a set of target URLs. Unparseable URLs
+ * are ignored (they cannot be fetched anyway). Used to decide whether a
+ * pull is single-host (rate-limiter-bound) or multi-host (where more
+ * workers help). Exported for unit tests.
+ */
+export function countDistinctHosts(targetUrls: string[]): number {
+	const hosts = new Set<string>();
+	for (const raw of targetUrls) {
+		let s = raw;
+		if (!/^https?:\/\//i.test(s)) s = `https://${s}`;
+		try {
+			const host = new URL(s).hostname.toLowerCase();
+			if (host) hosts.add(host);
+		} catch {
+			/* unparseable URL — skip for host counting */
+		}
+	}
+	return hosts.size;
+}
+
+/**
+ * Right-size pull worker count for a target URL set (P4). Pure/offline.
+ *
+ * - Single host (≤1 distinct host): rate-limiter-bound, so return
+ *   ~PULL_WORKERS_PER_HOST (10) regardless of URL count or CPU — surplus
+ *   workers only add lock contention + memory.
+ * - Multi host: scale ~PULL_WORKERS_PER_HOST per distinct host (each host
+ *   has its own bucket), bounded by CPU headroom (cpus×2, floored) and the
+ *   hard ceiling.
+ *
+ * Always returns a value within [PULL_CONCURRENCY_FLOOR, PULL_CONCURRENCY_CEILING].
+ * The deliberate 5/s per-host rate cap is NOT touched here.
+ */
+export function computePullConcurrency(
+	targetUrls: string[],
+	cpus: number,
+): number {
+	const distinctHosts = countDistinctHosts(targetUrls);
+
+	if (distinctHosts <= 1) {
+		// Single-host (or empty/unparseable): one bucket, I/O-bound. CPU
+		// count is irrelevant — clamp the per-host worker count and return.
+		return Math.min(
+			PULL_CONCURRENCY_CEILING,
+			Math.max(PULL_CONCURRENCY_FLOOR, PULL_WORKERS_PER_HOST),
+		);
+	}
+
+	// Multi-host: more workers pay off across hosts. Scale with host count,
+	// cap by CPU headroom (parallel extraction is CPU-bound) and the ceiling.
+	const safeCpus = Math.max(1, Math.round(cpus));
+	const hostScaled = distinctHosts * PULL_WORKERS_PER_HOST;
+	const cpuCap = Math.max(PULL_CONCURRENCY_FLOOR, safeCpus * 2);
+	return Math.min(
+		PULL_CONCURRENCY_CEILING,
+		Math.max(PULL_CONCURRENCY_FLOOR, Math.min(hostScaled, cpuCap)),
+	);
+}
+
 export function registerWebpullTool(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: "aio-webpull",
@@ -170,7 +255,10 @@ export function registerWebpullTool(pi: ExtensionAPI): void {
 					? (params.max as number)
 					: 100,
 			);
-			const concurrency = Math.max(4, cpus().length * 2);
+			// Right-sized via computePullConcurrency once the target URL set is
+			// known (below). Seed with a single-host sizing from the root URL so
+			// the value is always sane before discovery/resume refines it (P4).
+			let concurrency = computePullConcurrency([url.href], cpus().length);
 			const browser = (params.browser as string) ?? getLatestChromeProfile();
 			const os = (params.os as string) ?? DEFAULT_OS;
 			const proxy = (params.proxy as string) ?? undefined;
@@ -217,6 +305,17 @@ export function registerWebpullTool(pi: ExtensionAPI): void {
 				if (queue) {
 					const s = queue.stats();
 					priorCompleted = s.completed;
+					// Size workers from the URLs still to be fetched (P4).
+					concurrency = computePullConcurrency(
+						queue
+							.snapshot()
+							.filter(
+								(e) =>
+									e.status === "queued" || e.status === "in_progress",
+							)
+							.map((e) => e.url),
+						cpus().length,
+					);
 					onUpdate?.({
 						content: [
 							{
@@ -245,6 +344,10 @@ export function registerWebpullTool(pi: ExtensionAPI): void {
 
 				queue = await RequestQueue.create(outDir);
 				await queue.add(urls);
+
+				// Size workers from the discovered URL set (P4): single-host
+				// pulls are rate-limiter-bound (~10 workers), multi-host scale up.
+				concurrency = computePullConcurrency(urls, cpus().length);
 
 				onUpdate?.({
 					content: [

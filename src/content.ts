@@ -36,12 +36,43 @@ import { createFetchError } from "./tools/fetch-error.ts";
 
 export const MARKDOWN_SIGNAL =
 	/^(#{1,6}\s|[-*]\s|\d+\.\s|```|>\s|\[[^\]]+\]\([^)]+\))/m;
-export const DEFUDDLE_TIMEOUT = 8000;
+// Defuddle is CPU-bound and ~14x slower than Readability on large docs
+// (measured 2605ms vs 182ms on 625KB). It only runs when Readability
+// fails, so bound its worst-case worker stall tightly rather than the
+// previous generous 8s.
+export const DEFUDDLE_TIMEOUT = 4000;
 export const MAX_PREVIEW_CHARS = 1800;
 export const MIN_USEFUL_CONTENT = 500;
 
 const MAX_CLIENT_REDIRECTS = 5;
 const MIN_ALTERNATE_FALLBACK_WORDS = 30;
+
+// Local extraction (Readability/Defuddle) is considered to have produced
+// enough content when it yields at least this many words. Below this, the
+// page is likely JS-heavy and we fall back to the Jina proxy reader.
+export const MIN_LOCAL_WORDS = 50;
+
+// Readability is accepted unless its output is a suspiciously tiny
+// fraction of a large HTML document (a sign it latched onto boilerplate
+// rather than the article). Lowered from 1% to 0.5% so more pages resolve
+// via the much-cheaper Readability path instead of falling through to
+// Defuddle.
+export const READABILITY_MIN_RATIO = 0.005;
+
+/**
+ * Heuristic: did Readability "fail" by extracting far too little of a
+ * large document? Only applied to large HTML (>10KB) where a real article
+ * should dwarf the boilerplate. Exported for offline testing.
+ */
+export function readabilityRatioFailed(
+	contentLength: number,
+	htmlLength: number,
+): boolean {
+	return (
+		htmlLength > 10000 &&
+		contentLength < READABILITY_MIN_RATIO * htmlLength
+	);
+}
 
 // ─── Noise selectors ───────────────────────────────────────────────
 
@@ -576,56 +607,74 @@ export async function runHtmlPipeline(
 	cleaned = compressHtml(cleaned);
 	const rawHtml = hookedText;
 
-	if (!(await isDangerousUrl(url))) {
+	// Local extraction first (Readability → RSC → Defuddle → fallback) on
+	// the HTML we already downloaded. The Jina proxy reader re-fetches the
+	// same page server-side, so it is a *fallback* for genuinely JS-heavy
+	// pages that yield too few words locally — not the first step.
+	const local = await runLocalExtraction(cleaned, hookedText, finalUrl, rawHtml);
+
+	let chosen = local;
+	const localWords = wordCount(local.content || "");
+	if (localWords < MIN_LOCAL_WORDS && !(await isDangerousUrl(url))) {
 		const { fetchJina } = await import("./fetch-jina.ts");
 		const jina = await fetchJina(url);
-		if (jina) {
-			if (wordCount(jina.content || "") < MIN_ALTERNATE_FALLBACK_WORDS) {
-				const alt = await tryAlternateLinks(hookedText, finalUrl, _opts);
-				if (alt) return finalizePullResult(alt, redirectNotice);
-			}
-			return finalizePullResult(jina, redirectNotice);
+		// Prefer Jina only when it actually recovered more content than the
+		// local pass — never downgrade a thin Jina body over a usable local
+		// extraction.
+		if (jina && wordCount(jina.content || "") > localWords) {
+			chosen = jina;
 		}
 	}
 
+	if (wordCount(chosen.content || "") < MIN_ALTERNATE_FALLBACK_WORDS) {
+		const alt = await tryAlternateLinks(hookedText, finalUrl, _opts);
+		if (alt) return finalizePullResult(alt, redirectNotice);
+	}
+	return finalizePullResult(chosen, redirectNotice);
+}
+
+/**
+ * Run the purely-local extraction chain (no network) over HTML we already
+ * have: Readability, then Next.js RSC payloads, then Defuddle (bounded by
+ * DEFUDDLE_TIMEOUT), then a last-resort text fallback. Returns an
+ * unfinalized PullResult; the caller decides whether to fall back to Jina
+ * and applies finalization / alternate-link handling.
+ */
+async function runLocalExtraction(
+	cleaned: string,
+	hookedText: string,
+	finalUrl: string,
+	rawHtml: string,
+): Promise<PullResult> {
 	const readability = extractReadability(cleaned, finalUrl);
 	if (readability) {
+		// Accept Readability whenever it produced a usable article, or when
+		// the ratio heuristic did not flag it as boilerplate. This resolves
+		// more pages via the cheap Readability path instead of Defuddle.
 		if (
-			hookedText.length > 10000 &&
-			readability.content.length < 0.01 * hookedText.length
+			wordCount(readability.content) >= MIN_LOCAL_WORDS ||
+			!readabilityRatioFailed(readability.content.length, hookedText.length)
 		) {
-			// skip — readability failed
-		} else {
-			if (wordCount(readability.content) < MIN_ALTERNATE_FALLBACK_WORDS) {
-				const alt = await tryAlternateLinks(hookedText, finalUrl, _opts);
-				if (alt) return finalizePullResult(alt, redirectNotice);
-			}
-			return finalizePullResult(
-				{
-					ok: true,
-					url: finalUrl,
-					title: readability.title,
-					content: readability.content,
-					rawHtml,
-				},
-				redirectNotice,
-			);
+			return {
+				ok: true,
+				url: finalUrl,
+				title: readability.title,
+				content: readability.content,
+				rawHtml,
+			};
 		}
 	}
 
 	const rscContent = extractRSC(hookedText);
 	if (rscContent) {
-		return finalizePullResult(
-			{
-				ok: true,
-				url: finalUrl,
-				// Derive a real title from the HTML (og:title → <title> →
-				// <h1>) instead of hardcoding the hostname for Next.js SPAs.
-				title: resolveHtmlTitle(hookedText, finalUrl),
-				content: rscContent,
-			},
-			redirectNotice,
-		);
+		return {
+			ok: true,
+			url: finalUrl,
+			// Derive a real title from the HTML (og:title → <title> →
+			// <h1>) instead of hardcoding the hostname for Next.js SPAs.
+			title: resolveHtmlTitle(hookedText, finalUrl),
+			content: rscContent,
+		};
 	}
 
 	try {
@@ -636,34 +685,20 @@ export async function runHtmlPipeline(
 		let defContent = result.content || "";
 		defContent = stripDefuddleComments(defContent);
 		defContent = cleanText(defContent);
-		if (wordCount(defContent) < MIN_ALTERNATE_FALLBACK_WORDS) {
-			const alt = await tryAlternateLinks(hookedText, finalUrl, _opts);
-			if (alt) return finalizePullResult(alt, redirectNotice);
-		}
-		return finalizePullResult(
-			{
-				ok: true,
-				url: finalUrl,
-				title: result.title || "",
-				content: defContent,
-				author: result.author || undefined,
-				published: result.published || undefined,
-				site: result.site || undefined,
-				language: result.language || undefined,
-				wordCount: result.wordCount || undefined,
-			},
-			redirectNotice,
-		);
+		return {
+			ok: true,
+			url: finalUrl,
+			title: result.title || "",
+			content: defContent,
+			author: result.author || undefined,
+			published: result.published || undefined,
+			site: result.site || undefined,
+			language: result.language || undefined,
+			wordCount: result.wordCount || undefined,
+		};
 	} catch {
 		const { title, content } = fallbackExtract(cleaned);
-		if (wordCount(content) < MIN_ALTERNATE_FALLBACK_WORDS) {
-			const alt = await tryAlternateLinks(hookedText, finalUrl, _opts);
-			if (alt) return finalizePullResult(alt, redirectNotice);
-		}
-		return finalizePullResult(
-			{ ok: true, url: finalUrl, title, content, rawHtml },
-			redirectNotice,
-		);
+		return { ok: true, url: finalUrl, title, content, rawHtml };
 	}
 }
 

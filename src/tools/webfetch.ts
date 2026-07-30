@@ -39,8 +39,7 @@ import {
 	buildConditionalHeaders,
 	drainCapturedValidators,
 	extractValidators,
-	hasValidators,
-	isExpiredEntry,
+	getRevalidationCandidate,
 	refreshEntryOnNotModified,
 } from "../http-validators.ts";
 import { diffContent } from "../content-diff.ts";
@@ -972,20 +971,15 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 							} | null = null;
 
 							if (mode !== "browser") {
-								void getStoredContent(url.href); // side effect: drops expired entries; value unused (raw peek below)
-								// getStoredContent returns null when TTL is still fresh
-								// (entry served directly from cache by the caller) OR when
-								// it doesn't exist. We need the raw Map lookup to detect
-								// expired-but-present entries; getStoredContent already
-								// deleted the key if expired, so we check before expiry.
-								// Re-look: peek without the TTL filter.
-								const rawEntry = peekStoredContent(url.href);
+								// P5: peek (do NOT get) the raw entry so an expired-but-present
+								// entry with validators survives to be revalidated. The old code
+								// called getStoredContent() first, which deletes expired entries
+								// as a side effect and silently made this conditional-request
+								// path dead code. getRevalidationCandidate returns the entry only
+								// when it is expired AND carries an ETag/Last-Modified.
+								const rawEntry = getRevalidationCandidate(url.href);
 
-								if (
-									rawEntry &&
-									isExpiredEntry(rawEntry) &&
-									hasValidators(rawEntry)
-								) {
+								if (rawEntry) {
 									// Entry is expired but has validators — attempt revalidation.
 									const condHeaders = buildConditionalHeaders(rawEntry);
 									const revalRes = await smartFetch(url.href, {

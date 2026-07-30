@@ -38,12 +38,12 @@ pi-webaio/
 │   ├── redact.ts             ← Output secret redaction — masks credentials in error messages and TUI previews (v0.7.3)
 │   ├── session-store.ts      ← Content cache + search context store (disk-backed), relatedness-gated summary bridging
 │   ├── token-count.ts        ← CJK-aware token estimation
-│   ├── content.ts            ← Extraction pipeline (vertical → GitHub → binary → JSON → RSC → defuddle → fallback) + lifecycle hooks
+│   ├── content.ts            ← Extraction pipeline (vertical → GitHub → binary → JSON → local-first RSC/Readability/defuddle, lazy Jina fallback) + lifecycle hooks
 │   ├── content-diff.ts       ← Section-level diff between cached and fresh page versions (v0.7.0)
 │   ├── http-validators.ts    ← Conditional requests via stored ETag/Last-Modified with 304 handling (v0.7.0)
 │   ├── github-pipeline.ts    ← Full GitHub URL handling (repo/tree/blob/issue/PR/actions run/actions logs/check log/security alert)
 │   ├── github-api.ts         ← REST + gh CLI fallback (ghFetch, ghRunLogs, ghApiCall, ghFetchWithFallback)
-│   ├── fetch.ts              ← smartFetch, fetchBuffer, fetchWithPlaywright, withTimeout, rate limiter, pinned SSRF lookup, bot-wait loop, soft-block 404→browser escalation
+│   ├── fetch.ts              ← smartFetch, fetchBuffer, fetchWithPlaywright, withTimeout, rate limiter, pinned SSRF lookup, bot-wait loop, soft-block 404→browser escalation, shared warm BrowserPool
 │   ├── cookie-cache.ts       ← Per-origin cookie cache bridging Playwright harvests across fetch calls (v0.7.1)
 │   ├── strategy-memory.ts    ← Per-domain fetch-ladder memory (which rung worked), LRU + re-probe (v0.7.0)
 │   ├── prefetch.ts           ← Speculative prefetch of top search results into the content cache (v0.7.0)
@@ -116,7 +116,7 @@ pi-webaio/
 ├── types/
 │   ├── pi-coding-agent.d.ts  ← Minimal ExtensionAPI type declaration
 │   └── playwright.d.ts       ← Playwright type stub (optional dep)
-├── tests/                    ← 43 suites wired into test:all (1095 tests) + standalone suites (mcp, etc.)
+├── tests/                    ← 47 suites wired into test:all (1134 tests) + standalone suites (mcp, etc.)
 ├── tsconfig.json             ← Lint config (noEmit, strict, ES2022)
 ├── tsconfig.dist.json        ← Build config (emits to dist/, includes types/**/*.d.ts)
 ├── package.json              ← type: "module", pi extension manifest, v0.7.3
@@ -205,7 +205,7 @@ pi-webaio/
 - Pulls entire websites into local markdown files
 - Discovers pages via sitemap, navigation links, or crawling
 - Writes files preserving URL structure with YAML frontmatter, and builds a BM25 index alongside for `aio-webquery`
-- Concurrent workers (4 × CPU cores)
+- Concurrent workers sized by `computePullConcurrency` (10 for single-host pulls, `distinctHosts × 10` capped at 32 for multi-host; rate-limiter-aware, not raw CPU count)
 - Parameters: `url`, `out`, `max` (default 100, hard-capped at 500), `mode`, `browser`, `os`, `proxy`, `compile`, `bypass`
 - **Request queue**: persistent checkpoint/resume via `resume` param (default: auto-detect). Survives crashes and resumes mid-pull from last checkpoint. Re-pulling a completed site reports "0 new pages (N already completed …)" instead of a bare "Pulled 0 pages" (v0.7.3).
 - **Session router**: route different URL patterns to different fetcher modes/extractors via `routes` param. Supports substring, glob (`*/docs/*`), and regex patterns. First match wins.
@@ -434,7 +434,7 @@ TUI result rendering for all tools; phase-aware FetchError system; `format` para
 ## Testing
 
 - `npm test` → runs unit tests (`tests/unit.test.mjs`, 156 tests)
-- `npm run test:all` → runs all 43 wired suites (1095 tests total, 0 fail, 2 expected skips: a live-network Jina test that skips on external HTTP 403, and an opt-in live TLS test)
+- `npm run test:all` → runs all 47 wired suites (1134 tests total, 0 fail, 2 expected skips: a live-network Jina test that skips on external HTTP 403, and an opt-in live TLS test)
 - `npm run test:mcp` → MCP server tests (standalone, not in test:all)
 - Specialized suites (each `npm run test:<name>`): `new` (new-features, 31), `paywall` (65), `check` (github-check, 35), `render` (render-result, 40), `fetcherror` (fetch-error, 57), `fetchprogress` (9), `hardening` (16), `redact` (21), `ssrf` (ssrf-hardening, 30), `fingerprint` (14), `format` (18), `webfetch-summary` (13), `search-context` (20), `chunker` (31), `prune` (prune-markdown, 25), `github-map` (50), `reddit` (reddit-block, 7), `source-ranking` (16), `webresearch` (26), `stance` (24), `cookie-cache` (25), `title-extraction` (10), `integration` (5), `bench` (bench-harness, 35)
 - Additional suites present in `tests/` (run via test:all or directly): goggles (14), bot-wait (6), ssrf-allowlist (37), lifecycle-hooks (14), webquery (12), plus diff-refetch, query-mode, revalidation, strategy-memory, prefetch, token-budget, user-verticals

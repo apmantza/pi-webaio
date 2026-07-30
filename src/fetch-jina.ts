@@ -92,14 +92,95 @@ export function parseJinaBody(text: string, url: string): PullResult | null {
 	return { ok: true, url, title: hostnameOf(url), content: body };
 }
 
-export async function fetchJina(url: string): Promise<PullResult | null> {
-	try {
-		const res = await smartFetch(
-			`https://r.jina.ai/${encodeURIComponent(url)}`,
-		);
-		if (!res || res.status >= 400) return null;
-		return parseJinaBody(res.text, url);
-	} catch {
-		return null;
+// ─── Timeout ───────────────────────────────────────────────────────
+// Jina is a *fallback* proxy that re-fetches a page we already have, so
+// it should never inherit smartFetch's generous 30s whole-request
+// timeout. Bound it to a few seconds: long enough for a genuine render
+// on a JS-heavy page, short enough that a blocked/rate-limited Jina does
+// not stall the pipeline (measured nulls took ~4–5.5s before falling
+// through to local extraction anyway).
+export const JINA_TIMEOUT_MS = 4000;
+
+// ─── Per-domain negative cache ─────────────────────────────────────
+// When Jina returns null for a domain (blocked/rate-limited/challenge),
+// the very next page of the same pull almost certainly will too. Skip
+// re-trying it. Bounded LRU so a long-running process does not grow this
+// without limit.
+const JINA_NEGATIVE_CACHE_MAX = 50;
+const jinaNegativeCache = new Map<string, true>();
+
+function rememberJinaFailure(host: string): void {
+	if (!host) return;
+	// Re-insert so the entry is the most-recently-used.
+	jinaNegativeCache.delete(host);
+	jinaNegativeCache.set(host, true);
+	if (jinaNegativeCache.size > JINA_NEGATIVE_CACHE_MAX) {
+		// Evict the least-recently-used (first) key.
+		const oldest = jinaNegativeCache.keys().next().value;
+		if (oldest !== undefined) jinaNegativeCache.delete(oldest);
 	}
+}
+
+/** True when a domain recently failed Jina and should be skipped. */
+export function isJinaNegativeCached(url: string): boolean {
+	return jinaNegativeCache.has(hostnameOf(url));
+}
+
+/** Test helper — reset the per-domain negative cache. */
+export function clearJinaNegativeCache(): void {
+	jinaNegativeCache.clear();
+}
+
+// ─── Injectable transport (test seam) ──────────────────────────────
+// The real transport does a network round-trip through smartFetch. Tests
+// override this to assert call/skip behavior offline; the timeout and
+// negative cache below still wrap whatever transport is installed.
+type JinaTransport = (url: string) => Promise<PullResult | null>;
+
+async function defaultJinaTransport(url: string): Promise<PullResult | null> {
+	const res = await smartFetch(`https://r.jina.ai/${encodeURIComponent(url)}`, {
+		timeoutMs: JINA_TIMEOUT_MS,
+	});
+	if (!res || res.status >= 400) return null;
+	return parseJinaBody(res.text, url);
+}
+
+let jinaTransport: JinaTransport = defaultJinaTransport;
+
+/** Test helper — override the Jina transport (pass null to restore). */
+export function __setJinaTransportForTests(fn: JinaTransport | null): void {
+	jinaTransport = fn ?? defaultJinaTransport;
+}
+
+/** Race a promise against the Jina timeout without dangling rejections. */
+function withJinaTimeout(promise: Promise<PullResult | null>): Promise<PullResult | null> {
+	return new Promise<PullResult | null>((resolve) => {
+		const timer = setTimeout(() => resolve(null), JINA_TIMEOUT_MS);
+		promise.then(
+			(v) => {
+				clearTimeout(timer);
+				resolve(v);
+			},
+			() => {
+				clearTimeout(timer);
+				resolve(null);
+			},
+		);
+	});
+}
+
+export async function fetchJina(url: string): Promise<PullResult | null> {
+	const host = hostnameOf(url);
+	// A domain that just returned null is skipped on the next page of a
+	// pull instead of paying the round-trip again.
+	if (host && jinaNegativeCache.has(host)) return null;
+
+	let result: PullResult | null = null;
+	try {
+		result = await withJinaTimeout(jinaTransport(url));
+	} catch {
+		result = null;
+	}
+	if (result === null && host) rememberJinaFailure(host);
+	return result;
 }

@@ -9,6 +9,7 @@
 import {
 	sessionStore,
 	normalizeCacheKey,
+	peekStoredContent,
 	SESSION_CACHE_TTL_MS,
 } from "./session-store.ts";
 import type { StoredContent } from "./types.ts";
@@ -101,6 +102,30 @@ export function refreshEntryOnNotModified(
 
 export function hasValidators(entry: StoredContent): boolean {
 	return !!(entry.etag || entry.lastModified);
+}
+
+// ─── Pick the entry eligible for revalidation ──────────────────────
+
+/**
+ * Return the cached entry for `url` when it is eligible for HTTP
+ * revalidation — present, TTL-expired, and carrying at least one validator
+ * (ETag / Last-Modified). Returns null otherwise (absent, still fresh, or
+ * no validators to revalidate with).
+ *
+ * IMPORTANT (P5): this PEEKS the raw entry without applying TTL eviction.
+ * The expired entry is precisely the one we want to revalidate with a cheap
+ * conditional 304 request instead of a full re-fetch. Calling
+ * `getStoredContent()` first would delete that expired entry as a side
+ * effect and make revalidation impossible — the tool layer used to do
+ * exactly that, which silently turned the conditional-request path into
+ * dead code. Always peek, never get, when deciding whether to revalidate.
+ */
+export function getRevalidationCandidate(url: string): StoredContent | null {
+	const entry = peekStoredContent(url);
+	if (entry && isExpiredEntry(entry) && hasValidators(entry)) {
+		return entry;
+	}
+	return null;
 }
 
 // ─── Side-channel validator capture ───────────────────────────────

@@ -25,6 +25,19 @@ import { debug } from "./debug.ts";
 export const ENGINE_HEALTH_COOLDOWN_MS = 10 * 60 * 1000; // 10 min cooldown
 export const ENGINE_FAILURE_THRESHOLD = 2; // consecutive failures before cooldown
 
+/**
+ * Per-engine deadline (P3). `searchWeb` fans out to four HTTP engines via
+ * `Promise.all`, and each fetch otherwise inherits smartFetch's 30s timeout
+ * plus `fetchWithRetry`'s full retry cycle (MAX_RETRIES=2, jittered 1s→2s
+ * backoff) — a single rate-limited engine (a Brave HTTP 429) was measured to
+ * blow one search to 8.5s vs ~1.3s normal. Each engine fetch is raced against
+ * this deadline so a stalled/slow engine resolves to empty (status `timeout`)
+ * instead of holding the merge. 4.5s sits above the slowest *healthy* engine
+ * (Yahoo ~1.5s) but well under the tool's 7s cap, so one flaky engine can no
+ * longer bound the total.
+ */
+export const ENGINE_DEADLINE_MS = 4500;
+
 export const sessionEngineHealth = new Map<string, EngineHealthRecord>();
 
 export function getOrCreateEngineHealth(engine: string): EngineHealthRecord {
@@ -737,6 +750,7 @@ export type EngineStatus =
 	| "quota"
 	| "cooled_down"
 	| "error"
+	| "timeout"
 	| "disabled"
 	| `http_${number}`;
 
@@ -771,7 +785,7 @@ export interface EngineOutcome {
 	latencyMs: number;
 	/** True when the response body looked like a quota/rate-limit error. */
 	quota?: boolean;
-	skipReason?: "cooled_down" | "error" | "disabled";
+	skipReason?: "cooled_down" | "error" | "disabled" | "timeout";
 }
 
 /** Reduce one engine outcome to its coarse status label. */
@@ -823,6 +837,8 @@ export function describeEngineStatus(status: EngineStatus): string {
 			return "cooled down after recent failures";
 		case "error":
 			return "network error";
+		case "timeout":
+			return "timed out";
 		case "disabled":
 			return "not attempted";
 		default:
@@ -843,9 +859,13 @@ export function engineStatusNotes(engineStatus: EngineStatusMap): string[] {
 		const entry = engineStatus[id];
 		if (!entry || entry.status === "ok" || entry.status === "disabled")
 			continue;
-		notes.push(
-			`_(${ENGINE_DISPLAY_NAMES[id]}: ${describeEngineStatus(entry.status)})_`,
-		);
+		// A deadline cutoff carries the measured latency so the note reads
+		// `_(Bing: timed out after 4.5s)_` rather than a bare "timed out" (P3).
+		const reason =
+			entry.status === "timeout" && entry.latencyMs > 0
+				? `timed out after ${formatEngineLatency(entry.latencyMs)}`
+				: describeEngineStatus(entry.status);
+		notes.push(`_(${ENGINE_DISPLAY_NAMES[id]}: ${reason})_`);
 	}
 	return notes;
 }
@@ -855,6 +875,16 @@ export function engineStatusNotes(engineStatus: EngineStatusMap): string[] {
 export async function searchWeb(
 	query: string,
 	goggles?: GogglesProfile,
+	options: {
+		/**
+		 * Per-engine fetch implementation. Defaults to `smartFetch`; injectable
+		 * so tests can mock engine responses/delays offline. Same contract as
+		 * `smartFetch` (resolves to a result or null, throws on hard failure).
+		 */
+		fetchFn?: typeof smartFetch;
+		/** Override the per-engine deadline (P3). Defaults to ENGINE_DEADLINE_MS. */
+		engineDeadlineMs?: number;
+	} = {},
 ): Promise<{
 	results: SearchResult[];
 	ddgCount: number;
@@ -914,6 +944,9 @@ export async function searchWeb(
 	// with no history stay at their original relative position (score 0.5).
 	const engines = rankEngines(enginesBase);
 
+	const fetchFn = options.fetchFn ?? smartFetch;
+	const deadlineMs = options.engineDeadlineMs ?? ENGINE_DEADLINE_MS;
+
 	const promises = engines.map((engine) => {
 		if (!isEngineAvailable(engine.id)) {
 			debug(
@@ -928,26 +961,58 @@ export async function searchWeb(
 			});
 		}
 		const start = Date.now();
-		return smartFetch(engine.url, { headers: commonHeaders })
-			.then((res) => ({
-				id: engine.id,
-				res,
-				latencyMs: Date.now() - start,
-				skipReason: undefined,
-			}))
-			.catch((err) => {
-				recordEngineFailure(engine.id, String(err));
+		// P3: race the fetch against a per-engine deadline so a stalled or
+		// rate-limited engine (e.g. a 429 stuck in fetchWithRetry's backoff)
+		// resolves to empty with status `timeout` instead of holding the merge.
+		// This subsumes a search-specific fail-fast: a 429 retry cycle is cut
+		// off at the deadline rather than running to its full ~8s.
+		let deadlineHandle: ReturnType<typeof setTimeout> | undefined;
+		const deadline = new Promise<true>((resolve) => {
+			deadlineHandle = setTimeout(() => resolve(true), deadlineMs);
+			deadlineHandle.unref?.();
+		});
+		const attempt = fetchFn(engine.url, { headers: commonHeaders })
+			.then((res) => ({ res, timedOut: false as const, err: undefined as unknown }))
+			.catch((err) => ({ res: null, timedOut: false as const, err }));
+		return Promise.race([
+			attempt,
+			deadline.then(() => ({ res: null, timedOut: true as const, err: undefined as unknown })),
+		]).then((outcome) => {
+			clearTimeout(deadlineHandle);
+			const latencyMs = Date.now() - start;
+			if (outcome.timedOut) {
+				recordEngineFailure(engine.id, `timed out after ${deadlineMs}ms`);
 				debug(
 					"search",
-					`${engine.id} fetch error: ${String(err).slice(0, 160)}`,
+					`${engine.id} timed out after ${deadlineMs}ms (deadline cutoff)`,
 				);
 				return {
 					id: engine.id,
 					res: null,
-					latencyMs: Date.now() - start,
+					latencyMs,
+					skipReason: "timeout" as const,
+				};
+			}
+			if (outcome.err !== undefined) {
+				recordEngineFailure(engine.id, String(outcome.err));
+				debug(
+					"search",
+					`${engine.id} fetch error: ${String(outcome.err).slice(0, 160)}`,
+				);
+				return {
+					id: engine.id,
+					res: null,
+					latencyMs,
 					skipReason: "error" as const,
 				};
-			});
+			}
+			return {
+				id: engine.id,
+				res: outcome.res,
+				latencyMs,
+				skipReason: undefined,
+			};
+		});
 	});
 
 	const settled = await Promise.all(promises);
