@@ -9,7 +9,7 @@ This is the third inspiration pass for **pi-webaio**. It covers nine repositorie
 ## Analyzed Repositories
 
 | # | Repository | Link | Primary relevance |
-|---|------------|------|-------------------|
+| --- | ------------ | ------ | ------------------- |
 | 1 | `unclecode/crawl4ai` | <https://github.com/unclecode/crawl4ai> | Direct parallel — async crawler, extraction strategies, hooks, adaptive crawling |
 | 2 | `browser-use/browser-use` | <https://github.com/browser-use/browser-use> | Agent-native DOM understanding, watchdog system, MCP server |
 | 3 | `apify/crawlee` | <https://github.com/apify/crawlee> | Production framework patterns — unified interface, request queue, session pool |
@@ -170,7 +170,7 @@ Every reviewed repo enables extension without forking:
 ### Tier 1 — Immediate (≤ 2 weeks, single-file changes)
 
 | # | Status | Opportunity | Source repos | pi-webaio module |
-|---|--------|-------------|-------------|-----------------|
+| --- | -------- | ------------- | ------------- | ----------------- |
 | 1.1 | ⚠️ | **Named browser profiles** — save/load/export browser identity (cookies, locale, viewport, stealth args). Requires an encryption-at-rest + explicit-opt-in design pass before implementation; persisted cookies/auth-state are a secret-at-rest concern for a tool built around not leaking credentials. | crawl4ai `browser_profiler`, browser-use `BrowserProfile` | `browser-pool.ts` |
 | 1.2 | ✅ | **Watchdog pattern** — `captcha_watchdog`, `crash_watchdog`, `dom_watchdog` for fetch lifecycle | browser-use watchdogs | `fetch.ts` |
 | 1.3 | 🔽 | **Sticky per-domain proxy mapping** — narrowed from "proxy rotation" since proxy support already exists; the actual gap is session-to-proxy stickiness per domain, not rotation itself | crawlee proxy rotation | `browser-pool.ts` |
@@ -179,7 +179,7 @@ Every reviewed repo enables extension without forking:
 ### Tier 2 — Short-term (1–2 months)
 
 | # | Status | Opportunity | Source repos | pi-webaio module |
-|---|--------|-------------|-------------|-----------------|
+| --- | -------- | ------------- | ------------- | ----------------- |
 | 2.1 | ⚠️ | **Declarative, allowlisted lifecycle hooks** — narrowed from a general "hook middleware chain" of user-provided callables (crawl4ai's own hook system caused RCE via sandbox escape in v0.8.x). Only fixed, vetted lifecycle events (`onBotDetected`, `onRedirect`, etc.) with no arbitrary code execution. | crawl4ai hooks (cautionary), scrapy middleware | new `hooks.ts` or `fetch.ts` |
 | 2.2 | ✅ | **Query-aware content pruning** — BM25 relevance filtering when `query` param is passed | crawl4ai `BM25ContentFilter` | `prune-markdown.ts` |
 | 2.3 | ✅ | **Image/audio/video conversion** — OCR + transcription in `aio-webfetch` detection pipeline | markitdown multi-modal converters | `aio-webfetch` tool handler |
@@ -188,7 +188,7 @@ Every reviewed repo enables extension without forking:
 ### Tier 3 — Medium-term (3–6 months)
 
 | # | Status | Opportunity | Source repos | pi-webaio module |
-|---|--------|-------------|-------------|-----------------|
+| --- | -------- | ------------- | ------------- | ----------------- |
 | 3.1 | ❌ | ~~`aio-weblearn` tool~~ — dropped. AutoScraper's rule-learning exists to substitute for reasoning it doesn't have; pi-webaio's calling agent already reasons over markdown/CSS more flexibly than any learned rule set would. See [amendment](#amendment--critical-reassessment) and [scrape-tool assessment](#should-pi-webaio-expose-a-dedicated-web-scrape-tool). | AutoScraper | — |
 | 3.2 | ⬇️ | **Deep crawl strategies** — BFS/DFS/BFF with scored prioritization in queue. De-prioritized: these exist in crawl4ai/Scrapling because they're unsupervised frameworks with no LLM deciding what to fetch next; pi-webaio's agent-driven, per-call usage pattern rarely needs this. | crawl4ai `deep_crawling/`, Scrapling spider | `request-queue.ts` |
 | 3.3 | ✅ | **MCP server mode** — serve pi-webaio as MCP server for non-pi consumers | browser-use MCP, Scrapling `[ai]` | new run mode |
@@ -197,7 +197,7 @@ Every reviewed repo enables extension without forking:
 ### Tier 4 — Research / Aspirational
 
 | # | Opportunity | Source repos |
-|---|-------------|-------------|
+| --- | ------------- | ------------- |
 | 4.1 | **Docker self-hosted API** — JWT auth, loopback bind, sandboxed hooks, monitoring dashboard | crawl4ai Docker API |
 | 4.2 | **Agent harness** — give the LLM a direct, dependable browser surface for task completion | browser-use CLI 3.0 (Browser Harness) |
 | 4.3 | **Shadow DOM flattening + virtual scroll** — `flatten_shadow_dom=True`, `VirtualScrollConfig` | crawl4ai |
@@ -210,7 +210,7 @@ Every reviewed repo enables extension without forking:
 The review also confirmed capabilities that are stronger than any single peer:
 
 | Capability | Status |
-|-----------|--------|
+| ----------- | -------- |
 | Phase-aware error system (25 codes × 10 phases × 7 categories) | Unique among reviewed repos |
 | CJK-aware RAG chunking with overlap | crawl4ai has chunking but simpler |
 | 7-strategy paywall bypass chain with per-domain tuning | crawl4ai has bot-UA fallback only |
@@ -220,7 +220,7 @@ The review also confirmed capabilities that are stronger than any single peer:
 | Response ID + 24 h TTL disk-backed persistence | crawlee has storage but no response IDs |
 | Search context bridging (recent query → AI summarization prompt) | Unique |
 | Comprehensive SSRF guard (RFC 1918/6598/3927 + IPv6 + cloud metadata) | crawl4ai SSRF covers Docker API only |
-| URL cardinality escape hatch (`avoid: "domain|ip"`) | None |
+| URL cardinality escape hatch (`avoid: "domain | ip"`) | None |
 
 ---
 

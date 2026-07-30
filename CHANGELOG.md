@@ -13,6 +13,8 @@ All notable changes to pi-webaio will be documented in this file.
 
 ### Fixed
 
+- **Batch fetch errors now carry the phase-aware error code** (`src/tools/webfetch.ts`) — the multi-URL batch result's `Errors:` list read the legacy `errorInfo.code`, so an SSRF block rendered as `[invalid_url]` while the single-fetch path correctly showed `[blocked_ssrf]`. The batch renderer now prefers the phase-aware `fetchError.code` / `fetchError.statusCode` (falling back to the legacy fields), so a blocked URL renders `[blocked_ssrf]` consistently across single and batch fetches.
+
 ## [0.7.3] - 2026-07-29
 
 ### Added

@@ -754,7 +754,7 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 							} | null = null;
 
 							if (mode !== "browser") {
-								const cachedEntry = getStoredContent(url.href);
+								void getStoredContent(url.href); // side effect: drops expired entries; value unused (raw peek below)
 								// getStoredContent returns null when TTL is still fresh
 								// (entry served directly from cache by the caller) OR when
 								// it doesn't exist. We need the raw Map lookup to detect
@@ -1560,8 +1560,8 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 								"",
 								"Errors:",
 								...errResults.map((r) => {
-									const code = (r as any).errorInfo?.code;
-									const sc = (r as any).errorInfo?.statusCode;
+									const code = (r as any).fetchError?.code ?? (r as any).errorInfo?.code; // phase-aware (e.g. blocked_ssrf) over legacy errorInfo.code
+									const sc = (r as any).fetchError?.statusCode ?? (r as any).errorInfo?.statusCode;
 									const tag = [code, sc ? `HTTP ${sc}` : null]
 										.filter(Boolean)
 										.join(", ");
