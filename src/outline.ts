@@ -164,22 +164,224 @@ export function splitSections(markdown: string): Section[] {
 	return splitSectionsClean(stripWrapper(markdown));
 }
 
+// ─── Conservative heading fallback (Fix 3) ──────────────────────────
+// Some pages reach the agent with NO ATX headings even though they have
+// clear sections. The reproduced case is expressjs.com's guide: the
+// extraction pipeline prefers Readability, whose `article.textContent` is
+// plain prose, so section titles ("Route methods", "Route paths", …)
+// survive only as short plain-text lines and `extractOutline` reports
+// "(no headings — flat document)". Defuddle itself emits proper ATX
+// headings — it simply never runs when Readability wins.
+//
+// Rather than reorder the extraction pipeline (a risky change for every
+// well-formed page), we add a CONSERVATIVE fallback here that activates
+// ONLY when a document has zero ATX headings: detect short, unpunctuated,
+// heading-like lines and treat them as level-2 headings. It must never
+// fire on ordinary prose paragraphs and never when real `#` headings exist.
+
+/** Max length for a line to be considered heading-like. */
+const FALLBACK_HEADING_MAX_LEN = 60;
+
+/**
+ * Is `line` a plausible section heading in a heading-less document?
+ * Conservative on purpose — every guard exists to keep ordinary prose
+ * paragraphs (long, sentence-punctuated) from being misread as headings.
+ */
+function isFallbackHeadingLine(line: string, nextNonEmpty: string): boolean {
+	// Indented (>= 4 spaces) lines are code, not headings.
+	if (/^\s{4,}/.test(line)) return false;
+	const t = line.trim();
+	if (!t) return false;
+	if (t.length > FALLBACK_HEADING_MAX_LEN) return false;
+	// Must contain a real letter (rules out rules, symbols, pure numbers).
+	if (!/[a-zA-Z]/.test(t)) return false;
+	// Terminal punctuation → a sentence, not a heading.
+	if (/[.!?…,;:]$/.test(t)) return false;
+	// Commas/semicolons mid-line → a clause, not a heading.
+	if (/[,;]/.test(t)) return false;
+	// List items, blockquotes, table rows, fences, bare URLs are not headings.
+	if (/^([-*+]|\d+\.)\s/.test(t)) return false;
+	if (/^>/.test(t) || /^\|/.test(t)) return false;
+	if (/^(```|~~~)/.test(t)) return false;
+	if (/^https?:\/\//.test(t)) return false;
+	// Headings read like titles: start with a capital letter, or carry a
+	// code-identifier signal (`.`, `()`, `_`, backtick) for headings such as
+	// "app.route()" / "express.Router". This is what keeps an all-lowercase
+	// prose fragment ("just some plain prose") from matching.
+	const looksLikeTitle =
+		/^[A-Z]/.test(t) || /[`()._]/.test(t);
+	if (!looksLikeTitle) return false;
+	// Must be followed by real content: a prose line (long, or a terminated
+	// sentence). A short line followed by nothing/another short line is not
+	// enough evidence.
+	const nt = nextNonEmpty.trim();
+	if (!nt) return false;
+	return nt.length > FALLBACK_HEADING_MAX_LEN || /[.!?]$/.test(nt);
+}
+
+/**
+ * Detect heading-like lines in a document that has ZERO ATX headings and
+ * synthesize level-2 outline entries for them (with per-section word
+ * counts). Fence-aware: lines inside ``` / ~~~ blocks are never treated as
+ * headings. Returns [] when nothing qualifies, so the caller's empty-outline
+ * behavior is preserved for genuinely flat prose.
+ */
+function detectFallbackHeadings(clean: string): OutlineHeading[] {
+	const lines = clean.split("\n");
+	const headingIdx: number[] = [];
+	let inFence = false;
+	let fenceChar = "";
+
+	for (let i = 0; i < lines.length; i++) {
+		const line = lines[i]!;
+		const fence = line.match(FENCE_RE);
+		if (fence) {
+			const ch = fence[1]![0];
+			if (!inFence) {
+				inFence = true;
+				fenceChar = ch;
+			} else if (ch === fenceChar) {
+				inFence = false;
+				fenceChar = "";
+			}
+			continue;
+		}
+		if (inFence) continue;
+		// Next non-empty line (a heading is always followed by its body).
+		let next = "";
+		for (let j = i + 1; j < lines.length; j++) {
+			if (lines[j]!.trim()) {
+				next = lines[j]!;
+				break;
+			}
+		}
+		if (isFallbackHeadingLine(line, next)) headingIdx.push(i);
+	}
+	if (headingIdx.length === 0) return [];
+
+	const headings: OutlineHeading[] = [];
+	for (let k = 0; k < headingIdx.length; k++) {
+		const start = headingIdx[k]!;
+		const end = k + 1 < headingIdx.length ? headingIdx[k + 1]! : lines.length;
+		const body = lines.slice(start + 1, end).join("\n").trim();
+		headings.push({
+			level: 2,
+			text: lines[start]!.trim(),
+			words: countWords(body),
+		});
+	}
+	return headings;
+}
+
 /**
  * Parse ATX headings into a document-ordered outline with per-section word
- * counts and a total word count. A document with no headings yields an empty
- * `headings` array (totalWords still reflects the body size).
+ * counts and a total word count. A document with no ATX headings falls back
+ * to conservative heading detection (see {@link detectFallbackHeadings}); a
+ * genuinely flat prose document still yields an empty `headings` array.
+ * totalWords always reflects the body size.
  */
 export function extractOutline(markdown: string): Outline {
 	const clean = stripWrapper(markdown);
 	const sections = splitSectionsClean(clean);
+	const headings =
+		sections.length > 0
+			? sections.map((s) => ({
+					level: s.level,
+					text: s.text,
+					words: s.words,
+				}))
+			: detectFallbackHeadings(clean);
 	return {
 		totalWords: countContentWords(clean),
-		headings: sections.map((s) => ({
-			level: s.level,
-			text: s.text,
-			words: s.words,
-		})),
+		headings,
 	};
+}
+
+// ─── Frugal-section selection (Fix 1) ───────────────────────────────
+// The frugal preview showcases ONE section. Picking the raw largest by word
+// count is naive: on Wikipedia's Express.js page that was "External links"
+// (mostly unstripped CSS) over genuinely useful Summary/History prose. Skip
+// low-value tail sections and non-prose (CSS/link-heavy) bodies, then pick
+// the largest remaining content section (earlier position breaks ties).
+
+/** Headings that mark low-value tail/boilerplate sections (case-insensitive). */
+const LOW_VALUE_HEADINGS = new Set([
+	"references",
+	"external links",
+	"see also",
+	"categories",
+	"notes",
+	"bibliography",
+	"further reading",
+	"footer",
+	"navigation",
+	"menu",
+]);
+
+/** Normalize a heading for low-value comparison (trim, lower, strip trailing punct). */
+function normalizeHeading(text: string): string {
+	return text.trim().toLowerCase().replace(/[\s.:]+$/, "").replace(/\s+/g, " ");
+}
+
+/** Is this section's heading a known low-value tail/boilerplate section? */
+export function isLowValueHeading(text: string): boolean {
+	return LOW_VALUE_HEADINGS.has(normalizeHeading(text));
+}
+
+/**
+ * Does a whitespace token look like leaked CSS or a bare URL rather than
+ * prose? Used to detect sections that are mostly non-prose (e.g. Wikipedia's
+ * CSS-filled "External links"). Individual matches are deliberately loose —
+ * the >50% aggregate threshold in {@link isMostlyNonProse} is what keeps this
+ * from false-positiving on an occasional "Note:" in real prose.
+ */
+function isCruftToken(token: string): boolean {
+	if (/^https?:\/\//i.test(token) || /^www\./i.test(token)) return true; // bare URL
+	if (/[{};]/.test(token)) return true; // CSS block / declaration separators
+	if (/^[.#][a-zA-Z_]/.test(token)) return true; // .class / #id selector
+	// A CSS declaration with a CSS-ish value (margin:0, color:#fff, width:50%).
+	if (
+		/^[a-z-]+:[a-z0-9#.!%]/i.test(token) &&
+		/\d|%|px|em|rem|#[0-9a-f]/i.test(token)
+	) {
+		return true;
+	}
+	return false;
+}
+
+/**
+ * Is this section body mostly non-prose (>~50% of tokens look like CSS
+ * selectors/declarations or bare URLs)? Empty bodies are treated as prose
+ * (not skipped) so an empty-but-legit section is never penalized here.
+ */
+export function isMostlyNonProse(body: string): boolean {
+	const tokens = body.trim().split(/\s+/).filter(Boolean);
+	if (tokens.length === 0) return false;
+	const cruft = tokens.reduce((n, t) => n + (isCruftToken(t) ? 1 : 0), 0);
+	return cruft / tokens.length > 0.5;
+}
+
+/**
+ * Pick the section to showcase in the frugal preview. Skips low-value
+ * tail sections (References, External links, …) and mostly-non-prose
+ * (CSS/link-heavy) bodies, then returns the largest remaining section by
+ * word count, with EARLIER document position as the tiebreak. If EVERY
+ * section is low-value, falls back to the first section. Returns null only
+ * when there are no sections at all.
+ */
+export function selectFrugalSection(sections: Section[]): Section | null {
+	if (sections.length === 0) return null;
+	const candidates = sections.filter(
+		(s) => !isLowValueHeading(s.text) && !isMostlyNonProse(s.body),
+	);
+	// All low-value → fall back to the first section (never null when non-empty).
+	if (candidates.length === 0) return sections[0]!;
+	// Largest by word count; strict `>` keeps the earliest on ties.
+	let best = candidates[0]!;
+	for (const s of candidates) {
+		if ((s.words ?? 0) > (best.words ?? 0)) best = s;
+	}
+	return best;
 }
 
 /**

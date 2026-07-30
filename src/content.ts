@@ -206,6 +206,90 @@ export function stripDefuddleComments(content: string): string {
 	return content.replace(/\n---\n+## Comments[\s\S]*$/i, "").trimEnd();
 }
 
+// ─── CSS / style cruft stripping (Fix 2) ────────────────────────
+// Wikipedia-style pages leak `<style>` blocks and standalone CSS rules
+// (`.mw-parser-output …{…}`, `#id{…}`) into the extracted markdown. This
+// pollutes word counts, the outline, the frugal preview, and the cached
+// content. Strip that leaked CSS — but NEVER legitimate fenced code blocks:
+// a ```css / ```scss / ```less fence is preserved verbatim. Conservative by
+// design: when a line is not clearly leaked CSS, it is left alone.
+
+/** A fenced-code delimiter (``` or ~~~), up to 3 leading spaces. */
+const CSS_FENCE_RE = /^[ \t]{0,3}(`{3,}|~{3,})/;
+
+/**
+ * Does this (trimmed, outside-any-fence) line look like a standalone CSS
+ * rule that leaked into prose — `selector { declarations }` on one line?
+ * Requires a `{…}` pair whose selector carries a CSS signal char
+ * (`. # [ : > ~ + @`) and whose body holds a `prop:value` declaration, so
+ * prose or code like `if (x) { y }` is never touched.
+ */
+function isCssRuleLine(trimmed: string): boolean {
+	if (!trimmed) return false;
+	const m = trimmed.match(/^([^{}]+)\{([^{}]*)\}$/);
+	if (!m) return false;
+	const selector = m[1]!.trim();
+	const decls = m[2]!;
+	// Selector must carry a CSS signal char (catches .class, #id, a:hover,
+	// @media, [attr], child combinators) — avoids `if (…) {…}` false positives.
+	if (!/[.#:[>@~+]/.test(selector)) return false;
+	// Declarations must contain a CSS `prop:value`.
+	if (!/[a-z-]+\s*:/i.test(decls)) return false;
+	return true;
+}
+
+/**
+ * Remove CSS/style cruft that leaked into extracted markdown: `<style>…</style>`
+ * blocks and standalone single-line CSS rules. Fence-aware — anything inside a
+ * ``` / ~~~ code fence (including ```css) is preserved verbatim. Idempotent.
+ */
+export function stripCssCruft(markdown: string): string {
+	const lines = markdown.split("\n");
+	const out: string[] = [];
+	let inFence = false;
+	let fenceChar = "";
+	let inStyle = false;
+
+	for (const line of lines) {
+		// Fence tracking takes priority — code blocks are sacred.
+		const fence = line.match(CSS_FENCE_RE);
+		if (fence) {
+			const ch = fence[1]![0];
+			if (!inFence) {
+				inFence = true;
+				fenceChar = ch;
+			} else if (ch === fenceChar) {
+				inFence = false;
+				fenceChar = "";
+			}
+			out.push(line);
+			continue;
+		}
+		if (inFence) {
+			out.push(line);
+			continue;
+		}
+
+		// `<style>…</style>` block removal (may span multiple lines).
+		if (inStyle) {
+			if (/<\/style\s*>/i.test(line)) inStyle = false;
+			continue;
+		}
+		if (/<style\b[^>]*>/i.test(line)) {
+			// A style block that opens AND closes on one line.
+			if (!/<\/style\s*>/i.test(line)) inStyle = true;
+			continue;
+		}
+
+		// Standalone leaked CSS rule line.
+		if (isCssRuleLine(line.trim())) continue;
+
+		out.push(line);
+	}
+
+	return out.join("\n");
+}
+
 // ─── JS rendering detection ───────────────────────────────────────
 
 export function isLikelyJSRendered(html: string): boolean {
@@ -485,6 +569,11 @@ export function finalizePullResult(
 	if (!result.ok || !result.content) return result;
 
 	let content = result.content;
+
+	// Fix 2: strip leaked CSS / `<style>` cruft before anything else so the
+	// cached content, word counts, outline, and preview are all clean.
+	// Fence-aware — legitimate ```css code blocks are preserved verbatim.
+	content = stripCssCruft(content);
 
 	// Always strip trailing paywall text from extracted markdown,
 	// even when bypass wasn't requested. Sites like Medium embed

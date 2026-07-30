@@ -29,6 +29,7 @@ import {
 import {
 	extractOutline,
 	renderOutlineText,
+	selectFrugalSection,
 	splitSections,
 } from "../outline.ts";
 import {
@@ -595,9 +596,10 @@ export function buildFrugalPreview(
 
 	let sectionBlock = "";
 	if (sections.length > 0) {
-		const top = sections
-			.slice()
-			.sort((a, b) => (b.words ?? 0) - (a.words ?? 0))[0];
+		// Fix 1: showcase the largest *content* section — skip low-value tail
+		// sections (References, External links, …) and CSS/link-heavy bodies
+		// that would otherwise win a naive largest-by-word-count pick.
+		const top = selectFrugalSection(sections);
 		if (top && top.body) {
 			const excerpt =
 				top.body.length > maxChars
@@ -713,12 +715,12 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 			url: Type.Optional(
 				Type.Union([Type.String(), Type.Array(Type.String())], {
 					description:
-					"URL to fetch. Accepts a single URL string OR an array of URL strings (additive — `urls` still works and takes precedence if both are given).",
+						"URL to fetch. Accepts a single URL string OR an array of URL strings (additive — `urls` still works and takes precedence if both are given).",
 				}),
 			),
 			urls: Type.Optional(
 				Type.Array(Type.String(), {
-						description:
+					description:
 						"Multiple URLs to fetch in parallel. Takes precedence over `url` if both are given.",
 				}),
 			),
@@ -2029,34 +2031,25 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 						}));
 					const topK =
 						(params.topChunks as number | undefined) ?? DEFAULT_TOP_CHUNKS;
-					const ranked = rankChunksAcrossSources(
-						sources,
-						multiAnswerQuery!,
-						{
-							topK,
-							chunkOptions: {
-								maxTokens: params.maxTokens as number | undefined,
-								overlapTokens: params.overlapTokens as number | undefined,
-							},
+					const ranked = rankChunksAcrossSources(sources, multiAnswerQuery!, {
+						topK,
+						chunkOptions: {
+							maxTokens: params.maxTokens as number | undefined,
+							overlapTokens: params.overlapTokens as number | undefined,
 						},
-					);
+					});
 					if (ranked.length > 0) {
 						// Render the inner cited-answer text (no markers), apply an
 						// optional hard token budget, THEN wrap in fresh safety
 						// markers so the [UNTRUSTED WEB CONTENT] guard always survives
 						// the budget transform.
-						let inner = formatMultiSourceAnswer(
-							ranked,
-							multiAnswerQuery!,
-							{ sourcesCount: sources.length, wrap: false },
-						);
+						let inner = formatMultiSourceAnswer(ranked, multiAnswerQuery!, {
+							sourcesCount: sources.length,
+							wrap: false,
+						});
 						const budgetTokens = params.budgetTokens as number | undefined;
 						if (budgetTokens) {
-							inner = applyTokenBudget(
-								inner,
-								budgetTokens,
-								multiAnswerQuery,
-							);
+							inner = applyTokenBudget(inner, budgetTokens, multiAnswerQuery);
 						}
 						const displayContent = wrapUntrusted(inner);
 						const header = `Fetched ${okResults.length}/${targets.length} URLs.`;

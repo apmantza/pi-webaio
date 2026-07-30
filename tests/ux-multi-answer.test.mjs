@@ -106,10 +106,14 @@ test("rankChunksAcrossSources: empty/whitespace query → []", () => {
 });
 
 test("rankChunksAcrossSources: pools chunks from multiple sources, each tagged with its source URL + heading", () => {
-	const ranked = rankChunksAcrossSources([SOURCE_A, SOURCE_B], "authentication token", {
-		topK: 4,
-		chunkOptions: { maxTokens: 20 },
-	});
+	const ranked = rankChunksAcrossSources(
+		[SOURCE_A, SOURCE_B],
+		"authentication token",
+		{
+			topK: 4,
+			chunkOptions: { maxTokens: 20 },
+		},
+	);
 	assert.ok(ranked.length > 0, "should return ranked chunks");
 	// Every chunk carries a source URL (the citation) + verbatim text + score.
 	for (const r of ranked) {
@@ -132,10 +136,14 @@ test("rankChunksAcrossSources: pools chunks from multiple sources, each tagged w
 });
 
 test("rankChunksAcrossSources: a query matching source B ranks B's chunks above A's", () => {
-	const ranked = rankChunksAcrossSources([SOURCE_A, SOURCE_B], "authentication token api", {
-		topK: 2,
-		chunkOptions: { maxTokens: 20 },
-	});
+	const ranked = rankChunksAcrossSources(
+		[SOURCE_A, SOURCE_B],
+		"authentication token api",
+		{
+			topK: 2,
+			chunkOptions: { maxTokens: 20 },
+		},
+	);
 	assert.ok(ranked.length >= 1);
 	// The top chunk must come from source B (the auth content), not A (cooking).
 	assert.equal(ranked[0].url, SOURCE_B.url);
@@ -154,16 +162,24 @@ test("rankChunksAcrossSources: a query matching source B ranks B's chunks above 
 });
 
 test("rankChunksAcrossSources: respects topK", () => {
-	const one = rankChunksAcrossSources([SOURCE_A, SOURCE_B], "token pasta bread", {
-		topK: 1,
-		chunkOptions: { maxTokens: 20 },
-	});
+	const one = rankChunksAcrossSources(
+		[SOURCE_A, SOURCE_B],
+		"token pasta bread",
+		{
+			topK: 1,
+			chunkOptions: { maxTokens: 20 },
+		},
+	);
 	assert.equal(one.length, 1);
 
-	const three = rankChunksAcrossSources([SOURCE_A, SOURCE_B], "token pasta bread", {
-		topK: 3,
-		chunkOptions: { maxTokens: 20 },
-	});
+	const three = rankChunksAcrossSources(
+		[SOURCE_A, SOURCE_B],
+		"token pasta bread",
+		{
+			topK: 3,
+			chunkOptions: { maxTokens: 20 },
+		},
+	);
 	assert.equal(three.length, 3);
 });
 
@@ -174,10 +190,14 @@ test("rankChunksAcrossSources: default topK is 5", () => {
 test("rankChunksAcrossSources: a source that fails to chunk is skipped, not fatal", () => {
 	// maxTokens < 1 makes chunkMarkdown throw; the good source still contributes.
 	const bad = { url: "https://bad.example.com", content: "some content" };
-	const ranked = rankChunksAcrossSources([bad, SOURCE_B], "authentication token", {
-		topK: 3,
-		chunkOptions: { maxTokens: 20 },
-	});
+	const ranked = rankChunksAcrossSources(
+		[bad, SOURCE_B],
+		"authentication token",
+		{
+			topK: 3,
+			chunkOptions: { maxTokens: 20 },
+		},
+	);
 	assert.ok(ranked.length > 0);
 	assert.ok(ranked.every((r) => r.url === SOURCE_B.url));
 });
@@ -193,10 +213,14 @@ test("rankChunksAcrossSources: sources with only frontmatter/markers yield nothi
 // ─── UX8: formatMultiSourceAnswer — cited render + safety markers ────
 
 test("formatMultiSourceAnswer: renders each chunk cited with its source URL, wrapped in safety markers", () => {
-	const ranked = rankChunksAcrossSources([SOURCE_A, SOURCE_B], "authentication token", {
-		topK: 2,
-		chunkOptions: { maxTokens: 20 },
-	});
+	const ranked = rankChunksAcrossSources(
+		[SOURCE_A, SOURCE_B],
+		"authentication token",
+		{
+			topK: 2,
+			chunkOptions: { maxTokens: 20 },
+		},
+	);
 	const out = formatMultiSourceAnswer(ranked, "authentication token", {
 		sourcesCount: 2,
 	});
@@ -218,7 +242,9 @@ test("formatMultiSourceAnswer: wrap:false returns bare inner text (no markers) f
 		topK: 1,
 		chunkOptions: { maxTokens: 20 },
 	});
-	const inner = formatMultiSourceAnswer(ranked, "token refresh", { wrap: false });
+	const inner = formatMultiSourceAnswer(ranked, "token refresh", {
+		wrap: false,
+	});
 	assert.ok(!inner.includes("[UNTRUSTED WEB CONTENT"));
 	assert.ok(inner.includes("Cited answer"));
 });
@@ -239,10 +265,14 @@ test("multi-source answer: cited chunks returned, full content for every source 
 	storeContent(SOURCE_A.url, "Source A", SOURCE_A.content);
 	storeContent(SOURCE_B.url, "Source B", SOURCE_B.content);
 
-	const ranked = rankChunksAcrossSources([SOURCE_A, SOURCE_B], "authentication token", {
-		topK: 2,
-		chunkOptions: { maxTokens: 20 },
-	});
+	const ranked = rankChunksAcrossSources(
+		[SOURCE_A, SOURCE_B],
+		"authentication token",
+		{
+			topK: 2,
+			chunkOptions: { maxTokens: 20 },
+		},
+	);
 	const display = formatMultiSourceAnswer(ranked, "authentication token", {
 		sourcesCount: 2,
 	});
@@ -279,7 +309,10 @@ test("UX9: `summarize` param exists, is an optional boolean, and is OFF by defau
 	const required = tool.parameters.required ?? [];
 	assert.ok(!required.includes("summarize"), "summarize must be optional");
 	// No default:true baked into the schema (default behavior is off).
-	assert.ok(!/"default"\s*:\s*true/.test(schema), "summarize must not default to true");
+	assert.ok(
+		!/"default"\s*:\s*true/.test(schema),
+		"summarize must not default to true",
+	);
 	// The description documents the opt-in + off-by-default contract.
 	assert.match(tool.description, /summarize/);
 	assert.match(tool.description, /opt-in|Off by default|opt-in AI summary/i);
@@ -296,7 +329,10 @@ test("UX9: long content's default path is the frugal preview, NOT an AI summary"
 	assert.ok(display.includes("Outline:"));
 	assert.ok(display.includes("## DeepGuide"));
 	assert.ok(display.includes("aio-webcontent"));
-	assert.ok(!display.includes("AI-summarized"), "default path must not be an AI summary");
+	assert.ok(
+		!display.includes("AI-summarized"),
+		"default path must not be an AI summary",
+	);
 });
 
 // ─── UX11: `url` accepts a string OR an array; `urls` still works ────
@@ -309,14 +345,19 @@ test("UX11: resolveFetchTargets accepts url as a string", () => {
 
 test("UX11: resolveFetchTargets accepts url as an array (additive)", () => {
 	assert.deepEqual(
-		resolveFetchTargets(["https://a.example.com", "https://b.example.com"], undefined),
+		resolveFetchTargets(
+			["https://a.example.com", "https://b.example.com"],
+			undefined,
+		),
 		["https://a.example.com", "https://b.example.com"],
 	);
 });
 
 test("UX11: urls still works and takes precedence over url", () => {
 	assert.deepEqual(
-		resolveFetchTargets("https://url.example.com", ["https://urls.example.com"]),
+		resolveFetchTargets("https://url.example.com", [
+			"https://urls.example.com",
+		]),
 		["https://urls.example.com"],
 	);
 });
@@ -334,7 +375,10 @@ test("UX11: schema declares url as string-or-array and keeps urls as an array", 
 	assert.ok(urlSchema.includes("string"), "url union must include string");
 	assert.ok(urlSchema.includes("array"), "url union must include array");
 	// urls remains an array param (unchanged).
-	assert.ok(JSON.stringify(props.urls).includes("array"), "urls must stay an array");
+	assert.ok(
+		JSON.stringify(props.urls).includes("array"),
+		"urls must stay an array",
+	);
 });
 
 // ─── Single-URL answer mode is unchanged ─────────────────────────────
