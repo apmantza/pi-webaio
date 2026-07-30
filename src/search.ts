@@ -17,6 +17,7 @@ import type {
 	SourceType,
 } from "./types.ts";
 import { computeGogglesBonus, type GogglesProfile } from "./goggles.ts";
+import { createBM25Scorer } from "./bm25.ts";
 
 // ─── Engine health tracking ────────────────────────────────────────
 
@@ -147,7 +148,7 @@ export function extractDomain(url: string): string | undefined {
 // ─── Search result parsers ─────────────────────────────────────────
 
 function checkSearchFilters(
-	url: string,
+	_url: string,
 	hostname: string,
 	engines: string[],
 ): boolean {
@@ -463,7 +464,10 @@ const PREFERRED_DOMAIN_RULES: PreferredDomainRule[] = [
 		pattern: /\b(openai|gpt|chatgpt)\b/,
 		domains: ["openai.com", "platform.openai.com", "help.openai.com"],
 	},
-	{ pattern: /\b(anthropic|claude)\b/, domains: ["anthropic.com", "docs.anthropic.com"] },
+	{
+		pattern: /\b(anthropic|claude)\b/,
+		domains: ["anthropic.com", "docs.anthropic.com"],
+	},
 	{ pattern: /\bbun\b/, domains: ["bun.sh", "bun.com"] },
 	{ pattern: /\b(next\.js|nextjs)\b/, domains: ["nextjs.org", "vercel.com"] },
 	{ pattern: /\bplaywright\b/, domains: ["playwright.dev"] },
@@ -475,17 +479,29 @@ const PREFERRED_DOMAIN_RULES: PreferredDomainRule[] = [
 	{ pattern: /\bsvelte\b/, domains: ["svelte.dev"] },
 	{ pattern: /\bsolid(js)?\b/, domains: ["solidjs.com"] },
 	{ pattern: /\b(vue|nuxt)\b/, domains: ["vuejs.org", "nuxt.com"] },
-	{ pattern: /\breact(\s*native)?\b/, domains: ["react.dev", "reactnative.dev"] },
+	{
+		pattern: /\breact(\s*native)?\b/,
+		domains: ["react.dev", "reactnative.dev"],
+	},
 	{ pattern: /\bangular\b/, domains: ["angular.io", "angular.dev"] },
-	{ pattern: /\bnode(\.js)?\b/, domains: ["nodejs.org", "nodejs.dev", "npmjs.com"] },
-	{ pattern: /\b(golang|go)\b/, domains: ["go.dev", "golang.org", "pkg.go.dev"] },
+	{
+		pattern: /\bnode(\.js)?\b/,
+		domains: ["nodejs.org", "nodejs.dev", "npmjs.com"],
+	},
+	{
+		pattern: /\b(golang|go)\b/,
+		domains: ["go.dev", "golang.org", "pkg.go.dev"],
+	},
 	{ pattern: /\bdeno\b/, domains: ["deno.land", "deno.com"] },
 	{ pattern: /\bfresh\b/, domains: ["fresh.deno.dev"] },
 	{ pattern: /\btypescript\b/, domains: ["typescriptlang.org"] },
 	{ pattern: /\bpython\b/, domains: ["python.org", "docs.python.org"] },
 	{ pattern: /\brust\b/, domains: ["rust-lang.org", "docs.rs", "crates.io"] },
 	{ pattern: /\bzig\b/, domains: ["ziglang.org"] },
-	{ pattern: /\bdocker\b/, domains: ["docker.com", "docs.docker.com", "hub.docker.com"] },
+	{
+		pattern: /\bdocker\b/,
+		domains: ["docker.com", "docs.docker.com", "hub.docker.com"],
+	},
 	{ pattern: /\b(kubernetes|k8s)\b/, domains: ["kubernetes.io", "k8s.io"] },
 	{
 		pattern: /\bpostgres(ql)?\b/,
@@ -549,23 +565,47 @@ export const ENGINE_WEIGHTS: Record<string, number> = {
 const SOURCE_TYPE_WEIGHT = 2;
 
 /**
+ * Multiplier applied to the BM25 query-relevance score (over title+snippet)
+ * when composing the rank score (F5). Deliberately small so it strengthens
+ * relevance ordering among similarly-scored results without overturning the
+ * stronger engine-consensus / sourceType / preferred-domain / goggles signals.
+ */
+const RELEVANCE_WEIGHT = 1;
+
+/**
+ * Per-domain diversity cap (F5, inspired by Hound's max-2-per-domain): no
+ * single domain may occupy more than this many slots in the top slice of the
+ * ranked list. Excess same-domain results are demoted below the cap rather
+ * than dropped, so recall is preserved. Applies as a final reordering pass
+ * after all scoring composes.
+ */
+export const DOMAIN_DIVERSITY_CAP = 2;
+
+/**
  * Merge cross-engine buckets into a ranked result list. Score composes:
  *   engine weight sum + consensus bonus (existing) +
  *   sourceType priority * SOURCE_TYPE_WEIGHT (#61) +
  *   PREFERRED_DOMAIN_BONUS when the domain matches a query-inferred
  *   canonical official domain (#63) +
  *   goggles bonus when an optional named/custom rerank profile is active
- *   (#72).
+ *   (#72) +
+ *   BM25 query-relevance bonus * RELEVANCE_WEIGHT over title+snippet (F5).
+ *
+ * After scoring, a final per-domain diversity cap (F5) reorders the list so
+ * no single domain occupies more than `DOMAIN_DIVERSITY_CAP` top slots;
+ * excess same-domain results are demoted below the cap, never dropped.
  *
  * `query` is optional so existing callers that don't have one (or don't
  * care about preferred-domain boosting) keep working unchanged. `goggles`
  * is likewise optional and purely additive — omitting it leaves scoring
- * byte-for-byte identical to before #72.
+ * byte-for-byte identical to before #72. `options.domainCap` overrides the
+ * diversity cap (set to 0 to disable the cap entirely).
  */
 export function scoreAndRankResults(
 	buckets: Map<string, EngineSource[]>,
 	query = "",
 	goggles?: GogglesProfile,
+	options: { domainCap?: number } = {},
 ): { result: SearchResult; score: number; sources: string[] }[] {
 	const preferredDomains = inferPreferredDomains(query);
 	const scored: { result: SearchResult; score: number; sources: string[] }[] =
@@ -604,8 +644,57 @@ export function scoreAndRankResults(
 		scored.push({ result, score, sources });
 	}
 
+	// F5: fold in BM25 query-relevance over title+snippet. A single scorer
+	// shares IDF across the whole result set; an empty query is a no-op (the
+	// scorer returns 0 for every document).
+	if (query) {
+		const scorer = createBM25Scorer(query);
+		const relevance = scorer.scoreAll(
+			scored.map((s) => `${s.result.title} ${s.result.snippet}`),
+		);
+		for (let i = 0; i < scored.length; i++) {
+			scored[i]!.score += RELEVANCE_WEIGHT * (relevance[i] ?? 0);
+		}
+	}
+
 	scored.sort((a, b) => b.score - a.score);
-	return scored;
+
+	const domainCap = options.domainCap ?? DOMAIN_DIVERSITY_CAP;
+	return applyDomainDiversityCap(scored, domainCap);
+}
+
+/**
+ * Per-domain diversity cap (F5). Walks the score-sorted list in order, keeping
+ * the first `cap` results per domain in place and deferring any excess
+ * same-domain results to the end (in their original score order). Nothing is
+ * dropped — recall is preserved — but the top slice is diversified so one
+ * domain cannot dominate it. A `cap` <= 0 disables the cap (returns as-is).
+ */
+export function applyDomainDiversityCap<T extends { result: SearchResult }>(
+	scored: T[],
+	cap: number = DOMAIN_DIVERSITY_CAP,
+): T[] {
+	if (cap <= 0) return scored;
+	const kept: T[] = [];
+	const deferred: T[] = [];
+	const counts = new Map<string, number>();
+	for (const entry of scored) {
+		const domain = stripWww(
+			(
+				entry.result.domain ||
+				extractDomain(entry.result.url) ||
+				""
+			).toLowerCase(),
+		);
+		const seen = counts.get(domain) || 0;
+		if (seen < cap) {
+			counts.set(domain, seen + 1);
+			kept.push(entry);
+		} else {
+			deferred.push(entry);
+		}
+	}
+	return [...kept, ...deferred];
 }
 
 export function buildResultBuckets(

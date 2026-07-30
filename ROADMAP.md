@@ -87,11 +87,11 @@ fail-closed guard and non-overridable metadata floor must be preserved.
 
 | ID  | Feature                                    | Detail                                                                              | Effort |
 | --- | ------------------------------------------ | ----------------------------------------------------------------------------------- | ------ |
-| F5  | BM25-rank + domain-diversify search results | Reuse `src/bm25.ts` in `aio-websearch`; cap per-domain *(henyo)*                    | S/M    |
-| F6  | Content-hash dedup + diff-mode             | SHA-256 skip-unchanged for cache/pull-resume; `aio-webcontent` diff vs cached *(pi-research, BetterWright)* | M      |
+| F5  | BM25-rank + domain-diversify search results ✅ | Reuse `src/bm25.ts` in `aio-websearch`; cap per-domain *(henyo)*                    | S/M    |
+| F6  | Content-hash dedup + diff-mode ✅             | SHA-256 skip-unchanged for cache/pull-resume; `aio-webcontent` diff vs cached *(pi-research, BetterWright)* | M      |
 | F7  | "Omitted sections" TOC on truncation       | `prune-markdown.ts` appends residual headings, not just a count *(henyo)*           | S      |
-| F8  | Local-knowledge pre-check before live fetch | Query pulled corpora via `aio-webquery` before `aio-webfetch` *(pi-research)*       | S/M    |
-| F9  | Context7 + DeepWiki verticals              | Library-docs + repo-Q&A extractors *(pi-webxp)*                                     | M      |
+| F8  | Local-knowledge pre-check before live fetch ✅ | Query pulled corpora via `aio-webquery` before `aio-webfetch` *(pi-research)*       | S/M    |
+| F9  | Context7 + DeepWiki verticals ✅              | Library-docs + repo-Q&A extractors *(pi-webxp)*                                     | M      |
 
 ### Tier 3 — strategic backlog
 
@@ -162,9 +162,9 @@ byte-bounded LRU cache (recurring), X/Twitter vertical (pi-lab). Full detail in 
 
 - **v0.7.3 (patch — DONE):** B2, B3, B4, B5, B6, B8, F7 fixed; H3 audited clean; B1 & B7 investigated (no defect). Dependency/security bumps (sharp removed; MCP SDK/hono/brace-expansion; pi peer 0.82) + `dependabot.yml` added; lens blocking findings triaged.
 - **Security patch (DONE — shipped in 0.7.3):** H1 (SSRF DNS-pinning + fail-closed + metadata floor; the flagged github-pipeline path sanitization was verified already fixed by `08e64ae`) + H2 (secret redaction in output/errors). 51 new offline tests (30 ssrf-hardening + 21 redact). Caveat: `wreq-js` (primary fetcher) is a native binding with no `lookup` hook, so DNS-pinning is enforced on the Playwright path while the primary path keeps the fail-closed pre-flight check.
-- **Pre-0.8.0 feature work (DONE — on master):** F2 (source trust-tier + evidence-quality grading; `src/source-trust.ts` + opt-in `rankSources` `trustBoost`) and F4 (backend `doctor`; `npm run diagnose:backends`). 69 new tests; full suite 931 / 0 fail.
+- **Pre-0.8.0 feature work (DONE — on master):** F2 (source trust-tier + evidence-quality grading; `src/source-trust.ts` + opt-in `rankSources` `trustBoost`), F4 (backend `doctor`; `npm run diagnose:backends`), F9 (Context7 + DeepWiki keyless verticals), F5 (domain-diversified search ranking), F6 (content-hash dedup + `aio-webcontent` diff-mode), and F8 (opt-in local-knowledge pre-check before live fetch). 128 new tests across these; full suite 1026 / 0 fail.
 - **v0.8.0 (feature release):** F1 (iterative cited-report research loop — the centerpiece; F2's grading feeds it). Inspiration #8 de-risks it — assemble from pi-search's citation contract + web-spider's `PageGraph` + pi-source-drafts' journal substrate.
-- **v0.8.x (inspiration-informed order):** F9 first (fastest win — Context7 + DeepWiki already implemented keyless in heyhuynhgiabuu/pi-search, slots into the vertical registry + MCP SDK dep); then F11 (5+ reference impls: xl0/webveil/rpiv/pi-search); then F5 (Hound diversity-cap + web-spider round-robin), F6 (zeldrisho `InflightCoalescer`), F8 (pi-source-drafts auto-capture + xl0 fuzzy `findText`), F3; plus new F15–F18.
+- **v0.8.x (remaining):** F11 (config layering — 5+ reference impls: xl0/webveil/rpiv/pi-search), F3 (stateful fetching), and new F15–F18 (keyless hosted-MCP search, fuzzy `findText`, in-flight coalescing, robots.txt Crawl-delay). F9/F5/F6/F8 shipped pre-0.8.0 (above).
 - **Browser-isolation cluster (F10/F13, + F3):** shares one answer — study thurstonsand/pi-web-tools `fetchers/local/` (worker over a socket) + web-spider-daemon `playwright-session-registry.ts` (per-session process) end-to-end before designing.
 - **Backlog:** F12 (coherent-fingerprint; thurstonsand headed-escalation is the reference), F14 (video/frame — reference verified in survey #8b via pi-web-access's Gemini-native-ingestion + ffmpeg-frame-export design; remaining work is adoption + a Windows cookie path).
 - **Security cross-checks (DONE — survey #8):** H4–H7 — Playwright redirect guard added (wreq-js hops remain an unhookable documented limitation); IPv6 NAT64/benchmarking/discard-floor + hex-metadata coverage; dangerous-port blocklist (allow-list-aware, fails closed); homoglyph folding + base64-blob redaction + MCP error-path redaction parity. 36 new tests (`tests/security-crosscheck.test.mjs`).

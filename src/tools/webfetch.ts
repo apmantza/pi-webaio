@@ -67,6 +67,8 @@ import {
 	suggestRetryTimeoutMs,
 } from "./fetch-error.ts";
 import { frontmatter, runInBatches, safeResolveInBaseTemp } from "./utils.ts";
+import { queryIndex } from "../webquery-index.ts";
+import { resolveCorpusDir } from "./webquery.ts";
 
 /**
  * Build a deterministic fallback summary from markdown content.
@@ -89,6 +91,120 @@ const HEADING_RE = /^#{1,6}\s/;
 // "Hi." (3 chars) and "OK." (3 chars), while still capturing short
 // sentences like "Tap Continue." (13 chars) and "Done." (5 chars).
 const FIRST_SENTENCE_RE = /^(.{5,120}?)[.!?](\s|$)/;
+
+// ─── Local-knowledge pre-check (F8) ───────────────────────────────────
+// Opt-in check run before a live fetch: is the topic/URL already covered
+// by a locally-pulled aio-webpull corpus? Reuses the same corpus resolution
+// (resolveCorpusDir) and BM25 query primitive (queryIndex) as aio-webquery
+// so nothing is duplicated. Fully isolated — when `localCheck` is absent the
+// fetch path is byte-for-byte unchanged.
+
+/** One local corpus hit surfaced in the fetch result. */
+interface LocalKnowledgeHit {
+	score: number;
+	file: string;
+	url: string;
+	heading: string;
+}
+
+/** Shape of `details.localKnowledge` when the pre-check finds coverage. */
+interface LocalKnowledge {
+	checked: true;
+	/** Absolute corpus directory that was searched. */
+	corpusDir: string;
+	/** The query text actually searched. */
+	query: string;
+	/** Whether the query came from the fetch's `query` param or the URL. */
+	source: "query" | "url";
+	matchCount: number;
+	chunkCount: number;
+	hits: LocalKnowledgeHit[];
+}
+
+/** Default number of local hits to surface in the pre-check. */
+const LOCAL_PRECHECK_TOP_K = 3;
+
+/**
+ * Search the pulled corpus for the first target's hostname for content
+ * matching the fetch's `query` (or a query derived from the URL path when
+ * no explicit query is given). Returns `undefined` when there is no corpus,
+ * nothing matches, or the target URL cannot be parsed — i.e. a no-op that
+ * leaves the fetch result untouched.
+ *
+ * @internal Exported for unit tests only. Not part of the public API.
+ */
+export async function runLocalKnowledgePreCheck(
+	targets: string[],
+	query: string | undefined,
+	topK: number = LOCAL_PRECHECK_TOP_K,
+): Promise<LocalKnowledge | undefined> {
+	const first = targets[0];
+	if (!first) return undefined;
+
+	let hostname: string;
+	let urlDerivedQuery: string;
+	try {
+		let urlStr = first;
+		if (!/^https?:\/\//i.test(urlStr)) urlStr = `https://${urlStr}`;
+		const u = new URL(urlStr);
+		hostname = u.hostname;
+		const pathTokens = u.pathname.split(/[/._-]+/).filter(Boolean);
+		urlDerivedQuery = [hostname, ...pathTokens].join(" ");
+	} catch {
+		return undefined;
+	}
+	if (!hostname) return undefined;
+
+	const trimmedQuery = query?.trim();
+	const searchText = trimmedQuery ? trimmedQuery : urlDerivedQuery;
+	if (!searchText) return undefined;
+
+	// Corpora live under <temp>/pi-webaio/<hostname> (aio-webpull's default
+	// layout); resolveCorpusDir(hostname) targets exactly that directory.
+	const corpusDir = resolveCorpusDir(hostname);
+
+	let result;
+	try {
+		result = await queryIndex(corpusDir, searchText, topK);
+	} catch {
+		return undefined;
+	}
+	if (!result.ok || result.hits.length === 0) return undefined;
+
+	return {
+		checked: true,
+		corpusDir,
+		query: searchText,
+		source: trimmedQuery ? "query" : "url",
+		matchCount: result.hits.length,
+		chunkCount: result.chunkCount,
+		hits: result.hits.map((h) => ({
+			score: Math.round(h.score * 1000) / 1000,
+			file: h.file,
+			url: h.url,
+			heading: h.heading,
+		})),
+	};
+}
+
+/**
+ * Render a short agent-visible note for a pre-check result. Returns an empty
+ * string when there is nothing to report, so appending it to the fetch output
+ * is byte-for-byte invisible when the pre-check is off or finds nothing.
+ */
+function formatLocalKnowledgeNote(lk: LocalKnowledge | undefined): string {
+	if (!lk) return "";
+	const top = lk.hits[0];
+	const topDesc = top
+		? `${top.file}${top.heading ? ` › ${top.heading}` : ""}${top.url ? ` (${top.url})` : ""} score=${top.score}`
+		: "";
+	return (
+		`\n\n[Local knowledge pre-check: ${lk.matchCount} relevant chunk(s) of ${lk.chunkCount} ` +
+		`already pulled locally in ${lk.corpusDir} for "${lk.query}". ` +
+		`Top hit: ${topDesc}. Consider aio-webquery (or reading the local file) ` +
+		`before/instead of a live fetch.]`
+	);
+}
 
 export function buildDeterministicSummary(content: string): string {
 	const trimmedInput = content.slice(0, MAX_SUMMARY_INPUT_CHARS);
@@ -460,6 +576,12 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 						"When true and a previous version of the URL is cached, fetch fresh content and return a section-level diff (added/changed/removed sections by heading) instead of the full page. If content is unchanged (including a 304 Not Modified response), reports 'unchanged since <time>, 0 changes'. When nothing is cached, falls back to a normal full fetch with a note that no baseline exists. The new content replaces the cache so the next diff is against this fetch.",
 				}),
 			),
+			localCheck: Type.Optional(
+				Type.Boolean({
+					description:
+						"Opt-in local-knowledge pre-check. Before the live fetch, search any locally-pulled corpus (from aio-webpull) for the URL's hostname using the fetch's `query` (or a query derived from the URL path). If relevant content is already pulled, it is surfaced as `details.localKnowledge` (top matching files, original URLs, and BM25 scores) plus a note in the output, so you can use cached local content instead of / alongside the network fetch. Default (absent) leaves the fetch completely unchanged.",
+				}),
+			),
 		}),
 
 		async execute(
@@ -678,6 +800,18 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 					/* session creation failed — fall back to isolated fetches */
 				}
 			}
+
+			// ── Local-knowledge pre-check (F8, opt-in) ─────────────────────
+			// Runs before any network I/O. When `localCheck` is absent this is
+			// `undefined` and every return path below is byte-for-byte unchanged.
+			const localKnowledge =
+				params.localCheck === true
+					? await runLocalKnowledgePreCheck(
+							targets,
+							params.query as string | undefined,
+						)
+					: undefined;
+			const localKnowledgeNote = formatLocalKnowledgeNote(localKnowledge);
 
 			const singleStartedAt = Date.now();
 			const results = await (async () => {
@@ -1187,7 +1321,7 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 							content: [
 								{
 									type: "text",
-									text: agentText.trim(),
+									text: agentText.trim() + localKnowledgeNote,
 								},
 							],
 							details: {
@@ -1201,6 +1335,7 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 								errorPhase: fe?.phase,
 								errorCategory: fe?.category,
 								errorRetryable: fe?.retryable,
+								...(localKnowledge ? { localKnowledge } : {}),
 								items: details.items,
 							},
 						};
@@ -1360,7 +1495,7 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 									: "",
 							].join("\n");
 							return {
-								content: [{ type: "text", text }],
+								content: [{ type: "text", text: text + localKnowledgeNote }],
 								details: {
 									outPath: r.outPath,
 									title: r.title,
@@ -1370,6 +1505,7 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 									os,
 									proxy,
 									truncated: false,
+									...(localKnowledge ? { localKnowledge } : {}),
 									summarized: false,
 									fullLength: preview.length,
 									status: "done",
@@ -1464,7 +1600,7 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 					].join("\n");
 
 					return {
-						content: [{ type: "text", text }],
+						content: [{ type: "text", text: text + localKnowledgeNote }],
 						details: {
 							outPath: r.outPath,
 							title: r.title,
@@ -1474,6 +1610,7 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 							os,
 							proxy,
 							truncated: !summarized && !isShort,
+							...(localKnowledge ? { localKnowledge } : {}),
 							summarized,
 							fullLength: preview.length,
 							summaryLength: summary?.length,
@@ -1582,9 +1719,10 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 						: [],
 				];
 				return {
-					content: [{ type: "text", text: lines.join("\n") }],
+					content: [{ type: "text", text: lines.join("\n") + localKnowledgeNote }],
 					details: {
 						results,
+						...(localKnowledge ? { localKnowledge } : {}),
 						browser,
 						os,
 						packagePath,

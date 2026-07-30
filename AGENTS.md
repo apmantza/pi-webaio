@@ -50,12 +50,13 @@ pi-webaio/
 │   ├── goggles.ts            ← Search rerank presets/rules (docs-first, research, news-balanced, custom) (v0.7.1)
 │   ├── research.ts           ← Single-round research bundle orchestrator + claim-stance classifier (v0.7.1)
 │   ├── source-trust.ts       ← Source trust-tier + evidence-quality grading (classifySourceProfile + caveat reasons) (post-0.7.3)
+│   ├── content-hash.ts       ← SHA-256 content hashing for dedup + diff baselines (post-0.7.3)
 │   ├── webquery-index.ts     ← BM25 index builder/loader for the aio-webpull corpus (v0.7.0)
 │   ├── hooks.ts              ← User lifecycle hooks (afterFetch/afterExtract) loaded from ~/.pi/agent/webaio/hooks/ (v0.7.2)
 │   ├── mcp-server.ts         ← MCP stdio server adapter exposing all 8 tools to non-pi clients (v0.7.0)
 │   ├── types.ts              ← Shared types (PullResult, FetchOpts, FetchErrorInfo, ScrapeMode)
-│   ├── verticals/            ← 19 built-in API-first extractors + user loader
-│   │   ├── registry.ts       ← Pattern-matching registry (19 extractors)
+│   ├── verticals/            ← 21 built-in API-first extractors + user loader
+│   │   ├── registry.ts       ← Pattern-matching registry (21 extractors)
 │   │   ├── user-loader.ts    ← Loads user-defined verticals from ~/.pi/agent/webaio/verticals/ (v0.7.0)
 │   │   ├── types.ts          ← Shared types
 │   │   ├── npm.ts            ← npm registry API
@@ -76,13 +77,15 @@ pi-webaio/
 │   │   ├── pubdev.ts         ← pub.dev API
 │   │   ├── gopackages.ts     ← Go module proxy
 │   │   ├── nuget.ts          ← NuGet Search API v3
-│   │   └── gitlab.ts         ← GitLab REST API v4 (known-host gated in v0.7.3)
+│   │   ├── gitlab.ts         ← GitLab REST API v4 (known-host gated in v0.7.3)
+│   │   ├── context7.ts       ← Context7 library-docs API (keyless two-step search→fetch) (post-0.7.3)
+│   │   └── deepwiki.ts       ← DeepWiki repo-Q&A via MCP JSON-RPC (keyless) (post-0.7.3)
 │   └── tools/                ← Tool handlers
 │       ├── render-result.ts  ← TUI components (call/progress/result), markdownToText, applyFormat, secret redaction (v0.5.0)
 │       ├── fetch-error.ts    ← Phase-aware FetchError (26 codes × 10 phases × 7 categories) (v0.5.0, v0.7.3)
 │       ├── utils.ts          ← Shared helpers: frontmatter, runInBatches, safeResolveInBaseTemp
-│       ├── webfetch.ts       ← aio-webfetch registration + execute (answer mode, budgetTokens, diff)
-│       ├── webcontent.ts     ← aio-webcontent registration
+│       ├── webfetch.ts       ← aio-webfetch registration + execute (answer mode, budgetTokens, diff, localCheck)
+│       ├── webcontent.ts     ← aio-webcontent registration (content-hash dedup, diff mode)
 │       ├── webresult.ts      ← aio-webresult registration
 │       ├── websearch.ts      ← aio-websearch registration (googleStatus surfacing)
 │       ├── webmap.ts         ← aio-webmap registration
@@ -112,7 +115,7 @@ pi-webaio/
 ├── types/
 │   ├── pi-coding-agent.d.ts  ← Minimal ExtensionAPI type declaration
 │   └── playwright.d.ts       ← Playwright type stub (optional dep)
-├── tests/                    ← 32 suites wired into test:all (931 tests) + standalone suites (mcp, etc.)
+├── tests/                    ← 37 suites wired into test:all (1026 tests) + standalone suites (mcp, etc.)
 ├── tsconfig.json             ← Lint config (noEmit, strict, ES2022)
 ├── tsconfig.dist.json        ← Build config (emits to dist/, includes types/**/*.d.ts)
 ├── package.json              ← type: "module", pi extension manifest, v0.7.3
@@ -146,7 +149,7 @@ pi-webaio/
 - **Phase-aware FetchError** (v0.5.0): 26 codes × 10 phases × 7 categories with downloadedBytes, elapsedMs, contentLength for smart retry timeout suggestions
 - **Pre-flight secret scan** (v0.5.0): blocks URLs with API keys/tokens before any fetch — returns clear "Request blocked: potential secret(s) detected in URL (GitHub PAT (classic), ...)" instead of generic "Could not reach server"
 - **Extraction pipeline** (tries in order, falls through):
-  1. Vertical extractors (19 built-in patterns: npm, PyPI, etc., plus user-defined verticals)
+  1. Vertical extractors (21 built-in patterns: npm, PyPI, etc., plus user-defined verticals)
   2. GitHub special-case (clone or API for repos/trees/blobs/issues/PRs/actions runs/actions logs/check logs/security alerts)
   3. `api.github.com/repos/{owner}/{repo}/actions/runs/{runId}/logs` (v0.5.0 — via gh CLI)
   4. Binary download detection (PDF by URL, null-byte/ASCII heuristic)
@@ -430,7 +433,7 @@ TUI result rendering for all tools; phase-aware FetchError system; `format` para
 ## Testing
 
 - `npm test` → runs unit tests (`tests/unit.test.mjs`, 156 tests)
-- `npm run test:all` → runs all 32 wired suites (931 tests total, 0 fail, 2 expected skips: a live-network Jina test that skips on external HTTP 403, and an opt-in live TLS test)
+- `npm run test:all` → runs all 37 wired suites (1026 tests total, 0 fail, 2 expected skips: a live-network Jina test that skips on external HTTP 403, and an opt-in live TLS test)
 - `npm run test:mcp` → MCP server tests (standalone, not in test:all)
 - Specialized suites (each `npm run test:<name>`): `new` (new-features, 31), `paywall` (65), `check` (github-check, 35), `render` (render-result, 40), `fetcherror` (fetch-error, 57), `fetchprogress` (9), `hardening` (16), `redact` (21), `ssrf` (ssrf-hardening, 30), `fingerprint` (14), `format` (18), `webfetch-summary` (13), `search-context` (20), `chunker` (31), `prune` (prune-markdown, 25), `github-map` (50), `reddit` (reddit-block, 7), `source-ranking` (16), `webresearch` (26), `stance` (24), `cookie-cache` (25), `title-extraction` (10), `integration` (5), `bench` (bench-harness, 35)
 - Additional suites present in `tests/` (run via test:all or directly): goggles (14), bot-wait (6), ssrf-allowlist (37), lifecycle-hooks (14), webquery (12), plus diff-refetch, query-mode, revalidation, strategy-memory, prefetch, token-budget, user-verticals

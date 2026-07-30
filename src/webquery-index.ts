@@ -5,6 +5,7 @@
 import { readFile, writeFile, readdir, stat } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { chunkMarkdown } from "./chunker.ts";
+import { createBM25Scorer } from "./bm25.ts";
 
 /** Index format version — bump when the stored shape changes. */
 export const INDEX_VERSION = 1;
@@ -190,4 +191,65 @@ export async function loadIndex(outDir: string): Promise<LoadIndexResult> {
 	}
 
 	return { ok: true, index: parsed as WebpullIndex };
+}
+
+// ─── Querying ─────────────────────────────────────────────────────────
+
+/** One ranked hit returned by {@link queryIndex}. */
+export interface CorpusHit {
+	/** BM25 relevance score (higher = more relevant). */
+	score: number;
+	/** Relative path from outDir to the source markdown file. */
+	file: string;
+	/** Original URL from YAML frontmatter (may be empty). */
+	url: string;
+	/** Heading breadcrumb (may be empty). */
+	heading: string;
+}
+
+export type QueryIndexResult =
+	| { ok: true; hits: CorpusHit[]; chunkCount: number; builtAt: string }
+	| { ok: false; reason: "missing" | "version_mismatch" | "corrupt"; message: string };
+
+/**
+ * Load the corpus index at `outDir` and return the top-`topK` BM25-ranked
+ * chunks matching `query`. This is the shared query primitive reused by
+ * aio-webquery and the aio-webfetch local-knowledge pre-check (F8) so the
+ * scoring logic lives in exactly one place.
+ *
+ * Returns `ok: false` (with the loadIndex reason) when the index is missing
+ * or invalid, and an empty `hits` array when the corpus exists but nothing
+ * matches the query terms.
+ */
+export async function queryIndex(
+	outDir: string,
+	query: string,
+	topK = 8,
+): Promise<QueryIndexResult> {
+	const loaded = await loadIndex(outDir);
+	if (!loaded.ok) {
+		return { ok: false, reason: loaded.reason, message: loaded.message };
+	}
+
+	const { index } = loaded;
+	const { chunks } = index;
+	if (chunks.length === 0) {
+		return { ok: true, hits: [], chunkCount: 0, builtAt: index.builtAt };
+	}
+
+	const scorer = createBM25Scorer(query);
+	const scores = scorer.scoreAll(chunks.map((c) => c.text));
+	const hits = scores
+		.map((score, i) => ({ score, chunk: chunks[i]! }))
+		.filter((r) => r.score > 0)
+		.sort((a, b) => b.score - a.score)
+		.slice(0, Math.max(1, Math.floor(topK)))
+		.map(({ score, chunk }) => ({
+			score,
+			file: chunk.file,
+			url: chunk.url,
+			heading: chunk.heading,
+		}));
+
+	return { ok: true, hits, chunkCount: chunks.length, builtAt: index.builtAt };
 }

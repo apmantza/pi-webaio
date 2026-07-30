@@ -3,9 +3,10 @@
 // Uses a JSON metadata index + content-addressed blobs under os.tmpdir().
 
 import { mkdir, readFile, writeFile, unlink } from "node:fs/promises";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { hashContent as sha256 } from "./content-hash.ts";
 
 const BASE_TEMP = join(tmpdir(), "pi-webaio");
 const STORAGE_DIR = join(BASE_TEMP, "results");
@@ -75,7 +76,9 @@ async function saveIndex(): Promise<void> {
 }
 
 function hashContent(content: string): string {
-	return createHash("sha256").update(content).digest("hex").slice(0, 16);
+	// Truncated digest preserved for index-format continuity; the shared
+	// SHA-256 helper lives in content-hash.ts (F6).
+	return sha256(content).slice(0, 16);
 }
 
 function makeId(): string {

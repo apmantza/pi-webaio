@@ -175,6 +175,16 @@ export interface StoredContent {
 	/** HTTP revalidation validators (issue #46) */
 	etag?: string;
 	lastModified?: string;
+	/** SHA-256 content hash for dedup / unchanged detection (F6) */
+	contentHash?: string;
+	/**
+	 * The immediately preceding version of this URL's content, retained
+	 * when a re-fetch overwrites the entry. Powers aio-webcontent's
+	 * diff-mode (F6). Absent on first sighting.
+	 */
+	previousContent?: string;
+	/** Hash of `previousContent`, for cheap unchanged detection (F6). */
+	previousContentHash?: string;
 }
 
 /**

@@ -33,6 +33,8 @@ import { matchesPubDev, extractPubDev } from "./pubdev.ts";
 import { matchesGoPackages, extractGoPackages } from "./gopackages.ts";
 import { matchesNuGet, extractNuGet } from "./nuget.ts";
 import { matchesGitLab, extractGitLab } from "./gitlab.ts";
+import { matchesContext7, extractContext7 } from "./context7.ts";
+import { matchesDeepWiki, extractDeepWiki } from "./deepwiki.ts";
 
 export interface ExtractorMatch {
 	name: string;
@@ -84,6 +86,8 @@ export const VERTICAL_EXTRACTORS: ExtractorMatch[] = [
 	{ name: "gopackages", matcher: matchesGoPackages },
 	{ name: "nuget", matcher: matchesNuGet },
 	{ name: "gitlab", matcher: matchesGitLab },
+	{ name: "context7", matcher: matchesContext7 },
+	{ name: "deepwiki", matcher: matchesDeepWiki },
 ];
 
 /**
@@ -198,6 +202,12 @@ export async function runVerticalExtractor(
 	}
 	if (matchesGitLab(url)) {
 		return extractGitLab(url, fetchJson, fetchText);
+	}
+	if (matchesContext7(url)) {
+		return extractContext7(url);
+	}
+	if (matchesDeepWiki(url)) {
+		return extractDeepWiki(url);
 	}
 	return null;
 }

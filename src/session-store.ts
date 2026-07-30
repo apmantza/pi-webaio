@@ -16,6 +16,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { scoreRelevance } from "./bm25.ts";
+import { hashContent } from "./content-hash.ts";
 import type { StoredContent, SearchResult } from "./types.ts";
 
 // ─── Constants ─────────────────────────────────────────────────────
@@ -120,6 +121,11 @@ export function getStoredContent(url: string): StoredContent | null {
 			return null;
 		}
 	}
+	// F6: backfill the content hash for entries loaded from disk (or stored
+	// before hashing existed) so dedup/diff work uniformly.
+	if (entry.content && !entry.contentHash) {
+		entry.contentHash = hashContent(entry.content);
+	}
 	return entry;
 }
 
@@ -143,12 +149,28 @@ export function storeContent(
 		const first = sessionStore.keys().next().value;
 		if (first !== undefined) sessionStore.delete(first);
 	}
+	// F6: content-hash dedup. Hash the new content and, when overwriting an
+	// existing entry, retain the prior version so aio-webcontent can diff
+	// current vs previous. If the hash is unchanged we carry the existing
+	// baseline forward (a no-op re-store must not erase the diff baseline).
+	const contentHash = hashContent(content);
+	const existing = sessionStore.get(key);
+	const unchanged = existing?.contentHash === contentHash;
+	const previousContent = unchanged
+		? existing?.previousContent
+		: (existing?.content ?? undefined);
+	const previousContentHash = unchanged
+		? existing?.previousContentHash
+		: (existing?.contentHash ?? undefined);
 	sessionStore.set(key, {
 		url,
 		title,
 		content,
 		filePath,
 		timestamp: Date.now(),
+		contentHash,
+		...(previousContent !== undefined ? { previousContent } : {}),
+		...(previousContentHash !== undefined ? { previousContentHash } : {}),
 		...(metadata
 			? {
 					author: metadata.author,
