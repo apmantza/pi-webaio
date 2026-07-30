@@ -424,6 +424,25 @@ test("isRetryableNetworkError detects timeout", () => {
 	assert.strictEqual(isRetryableNetworkError(err), true);
 });
 
+test("isRetryableNetworkError detects wreq-js 'error sending request' (reqwest connect failure)", () => {
+	const err = new Error(
+		"GET https://html.duckduckgo.com/html/?q=x: error sending request for uri (https://html.duckduckgo.com/html/?q=x): client error (Connect)",
+	);
+	assert.strictEqual(isRetryableNetworkError(err), true);
+});
+
+test("isRetryableNetworkError detects wreq-js Windows connection reset (os error 10054)", () => {
+	const err = new Error(
+		"error sending request: client error (Connect): An existing connection was forcibly closed by the remote host. (os error 10054)",
+	);
+	assert.strictEqual(isRetryableNetworkError(err), true);
+});
+
+test("isRetryableNetworkError detects generic 'connection reset' (Linux/peer)", () => {
+	const err = new Error("Connection reset by peer (os error 104)");
+	assert.strictEqual(isRetryableNetworkError(err), true);
+});
+
 test("isRetryableNetworkError rejects random errors", () => {
 	const err = new Error("something went wrong");
 	assert.strictEqual(isRetryableNetworkError(err), false);

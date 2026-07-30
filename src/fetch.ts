@@ -107,16 +107,23 @@ function describeLadderError(err: unknown): string {
 
 export function isRetryableNetworkError(err: unknown): boolean {
 	if (!(err instanceof Error || err instanceof TypeError)) return false;
-	const msg = (err as Error).message || "";
+	const msg = ((err as Error).message || "").toLowerCase();
 	return (
 		msg.includes("fetch failed") ||
-		msg.includes("ECONNRESET") ||
-		msg.includes("ETIMEDOUT") ||
-		msg.includes("ECONNREFUSED") ||
+		msg.includes("econnreset") ||
+		msg.includes("etimedout") ||
+		msg.includes("econnrefused") ||
 		msg.includes("timeout") ||
 		msg.includes("timed out") ||
-		msg.includes("ENOTFOUND") ||
-		msg.includes("getaddrinfo")
+		msg.includes("enotfound") ||
+		msg.includes("getaddrinfo") ||
+		// wreq-js native (Rust/reqwest) transport errors — the binding reports
+		// these in reqwest / os-error format rather than Node's ECONNRESET-style
+		// strings, so a connection reset would otherwise fail fast with no retry
+		// and its throw would bypass smartFetch's browser rung.
+		msg.includes("error sending request") ||
+		msg.includes("forcibly closed") ||
+		msg.includes("connection reset")
 	);
 }
 
