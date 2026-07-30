@@ -1157,7 +1157,11 @@ export async function smartFetch(
 						};
 					}
 					// 200 but still a challenge page — record the soft block.
-					ladderAttempts.push({ profile: fb, status: fbRes.status, error: "blocked" });
+					ladderAttempts.push({
+						profile: fb,
+						status: fbRes.status,
+						error: "blocked",
+					});
 				} catch (err) {
 					ladderAttempts.push({ profile: fb, error: describeLadderError(err) });
 				}
@@ -1203,7 +1207,10 @@ export async function smartFetch(
 		// `bypass: true` or a different profile would help. Keep returning null
 		// (control flow unchanged) — the caller still produces the bot-block error.
 		const ladderSummary = summarizeBotBlockLadder(ladderAttempts);
-		debug("fetch", `bot-block ladder exhausted for ${domain}: ${ladderSummary}`);
+		debug(
+			"fetch",
+			`bot-block ladder exhausted for ${domain}: ${ladderSummary}`,
+		);
 		console.error(
 			`[pi-webaio] bot-block ladder exhausted for ${domain}: ${ladderSummary}`,
 		);

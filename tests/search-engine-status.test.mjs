@@ -170,7 +170,10 @@ test("engineStatusNotes: emits a note per non-ok engine, skips ok and disabled",
 		notes.some((n) => n === "_(Yahoo: HTTP 429)_"),
 		`expected a Yahoo HTTP 429 note, got: ${JSON.stringify(notes)}`,
 	);
-	assert.ok(!notes.some((n) => n.includes("DDG")), "ok engine must not be noted");
+	assert.ok(
+		!notes.some((n) => n.includes("DDG")),
+		"ok engine must not be noted",
+	);
 	assert.ok(
 		!notes.some((n) => n.includes("Bing")),
 		"disabled engine must not be noted",

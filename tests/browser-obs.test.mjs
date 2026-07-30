@@ -24,7 +24,10 @@ import { summarizeBotBlockLadder } from "../src/fetch.ts";
 // ─── P4: toLaunchErrorRecord ────────────────────────────────────────
 
 test("toLaunchErrorRecord: records an Error message + timestamp", () => {
-	const rec = toLaunchErrorRecord(new Error("channel 'chrome' not found"), 1234);
+	const rec = toLaunchErrorRecord(
+		new Error("channel 'chrome' not found"),
+		1234,
+	);
 	assert.equal(rec.message, "channel 'chrome' not found");
 	assert.equal(rec.at, 1234);
 });
@@ -40,7 +43,10 @@ test("toLaunchErrorRecord: defaults `at` to now when omitted", () => {
 	const before = Date.now();
 	const rec = toLaunchErrorRecord(new Error("x"));
 	const after = Date.now();
-	assert.ok(rec.at >= before && rec.at <= after, "at should default to Date.now()");
+	assert.ok(
+		rec.at >= before && rec.at <= after,
+		"at should default to Date.now()",
+	);
 });
 
 // ─── P4: degradedPoolNotice ─────────────────────────────────────────
@@ -54,7 +60,10 @@ test("degradedPoolNotice: surfaces the recorded reason when degraded", () => {
 		message: "Executable doesn't exist",
 		at: 1,
 	});
-	assert.equal(notice, "pool degraded: last launch failed (Executable doesn't exist)");
+	assert.equal(
+		notice,
+		"pool degraded: last launch failed (Executable doesn't exist)",
+	);
 });
 
 // ─── P4: formatLaunchTiming ─────────────────────────────────────────
@@ -149,7 +158,9 @@ test("summarizeBotBlockLadder: mixed timeout / 403 / blocked", () => {
 
 test("summarizeBotBlockLadder: status wins over error token", () => {
 	assert.equal(
-		summarizeBotBlockLadder([{ profile: "firefox_147", status: 429, error: "blocked" }]),
+		summarizeBotBlockLadder([
+			{ profile: "firefox_147", status: 429, error: "blocked" },
+		]),
 		"firefox_147=429",
 	);
 });

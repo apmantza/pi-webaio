@@ -511,7 +511,10 @@ export async function probeWreq(deps) {
 export async function probeTempDir(deps) {
 	const name = "Temp dir / storage";
 	const base = deps.tempBase;
-	const probeFile = join(base, `.doctor-probe-${process.pid}-${Date.now()}.tmp`);
+	const probeFile = join(
+		base,
+		`.doctor-probe-${process.pid}-${Date.now()}.tmp`,
+	);
 	const payload = "pi-webaio-doctor";
 	try {
 		await deps.ensureDir(base);

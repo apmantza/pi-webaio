@@ -964,10 +964,7 @@ export async function searchWeb(
 				quota = true;
 				recordEngineFailure(s.id, `HTTP ${s.res.status}`);
 				recordEngineSearchFailure(s.id);
-				debug(
-					"search",
-					`${s.id} quota/rate-limit (HTTP ${s.res.status})`,
-				);
+				debug("search", `${s.id} quota/rate-limit (HTTP ${s.res.status})`);
 			} else if (s.res) {
 				debug("search", `${s.id} failed with HTTP ${s.res.status}`);
 			}

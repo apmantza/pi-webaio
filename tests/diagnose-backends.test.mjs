@@ -590,7 +590,10 @@ test("probeDns: live, resolver throws → missing", async () => {
 // ─── probeProxy (live-path logic, pure validation) ──────────────────
 
 test("probeProxy: offline → skipped", async () => {
-	const r = await probeProxy({ live: false, env: { HTTPS_PROXY: "http://x:1" } });
+	const r = await probeProxy({
+		live: false,
+		env: { HTTPS_PROXY: "http://x:1" },
+	});
 	assert.equal(r.status, "skipped");
 });
 

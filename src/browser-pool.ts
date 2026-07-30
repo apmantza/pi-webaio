@@ -371,9 +371,9 @@ export class BrowserPool {
 				this._lastLaunchError = toLaunchErrorRecord(err);
 				debug(
 					"browser-pool",
-					`replacement launch failed: ${this._lastLaunchError.message} — ${
-						degradedPoolNotice(this._lastLaunchError)
-					}`,
+					`replacement launch failed: ${this._lastLaunchError.message} — ${degradedPoolNotice(
+						this._lastLaunchError,
+					)}`,
 				);
 			});
 		}

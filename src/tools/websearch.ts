@@ -21,10 +21,7 @@ import {
 	cdpAvailable as cdpAvailableGA,
 } from "../google-ai.ts";
 import type { SearchResult } from "../types.ts";
-import {
-	triggerPrefetch,
-	DEFAULT_PREFETCH_COUNT,
-} from "../prefetch.ts";
+import { triggerPrefetch, DEFAULT_PREFETCH_COUNT } from "../prefetch.ts";
 
 export function registerWebsearchTool(pi: ExtensionAPI): void {
 	pi.registerTool({
@@ -63,10 +60,13 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 				}),
 			),
 			goggles: Type.Optional(
-				Type.Union([Type.String(), Type.Record(Type.String(), Type.Unknown())], {
-					description:
-						"Optional rerank profile applied additively on top of the normal ranking. Pass a built-in preset name ('docs-first', 'research', 'news-balanced'), a path to a JSON file of custom rules, an inline JSON string, or a rules object ({ rules: [{ domains?, domainMarkers?, urlMarkers?, titleTerms?, weight }] }). Omit for unchanged default ranking.",
-				}),
+				Type.Union(
+					[Type.String(), Type.Record(Type.String(), Type.Unknown())],
+					{
+						description:
+							"Optional rerank profile applied additively on top of the normal ranking. Pass a built-in preset name ('docs-first', 'research', 'news-balanced'), a path to a JSON file of custom rules, an inline JSON string, or a rules object ({ rules: [{ domains?, domainMarkers?, urlMarkers?, titleTerms?, weight }] }). Omit for unchanged default ranking.",
+					},
+				),
 			),
 		}),
 
@@ -203,8 +203,7 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 				if (settled[0].status === "fulfilled") {
 					httpResults = settled[0].value.results;
 					httpCounts = (settled[0].value as any).httpCounts ?? httpCounts;
-					engineStatus =
-						(settled[0].value as any).engineStatus ?? engineStatus;
+					engineStatus = (settled[0].value as any).engineStatus ?? engineStatus;
 				}
 				if (settled[1].status === "fulfilled")
 					googleResults = settled[1].value.results;
@@ -241,13 +240,12 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 
 			const engineLabel: string[] = [];
 			const httpEngineIds = ["ddg", "brave", "yahoo", "bing"] as const;
-			const httpEngineNames: Record<(typeof httpEngineIds)[number], string> =
-				{
-					ddg: "DDG",
-					brave: "Brave",
-					yahoo: "Yahoo",
-					bing: "Bing",
-				};
+			const httpEngineNames: Record<(typeof httpEngineIds)[number], string> = {
+				ddg: "DDG",
+				brave: "Brave",
+				yahoo: "Yahoo",
+				bing: "Bing",
+			};
 			for (const id of httpEngineIds) {
 				const count = httpCounts[id];
 				if (!count) continue;
