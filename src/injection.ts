@@ -12,6 +12,66 @@ export function safeRegexTest(pattern: RegExp, text: string): boolean {
 	return pattern.test(safe);
 }
 
+// ─── Homoglyph / zero-width normalization ────────────────────────────
+// An attacker can evade the ASCII injection patterns below by spelling
+// "ignore all previous instructions" with Cyrillic/Greek lookalikes
+// (а/e/о/р/с/у/х) or by inserting zero-width characters between letters.
+// normalizeForInjection() folds these back to their ASCII equivalents
+// BEFORE pattern matching so such obfuscation is detected. This is purely
+// additive to detection: plain ASCII text is unchanged (NFKC is the
+// identity on ASCII, the homoglyph map only touches non-ASCII lookalikes,
+// and the zero-width strip removes invisible characters only).
+
+/** Explicit Cyrillic/Greek lookalike → ASCII fold map. */
+const HOMOGLYPH_MAP: Record<string, string> = {
+	"\u0430": "a", // Cyrillic а
+	"\u0435": "e", // Cyrillic е
+	"\u043e": "o", // Cyrillic о
+	"\u0440": "p", // Cyrillic р
+	"\u0441": "c", // Cyrillic с
+	"\u0443": "y", // Cyrillic у
+	"\u0445": "x", // Cyrillic х
+	"\u0456": "i", // Cyrillic і
+	"\u0458": "j", // Cyrillic ј
+	"\u0455": "s", // Cyrillic ѕ
+	"\u04bb": "h", // Cyrillic һ
+	"\u0501": "d", // Cyrillic ԁ
+	"\u03b1": "a", // Greek α
+	"\u03b5": "e", // Greek ε
+	"\u03b9": "i", // Greek ι
+	"\u03ba": "k", // Greek κ
+	"\u03bd": "n", // Greek ν
+	"\u03bf": "o", // Greek ο
+	"\u03c1": "p", // Greek ρ
+	"\u03c4": "t", // Greek τ
+	"\u03c5": "u", // Greek υ
+};
+
+/** Zero-width / invisible formatting characters used to split keywords. */
+const ZERO_WIDTH_RE =
+	/[\u200B-\u200F\u202A-\u202E\u2060-\u2064\uFEFF\u00AD]/g;
+
+/** Combining diacritical marks (e.g. ǐ → i after NFKD-style stripping). */
+const COMBINING_MARKS_RE = /[\u0300-\u036F]/g;
+
+/**
+ * Fold homoglyphs and strip zero-width/invisible characters so obfuscated
+ * injection text matches the ASCII patterns. Non-destructive to legitimate
+ * content detection: only runs inside detectPromptInjection, never rewrites
+ * the stored/returned page body.
+ */
+export function normalizeForInjection(text: string): string {
+	if (text == null) return "";
+	if (typeof text !== "string") text = String(text);
+	if (!text) return text;
+	let out = text.normalize("NFKC");
+	out = out.replace(ZERO_WIDTH_RE, "");
+	out = out.replace(COMBINING_MARKS_RE, "");
+	let folded = "";
+	for (const ch of out) folded += HOMOGLYPH_MAP[ch] ?? ch;
+	return folded;
+}
+
 // ─── Patterns ──────────────────────────────────────────────────────
 
 export interface InjectionResult {
@@ -126,9 +186,12 @@ export const INJECTION_PATTERNS: InjectionPattern[] = [
 // ─── Detection ─────────────────────────────────────────────────────
 
 export function detectPromptInjection(text: string): InjectionResult {
+	// Fold homoglyphs + strip zero-width chars first so obfuscated injection
+	// (Cyrillic/Greek lookalikes, invisible separators) still matches.
+	const normalized = normalizeForInjection(text);
 	for (const pattern of INJECTION_PATTERNS) {
 		for (const re of pattern.patterns) {
-			const trimmed = text.slice(0, 3000);
+			const trimmed = normalized.slice(0, 3000);
 			if (re.test(trimmed)) {
 				const snippet = trimmed.slice(0, 200);
 				return {

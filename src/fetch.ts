@@ -16,6 +16,7 @@ import { STEALTH_SCRIPT } from "#stealth-script";
 import { detectBotBlock, detectLoginRedirect } from "./bot-detection.ts";
 import {
 	createPinnedLookup,
+	fastSsrfBlock,
 	isDangerousUrl,
 	scanForSecrets,
 	validateUrlForSsrf,
@@ -325,6 +326,42 @@ export async function waitForBotProtectionToClear(
 	return html;
 }
 
+/**
+ * Install a per-request SSRF guard on a Playwright page. Intercepts EVERY
+ * request the page makes — the initial navigation, each redirect hop, and
+ * all subresources (img/script/xhr) — and aborts any whose URL fails the
+ * synchronous {@link fastSsrfBlock} check (literal private/metadata IPs,
+ * blocked metadata hostnames, `.local`, private prefixes, dangerous ports).
+ *
+ * This closes the redirect gap in the browser fallback: `page.goto` follows
+ * redirects internally and `--host-resolver-rules` only pins the INITIAL
+ * host, so without this guard a public page could 302 the headless browser
+ * into `http://169.254.169.254/` or `http://localhost/`. Best-effort: any
+ * error registering the route degrades to the pre-existing behavior rather
+ * than failing the fetch.
+ */
+function installSsrfRedirectGuard(page: any): void {
+	try {
+		const routePromise = page.route("**/*", (route: any) => {
+			let reqUrl = "";
+			try {
+				reqUrl = route.request().url();
+			} catch {
+				reqUrl = "";
+			}
+			const verdict = fastSsrfBlock(reqUrl);
+			if (verdict.dangerous) {
+				return route.abort("blockedbyclient");
+			}
+			return route.continue();
+		});
+		// page.route returns a promise in modern Playwright; swallow errors.
+		Promise.resolve(routePromise).catch(() => {});
+	} catch {
+		/* best-effort — never fail the fetch over guard registration */
+	}
+}
+
 export async function fetchWithPlaywright(
 	url: string,
 	pool?: FetchOpts["browserPool"],
@@ -363,13 +400,15 @@ export async function fetchWithPlaywright(
 	}
 	const pinnedLaunchArgs = buildHostResolverRules(pinnedHost, ssrf.pinnedIps);
 	if (pool) {
+		// (redirect guard installed per-page below, after acquirePage)
 		let pooled: Awaited<
 			ReturnType<NonNullable<FetchOpts["browserPool"]>["acquirePage"]>
 		> | null = null;
 
 		try {
 			pooled = await pool.acquirePage();
-			await applyStealth(pooled.page);
+				installSsrfRedirectGuard(pooled.page);
+				await applyStealth(pooled.page);
 			await pooled.page.goto(url, {
 				waitUntil: "domcontentloaded",
 				timeout: 15000,
@@ -403,6 +442,7 @@ export async function fetchWithPlaywright(
 					...(pinnedLaunchArgs.length ? { args: pinnedLaunchArgs } : {}),
 				});
 				const page = await browser.newPage();
+				installSsrfRedirectGuard(page);
 				await applyStealth(page);
 				await page.goto(url, {
 					waitUntil: "domcontentloaded",
@@ -608,10 +648,16 @@ export async function readResponseTextWithProgress(
 // window remains between the pre-flight validateUrlForSsrf() check below and
 // wreq's own connect. Mitigations in place: (a) the pre-flight check is
 // fail-closed and validates ALL resolved IPs incl. the absolute cloud-
-// metadata floor; (b) redirect hops are re-validated by the caller; (c) the
-// Playwright fallback path IS pinned via --host-resolver-rules (see
-// fetchWithPlaywright / buildHostResolverRules). If wreq-js ever exposes a
-// connect hook, wire createPinnedLookup(validation.pinnedIps) here.
+// metadata floor; (b) the Playwright fallback path IS pinned via
+// --host-resolver-rules (see fetchWithPlaywright / buildHostResolverRules)
+// AND installs a per-request SSRF route guard (installSsrfRedirectGuard)
+// that re-validates every redirect hop and subresource via fastSsrfBlock().
+// KNOWN LIMITATION: wreq-js follows redirects internally (`redirect: "follow"`)
+// with no redirect hook, so a server-side 30x from a public URL to a
+// private/metadata address on THIS rung is not re-validated hop-by-hop — the
+// initial dial is still protected by the pre-flight check + metadata floor.
+// If wreq-js ever exposes a connect or redirect hook, wire
+// createPinnedLookup(validation.pinnedIps) and per-hop fastSsrfBlock() here.
 export async function fetchWithRetry(
 	url: string,
 	options: FetchOpts = {},

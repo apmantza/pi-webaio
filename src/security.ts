@@ -26,6 +26,7 @@ function isPrivateIPv4(ip: string): boolean {
 		(a === 192 && b === 168) || // RFC 1918
 		(a === 169 && b === 254) || // link-local
 		(a === 100 && b >= 64 && b <= 127) || // CGN (RFC 6598)
+		(a === 198 && (b === 18 || b === 19)) || // benchmarking (RFC 2544)
 		a === 0 // "this" network
 	);
 }
@@ -41,6 +42,40 @@ function isPrivateIPv6(ip: string): boolean {
 
 	const v4Compat = n.match(/^::([\d.]+)$/);
 	if (v4Compat) return isPrivateIPv4(v4Compat[1]!);
+
+	// Byte-level checks for transition mechanisms that embed an IPv4
+	// address in the low bits. A prefix translating to a private/metadata
+	// IPv4 is an SSRF vector, so evaluate the embedded address (same
+	// approach as the 6to4 / Teredo string checks below).
+	const bytes = ipv6ToBytes(n);
+	if (bytes) {
+		// NAT64 (RFC 6052 64:ff9b::/96 and RFC 8215 64:ff9b:1::/48): the
+		// embedded IPv4 lives in the final 32 bits.
+		const nat64Prefix =
+			bytes[0] === 0x00 &&
+			bytes[1] === 0x64 &&
+			bytes[2] === 0xff &&
+			bytes[3] === 0x9b;
+		const nat64_96 = nat64Prefix && bytes.subarray(4, 12).every((b) => b === 0);
+		const nat64_48 =
+			nat64Prefix && bytes[4] === 0x00 && bytes[5] === 0x01;
+		if (nat64_96 || nat64_48) {
+			return isPrivateIPv4(
+				`${bytes[12]}.${bytes[13]}.${bytes[14]}.${bytes[15]}`,
+			);
+		}
+		// IPv4-mapped hex form ::ffff:XXYY:ZZWW (the dotted-quad form is
+		// handled by the regex above; this catches the hex spelling).
+		const mappedHex =
+			bytes.subarray(0, 10).every((b) => b === 0) &&
+			bytes[10] === 0xff &&
+			bytes[11] === 0xff;
+		if (mappedHex) {
+			return isPrivateIPv4(
+				`${bytes[12]}.${bytes[13]}.${bytes[14]}.${bytes[15]}`,
+			);
+		}
+	}
 
 	const sixTo4 = n.match(
 		/^2002:([0-9a-f]{2})([0-9a-f]{2}):([0-9a-f]{2})([0-9a-f]{2})/i,
@@ -113,6 +148,19 @@ export function isCloudMetadataIp(ip: string): boolean {
 		// embedding a metadata IPv4 address.
 		const embedded = n.match(/^::(?:ffff:)?([\d.]+)$/);
 		if (embedded) return METADATA_IPV4.has(embedded[1]!);
+		// Hex-spelled IPv4-mapped/compatible forms (e.g. ::ffff:a9fe:a9fe =
+		// 169.254.169.254). Resolve via bytes so the metadata floor cannot be
+		// bypassed by choosing the hex encoding of a mapped metadata address.
+		const bytes = ipv6ToBytes(n);
+		if (bytes) {
+			const allZeroHigh = bytes.subarray(0, 10).every((b) => b === 0);
+			const mapped = allZeroHigh && bytes[10] === 0xff && bytes[11] === 0xff;
+			const compat = allZeroHigh && bytes[10] === 0x00 && bytes[11] === 0x00;
+			if (mapped || compat) {
+				const v4 = `${bytes[12]}.${bytes[13]}.${bytes[14]}.${bytes[15]}`;
+				if (METADATA_IPV4.has(v4)) return true;
+			}
+		}
 		return false;
 	}
 	return false;
@@ -300,23 +348,55 @@ function isAllowed(ip: string, ranges: ParsedCidr[]): boolean {
 }
 
 /**
+ * Ranges that are NEVER legitimately public and are NOT cloud-metadata
+ * endpoints proper, but which an attacker can abuse to reach internal
+ * services or confuse resolvers. Like the metadata floor, this block is
+ * absolute: it is evaluated before, and independently of, the CIDR
+ * allow-list, so `WEBAIO_SSRF_ALLOW_RANGES` can never relax it.
+ */
+export function isNeverPublicFloorIp(ip: string): boolean {
+	if (isIP(ip) !== 6) return false;
+	const bytes = ipv6ToBytes(ip.toLowerCase());
+	if (!bytes) return false;
+	// 100::/64 — RFC 6666 discard-only prefix. Never legitimately routable;
+	// first 64 bits are 0100:0000:0000:0000.
+	if (
+		bytes[0] === 0x01 &&
+		bytes[1] === 0x00 &&
+		bytes.subarray(2, 8).every((b) => b === 0)
+	) {
+		return true;
+	}
+	return false;
+}
+
+/**
  * Evaluate a single IP against the SSRF policy.
  *
  * Order matters for the security guarantees:
  *  1. Cloud-metadata floor — absolute deny, ignores the allow-list.
- *  2. Private/loopback/link-local ranges — denied UNLESS explicitly
+ *  2. Never-public floor (e.g. RFC 6666 discard-only) — absolute deny.
+ *  3. Private/loopback/link-local ranges — denied UNLESS explicitly
  *     permitted by the config-driven CIDR allow-list.
- *  3. Everything else (public IPs) — allowed.
+ *  4. Everything else (public IPs) — allowed.
+ *
+ * `explicitlyAllowed` is true only when a private/internal IP was permitted
+ * by an explicit allow-range. Callers use it to decide whether a dangerous
+ * service port may still be reached (an explicit allow-range opts in).
  */
 function evaluateIp(
 	ip: string,
 	ranges: ParsedCidr[],
-): { dangerous: boolean; reason?: string } {
+): { dangerous: boolean; reason?: string; explicitlyAllowed?: boolean } {
 	if (isCloudMetadataIp(ip)) {
 		return { dangerous: true, reason: "cloud-metadata" };
 	}
+	if (isNeverPublicFloorIp(ip)) {
+		return { dangerous: true, reason: "reserved-range" };
+	}
 	if (isPrivateIp(ip)) {
-		if (isAllowed(ip, ranges)) return { dangerous: false };
+		if (isAllowed(ip, ranges))
+			return { dangerous: false, explicitlyAllowed: true };
 		return { dangerous: true, reason: "private-range" };
 	}
 	return { dangerous: false };
@@ -371,6 +451,7 @@ export async function validateUrlForSsrf(
 		const u = new URL(url);
 		const host = u.hostname.toLowerCase();
 		const ranges = getAllowRanges();
+		const portBlocked = isDangerousPort(effectivePort(u));
 
 		// Quick block: known dangerous hostnames (includes
 		// metadata.google.internal — absolute, pre-allow-list).
@@ -382,6 +463,9 @@ export async function validateUrlForSsrf(
 		const cleanedIp = host.replace(/^\[|\]$/g, "");
 		if (isIP(cleanedIp)) {
 			const ev = evaluateIp(cleanedIp, ranges);
+			if (!ev.dangerous && portBlocked && !ev.explicitlyAllowed) {
+				return { dangerous: true, reason: "dangerous-port", pinnedIps: [] };
+			}
 			return {
 				dangerous: ev.dangerous,
 				reason: ev.reason,
@@ -419,13 +503,23 @@ export async function validateUrlForSsrf(
 		}
 
 		const pinnedIps: string[] = [];
+		let allExplicitlyAllowed = true;
 		for (const record of records) {
 			const ev = evaluateIp(record.address, ranges);
 			if (ev.dangerous) {
 				// Any single bad address poisons the whole answer set.
 				return { dangerous: true, reason: ev.reason, pinnedIps: [] };
 			}
+			if (!ev.explicitlyAllowed) allExplicitlyAllowed = false;
 			pinnedIps.push(record.address);
+		}
+
+		// Dangerous service port: only reachable when EVERY resolved address
+		// was explicitly opted into via the allow-list. A public (or merely
+		// non-allow-listed) address on a DB/admin port is blocked. Fail-closed
+		// on mixed answer sets.
+		if (portBlocked && !allExplicitlyAllowed) {
+			return { dangerous: true, reason: "dangerous-port", pinnedIps: [] };
 		}
 
 		return { dangerous: false, pinnedIps };
@@ -445,6 +539,100 @@ export async function validateUrlForSsrf(
  */
 export async function isDangerousUrl(url: string): Promise<boolean> {
 	return (await validateUrlForSsrf(url)).dangerous;
+}
+
+// ─── Dangerous service ports ────────────────────────────────────────
+// Admin / datastore service ports that should essentially never be the
+// target of a web fetch. Blocking them is additive defense-in-depth: even
+// an otherwise-reachable host is refused on these ports UNLESS the target
+// IP was explicitly opted into via WEBAIO_SSRF_ALLOW_RANGES (see
+// evaluateIp `explicitlyAllowed`), so a deliberately allow-listed internal
+// database can still be reached by an operator who asked for it.
+const DANGEROUS_PORTS = new Set([
+	22, // ssh
+	23, // telnet
+	25, // smtp
+	135, // msrpc
+	139, // netbios
+	445, // smb
+	1099, // java rmi
+	1433, // mssql
+	1521, // oracle
+	2049, // nfs
+	3306, // mysql
+	3389, // rdp
+	5432, // postgres
+	5900, // vnc
+	5984, // couchdb
+	6379, // redis
+	9200, // elasticsearch
+	9300, // elasticsearch transport
+	11211, // memcached
+	27017, // mongodb
+	50000, // sap
+]);
+
+/** True when `port` is a blocked admin/datastore service port. */
+export function isDangerousPort(port: number | null | undefined): boolean {
+	if (port == null || Number.isNaN(port)) return false;
+	return DANGEROUS_PORTS.has(port);
+}
+
+/** Resolve a URL's effective numeric port (protocol default when absent). */
+function effectivePort(u: URL): number | null {
+	if (u.port) return Number(u.port);
+	if (u.protocol === "http:") return 80;
+	if (u.protocol === "https:") return 443;
+	return null;
+}
+
+/**
+ * Synchronous, DNS-free SSRF pre-check for a single URL. Used to gate
+ * redirect hops and subresource requests in the Playwright fallback (see
+ * fetch.ts), where each mid-chain `Location` cannot be run through the async
+ * DNS validator. It catches the high-value cases — literal private/metadata
+ * IPs, blocked metadata hostnames, `.local`, private host prefixes, and
+ * dangerous service ports — without a resolver call. Hostnames that would
+ * only be caught after DNS resolution are NOT covered here (documented
+ * limitation); the initial navigation is still fully validated by
+ * {@link validateUrlForSsrf}. Fail-closed on an unparseable URL.
+ */
+export function fastSsrfBlock(url: string): { dangerous: boolean; reason?: string } {
+	let u: URL;
+	try {
+		u = new URL(url);
+	} catch {
+		return { dangerous: true, reason: "unparseable" };
+	}
+	if (u.protocol !== "http:" && u.protocol !== "https:") {
+		return { dangerous: false };
+	}
+	const host = u.hostname.toLowerCase();
+	if (BLOCKED_HOSTS.has(host)) {
+		return { dangerous: true, reason: "blocked-host" };
+	}
+	const ranges = getAllowRanges();
+	const cleanedIp = host.replace(/^\[|\]$/g, "");
+	if (isIP(cleanedIp)) {
+		const ev = evaluateIp(cleanedIp, ranges);
+		if (!ev.dangerous && isDangerousPort(effectivePort(u)) && !ev.explicitlyAllowed) {
+			return { dangerous: true, reason: "dangerous-port" };
+		}
+		return { dangerous: ev.dangerous, reason: ev.reason };
+	}
+	if (host.endsWith(".local")) {
+		return { dangerous: true, reason: "dot-local" };
+	}
+	if (host.startsWith("192.168.") || host.startsWith("10.")) {
+		return { dangerous: true, reason: "private-prefix" };
+	}
+	if (host.startsWith("172.")) {
+		const octet = Number.parseInt(host.split(".")[1] ?? "0", 10);
+		if (octet >= 16 && octet <= 31) {
+			return { dangerous: true, reason: "private-prefix" };
+		}
+	}
+	return { dangerous: false };
 }
 
 // ─── DNS pinning ───────────────────────────────────────────────────
@@ -478,7 +666,9 @@ export function createPinnedLookup(
 	const pins = pinnedIps
 		.map((ip) => ({ address: ip, family: isIP(ip) }))
 		.filter((p) => p.family !== 0)
-		.filter((p) => !isCloudMetadataIp(p.address));
+		.filter(
+			(p) => !isCloudMetadataIp(p.address) && !isNeverPublicFloorIp(p.address),
+		);
 
 	return function pinnedLookup(
 		hostname: string,

@@ -29,6 +29,7 @@ import { registerWebmapTool } from "./tools/webmap.ts";
 import { registerWebpullTool } from "./tools/webpull.ts";
 import { registerWebqueryTool } from "./tools/webquery.ts";
 import { registerWebresearchTool } from "./tools/webresearch.ts";
+import { redactSecrets } from "./redact.ts";
 
 // ─── Tool definition shape (subset of pi's registerTool config) ────────────
 
@@ -195,9 +196,17 @@ export async function startMcpServer(): Promise<void> {
 			return { content: result.content };
 		} catch (err: unknown) {
 			const msg = err instanceof Error ? err.message : String(err);
+			// Sanitization parity with the pi-extension path: fetch-error.ts /
+			// render-result.ts run redactSecrets() over error messages so a
+			// credential echoed in a thrown error never reaches the agent. The
+			// MCP path must do the same, or it would leak secrets the TUI path
+			// masks. redactSecrets is idempotent and non-destructive to
+			// secret-free text.
 			return {
 				isError: true,
-				content: [{ type: "text", text: `Tool error (${name}): ${msg}` }],
+				content: [
+					{ type: "text", text: redactSecrets(`Tool error (${name}): ${msg}`) },
+				],
 			};
 		}
 	});

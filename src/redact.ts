@@ -43,7 +43,8 @@ export type RedactionType =
 	| "password"
 	| "api-key"
 	| "token"
-	| "secret";
+	| "secret"
+	| "base64-blob";
 
 /** Stable placeholder for a masked secret. */
 export function redactionPlaceholder(type: RedactionType): string {
@@ -81,6 +82,18 @@ const PASSWORD_URL_RE = /(\/\/[^\s:@/]+:)([^\s@/]+)(@)/g;
 // so a quoted value must close with the same quote.
 const KV_RE =
 	/(api[_-]?key|access[_-]?token|auth[_-]?token|refresh[_-]?token|session[_-]?token|id[_-]?token|client[_-]?secret|secret[_-]?key|secret|token|password|passwd|pwd)(\s*[:=]\s*)(["']?)([A-Za-z0-9._~+=/-]+)(\3)/gi;
+
+// ─── Long high-entropy base64 blobs ────────────────────────────────────
+// A standalone run of >=40 base64 characters that carries real entropy
+// (at least one digit AND both upper- and lower-case) is almost always an
+// embedded credential / opaque token rather than prose. Run LAST, after the
+// unambiguous shapes, so JWT segments and private-key bodies are already
+// masked. The look-behinds skip data-URIs (`data:…base64,<payload>`) and the
+// entropy guard in the replacer skips pure-hex digests (git SHAs etc., which
+// are lowercase-only) and pure-alpha strings. Bounded length (<=512) keeps
+// the match and any backtracking tiny.
+const BASE64_BLOB_RE =
+	/(?<![A-Za-z0-9+/=])(?<!base64,)(?<!data:)([A-Za-z0-9+/]{40,512}={0,2})(?![A-Za-z0-9+/=])/g;
 
 /**
  * Entropy guard for key/value redaction. Real secrets carry digits,
@@ -153,5 +166,25 @@ export function redactSecrets(text: string): string {
 		},
 	);
 
+	// Long high-entropy base64 blobs (embedded tokens), run last.
+	out = out.replace(BASE64_BLOB_RE, (match: string, blob: string) => {
+		if (!looksLikeBase64Secret(blob)) return match;
+		return redactionPlaceholder("base64-blob");
+	});
+
 	return out;
+}
+
+/**
+ * Entropy guard for base64-blob redaction. Require at least one digit AND
+ * both upper- and lower-case letters so we mask opaque tokens but leave
+ * pure-hex digests (lowercase-only git SHAs / checksums) and pure-alpha
+ * strings alone. Padding (`=`) alone is not enough to qualify.
+ */
+function looksLikeBase64Secret(blob: string): boolean {
+	const body = blob.replace(/=+$/, "");
+	if (body.length < 40) return false;
+	return (
+		/[0-9]/.test(body) && /[a-z]/.test(body) && /[A-Z]/.test(body)
+	);
 }
