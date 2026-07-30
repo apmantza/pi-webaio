@@ -751,10 +751,7 @@ export function isSoftBlock404Resolved(
 	hasHtml: boolean,
 ): boolean {
 	return (
-		wreqStatus === 404 &&
-		hasHtml &&
-		browserStatus >= 200 &&
-		browserStatus < 300
+		wreqStatus === 404 && hasHtml && browserStatus >= 200 && browserStatus < 300
 	);
 }
 
