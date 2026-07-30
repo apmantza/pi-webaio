@@ -17,6 +17,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { scoreRelevance } from "./bm25.ts";
 import { hashContent } from "./content-hash.ts";
+import { debug } from "./debug.ts";
 import type { StoredContent, SearchResult } from "./types.ts";
 
 // ─── Constants ─────────────────────────────────────────────────────
@@ -105,8 +106,12 @@ export function peekStoredContent(url: string): StoredContent | null {
 export function getStoredContent(url: string): StoredContent | null {
 	const key = normalizeCacheKey(url);
 	const entry = sessionStore.get(key);
-	if (!entry) return null;
+	if (!entry) {
+		debug("cache", `miss (no entry): ${url}`);
+		return null;
+	}
 	if (Date.now() - entry.timestamp > SESSION_CACHE_TTL_MS) {
+		debug("cache", `miss (expired): ${url}`);
 		sessionStore.delete(key);
 		return null;
 	}
@@ -116,6 +121,7 @@ export function getStoredContent(url: string): StoredContent | null {
 			const raw = readFileSync(entry.filePath, "utf8");
 			entry.content = stripFrontmatter(raw);
 		} catch {
+			debug("cache", `miss (disk read failed): ${url}`);
 			sessionStore.delete(key);
 			return null;
 		}
@@ -125,6 +131,7 @@ export function getStoredContent(url: string): StoredContent | null {
 	if (entry.content && !entry.contentHash) {
 		entry.contentHash = hashContent(entry.content);
 	}
+	debug("cache", `hit: ${url}`);
 	return entry;
 }
 
@@ -143,6 +150,7 @@ export function storeContent(
 ) {
 	const key = normalizeCacheKey(url);
 	pruneExpiredSessionEntries();
+	debug("cache", `store: ${url} (${content.length} chars)`);
 	// Enforce max size with simple LRU (delete oldest)
 	while (sessionStore.size >= MAX_SESSION_CACHE_ENTRIES) {
 		const first = sessionStore.keys().next().value;

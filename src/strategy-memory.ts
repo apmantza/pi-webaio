@@ -17,6 +17,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { BASE_TEMP } from "./session-store.ts";
+import { debug } from "./debug.ts";
 
 // ─── Constants ─────────────────────────────────────────────────────
 
@@ -108,17 +109,31 @@ function evictDomainIfNeeded(): void {
  */
 export function getStartingStrategy(domain: string): FetchStrategy | null {
 	const entry = domainMemory.get(domain);
-	if (!entry) return null;
+	if (!entry) {
+		debug("strategy", `${domain}: no memory — starting from cheapest rung`);
+		return null;
+	}
 
 	const age = Date.now() - entry.updatedAt;
 	if (age > STRATEGY_MEMORY_TTL_MS) {
+		debug(
+			"strategy",
+			`${domain}: entry stale (${age}ms > TTL) — re-probing from cheapest`,
+		);
 		domainMemory.delete(domain);
 		scheduleSave();
 		return null;
 	}
 
-	if (entry.reprobeNext) return null;
+	if (entry.reprobeNext) {
+		debug("strategy", `${domain}: reprobeNext set — re-probing from cheapest`);
+		return null;
+	}
 
+	debug(
+		"strategy",
+		`${domain}: starting at remembered rung "${entry.lastSuccessStrategy}"`,
+	);
 	return entry.lastSuccessStrategy;
 }
 
@@ -145,6 +160,10 @@ export function recordDomainSuccess(
 	if (existing) {
 		// Strictly cheaper strategy succeeding → downgrade memory
 		if (newIdx < rememberedIdx) {
+			debug(
+				"strategy",
+				`${domain}: cheaper strategy "${strategy}" succeeded — downgrading memory from "${existing.lastSuccessStrategy}"`,
+			);
 			existing.lastSuccessStrategy = strategy;
 			existing.consecutiveFailures = {};
 			existing.successCount = 1;
@@ -156,6 +175,10 @@ export function recordDomainSuccess(
 			existing.consecutiveFailures[strategy] = 0;
 			existing.successCount += 1;
 			if (existing.successCount >= RE_PROBE_SUCCESS_COUNT) {
+				debug(
+					"strategy",
+					`${domain}: ${existing.successCount} successes at "${strategy}" — scheduling re-probe from cheapest`,
+				);
 				existing.reprobeNext = true;
 				existing.successCount = 0;
 			}
@@ -165,6 +188,7 @@ export function recordDomainSuccess(
 		domainMemory.delete(domain);
 		domainMemory.set(domain, existing);
 	} else {
+		debug("strategy", `${domain}: first success recorded at "${strategy}"`);
 		evictDomainIfNeeded();
 		domainMemory.set(domain, {
 			lastSuccessStrategy: strategy,
@@ -190,6 +214,10 @@ export function recordDomainFailure(
 	if (existing) {
 		existing.consecutiveFailures[strategy] =
 			(existing.consecutiveFailures[strategy] ?? 0) + 1;
+		debug(
+			"strategy",
+			`${domain}: failure at "${strategy}" (consecutive=${existing.consecutiveFailures[strategy]})`,
+		);
 		existing.updatedAt = Date.now();
 		// Re-insert to refresh LRU position
 		domainMemory.delete(domain);

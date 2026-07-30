@@ -19,6 +19,13 @@ import {
 	probeChrome,
 	probeSearchEngines,
 	probeJina,
+	probeWreq,
+	probeTempDir,
+	probeMcp,
+	probeDns,
+	probeProxy,
+	validateProxyUrl,
+	tempBase,
 	SEARCH_ENGINES,
 } from "../scripts/diagnose-backends.mjs";
 
@@ -415,4 +422,198 @@ test("probeJina: live unreachable → warn", async () => {
 	});
 	assert.equal(r.status, "warn");
 	assert.match(r.hint, /unavailable/);
+});
+
+// ─── validateProxyUrl (pure) ────────────────────────────────────────
+
+test("validateProxyUrl accepts http/https/socks5", () => {
+	assert.equal(validateProxyUrl("http://user:pass@proxy.local:8080").ok, true);
+	assert.equal(validateProxyUrl("https://proxy.local:3128").ok, true);
+	const socks = validateProxyUrl("socks5://127.0.0.1:1080");
+	assert.equal(socks.ok, true);
+	assert.equal(socks.hostname, "127.0.0.1");
+});
+
+test("validateProxyUrl rejects empty, garbage, and bad protocols", () => {
+	assert.equal(validateProxyUrl("").ok, false);
+	assert.equal(validateProxyUrl("   ").ok, false);
+	assert.equal(validateProxyUrl("not a url").ok, false);
+	const ftp = validateProxyUrl("ftp://proxy.local:21");
+	assert.equal(ftp.ok, false);
+	assert.match(ftp.reason, /unsupported protocol/);
+});
+
+test("tempBase joins under pi-webaio", () => {
+	assert.match(tempBase("/tmp").replace(/\\/g, "/"), /\/tmp\/pi-webaio$/);
+});
+
+// ─── probeWreq ──────────────────────────────────────────────────────
+
+test("probeWreq: import + construct → ok, required", async () => {
+	let constructed = false;
+	const r = await probeWreq({
+		importModule: async () => ({
+			createSession: async () => {
+				constructed = true;
+				return { fetch: async () => {} };
+			},
+		}),
+	});
+	assert.equal(r.status, "ok");
+	assert.equal(r.required, true);
+	assert.equal(constructed, true);
+});
+
+test("probeWreq: import throws → missing with message", async () => {
+	const r = await probeWreq({
+		importModule: async () => {
+			throw new Error("Cannot find module 'wreq-js'");
+		},
+	});
+	assert.equal(r.status, "missing");
+	assert.equal(r.required, true);
+	assert.match(r.message, /Cannot find module/);
+});
+
+test("probeWreq: createSession missing → missing", async () => {
+	const r = await probeWreq({ importModule: async () => ({}) });
+	assert.equal(r.status, "missing");
+	assert.match(r.message, /createSession is not exported/);
+});
+
+test("probeWreq: session construction throws → missing with message", async () => {
+	const r = await probeWreq({
+		importModule: async () => ({
+			createSession: async () => {
+				throw new Error("native binding failed");
+			},
+		}),
+	});
+	assert.equal(r.status, "missing");
+	assert.match(r.message, /native binding failed/);
+});
+
+// ─── probeTempDir ───────────────────────────────────────────────────
+
+test("probeTempDir: write/read/delete success → ok", async () => {
+	const store = new Map();
+	const r = await probeTempDir({
+		tempBase: "/tmp/pi-webaio",
+		ensureDir: async () => {},
+		writeFile: async (p, data) => {
+			store.set(p, data);
+		},
+		readFile: async (p) => store.get(p),
+		unlink: async (p) => {
+			store.delete(p);
+		},
+	});
+	assert.equal(r.status, "ok");
+	assert.match(r.message, /writable/);
+});
+
+test("probeTempDir: write throws → missing with error", async () => {
+	const r = await probeTempDir({
+		tempBase: "/tmp/pi-webaio",
+		ensureDir: async () => {},
+		writeFile: async () => {
+			throw new Error("EACCES: permission denied");
+		},
+		readFile: async () => "",
+		unlink: async () => {},
+	});
+	assert.equal(r.status, "missing");
+	assert.match(r.message, /EACCES/);
+	assert.match(r.hint, /permissions|disk space/);
+});
+
+test("probeTempDir: read-back mismatch → warn", async () => {
+	const r = await probeTempDir({
+		tempBase: "/tmp/pi-webaio",
+		ensureDir: async () => {},
+		writeFile: async () => {},
+		readFile: async () => "corrupted",
+		unlink: async () => {},
+	});
+	assert.equal(r.status, "warn");
+});
+
+// ─── probeMcp ───────────────────────────────────────────────────────
+
+test("probeMcp: import success → ok, optional", async () => {
+	const r = await probeMcp({ importModule: async () => ({}) });
+	assert.equal(r.status, "ok");
+	assert.equal(r.required, false);
+});
+
+test("probeMcp: import throws → warn (not a strict gate)", async () => {
+	const r = await probeMcp({
+		importModule: async () => {
+			throw new Error("cannot find module");
+		},
+	});
+	assert.equal(r.status, "warn");
+	assert.equal(r.required, false);
+	assert.match(r.hint, /MCP server/);
+});
+
+// ─── probeDns (live-path logic, fake resolver) ──────────────────────
+
+test("probeDns: offline → skipped", async () => {
+	const r = await probeDns({ live: false, timeoutMs: 100 });
+	assert.equal(r.status, "skipped");
+	assert.match(r.hint, /--live/);
+});
+
+test("probeDns: live, resolves → ok with addresses", async () => {
+	const r = await probeDns({
+		live: true,
+		timeoutMs: 100,
+		resolveHost: async () => ["93.184.216.34"],
+	});
+	assert.equal(r.status, "ok");
+	assert.match(r.message, /93\.184\.216\.34/);
+});
+
+test("probeDns: live, resolver throws → missing", async () => {
+	const r = await probeDns({
+		live: true,
+		timeoutMs: 100,
+		resolveHost: async () => {
+			throw new Error("ENOTFOUND");
+		},
+	});
+	assert.equal(r.status, "missing");
+	assert.match(r.message, /ENOTFOUND/);
+});
+
+// ─── probeProxy (live-path logic, pure validation) ──────────────────
+
+test("probeProxy: offline → skipped", async () => {
+	const r = await probeProxy({ live: false, env: { HTTPS_PROXY: "http://x:1" } });
+	assert.equal(r.status, "skipped");
+});
+
+test("probeProxy: live, no proxy env → skipped", async () => {
+	const r = await probeProxy({ live: true, env: {} });
+	assert.equal(r.status, "skipped");
+	assert.match(r.message, /no HTTPS_PROXY/);
+});
+
+test("probeProxy: live, valid proxy → ok", async () => {
+	const r = await probeProxy({
+		live: true,
+		env: { HTTPS_PROXY: "http://proxy.local:8080" },
+	});
+	assert.equal(r.status, "ok");
+	assert.match(r.message, /proxy\.local/);
+});
+
+test("probeProxy: live, invalid proxy → missing", async () => {
+	const r = await probeProxy({
+		live: true,
+		env: { HTTP_PROXY: "not a url" },
+	});
+	assert.equal(r.status, "missing");
+	assert.match(r.message, /invalid proxy URL/);
 });

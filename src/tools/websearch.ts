@@ -10,6 +10,9 @@ import {
 	extractDomain,
 	scoreAndRankResults,
 	buildResultBuckets,
+	engineStatusNotes,
+	formatEngineLatency,
+	type EngineStatusMap,
 } from "../search.ts";
 import { loadGoggles, type GogglesInput } from "../goggles.ts";
 import {
@@ -124,11 +127,13 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 						yahoo: r.yahooCount,
 						bing: r.bingCount,
 					},
+					engineStatus: r.engineStatus as EngineStatusMap | undefined,
 				}),
 				() => ({
 					source: "http" as const,
 					results: [] as SearchResult[],
 					httpCounts: { ddg: 0, brave: 0, yahoo: 0, bing: 0 },
+					engineStatus: undefined as EngineStatusMap | undefined,
 				}),
 			);
 
@@ -186,16 +191,20 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 			let httpResults: SearchResult[] = [];
 			let googleResults: SearchResult[] = [];
 			let httpCounts = { ddg: 0, brave: 0, yahoo: 0, bing: 0 };
+			let engineStatus: EngineStatusMap | undefined;
 
 			if (result) {
 				httpResults = result[0].results;
 				googleResults = result[1].results;
 				httpCounts = (result[0] as any).httpCounts ?? httpCounts;
+				engineStatus = (result[0] as any).engineStatus ?? engineStatus;
 			} else {
 				const settled = await Promise.allSettled([httpPromise, googlePromise]);
 				if (settled[0].status === "fulfilled") {
 					httpResults = settled[0].value.results;
 					httpCounts = (settled[0].value as any).httpCounts ?? httpCounts;
+					engineStatus =
+						(settled[0].value as any).engineStatus ?? engineStatus;
 				}
 				if (settled[1].status === "fulfilled")
 					googleResults = settled[1].value.results;
@@ -231,10 +240,24 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 			const limited = merged.slice(0, MAX_TOTAL);
 
 			const engineLabel: string[] = [];
-			if (httpCounts.ddg) engineLabel.push(`DDG:${httpCounts.ddg}`);
-			if (httpCounts.brave) engineLabel.push(`Brave:${httpCounts.brave}`);
-			if (httpCounts.yahoo) engineLabel.push(`Yahoo:${httpCounts.yahoo}`);
-			if (httpCounts.bing) engineLabel.push(`Bing:${httpCounts.bing}`);
+			const httpEngineIds = ["ddg", "brave", "yahoo", "bing"] as const;
+			const httpEngineNames: Record<(typeof httpEngineIds)[number], string> =
+				{
+					ddg: "DDG",
+					brave: "Brave",
+					yahoo: "Yahoo",
+					bing: "Bing",
+				};
+			for (const id of httpEngineIds) {
+				const count = httpCounts[id];
+				if (!count) continue;
+				// Append the measured latency for ok engines so a slow engine that
+				// dominated the 7s cap is visible (P5).
+				const latencyMs = engineStatus?.[id]?.latencyMs ?? 0;
+				const latency =
+					latencyMs > 0 ? ` (${formatEngineLatency(latencyMs)})` : "";
+				engineLabel.push(`${httpEngineNames[id]}:${count}${latency}`);
+			}
 			if (googleResults.length)
 				engineLabel.push(`Google:${googleResults.length}`);
 			if (!engineLabel.length) engineLabel.push("HTTP");
@@ -263,6 +286,15 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 					? `\n_(Google: requested but returned nothing — ${googleStatus})_`
 					: "";
 
+			// Surface any non-ok HTTP engine (down / rate-limited / cooled-down /
+			// empty) so a failed engine is distinguishable from a legitimately
+			// empty one instead of silently vanishing from the header (P2).
+			const engineNotes = engineStatus
+				? engineStatusNotes(engineStatus)
+						.map((note) => `\n${note}`)
+						.join("")
+				: "";
+
 			const gogglesNote = goggles ? ` — goggles: ${goggles.name}` : "";
 
 			const text = [
@@ -278,6 +310,7 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 				}),
 				prefetchNote,
 				googleNote,
+				engineNotes,
 			].join("\n");
 
 			return {
@@ -286,6 +319,7 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 					query,
 					results: limited,
 					...httpCounts,
+					engineStatus,
 					googleCount: googleResults.length,
 					googleStatus,
 					durationMs: Date.now() - startedAt,
@@ -325,10 +359,21 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 				theme.fg("success", `${count} result${count === 1 ? "" : "s"}`) +
 				theme.fg("muted", ` via ${engineStr} in ${durText}`);
 
+			// Compact notes for any non-ok HTTP engine (P2), so the TUI reader also
+			// sees why an engine is missing rather than only the agent text.
+			const statusNotes = details.engineStatus
+				? engineStatusNotes(details.engineStatus)
+				: [];
+			const noteLine = statusNotes.length
+				? theme.fg("dim", statusNotes.join(" "))
+				: "";
+
 			if (count === 0) return new Text(summary);
-			if (!options.expanded) return new Text(summary);
+			if (!options.expanded)
+				return new Text(noteLine ? `${summary}\n${noteLine}` : summary);
 
 			const rows = [summary];
+			if (noteLine) rows.push(noteLine);
 			const visibleLimit = 8;
 			for (const item of details.results.slice(0, visibleLimit)) {
 				const domainTag = item.domain ? ` (${item.domain})` : "";

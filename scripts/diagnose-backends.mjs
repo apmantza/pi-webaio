@@ -5,10 +5,13 @@
 // a report, not a gate: it exits 0 even when backends are missing (pass
 // --strict to exit 1 when a required backend is unavailable).
 //
-// Offline checks run by default so the script never hangs: gh CLI present
-// + authenticated, Playwright importable + browsers installed, headless
-// Chrome binary locatable + CDP assets present. Network reachability
-// probes (search engines, Jina reader proxy) are opt-in behind --live.
+// Offline checks run by default so the script never hangs: wreq-js (the
+// primary fetch layer) importable + session-constructible, temp-dir/storage
+// writable, the MCP SDK importable, gh CLI present + authenticated,
+// Playwright importable + browsers installed, headless Chrome binary
+// locatable + CDP assets present. Network reachability probes (search
+// engines, Jina reader proxy, DNS resolution, proxy-env validation) are
+// opt-in behind --live.
 //
 // Usage:
 //   npm run diagnose:backends
@@ -17,7 +20,10 @@
 //   npm run diagnose:backends -- --timeout-ms 5000
 
 import { spawnSync } from "node:child_process";
+import { resolve as dnsResolve } from "node:dns/promises";
 import { existsSync, readdirSync } from "node:fs";
+import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -77,7 +83,8 @@ export function parseArgs(argv) {
 function printHelp() {
 	process.stdout.write(`pi-webaio backend doctor\n\n`);
 	process.stdout.write(
-		`Probes optional backends (gh CLI, Playwright, headless Chrome, search engines, Jina).\n`,
+		`Probes backends (wreq-js, temp-dir/storage, MCP SDK, gh CLI, Playwright, headless Chrome,\n` +
+			`search engines, Jina, DNS, proxy env).\n`,
 	);
 	process.stdout.write(
 		`Offline checks run by default; network reachability needs --live.\n\n`,
@@ -194,6 +201,31 @@ export function findChromeBinary(deps) {
 						"/snap/bin/chromium",
 					];
 	return candidates.find((c) => exists(c)) || null;
+}
+
+// Validate a proxy URL from the environment (pure — no network). Accepts
+// http/https/socks5 proxies; anything that fails to parse or lacks a
+// hostname is rejected.
+export function validateProxyUrl(value) {
+	if (!value || !value.trim()) return { ok: false, reason: "empty" };
+	let u;
+	try {
+		u = new URL(value);
+	} catch (err) {
+		return { ok: false, reason: String(err?.message || err) };
+	}
+	const allowed = new Set(["http:", "https:", "socks5:", "socks5h:"]);
+	if (!allowed.has(u.protocol)) {
+		return { ok: false, reason: `unsupported protocol ${u.protocol}` };
+	}
+	if (!u.hostname) return { ok: false, reason: "no hostname" };
+	return { ok: true, protocol: u.protocol, hostname: u.hostname };
+}
+
+// The temp base the extension persists results under (mirrors BASE_TEMP in
+// src/storage.ts).
+export function tempBase(osTmpdir) {
+	return join(osTmpdir, "pi-webaio");
 }
 
 // ─── Command / HTTP runners (injectable for tests) ──────────────────
@@ -425,6 +457,207 @@ export async function probeJina(deps) {
 	};
 }
 
+// ─── Offline layer-1 / storage / MCP probes ─────────────────────────
+
+// wreq-js is layer 1 of the fetch stack (every aio-webfetch depends on it).
+// Import it and construct a session — no network call — so a broken install
+// cannot report all-green. REQUIRED (counts toward --strict).
+export async function probeWreq(deps) {
+	const name = "wreq-js (primary fetch)";
+	let mod;
+	try {
+		mod = await deps.importModule("wreq-js");
+	} catch (err) {
+		return {
+			name,
+			status: "missing",
+			required: true,
+			message: `not importable: ${String(err?.message || err)}`,
+			hint: "run `npm install` to restore the primary fetch layer",
+		};
+	}
+	const createSession = mod?.createSession ?? mod?.default?.createSession;
+	if (typeof createSession !== "function") {
+		return {
+			name,
+			status: "missing",
+			required: true,
+			message: "imported but createSession is not exported",
+			hint: "the wreq-js install looks corrupt — reinstall it",
+		};
+	}
+	try {
+		await createSession({});
+	} catch (err) {
+		return {
+			name,
+			status: "missing",
+			required: true,
+			message: `session construction failed: ${String(err?.message || err)}`,
+			hint: "the native wreq-js binding may be broken — reinstall it",
+		};
+	}
+	return {
+		name,
+		status: "ok",
+		required: true,
+		message: "importable, session constructs",
+		hint: null,
+	};
+}
+
+// Write → read → delete a small probe file under the temp base the extension
+// persists results under. Injected fs ops keep this offline-testable.
+export async function probeTempDir(deps) {
+	const name = "Temp dir / storage";
+	const base = deps.tempBase;
+	const probeFile = join(base, `.doctor-probe-${process.pid}-${Date.now()}.tmp`);
+	const payload = "pi-webaio-doctor";
+	try {
+		await deps.ensureDir(base);
+		await deps.writeFile(probeFile, payload);
+		const back = await deps.readFile(probeFile);
+		const text = typeof back === "string" ? back : String(back);
+		await deps.unlink(probeFile);
+		if (text !== payload) {
+			return {
+				name,
+				status: "warn",
+				required: false,
+				message: `writable but read-back mismatch under ${base}`,
+				hint: "check disk integrity / antivirus interference",
+			};
+		}
+		return {
+			name,
+			status: "ok",
+			required: false,
+			message: `writable (${base})`,
+			hint: null,
+		};
+	} catch (err) {
+		try {
+			await deps.unlink(probeFile);
+		} catch {
+			/* best-effort cleanup */
+		}
+		return {
+			name,
+			status: "missing",
+			required: false,
+			message: `not writable under ${base}: ${String(err?.message || err)}`,
+			hint: "check temp-dir permissions and free disk space",
+		};
+	}
+}
+
+// MCP SDK importability. Optional — the stdio MCP server is a secondary
+// surface, so a failure is a warning, never a --strict gate.
+export async function probeMcp(deps) {
+	const name = "MCP SDK";
+	try {
+		await deps.importModule("@modelcontextprotocol/sdk/server/index.js");
+	} catch (err) {
+		return {
+			name,
+			status: "warn",
+			required: false,
+			message: `not importable: ${String(err?.message || err)}`,
+			hint: "the MCP server (pi-webaio-mcp) will be unavailable",
+		};
+	}
+	return {
+		name,
+		status: "ok",
+		required: false,
+		message: "importable",
+		hint: null,
+	};
+}
+
+// ─── Live network probes ────────────────────────────────────────────
+
+// DNS resolution of a well-known host. Live-only; the resolver is injected
+// so tests never touch the network.
+export async function probeDns(deps) {
+	const name = "DNS resolution";
+	if (!deps.live) {
+		return {
+			name,
+			status: "skipped",
+			required: false,
+			message: "network probe disabled",
+			hint: "re-run with --live to test DNS resolution",
+		};
+	}
+	const host = "example.com";
+	try {
+		const addrs = await deps.resolveHost(host);
+		const list = Array.isArray(addrs) ? addrs : [addrs];
+		return {
+			name,
+			status: "ok",
+			required: false,
+			message: `${host} → ${list.join(", ")}`,
+			hint: null,
+		};
+	} catch (err) {
+		return {
+			name,
+			status: "missing",
+			required: false,
+			message: `cannot resolve ${host}: ${String(err?.message || err)}`,
+			hint: "check network connectivity / DNS settings",
+		};
+	}
+}
+
+// Validate HTTPS_PROXY/HTTP_PROXY when set. Skipped when no proxy env is
+// present. URL parsing is pure; reachability is not attempted.
+export async function probeProxy(deps) {
+	const name = "Proxy env";
+	if (!deps.live) {
+		return {
+			name,
+			status: "skipped",
+			required: false,
+			message: "network probe disabled",
+			hint: "re-run with --live to validate proxy env vars",
+		};
+	}
+	const raw =
+		deps.env.HTTPS_PROXY ||
+		deps.env.https_proxy ||
+		deps.env.HTTP_PROXY ||
+		deps.env.http_proxy;
+	if (!raw) {
+		return {
+			name,
+			status: "skipped",
+			required: false,
+			message: "no HTTPS_PROXY/HTTP_PROXY set",
+			hint: null,
+		};
+	}
+	const v = validateProxyUrl(raw);
+	if (!v.ok) {
+		return {
+			name,
+			status: "missing",
+			required: false,
+			message: `invalid proxy URL: ${v.reason}`,
+			hint: "fix or unset HTTPS_PROXY/HTTP_PROXY",
+		};
+	}
+	return {
+		name,
+		status: "ok",
+		required: false,
+		message: `valid ${v.protocol} proxy at ${v.hostname}`,
+		hint: null,
+	};
+}
+
 // ─── Wiring ─────────────────────────────────────────────────────────
 
 function resolvePackageRoot() {
@@ -438,6 +671,7 @@ function defaultDeps(opts) {
 		timeoutMs: opts.timeoutMs,
 		live: opts.live,
 		packageRoot: resolvePackageRoot(),
+		tempBase: tempBase(tmpdir()),
 		runCommand: (cmd, args, timeoutMs) => runCommand(cmd, args, timeoutMs),
 		existsSync: (p) => existsSync(p),
 		listDir: (p) => {
@@ -449,6 +683,11 @@ function defaultDeps(opts) {
 		},
 		importModule: (spec) => import(spec),
 		fetchImpl: (url, init) => fetch(url, init),
+		resolveHost: (host) => dnsResolve(host),
+		ensureDir: (p) => mkdir(p, { recursive: true }),
+		writeFile: (p, data) => writeFile(p, data, "utf8"),
+		readFile: (p) => readFile(p, "utf8"),
+		unlink: (p) => unlink(p),
 	};
 }
 
@@ -464,11 +703,16 @@ async function main() {
 
 	const deps = defaultDeps(opts);
 	const results = [
+		await probeWreq(deps),
 		await probeGh(deps),
 		await probePlaywright(deps),
 		await probeChrome(deps),
+		await probeTempDir(deps),
+		await probeMcp(deps),
 		await probeSearchEngines(deps),
 		await probeJina(deps),
+		await probeDns(deps),
+		await probeProxy(deps),
 	];
 
 	process.stdout.write(formatReport(results, { live: opts.live }));

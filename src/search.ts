@@ -18,6 +18,7 @@ import type {
 } from "./types.ts";
 import { computeGogglesBonus, type GogglesProfile } from "./goggles.ts";
 import { createBM25Scorer } from "./bm25.ts";
+import { debug } from "./debug.ts";
 
 // ─── Engine health tracking ────────────────────────────────────────
 
@@ -61,6 +62,10 @@ export function recordEngineFailure(engine: string, reason: string): void {
 
 	if (record.consecutiveFailures >= ENGINE_FAILURE_THRESHOLD) {
 		record.coolDownUntil = Date.now() + ENGINE_HEALTH_COOLDOWN_MS;
+		debug(
+			"search",
+			`${engine} cooled down for ${ENGINE_HEALTH_COOLDOWN_MS}ms after ${record.consecutiveFailures} consecutive failures (${reason})`,
+		);
 	}
 }
 
@@ -91,6 +96,7 @@ export function recordProviderCooldown(
 	record.lastFailureAt = Date.now();
 	record.lastFailureReason = reason;
 	record.coolDownUntil = Date.now() + ttlMs;
+	debug("search", `${provider} cooled down for ${ttlMs}ms (${reason})`);
 }
 
 export function recordProviderNetworkFailure(
@@ -711,6 +717,139 @@ export function buildResultBuckets(
 	return buckets;
 }
 
+// ─── Per-engine status (observability P2/P5) ───────────────────────
+// `searchWeb` historically returned only result counts, so a down,
+// rate-limited, or cooled-down engine was indistinguishable from one that
+// legitimately found nothing — the TUI drops any engine with a zero count.
+// This map records *why* each engine contributed what it did (plus the
+// already-measured latency, P5) so callers can surface a compact note instead
+// of a silent zero.
+
+export type EngineId = "ddg" | "brave" | "yahoo" | "bing";
+
+/**
+ * Outcome of a single engine in one search round. `http_<code>` covers any
+ * non-quota HTTP ≥ 400 (e.g. `http_429`, `http_503`).
+ */
+export type EngineStatus =
+	| "ok"
+	| "empty"
+	| "quota"
+	| "cooled_down"
+	| "error"
+	| "disabled"
+	| `http_${number}`;
+
+export interface EngineStatusEntry {
+	/** Number of results this engine contributed (0 when it failed/skipped). */
+	count: number;
+	status: EngineStatus;
+	/** Wall time for this engine's request, in milliseconds (P5). */
+	latencyMs: number;
+}
+
+export type EngineStatusMap = Record<EngineId, EngineStatusEntry>;
+
+export const ENGINE_DISPLAY_NAMES: Record<EngineId, string> = {
+	ddg: "DDG",
+	brave: "Brave",
+	yahoo: "Yahoo",
+	bing: "Bing",
+};
+
+const ENGINE_IDS: readonly EngineId[] = ["ddg", "brave", "yahoo", "bing"];
+
+/**
+ * A single engine's observed outcome, as collected by `searchWeb`. `httpStatus`
+ * is null when no usable response arrived (network error / cooled-down skip);
+ * `skipReason` carries the pre-response cause when one applies.
+ */
+export interface EngineOutcome {
+	id: EngineId;
+	httpStatus: number | null;
+	count: number;
+	latencyMs: number;
+	/** True when the response body looked like a quota/rate-limit error. */
+	quota?: boolean;
+	skipReason?: "cooled_down" | "error" | "disabled";
+}
+
+/** Reduce one engine outcome to its coarse status label. */
+export function classifyEngineStatus(outcome: EngineOutcome): EngineStatus {
+	if (outcome.skipReason) return outcome.skipReason;
+	if (outcome.httpStatus !== null && outcome.httpStatus >= 400) {
+		return outcome.quota ? "quota" : `http_${outcome.httpStatus}`;
+	}
+	return outcome.count > 0 ? "ok" : "empty";
+}
+
+/**
+ * Build the full four-engine status map from a list of outcomes. Engines with
+ * no outcome (not attempted, e.g. a cache-served search) default to
+ * `disabled` so the map shape is always complete.
+ */
+export function buildEngineStatusMap(
+	outcomes: EngineOutcome[],
+): EngineStatusMap {
+	const map = {} as EngineStatusMap;
+	for (const id of ENGINE_IDS) {
+		map[id] = { count: 0, status: "disabled", latencyMs: 0 };
+	}
+	for (const o of outcomes) {
+		map[o.id] = {
+			count: o.count,
+			status: classifyEngineStatus(o),
+			latencyMs: o.latencyMs,
+		};
+	}
+	return map;
+}
+
+/** Format a latency in milliseconds as a compact `1.2s` / `340ms` string. */
+export function formatEngineLatency(ms: number): string {
+	return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms)}ms`;
+}
+
+/** Human-readable reason for a non-ok engine status. */
+export function describeEngineStatus(status: EngineStatus): string {
+	switch (status) {
+		case "ok":
+			return "ok";
+		case "empty":
+			return "returned 0 results";
+		case "quota":
+			return "rate-limited / quota exhausted";
+		case "cooled_down":
+			return "cooled down after recent failures";
+		case "error":
+			return "network error";
+		case "disabled":
+			return "not attempted";
+		default:
+			// `http_<code>`
+			return `HTTP ${status.slice("http_".length)}`;
+	}
+}
+
+/**
+ * Compact `_(Engine: reason)_` notes for every engine that did not return
+ * results normally (status neither `ok` nor `disabled`). Mirrors the
+ * `googleStatus` note style so a down/rate-limited/empty engine stays visible
+ * instead of vanishing from the result header (P2).
+ */
+export function engineStatusNotes(engineStatus: EngineStatusMap): string[] {
+	const notes: string[] = [];
+	for (const id of ENGINE_IDS) {
+		const entry = engineStatus[id];
+		if (!entry || entry.status === "ok" || entry.status === "disabled")
+			continue;
+		notes.push(
+			`_(${ENGINE_DISPLAY_NAMES[id]}: ${describeEngineStatus(entry.status)})_`,
+		);
+	}
+	return notes;
+}
+
 // ─── Search web (main entry point) ─────────────────────────────────
 
 export async function searchWeb(
@@ -722,6 +861,7 @@ export async function searchWeb(
 	braveCount: number;
 	yahooCount: number;
 	bingCount: number;
+	engineStatus: EngineStatusMap;
 }> {
 	const cached = getCachedSearch(query);
 	if (cached)
@@ -731,6 +871,12 @@ export async function searchWeb(
 			braveCount: 0,
 			yahooCount: 0,
 			bingCount: 0,
+			// Served from cache: no engines actually ran this round. Attribute
+			// the cached results to DDG (mirroring ddgCount above) and mark the
+			// rest as not-attempted so no misleading notes are rendered.
+			engineStatus: buildEngineStatusMap([
+				{ id: "ddg", httpStatus: 200, count: cached.length, latencyMs: 0 },
+			]),
 		};
 
 	const encoded = encodeURIComponent(query);
@@ -770,10 +916,15 @@ export async function searchWeb(
 
 	const promises = engines.map((engine) => {
 		if (!isEngineAvailable(engine.id)) {
+			debug(
+				"search",
+				`${engine.id} skipped: cooled down after recent failures`,
+			);
 			return Promise.resolve({
 				id: engine.id,
 				res: null,
 				latencyMs: 0,
+				skipReason: "cooled_down" as const,
 			});
 		}
 		const start = Date.now();
@@ -782,13 +933,19 @@ export async function searchWeb(
 				id: engine.id,
 				res,
 				latencyMs: Date.now() - start,
+				skipReason: undefined,
 			}))
 			.catch((err) => {
 				recordEngineFailure(engine.id, String(err));
+				debug(
+					"search",
+					`${engine.id} fetch error: ${String(err).slice(0, 160)}`,
+				);
 				return {
 					id: engine.id,
 					res: null,
 					latencyMs: Date.now() - start,
+					skipReason: "error" as const,
 				};
 			});
 	});
@@ -797,14 +954,31 @@ export async function searchWeb(
 
 	const counts = { ddg: 0, brave: 0, yahoo: 0, bing: 0 };
 	const engineResults = new Map<string, EngineSource[]>();
+	const outcomes: EngineOutcome[] = [];
 
 	for (const s of settled) {
 		const engine = engines.find((e) => e.id === s.id);
 		if (!engine || !s.res || s.res.status >= 400) {
+			let quota = false;
 			if (s.res && isQuotaError(s.res.status, s.res.text)) {
+				quota = true;
 				recordEngineFailure(s.id, `HTTP ${s.res.status}`);
 				recordEngineSearchFailure(s.id);
+				debug(
+					"search",
+					`${s.id} quota/rate-limit (HTTP ${s.res.status})`,
+				);
+			} else if (s.res) {
+				debug("search", `${s.id} failed with HTTP ${s.res.status}`);
 			}
+			outcomes.push({
+				id: s.id,
+				httpStatus: s.res ? s.res.status : null,
+				count: 0,
+				latencyMs: s.latencyMs,
+				quota,
+				skipReason: s.skipReason,
+			});
 			continue;
 		}
 
@@ -815,8 +989,15 @@ export async function searchWeb(
 		} else {
 			recordEngineFailure(s.id, "no results parsed");
 			recordEngineSearchFailure(s.id);
+			debug("search", `${s.id} parsed 0 results (HTTP ${s.res.status})`);
 		}
 		counts[s.id] = parsed.length;
+		outcomes.push({
+			id: s.id,
+			httpStatus: s.res.status,
+			count: parsed.length,
+			latencyMs: s.latencyMs,
+		});
 
 		for (const r of parsed) {
 			const list = engineResults.get(r.url) || [];
@@ -841,5 +1022,6 @@ export async function searchWeb(
 		braveCount: counts.brave,
 		yahooCount: counts.yahoo,
 		bingCount: counts.bing,
+		engineStatus: buildEngineStatusMap(outcomes),
 	};
 }

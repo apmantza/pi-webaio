@@ -70,6 +70,83 @@ import { frontmatter, runInBatches, safeResolveInBaseTemp } from "./utils.ts";
 import { queryIndex } from "../webquery-index.ts";
 import { resolveCorpusDir } from "./webquery.ts";
 
+// ─── P1 batch defensive backstops ──────────────────────────────────
+// The per-URL handler below wraps pullPageEnhanced in a try/catch so one
+// URL's throw cannot reject runInBatches' bare Promise.all and abort the
+// whole batch. These two pure helpers are the second line of defense the
+// observability audit (docs/observability-gaps.md, P1) recommended on top
+// of that fix:
+//
+//  (a) backfillMissingResults — after runInBatches resolves, guarantee one
+//      result slot per target so the rendered "Fetched N/M" count can never
+//      silently under-report a dropped URL.
+//  (b) detectErrorMisattribution — flag an error line whose message names a
+//      *different* http(s) URL than the result it is rendered against, so
+//      the render loop can label the mismatch instead of misleading the
+//      reader.
+//
+// Both are pure and side-effect free so they can be unit-tested offline
+// (tests/obs-small-wins.test.mjs).
+
+/** Minimal shape every batch result slot shares. */
+interface BatchResultSlot {
+	ok: boolean;
+	url?: string;
+	error?: string;
+}
+
+/**
+ * P1(a): guarantee one result per target. Any missing/undefined slot (a URL
+ * dropped by an internal error before it could be recorded as ok or error)
+ * is replaced with an explicit "no result recorded" error item, so the
+ * rendered count can never lie. The returned array always has exactly
+ * `targets.length` entries, positionally aligned with `targets`.
+ */
+export function backfillMissingResults<T extends BatchResultSlot>(
+	results: ReadonlyArray<T | undefined | null>,
+	targets: ReadonlyArray<string>,
+): T[] {
+	const out: T[] = [];
+	for (let i = 0; i < targets.length; i++) {
+		const r = results[i];
+		if (r != null) {
+			out.push(r);
+		} else {
+			out.push({
+				ok: false,
+				url: targets[i],
+				error: "no result recorded (internal error)",
+			} as T);
+		}
+	}
+	return out;
+}
+
+/** Matches http(s) URLs embedded in free text. */
+const ERROR_URL_RE = /https?:\/\/[^\s"'<>)\]]+/gi;
+
+/**
+ * P1(b): detect a mis-attributed error. Returns true when `errorText`
+ * references an http(s) URL that is different from `url` — the audit
+ * reproduced a batch case where an error line named one URL but carried
+ * another URL's message. Callers use this to label the mismatch explicitly
+ * rather than render a misleading `✗ <url>: <other url's error>` line.
+ *
+ * Pure. Returns false when the text carries no URL, or every URL it carries
+ * matches `url` (compared case-insensitively, ignoring trailing punctuation).
+ */
+export function detectErrorMisattribution(
+	url: string | undefined,
+	errorText: string | undefined,
+): boolean {
+	if (!url || !errorText) return false;
+	const norm = (u: string): string => u.toLowerCase().replace(/[.,;:!?]+$/, "");
+	const target = norm(url);
+	const mentioned = errorText.match(ERROR_URL_RE);
+	if (!mentioned) return false;
+	return mentioned.some((m) => norm(m) !== target);
+}
+
 /**
  * Build a deterministic fallback summary from markdown content.
  *
@@ -814,7 +891,7 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 			const localKnowledgeNote = formatLocalKnowledgeNote(localKnowledge);
 
 			const singleStartedAt = Date.now();
-			const results = await (async () => {
+			let results = await (async () => {
 				try {
 					return await runInBatches(
 						targets,
@@ -1301,6 +1378,12 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 				}
 			})();
 
+			// P1(a) defensive backstop: guarantee one result slot per target so a
+			// URL dropped by an internal error is rendered as an explicit
+			// "no result recorded" error instead of silently vanishing from the
+			// "Fetched N/M" count.
+			results = backfillMissingResults(results, targets);
+
 			try {
 				if (wreqSession) {
 					try {
@@ -1734,7 +1817,14 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 										.filter(Boolean)
 										.join(", ");
 									const suffix = tag ? ` [${tag}]` : "";
-									return `✗ ${r.url}: ${r.error}${suffix}`;
+									// P1(b): if the error message names a *different* URL than
+									// this result slot, label the mismatch so the line cannot
+									// mislead the reader into thinking r.url caused an error
+									// that actually belongs to another URL.
+									const mismatch = detectErrorMisattribution(r.url, r.error)
+										? " [error references a different URL]"
+										: "";
+									return `✗ ${r.url}: ${r.error}${mismatch}${suffix}`;
 								}),
 							]
 						: []),

@@ -37,6 +37,7 @@ import {
 	setCachedCookies,
 	type CachedCookie,
 } from "./cookie-cache.ts";
+import { debug } from "./debug.ts";
 
 // ─── Constants ─────────────────────────────────────────────────────
 
@@ -57,6 +58,50 @@ const NON_RETRYABLE_STATUS_CODES = new Set([400, 401, 403, 404]);
 
 export function normalizeFetchedUrl(url: string): string {
 	return url.startsWith("http://") ? url.replace(/^http:/i, "https:") : url;
+}
+
+// ─── Bot-block fallback ladder (observability audit P7) ─────────────
+//
+// When the plain fetch is bot-blocked, smartFetch tries three alternate wreq
+// browser profiles and then Playwright. Historically each failed profile was
+// swallowed and a total failure returned null with no record of the per-profile
+// outcomes, so the caller produced a generic bot-block error and the user
+// couldn't judge whether `bypass: true` or a different profile would help.
+// These helpers accumulate + render that ladder; the builder is pure so it is
+// offline-testable.
+
+export interface BotBlockAttempt {
+	/** Profile/layer label, e.g. "plain", "firefox_147", "playwright". */
+	profile: string;
+	/** HTTP status seen for this attempt, when one was received. */
+	status?: number;
+	/** Short failure token (e.g. "blocked", "timeout") when no clean status. */
+	error?: string;
+}
+
+/**
+ * Build a compact one-line summary of a bot-block fallback ladder, e.g.
+ * `plain=blocked, firefox_147=403, safari_26=timeout, playwright=blocked`.
+ * A status wins over an error token; with neither, the attempt reads "blocked".
+ */
+export function summarizeBotBlockLadder(attempts: BotBlockAttempt[]): string {
+	if (attempts.length === 0) return "no fallback attempts recorded";
+	return attempts
+		.map((a) => {
+			const outcome =
+				a.status != null ? String(a.status) : (a.error ?? "blocked");
+			return `${a.profile}=${outcome}`;
+		})
+		.join(", ");
+}
+
+/** Collapse an unknown attempt failure into a short, single-line token. */
+function describeLadderError(err: unknown): string {
+	const msg = err instanceof Error ? err.message : String(err);
+	if (/timeout|timed out|ETIMEDOUT/i.test(msg)) return "timeout";
+	const first = msg.split("\n")[0].trim();
+	if (!first) return "error";
+	return first.length > 60 ? first.slice(0, 57) + "..." : first;
 }
 
 export function isRetryableNetworkError(err: unknown): boolean {
@@ -1064,6 +1109,11 @@ export async function smartFetch(
 		// Record plain fetch as blocked before trying alternate wreq profiles
 		recordDomainFailure(domain, "plain");
 
+		// Accumulate every attempt so a total failure can report the full ladder
+		// instead of a generic bot-block error (P7).
+		const ladderAttempts: BotBlockAttempt[] = [
+			{ profile: "plain", error: "blocked" },
+		];
 		const fallbackBrowsers = ["firefox_147", "safari_26", "edge_145"];
 		const headers = {
 			...buildHeaders(undefined, options.os),
@@ -1073,14 +1123,21 @@ export async function smartFetch(
 			const fetchFn = options.wreqSession
 				? (u: string, init: any) => options.wreqSession.fetch(u, init)
 				: wreqFetch;
-			const fbRes = await fetchFn(url, {
-				redirect: "follow",
-				headers,
-				browser: fb as BrowserProfile,
-				os: (options.os ?? DEFAULT_OS) as EmulationOS,
-				timeout: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-				...(options.proxy ? { proxy: options.proxy } : {}),
-			});
+			let fbRes: any;
+			try {
+				fbRes = await fetchFn(url, {
+					redirect: "follow",
+					headers,
+					browser: fb as BrowserProfile,
+					os: (options.os ?? DEFAULT_OS) as EmulationOS,
+					timeout: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+					...(options.proxy ? { proxy: options.proxy } : {}),
+				});
+			} catch (err) {
+				// Network-level failure (timeout, reset, …) — record and try next.
+				ladderAttempts.push({ profile: fb, error: describeLadderError(err) });
+				continue;
+			}
 			if (fbRes?.ok) {
 				try {
 					const fbData = await readResponseTextWithProgress(
@@ -1099,19 +1156,26 @@ export async function smartFetch(
 							elapsedMs: Date.now() - startedAt,
 						};
 					}
-				} catch {
-					/* swallow — try next profile */
+					// 200 but still a challenge page — record the soft block.
+					ladderAttempts.push({ profile: fb, status: fbRes.status, error: "blocked" });
+				} catch (err) {
+					ladderAttempts.push({ profile: fb, error: describeLadderError(err) });
 				}
+			} else {
+				// Non-OK HTTP (403/429/…) — record the status and try next profile.
+				ladderAttempts.push({ profile: fb, status: fbRes?.status });
 			}
 		}
 
 		// All wreq profiles blocked; record wreq failure and try playwright
 		recordDomainFailure(domain, "wreq");
+		const pwStatusOut = { status: 0 };
 		const pwHtml = await fetchWithPlaywright(
 			url,
 			options.browserPool,
 			options.wreqSession,
 			cookieKey,
+			pwStatusOut,
 		);
 		if (pwHtml) {
 			recordDomainSuccess(domain, "browser");
@@ -1128,6 +1192,21 @@ export async function smartFetch(
 				elapsedMs: Date.now() - startedAt,
 			};
 		}
+		ladderAttempts.push({
+			profile: "playwright",
+			...(pwStatusOut.status
+				? { status: pwStatusOut.status }
+				: { error: "blocked" }),
+		});
+
+		// Total failure: surface the full ladder so the user can judge whether
+		// `bypass: true` or a different profile would help. Keep returning null
+		// (control flow unchanged) — the caller still produces the bot-block error.
+		const ladderSummary = summarizeBotBlockLadder(ladderAttempts);
+		debug("fetch", `bot-block ladder exhausted for ${domain}: ${ladderSummary}`);
+		console.error(
+			`[pi-webaio] bot-block ladder exhausted for ${domain}: ${ladderSummary}`,
+		);
 		return null;
 	}
 

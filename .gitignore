@@ -8,6 +8,7 @@ temp/
 dist/
 .env
 .pi-lens/
+.perf-tmp/
 grep-test.json
 nul
 autoresearch.ideas.md

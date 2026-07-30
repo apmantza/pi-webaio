@@ -4,6 +4,7 @@
 // are consulted BEFORE built-ins so users can override built-in behavior.
 
 import type { VerticalResult } from "./types.ts";
+import { debug } from "../debug.ts";
 import {
 	loadUserExtractors,
 	type RegisteredUserExtractor,
@@ -52,10 +53,29 @@ let _userExtractors: RegisteredUserExtractor[] = [];
  * Should be called once at extension startup. Safe to call multiple times;
  * subsequent calls replace the previous set.
  *
+ * A loader failure (bad path, syntax error in a custom vertical) is a
+ * user-actionable config error, NOT a best-effort background task: it is
+ * surfaced via console.warn and the registry is left empty rather than
+ * silently dropping the user's extractors (observability audit P6).
+ *
  * @param dirPath Optional override for the config directory path (for tests).
+ * @param loader  Optional injectable loader (for tests). Defaults to
+ *                loadUserExtractors.
  */
-export async function initUserExtractors(dirPath?: string): Promise<void> {
-	_userExtractors = await loadUserExtractors(dirPath);
+export async function initUserExtractors(
+	dirPath?: string,
+	loader: (
+		dirPath?: string,
+	) => Promise<RegisteredUserExtractor[]> = loadUserExtractors,
+): Promise<void> {
+	try {
+		_userExtractors = await loader(dirPath);
+	} catch (err) {
+		console.warn(
+			`[user-verticals] Failed to load user extractors: ${(err as Error).message ?? String(err)}`,
+		);
+		_userExtractors = [];
+	}
 }
 
 /**
@@ -98,8 +118,13 @@ export function findVerticalExtractor(url: string): string | null {
 	for (const u of _userExtractors) {
 		try {
 			if (u.matchUrl(url)) return u.name;
-		} catch {
-			// ignore matcher errors during attribution lookup
+		} catch (err) {
+			// Attribution is best-effort, but don't swallow silently — leave a
+			// debug trail so a broken user matcher is diagnosable (audit P6).
+			debug(
+				"verticals",
+				`${u.name} (${u.filePath}) match() threw during attribution: ${(err as Error).message}`,
+			);
 		}
 	}
 	for (const v of VERTICAL_EXTRACTORS) {

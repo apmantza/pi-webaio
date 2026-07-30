@@ -17,7 +17,14 @@ import { registerWebresearchTool } from "./src/tools/webresearch.ts";
 
 export default function (pi: ExtensionAPI) {
 	// Load user-defined vertical extractors from ~/.pi/agent/webaio/verticals/
-	initUserExtractors().catch(() => {});
+	// A load failure is a user-actionable config error (bad path, syntax error
+	// in a custom vertical), not a best-effort background task — surface it
+	// instead of silently dropping the user's extractors (audit P6).
+	initUserExtractors().catch((err) => {
+		console.warn(
+			`[user-verticals] Failed to initialize user extractors: ${(err as Error).message ?? String(err)}`,
+		);
+	});
 
 	// Load persisted search cache on startup
 	loadSearchCacheFromDisk().catch(() => {});

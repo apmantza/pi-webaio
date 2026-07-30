@@ -12,6 +12,8 @@
  * - Pre-warming: browsers are launched on first use, not upfront
  */
 
+import { debug } from "./debug.ts";
+
 // ─── Types ───────────────────────────────────────────────────────────
 
 // Playwright types are accessed via dynamic import to avoid type dependency issues
@@ -56,6 +58,56 @@ const DEFAULTS: Required<BrowserPoolOptions> = {
 	navigationTimeout: 30_000,
 };
 
+// ─── Launch observability helpers (observability audit P4) ──────────
+//
+// Browser launches are the slowest part of the browser path (~2-3s) and a
+// background relaunch that fails used to be fully silenced, so a degraded pool
+// later hung in acquire() with no record of why. These small pure helpers hold
+// the launch-error-record + timing logic so it is unit-testable offline, without
+// needing Playwright installed.
+
+export interface LaunchErrorRecord {
+	/** The launch failure message. */
+	message: string;
+	/** Epoch ms when the failure was recorded. */
+	at: number;
+}
+
+/**
+ * Normalize an unknown launch failure into a storable record. Pure — does not
+ * throw, so it is safe to call from a background `.catch()`.
+ */
+export function toLaunchErrorRecord(
+	err: unknown,
+	now: number = Date.now(),
+): LaunchErrorRecord {
+	const message = err instanceof Error ? err.message : String(err);
+	return { message, at: now };
+}
+
+/**
+ * Human-readable degraded-pool notice, or null when the pool is healthy.
+ * Callers (e.g. acquire()) can surface this instead of hanging silently.
+ */
+export function degradedPoolNotice(
+	lastLaunchError: LaunchErrorRecord | null,
+): string | null {
+	if (!lastLaunchError) return null;
+	return `pool degraded: last launch failed (${lastLaunchError.message})`;
+}
+
+/**
+ * Compact launch-timing line, e.g. `browser launch took 2143ms (channel=chrome)`
+ * or `browser launch took 1890ms (bundled browser)`. Pure + offline-testable.
+ */
+export function formatLaunchTiming(
+	durationMs: number,
+	channel: string | null,
+): string {
+	const which = channel ? `channel=${channel}` : "bundled browser";
+	return `browser launch took ${durationMs}ms (${which})`;
+}
+
 // ─── BrowserPool ─────────────────────────────────────────────────────
 
 export class BrowserPool {
@@ -65,6 +117,7 @@ export class BrowserPool {
 	private totalLaunched = 0;
 	private totalCrashes = 0;
 	private _closed = false;
+	private _lastLaunchError: LaunchErrorRecord | null = null;
 	private waiters: Array<() => void> = [];
 
 	constructor(options: BrowserPoolOptions = {}) {
@@ -128,6 +181,7 @@ export class BrowserPool {
 		totalLaunched: number;
 		crashes: number;
 		browsers: number;
+		lastLaunchError: LaunchErrorRecord | null;
 	} {
 		let active = 0;
 		for (const pb of this.browsers) {
@@ -139,11 +193,26 @@ export class BrowserPool {
 			totalLaunched: this.totalLaunched,
 			crashes: this.totalCrashes,
 			browsers: this.browsers.length,
+			lastLaunchError: this._lastLaunchError,
 		};
 	}
 
 	get closed(): boolean {
 		return this._closed;
+	}
+
+	/**
+	 * The last background replacement-launch failure, or null if none. When
+	 * non-null the pool is degraded — acquire() may hang/fail with no further
+	 * launches coming. See degradedPoolNotice().
+	 */
+	get lastLaunchError(): LaunchErrorRecord | null {
+		return this._lastLaunchError;
+	}
+
+	/** Convenience: the degraded-pool notice, or null when healthy. */
+	get degradedNotice(): string | null {
+		return degradedPoolNotice(this._lastLaunchError);
 	}
 
 	// ── Internal ────────────────────────────────────────────────────
@@ -190,19 +259,36 @@ export class BrowserPool {
 			launchOpts.channel = this.options.channel;
 		}
 
+		const launchStartedAt = Date.now();
 		let browser: any;
+		let usedChannel: string | null = this.options.channel ?? null;
 		try {
 			browser = await chromium.launch(launchOpts);
 		} catch (err) {
 			// Fallback: try without channel (Playwright's bundled browser)
 			if (this.options.channel) {
+				// Log the channel failure reason before falling back, so a second
+				// (bundled) failure doesn't erase the trace of the first (P4).
+				debug(
+					"browser-pool",
+					`channel launch failed (channel=${this.options.channel}): ${
+						err instanceof Error ? err.message : String(err)
+					} — falling back to bundled browser`,
+				);
 				delete launchOpts.channel;
+				usedChannel = null;
 				browser = await chromium.launch(launchOpts);
 			} else {
 				throw err;
 			}
 		}
+		debug(
+			"browser-pool",
+			formatLaunchTiming(Date.now() - launchStartedAt, usedChannel),
+		);
 
+		// A successful launch clears any prior degraded state.
+		this._lastLaunchError = null;
 		this.totalLaunched++;
 		const pb: PoolBrowser = {
 			browser,
@@ -277,9 +363,19 @@ export class BrowserPool {
 		} catch {
 			// already gone
 		}
-		// Launch a replacement immediately if we're still open and need capacity
+		// Launch a replacement immediately if we're still open and need capacity.
+		// Don't throw from the background relaunch, but record the failure so the
+		// pool can report "degraded" instead of silently hanging later (P4).
 		if (!this._closed) {
-			this.launchBrowser().catch(() => {});
+			this.launchBrowser().catch((err) => {
+				this._lastLaunchError = toLaunchErrorRecord(err);
+				debug(
+					"browser-pool",
+					`replacement launch failed: ${this._lastLaunchError.message} — ${
+						degradedPoolNotice(this._lastLaunchError)
+					}`,
+				);
+			});
 		}
 	}
 }
