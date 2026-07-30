@@ -207,7 +207,8 @@ export function runCommand(cmd, args, timeoutMs) {
 			stdio: ["ignore", "pipe", "pipe"],
 			windowsHide: true,
 		});
-		const timedOut = out.error?.code === "ETIMEDOUT" || out.signal === "SIGTERM";
+		const timedOut =
+			out.error?.code === "ETIMEDOUT" || out.signal === "SIGTERM";
 		return {
 			ok: !out.error && out.status === 0,
 			code: out.status,
@@ -388,7 +389,8 @@ export async function probeSearchEngines(deps) {
 		status,
 		required: false,
 		message: `${reachable}/${SEARCH_ENGINES.length} reachable`,
-		hint: reachable === 0 ? "check network/proxy; search will return empty" : null,
+		hint:
+			reachable === 0 ? "check network/proxy; search will return empty" : null,
 		detail,
 	};
 }
@@ -472,9 +474,7 @@ async function main() {
 	process.stdout.write(formatReport(results, { live: opts.live }));
 
 	if (opts.strict) {
-		const failed = results.filter(
-			(r) => r.required && r.status === "missing",
-		);
+		const failed = results.filter((r) => r.required && r.status === "missing");
 		if (failed.length) {
 			process.stderr.write(
 				`\n--strict: ${failed.length} required backend(s) missing: ${failed

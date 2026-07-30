@@ -407,8 +407,8 @@ export async function fetchWithPlaywright(
 
 		try {
 			pooled = await pool.acquirePage();
-				installSsrfRedirectGuard(pooled.page);
-				await applyStealth(pooled.page);
+			installSsrfRedirectGuard(pooled.page);
+			await applyStealth(pooled.page);
 			await pooled.page.goto(url, {
 				waitUntil: "domcontentloaded",
 				timeout: 15000,

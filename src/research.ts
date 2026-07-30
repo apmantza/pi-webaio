@@ -51,9 +51,10 @@ export const MAX_MAX_SOURCES = 12;
 export const DEFAULT_MAX_SOURCES = 6;
 
 export function clampMaxSources(value: unknown): number {
-	const n = typeof value === "number" && Number.isFinite(value)
-		? Math.floor(value)
-		: DEFAULT_MAX_SOURCES;
+	const n =
+		typeof value === "number" && Number.isFinite(value)
+			? Math.floor(value)
+			: DEFAULT_MAX_SOURCES;
 	return Math.min(MAX_MAX_SOURCES, Math.max(MIN_MAX_SOURCES, n));
 }
 
@@ -92,7 +93,10 @@ export function classifyReachability(input: {
 	errorCode?: string;
 }): ReachabilityStatus {
 	if (input.ok) return "ok";
-	if (input.statusCode !== undefined && ANTI_BOT_STATUS_CODES.has(input.statusCode)) {
+	if (
+		input.statusCode !== undefined &&
+		ANTI_BOT_STATUS_CODES.has(input.statusCode)
+	) {
 		return "skipped";
 	}
 	if (input.errorCode && ANTI_BOT_ERROR_CODES.has(input.errorCode)) {
@@ -107,11 +111,7 @@ export function classifyReachability(input: {
 // Marks a source as "primary" (official docs, standards bodies, .gov/.edu,
 // package registries, etc.) rather than a secondary write-up/blog.
 
-const PRIMARY_DOMAIN_SUFFIXES = [
-	".gov",
-	".edu",
-	".mil",
-];
+const PRIMARY_DOMAIN_SUFFIXES = [".gov", ".edu", ".mil"];
 
 const PRIMARY_DOMAIN_PATTERNS: RegExp[] = [
 	/^(www\.)?w3\.org$/,
@@ -408,7 +408,9 @@ export function countConflictMarkers(text: string | undefined): {
 } {
 	if (!text) return { count: 0, matched: [] };
 	const matches = text.match(CONFLICT_MARKER_REGEX) ?? [];
-	const matched = [...new Set(matches.map((m) => m.toLowerCase().replace(/\s+/g, " ")))].sort();
+	const matched = [
+		...new Set(matches.map((m) => m.toLowerCase().replace(/\s+/g, " "))),
+	].sort();
 	return { count: matches.length, matched };
 }
 
@@ -419,7 +421,10 @@ export function countConflictMarkers(text: string | undefined): {
  * evidence-extraction pass above — this is keyword overlap, not semantic
  * similarity.
  */
-export function keywordOverlapRatio(query: string, text: string | undefined): number {
+export function keywordOverlapRatio(
+	query: string,
+	text: string | undefined,
+): number {
 	const scorer = createBM25Scorer(query);
 	if (scorer.queryTerms.length === 0 || !text?.trim()) return 0;
 	const lower = text.toLowerCase();
@@ -434,7 +439,10 @@ export function keywordOverlapRatio(query: string, text: string | undefined): nu
  * date. Unknown dates are neutral (0.5) rather than penalized — freshness
  * is a soft signal, not a requirement.
  */
-export function freshnessScore(publishedAt: string | undefined, now: Date = new Date()): number {
+export function freshnessScore(
+	publishedAt: string | undefined,
+	now: Date = new Date(),
+): number {
 	if (!publishedAt) return 0.5;
 	const t = Date.parse(publishedAt);
 	if (Number.isNaN(t)) return 0.5;
@@ -553,20 +561,30 @@ const DOMINANCE_RATIO = 1.5;
  * signed `evidenceStrength` values) — see module caveat: this is a
  * heuristic hint, not a fact-check.
  */
-export function summarizeStance(query: string, sources: SourceStance[]): StanceSummary {
-	const supportingCount = sources.filter((s) => s.label === "supporting").length;
-	const conflictingCount = sources.filter((s) => s.label === "conflicting").length;
+export function summarizeStance(
+	query: string,
+	sources: SourceStance[],
+): StanceSummary {
+	const supportingCount = sources.filter(
+		(s) => s.label === "supporting",
+	).length;
+	const conflictingCount = sources.filter(
+		(s) => s.label === "conflicting",
+	).length;
 	const neutralCount = sources.filter((s) => s.label === "neutral").length;
 
 	const supportScore =
 		Math.round(
-			sources.filter((s) => s.evidenceStrength > 0).reduce((sum, s) => sum + s.evidenceStrength, 0) *
-				1000,
+			sources
+				.filter((s) => s.evidenceStrength > 0)
+				.reduce((sum, s) => sum + s.evidenceStrength, 0) * 1000,
 		) / 1000;
 	const conflictScore =
 		Math.round(
 			Math.abs(
-				sources.filter((s) => s.evidenceStrength < 0).reduce((sum, s) => sum + s.evidenceStrength, 0),
+				sources
+					.filter((s) => s.evidenceStrength < 0)
+					.reduce((sum, s) => sum + s.evidenceStrength, 0),
 			) * 1000,
 		) / 1000;
 
@@ -575,12 +593,14 @@ export function summarizeStance(query: string, sources: SourceStance[]): StanceS
 		verdict = "insufficient_evidence";
 	} else if (conflictingCount === 0) {
 		verdict =
-			supportScore >= STRONG_SCORE_THRESHOLD && supportingCount >= STRONG_COUNT_THRESHOLD
+			supportScore >= STRONG_SCORE_THRESHOLD &&
+			supportingCount >= STRONG_COUNT_THRESHOLD
 				? "supported"
 				: "likely_supported";
 	} else if (supportingCount === 0) {
 		verdict =
-			conflictScore >= STRONG_SCORE_THRESHOLD && conflictingCount >= STRONG_COUNT_THRESHOLD
+			conflictScore >= STRONG_SCORE_THRESHOLD &&
+			conflictingCount >= STRONG_COUNT_THRESHOLD
 				? "likely_false"
 				: "contested";
 	} else if (supportScore > conflictScore * DOMINANCE_RATIO) {
@@ -637,8 +657,12 @@ export interface BundleSummary {
 
 export function buildStatusMd(summary: BundleSummary): string {
 	const okCount = summary.fetched.filter((f) => f.reachability === "ok").length;
-	const skippedCount = summary.fetched.filter((f) => f.reachability === "skipped").length;
-	const deadCount = summary.fetched.filter((f) => f.reachability === "dead").length;
+	const skippedCount = summary.fetched.filter(
+		(f) => f.reachability === "skipped",
+	).length;
+	const deadCount = summary.fetched.filter(
+		(f) => f.reachability === "dead",
+	).length;
 	const primaryCount = summary.fetched.filter((f) => f.primary && f.ok).length;
 
 	const lines: string[] = [
@@ -701,7 +725,9 @@ export function buildStatusMd(summary: BundleSummary): string {
 		``,
 	);
 
-	return lines.filter((l, i, arr) => !(l === "" && arr[i - 1] === "")).join("\n");
+	return lines
+		.filter((l, i, arr) => !(l === "" && arr[i - 1] === ""))
+		.join("\n");
 }
 
 export function buildEvidenceMd(
@@ -711,7 +737,10 @@ export function buildEvidenceMd(
 	const byId = new Map(fetched.map((f) => [f.id, f]));
 	const lines: string[] = [`# Evidence`, ``];
 	if (evidence.length === 0) {
-		lines.push(`_No evidence extracted — no sources were successfully fetched._`, ``);
+		lines.push(
+			`_No evidence extracted — no sources were successfully fetched._`,
+			``,
+		);
 		return lines.join("\n");
 	}
 	for (const e of evidence) {
@@ -728,10 +757,15 @@ export function buildEvidenceMd(
 			``,
 		);
 	}
-	return lines.filter((l, i, arr) => !(l === "" && arr[i - 1] === "")).join("\n");
+	return lines
+		.filter((l, i, arr) => !(l === "" && arr[i - 1] === ""))
+		.join("\n");
 }
 
-export function buildClaimsMdScaffold(query: string, fetched: FetchedSourceRecord[]): string {
+export function buildClaimsMdScaffold(
+	query: string,
+	fetched: FetchedSourceRecord[],
+): string {
 	const okSources = fetched.filter((f) => f.ok);
 	return [
 		`# Claims`,
@@ -776,7 +810,8 @@ export function buildGapsMd(
 			`## Sources not usable as evidence`,
 			``,
 			...skippedOrDead.map(
-				(f) => `- ${f.id} (${f.reachability}): ${f.url}${f.errorMessage ? ` — ${f.errorMessage}` : ""}`,
+				(f) =>
+					`- ${f.id} (${f.reachability}): ${f.url}${f.errorMessage ? ` — ${f.errorMessage}` : ""}`,
 			),
 			``,
 		);
@@ -791,7 +826,11 @@ export function buildGapsMd(
 		);
 	}
 
-	if (zeroResultQueries.length === 0 && skippedOrDead.length === 0 && summary.unfetchedRanked.length === 0) {
+	if (
+		zeroResultQueries.length === 0 &&
+		skippedOrDead.length === 0 &&
+		summary.unfetchedRanked.length === 0
+	) {
 		lines.push(`_No gaps detected in this single-round MVP run._`, ``);
 	}
 
@@ -803,7 +842,9 @@ export function buildGapsMd(
 		``,
 	);
 
-	return lines.filter((l, i, arr) => !(l === "" && arr[i - 1] === "")).join("\n");
+	return lines
+		.filter((l, i, arr) => !(l === "" && arr[i - 1] === ""))
+		.join("\n");
 }
 
 export function buildStanceMd(summary: StanceSummary): string {
@@ -828,8 +869,13 @@ export function buildStanceMd(summary: StanceSummary): string {
 	];
 
 	if (summary.sources.length === 0) {
-		lines.push(`_No fetched sources with extractable content were available for stance classification._`, ``);
-		return lines.filter((l, i, arr) => !(l === "" && arr[i - 1] === "")).join("\n");
+		lines.push(
+			`_No fetched sources with extractable content were available for stance classification._`,
+			``,
+		);
+		return lines
+			.filter((l, i, arr) => !(l === "" && arr[i - 1] === ""))
+			.join("\n");
 	}
 
 	lines.push(
@@ -846,10 +892,14 @@ export function buildStanceMd(summary: StanceSummary): string {
 		``,
 	);
 
-	return lines.filter((l, i, arr) => !(l === "" && arr[i - 1] === "")).join("\n");
+	return lines
+		.filter((l, i, arr) => !(l === "" && arr[i - 1] === ""))
+		.join("\n");
 }
 
-export function buildStanceJson(summary: StanceSummary): Record<string, unknown> {
+export function buildStanceJson(
+	summary: StanceSummary,
+): Record<string, unknown> {
 	return {
 		version: 1,
 		caveat: STANCE_CAVEAT,
@@ -960,7 +1010,9 @@ export function buildSourcesJson(
 	};
 }
 
-export function buildEvidenceJson(evidence: EvidenceEntry[]): Record<string, unknown> {
+export function buildEvidenceJson(
+	evidence: EvidenceEntry[],
+): Record<string, unknown> {
 	return { version: 1, evidence };
 }
 

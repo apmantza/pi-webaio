@@ -80,7 +80,10 @@ test("formatReport includes header, glyphs and summary", () => {
 	assert.match(report, /✓/);
 	assert.match(report, /✗/);
 	assert.match(report, /⊘/);
-	assert.match(report, /Summary: 1 available, 1 missing, 0 degraded, 1 skipped/);
+	assert.match(
+		report,
+		/Summary: 1 available, 1 missing, 0 degraded, 1 skipped/,
+	);
 	assert.match(report, /live network probes enabled/);
 });
 
@@ -119,7 +122,10 @@ test("parseGhAccount extracts handle", () => {
 		"octocat",
 	);
 	assert.equal(parseGhAccount("account @monalisa"), "monalisa");
-	assert.equal(parseGhAccount("You are not logged into any GitHub hosts."), null);
+	assert.equal(
+		parseGhAccount("You are not logged into any GitHub hosts."),
+		null,
+	);
 	assert.equal(parseGhAccount(""), null);
 });
 
@@ -237,8 +243,7 @@ test("probeGh: authed → ok with account", async () => {
 		platform: "win32",
 		timeoutMs: 100,
 		runCommand: (cmd, args) => {
-			if (cmd === "where")
-				return { ok: true, stdout: "C:/bin/gh.exe\n" };
+			if (cmd === "where") return { ok: true, stdout: "C:/bin/gh.exe\n" };
 			if (args[0] === "auth")
 				return {
 					ok: true,
@@ -356,7 +361,10 @@ test("probeSearchEngines: live, all reachable → ok", async () => {
 	});
 	assert.equal(r.status, "ok");
 	assert.equal(calls, SEARCH_ENGINES.length);
-	assert.match(r.message, new RegExp(`${SEARCH_ENGINES.length}/${SEARCH_ENGINES.length}`));
+	assert.match(
+		r.message,
+		new RegExp(`${SEARCH_ENGINES.length}/${SEARCH_ENGINES.length}`),
+	);
 });
 
 test("probeSearchEngines: live, none reachable → missing", async () => {

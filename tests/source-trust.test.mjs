@@ -253,7 +253,9 @@ test("possible-conflict: fires when a vendor domain token overlaps the query", (
 });
 
 test("possible-conflict: does NOT fire without a query", () => {
-	const r = classifySourceProfile([{ sourceType: "website", domain: "acme.com" }]);
+	const r = classifySourceProfile([
+		{ sourceType: "website", domain: "acme.com" },
+	]);
 	assert.ok(!r.caveats.includes("possible-conflict"));
 });
 
@@ -288,7 +290,11 @@ test("caveats: deduped and in a fixed order", () => {
 	const r = classifySourceProfile(
 		[
 			{ sourceType: "community", domain: "reddit.com", reachability: "dead" },
-			{ sourceType: "community", domain: "reddit.com", reachability: "skipped" },
+			{
+				sourceType: "community",
+				domain: "reddit.com",
+				reachability: "skipped",
+			},
 		],
 		{ query: "reddit alternatives" },
 	);
@@ -375,8 +381,16 @@ test("rankSources: trustBoost can reorder a close race toward authoritative", ()
 	}));
 	const perQuery = buildPerQuery([
 		...fillers,
-		{ url: "https://community.com/x", domain: "community.com", sourceType: "community" }, // rank 9
-		{ url: "https://docs.dev/x", domain: "docs.dev", sourceType: "official-docs" }, // rank 10
+		{
+			url: "https://community.com/x",
+			domain: "community.com",
+			sourceType: "community",
+		}, // rank 9
+		{
+			url: "https://docs.dev/x",
+			domain: "docs.dev",
+			sourceType: "official-docs",
+		}, // rank 10
 	]);
 	const off = rankSources(perQuery, { trustBoost: false });
 	const on = rankSources(perQuery, { trustBoost: true });

@@ -184,7 +184,5 @@ export function redactSecrets(text: string): string {
 function looksLikeBase64Secret(blob: string): boolean {
 	const body = blob.replace(/=+$/, "");
 	if (body.length < 40) return false;
-	return (
-		/[0-9]/.test(body) && /[a-z]/.test(body) && /[A-Z]/.test(body)
-	);
+	return /[0-9]/.test(body) && /[a-z]/.test(body) && /[A-Z]/.test(body);
 }

@@ -48,8 +48,7 @@ const HOMOGLYPH_MAP: Record<string, string> = {
 };
 
 /** Zero-width / invisible formatting characters used to split keywords. */
-const ZERO_WIDTH_RE =
-	/[\u200B-\u200F\u202A-\u202E\u2060-\u2064\uFEFF\u00AD]/g;
+const ZERO_WIDTH_RE = /[\u200B-\u200F\u202A-\u202E\u2060-\u2064\uFEFF\u00AD]/g;
 
 /** Combining diacritical marks (e.g. ǐ → i after NFKD-style stripping). */
 const COMBINING_MARKS_RE = /[\u0300-\u036F]/g;

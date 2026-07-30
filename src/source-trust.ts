@@ -204,7 +204,10 @@ function hasCommunityOnly(profiles: SourceProfile[]): boolean {
  * low-diversity: ≥2 sources concentrated on one domain (>half share) OR all
  * sharing a single sourceType.
  */
-function hasLowDiversity(profiles: SourceProfile[], topDomainShare: number): boolean {
+function hasLowDiversity(
+	profiles: SourceProfile[],
+	topDomainShare: number,
+): boolean {
 	if (profiles.length < 2) return false;
 	const distinctTypes = new Set(profiles.map((p) => p.sourceType));
 	return topDomainShare > 0.5 || distinctTypes.size === 1;
@@ -236,10 +239,15 @@ function hasBotCheck(
  * possible-conflict: conservative — a source's identity-bearing domain token
  * appears as a whole query term (both ≥4 chars, generic labels excluded).
  */
-function hasPossibleConflict(profiles: SourceProfile[], query: string): boolean {
+function hasPossibleConflict(
+	profiles: SourceProfile[],
+	query: string,
+): boolean {
 	const qTokens = queryTokens(query);
 	return profiles.some((p) =>
-		p.domain ? domainIdentityTokens(p.domain).some((t) => qTokens.has(t)) : false,
+		p.domain
+			? domainIdentityTokens(p.domain).some((t) => qTokens.has(t))
+			: false,
 	);
 }
 
@@ -271,9 +279,12 @@ export function classifySourceProfile(
 	}
 	const uniqueDomains = domainCounts.size;
 	let topDomainCount = 0;
-	for (const c of domainCounts.values()) topDomainCount = Math.max(topDomainCount, c);
+	for (const c of domainCounts.values())
+		topDomainCount = Math.max(topDomainCount, c);
 	const topDomainShare =
-		sources.length > 0 && topDomainCount > 0 ? topDomainCount / sources.length : 0;
+		sources.length > 0 && topDomainCount > 0
+			? topDomainCount / sources.length
+			: 0;
 
 	// ── Caveats (fixed order, naturally deduped) ──
 	const caveats: SourceCaveat[] = [];

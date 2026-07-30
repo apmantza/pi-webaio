@@ -1560,8 +1560,11 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 								"",
 								"Errors:",
 								...errResults.map((r) => {
-									const code = (r as any).fetchError?.code ?? (r as any).errorInfo?.code; // phase-aware (e.g. blocked_ssrf) over legacy errorInfo.code
-									const sc = (r as any).fetchError?.statusCode ?? (r as any).errorInfo?.statusCode;
+									const code =
+										(r as any).fetchError?.code ?? (r as any).errorInfo?.code; // phase-aware (e.g. blocked_ssrf) over legacy errorInfo.code
+									const sc =
+										(r as any).fetchError?.statusCode ??
+										(r as any).errorInfo?.statusCode;
 									const tag = [code, sc ? `HTTP ${sc}` : null]
 										.filter(Boolean)
 										.join(", ");

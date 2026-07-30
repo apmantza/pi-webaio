@@ -68,11 +68,14 @@ function captureTools(): McpToolDef[] {
 			renderResult?: unknown;
 		}): void {
 			const rawSchema =
-				config.parameters ?? ({ type: "object", properties: {} } as Record<string, unknown>);
+				config.parameters ??
+				({ type: "object", properties: {} } as Record<string, unknown>);
 
 			// Strip TypeBox metadata ($schema, $id, Symbol keys) that MCP clients
 			// may not understand. Keep the structural JSON Schema properties.
-			const inputSchema = sanitizeJsonSchema(rawSchema as Record<string, unknown>);
+			const inputSchema = sanitizeJsonSchema(
+				rawSchema as Record<string, unknown>,
+			);
 			// MCP requires inputSchema to be type:"object" at the top level only —
 			// injecting `type` into nested nodes corrupts `properties` maps and unions.
 			if (!inputSchema["type"]) inputSchema["type"] = "object";
@@ -191,7 +194,12 @@ export async function startMcpServer(): Promise<void> {
 
 		try {
 			// onUpdate progress callbacks are no-ops in MCP context.
-			const result = await tool.execute(toolCallId, params, undefined, undefined);
+			const result = await tool.execute(
+				toolCallId,
+				params,
+				undefined,
+				undefined,
+			);
 			// result.content is already [{type:"text", text}] — pass through.
 			return { content: result.content };
 		} catch (err: unknown) {
