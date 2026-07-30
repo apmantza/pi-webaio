@@ -115,7 +115,7 @@ pi-webaio/
 ├── types/
 │   ├── pi-coding-agent.d.ts  ← Minimal ExtensionAPI type declaration
 │   └── playwright.d.ts       ← Playwright type stub (optional dep)
-├── tests/                    ← 38 suites wired into test:all (1034 tests) + standalone suites (mcp, etc.)
+├── tests/                    ← 39 suites wired into test:all (1036 tests) + standalone suites (mcp, etc.)
 ├── tsconfig.json             ← Lint config (noEmit, strict, ES2022)
 ├── tsconfig.dist.json        ← Build config (emits to dist/, includes types/**/*.d.ts)
 ├── package.json              ← type: "module", pi extension manifest, v0.7.3
@@ -433,7 +433,7 @@ TUI result rendering for all tools; phase-aware FetchError system; `format` para
 ## Testing
 
 - `npm test` → runs unit tests (`tests/unit.test.mjs`, 156 tests)
-- `npm run test:all` → runs all 38 wired suites (1034 tests total, 0 fail, 2 expected skips: a live-network Jina test that skips on external HTTP 403, and an opt-in live TLS test)
+- `npm run test:all` → runs all 39 wired suites (1036 tests total, 0 fail, 2 expected skips: a live-network Jina test that skips on external HTTP 403, and an opt-in live TLS test)
 - `npm run test:mcp` → MCP server tests (standalone, not in test:all)
 - Specialized suites (each `npm run test:<name>`): `new` (new-features, 31), `paywall` (65), `check` (github-check, 35), `render` (render-result, 40), `fetcherror` (fetch-error, 57), `fetchprogress` (9), `hardening` (16), `redact` (21), `ssrf` (ssrf-hardening, 30), `fingerprint` (14), `format` (18), `webfetch-summary` (13), `search-context` (20), `chunker` (31), `prune` (prune-markdown, 25), `github-map` (50), `reddit` (reddit-block, 7), `source-ranking` (16), `webresearch` (26), `stance` (24), `cookie-cache` (25), `title-extraction` (10), `integration` (5), `bench` (bench-harness, 35)
 - Additional suites present in `tests/` (run via test:all or directly): goggles (14), bot-wait (6), ssrf-allowlist (37), lifecycle-hooks (14), webquery (12), plus diff-refetch, query-mode, revalidation, strategy-memory, prefetch, token-budget, user-verticals

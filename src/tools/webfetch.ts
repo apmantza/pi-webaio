@@ -1014,15 +1014,39 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 								}
 							}
 
-							let result = await pullPageEnhanced(url.href, {
-								browser,
-								os,
-								proxy,
-								mode,
-								wreqSession,
-								bypass,
-								bypassStrategies: bypassStrategies as any,
-							});
+							let result: Awaited<ReturnType<typeof pullPageEnhanced>>;
+							try {
+								result = await pullPageEnhanced(url.href, {
+									browser,
+									os,
+									proxy,
+									mode,
+									wreqSession,
+									bypass,
+									bypassStrategies: bypassStrategies as any,
+								});
+							} catch (thrown) {
+								// A thrown FetchError (e.g. blocked_ssrf from the SSRF guard)
+								// must not reject runInBatches' bare Promise.all and abort the
+								// WHOLE batch — record it as this URL's error and let the other
+								// targets proceed. Mirrors the single-fetch throw handler below.
+								const fe: FetchError = isFetchError(thrown)
+									? thrown
+									: classifyError(thrown, { url: url.href });
+								const userErrorSummary = buildUserFacingFetchErrorSummary(fe);
+								markItemError(idx, userErrorSummary, startedAt);
+								return {
+									ok: false,
+									error: fe.message,
+									errorInfo: fetchErrorInfoFromUnknown(thrown, {
+										url: url.href,
+									}),
+									userErrorSummary,
+									fetchError: fe,
+									suggestedTimeoutMs: suggestRetryTimeoutMs(fe),
+									url: url.href,
+								};
+							}
 							if (!result.ok) {
 								const shouldRetryBrowser =
 									mode !== "browser" &&
@@ -1030,15 +1054,19 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 										result.errorInfo?.code === "blocked");
 								if (shouldRetryBrowser) {
 									updateItem(idx, { status: "loading", progress: 0.65 });
-									const browserResult = await pullPageEnhanced(url.href, {
-										browser,
-										os,
-										proxy,
-										mode: "browser",
-										wreqSession,
-									});
-									if (browserResult.ok) {
-										result = browserResult;
+									try {
+										const browserResult = await pullPageEnhanced(url.href, {
+											browser,
+											os,
+											proxy,
+											mode: "browser",
+											wreqSession,
+										});
+										if (browserResult.ok) {
+											result = browserResult;
+										}
+									} catch {
+										/* browser retry threw — keep the original non-ok result */
 									}
 								}
 							}
