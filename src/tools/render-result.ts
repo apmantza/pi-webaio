@@ -23,6 +23,7 @@ import {
 	Text,
 } from "@earendil-works/pi-tui";
 import { redactSecrets } from "../redact.ts";
+import type { OutlineHeading } from "../outline.ts";
 
 /** Spinner frames for the in-flight progress glyph. */
 export const SPINNER_FRAMES = [
@@ -96,6 +97,12 @@ export type WebfetchDetails = {
 	content?: string;
 	/** Output format hint (controls Markdown highlighting). */
 	format?: "markdown" | "text" | "html" | "json" | "raw";
+	/** UX1: when true, render the compact heading outline instead of the body. */
+	outlineMode?: boolean;
+	/** UX1/UX4: compact heading outline (document order; levels encode the tree). */
+	outline?: OutlineHeading[];
+	/** UX4: total word count of the fetched content. */
+	wordCount?: number;
 	/** Short error message for collapsed error view. */
 	errorText?: string;
 	/** 1-line user-facing error summary (red) in TUI. */
@@ -635,6 +642,29 @@ function buildResultMetadataLines(
 }
 
 /**
+ * UX1: build the compact outline rendering for the TUI (one line per heading,
+ * level conveyed by indentation, per-section word counts parenthesized).
+ */
+function buildOutlineLines(details: WebfetchDetails, theme: ThemeLike): string[] {
+	const headings = details.outline ?? [];
+	const lines: string[] = [
+		theme.fg(
+			"muted",
+			`Outline: ${details.wordCount ?? 0} words, ${headings.length} section${headings.length === 1 ? "" : "s"}`,
+		),
+	];
+	if (headings.length === 0) {
+		lines.push(theme.fg("muted", "- (no headings — flat document)"));
+	}
+	for (const h of headings) {
+		const indent = "  ".repeat(Math.max(0, h.level - 1));
+		const wc = h.words !== undefined ? theme.fg("muted", ` (${h.words})`) : "";
+		lines.push(`${indent}- ${theme.fg("text", h.text)}${wc}`);
+	}
+	return lines;
+}
+
+/**
  * Decide whether the body content should be wrapped in a Markdown widget
  * (for syntax highlighting) or shown as plain text.
  */
@@ -707,6 +737,16 @@ export function createResultComponent(
 	const metadataLines = buildResultMetadataLines(details, theme);
 	if (metadataLines.length > 0) {
 		container.addChild(new Text(metadataLines.join("\n"), 0, 0));
+	}
+
+	// UX1: outline mode renders the compact heading outline instead of the
+	// body (the full content stays saved/cached; only the view changes).
+	if (details.outlineMode) {
+		if (metadataLines.length > 0) {
+			container.addChild(new Spacer(1));
+		}
+		container.addChild(new Text(buildOutlineLines(details, theme).join("\n"), 0, 0));
+		return container;
 	}
 
 	const content = details.content ?? "";

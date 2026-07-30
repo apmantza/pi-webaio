@@ -1518,8 +1518,14 @@ test("matchesGitLab honors WEBAIO_GITLAB_HOSTS for self-hosted repo roots (B6)",
 // ─── webpull headline (B8) ────────────────────────────────────────
 
 test("formatPullHeadline: normal pull reports the page count", () => {
-	assert.equal(formatPullHeadline(5, 0, "/tmp/x"), "✅ Pulled 5 pages to /tmp/x");
-	assert.equal(formatPullHeadline(0, 0, "/tmp/x"), "✅ Pulled 0 pages to /tmp/x");
+	assert.equal(
+		formatPullHeadline(5, 0, "/tmp/x"),
+		"✅ Pulled 5 pages to /tmp/x",
+	);
+	assert.equal(
+		formatPullHeadline(0, 0, "/tmp/x"),
+		"✅ Pulled 0 pages to /tmp/x",
+	);
 });
 
 test("formatPullHeadline: zero new pages with prior completed explains resume (B8)", () => {

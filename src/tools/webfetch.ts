@@ -23,6 +23,11 @@ import {
 import { pruneMarkdown, applyTokenBudget } from "../prune-markdown.ts";
 import { createBM25Scorer } from "../bm25.ts";
 import {
+	extractOutline,
+	renderOutlineText,
+	splitSections,
+} from "../outline.ts";
+import {
 	BASE_TEMP,
 	focusedSummaryAnnotation,
 	getSearchContext,
@@ -510,6 +515,159 @@ export function applyQueryAnswerMode(
 	return parts.join("\n\n---\n\n") + footer;
 }
 
+// ─── UX1/UX2/UX5/UX6: agent-facing output shaping ────────────────────
+// The consumer of aio-webfetch is a coding AGENT, so these pure helpers
+// optimize the RETURNED preview for low token waste ("see the shape before
+// committing tokens"). They only ever change what is RETURNED — the full
+// content is always saved to disk + cached by the worker before any of this
+// runs, so no data is lost. Each helper re-wraps web-derived text in the
+// [UNTRUSTED WEB CONTENT] markers (prompt-injection safety, non-negotiable).
+
+/**
+ * UX2 threshold: only apply the frugal (outline + top section) preview to
+ * content longer than this. Below it the existing fixed-length teaser is
+ * kept, so short/medium pages are byte-for-byte unchanged.
+ */
+export const FRUGAL_PREVIEW_THRESHOLD_CHARS = 6000;
+
+/** Wrap web-derived display text in the prompt-injection safety markers. */
+function wrapUntrusted(inner: string): string {
+	return `[UNTRUSTED WEB CONTENT START]\n${inner}\n[UNTRUSTED WEB CONTENT END]`;
+}
+
+/**
+ * UX1: build the outline-only display for `outline: true`. Returns a compact
+ * heading outline (+ total word count + per-section word counts) instead of
+ * the body, so the agent can see a page's shape and then fetch only the
+ * section it wants. The full content is still saved/cached by the worker.
+ *
+ * @internal Exported for unit tests only.
+ */
+export function buildOutlineDisplay(
+	markdown: string,
+	opts: { url?: string } = {},
+): string {
+	const outline = extractOutline(markdown);
+	const footer = opts.url
+		? `Full content cached — fetch a section with aio-webfetch(query) or the whole page via aio-webcontent with URL: ${opts.url}`
+		: "Full content cached — retrieve via aio-webcontent by URL";
+	return `${wrapUntrusted(renderOutlineText(outline))}\n\n---\n_${footer}_`;
+}
+
+/**
+ * UX2: build a frugal default preview for long content — the heading outline
+ * plus the single largest section's body (truncated to `maxChars`) — instead
+ * of a blind head-truncation. The footer keeps the "full content cached —
+ * retrieve with aio-webcontent" contract.
+ *
+ * @internal Exported for unit tests only.
+ */
+export function buildFrugalPreview(
+	markdown: string,
+	opts: { url?: string; maxChars?: number } = {},
+): string {
+	const maxChars = opts.maxChars ?? MAX_PREVIEW_CHARS;
+	const outline = extractOutline(markdown);
+	const sections = splitSections(markdown);
+
+	let sectionBlock = "";
+	if (sections.length > 0) {
+		const top = sections
+			.slice()
+			.sort((a, b) => (b.words ?? 0) - (a.words ?? 0))[0];
+		if (top && top.body) {
+			const excerpt =
+				top.body.length > maxChars
+					? `${top.body.slice(0, maxChars)}…`
+					: top.body;
+			sectionBlock = `\n\n## ${top.text}\n\n${excerpt}`;
+		}
+	}
+
+	const footer = opts.url
+		? `Outline + largest section shown (${outline.totalWords} words total). Full content cached — retrieve via aio-webcontent with URL: ${opts.url}`
+		: `Outline + largest section shown (${outline.totalWords} words total). Full content cached — retrieve via aio-webcontent by URL`;
+	return `${wrapUntrusted(renderOutlineText(outline) + sectionBlock)}\n\n---\n_${footer}_`;
+}
+
+// Low-value YAML frontmatter fields dropped from the agent-visible preview
+// (UX6). title + url are always kept; the full frontmatter still lands in the
+// saved file. Matches the keys frontmatter() emits.
+const LOW_VALUE_FRONTMATTER_KEYS =
+	/^(author|published|site|language|word_count):/;
+
+/**
+ * UX6: trim low-value fields (author/published/site/language/word_count) from
+ * a LEADING YAML frontmatter block, keeping title + url. No-op when there is
+ * no leading frontmatter (e.g. outline/frugal/summary output). Only the
+ * agent-visible preview is affected — the saved file keeps full frontmatter.
+ *
+ * @internal Exported for unit tests only.
+ */
+export function trimPreviewFrontmatter(markdown: string): string {
+	const m = markdown.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+	if (!m) return markdown;
+	const trimmedFm = m[1]!
+		.split("\n")
+		.filter((line) => !LOW_VALUE_FRONTMATTER_KEYS.test(line.trim()))
+		.join("\n");
+	const start = m.index ?? 0;
+	return (
+		markdown.slice(0, start) +
+		`---\n${trimmedFm}\n---` +
+		markdown.slice(start + m[0].length)
+	);
+}
+
+/** Parts needed to compose the agent-visible single-result text. */
+export interface FetchTextParts {
+	formatLabel: string;
+	title?: string;
+	url?: string;
+	format: string;
+	responseId?: string;
+	/**
+	 * UX5: whether to print a standalone `Response ID:` line. Defaults to
+	 * false (de-emphasized) — the ID stays available in `details` and in the
+	 * non-markdown format label.
+	 */
+	showResponseId?: boolean;
+	chunkHeader?: string;
+	displayContent: string;
+	chunkBody?: string;
+	chunkCount?: number;
+	warning?: string;
+}
+
+/**
+ * Compose the agent-visible text for a single successful result. Shared by
+ * the answer-mode, outline-mode, and default paths so they stay consistent.
+ *
+ * @internal Exported for unit tests only.
+ */
+export function composeFetchText(parts: FetchTextParts): string {
+	const lines: string[] = [
+		parts.formatLabel,
+		`\nTitle: ${parts.title}`,
+		`URL: ${parts.url}`,
+		`Format: ${parts.format}`,
+	];
+	if (parts.showResponseId && parts.responseId) {
+		lines.push(`Response ID: ${parts.responseId}`);
+	}
+	if (parts.chunkHeader) lines.push(`\n${parts.chunkHeader}`);
+	lines.push("\n---\n", parts.displayContent);
+	if (parts.chunkBody) {
+		lines.push(
+			["\n\n---\n", `## Chunks (${parts.chunkCount ?? 0})\n`, parts.chunkBody].join(
+				"\n",
+			),
+		);
+	}
+	if (parts.warning) lines.push(parts.warning);
+	return lines.join("\n");
+}
+
 export function registerWebfetchTool(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: "aio-webfetch",
@@ -517,7 +675,7 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 		description:
 			"Fetch a single URL (or batch of URLs) and convert to markdown with anti-bot TLS fingerprinting. Detects PDFs, GitHub repos, and Next.js RSC. Long content is automatically summarized via Gemini AI; full content always saved to file.",
 		promptSnippet:
-			"aio-webfetch(url|urls, mode?, browser?, os?, proxy?, prune?, query?, topChunks?, interactive?, bypass?, bypassStrategies?, compile?, out?, cacheTtlSeconds?, start_index?, max_length?, format?): fetch URL(s) with anti-bot TLS fingerprinting, defuddle extraction, and optional AI summary. Default `format=markdown` saves to disk; pass `format=html|text|json|raw` for an in-memory body. Use the read tool on the saved path for full text. Pass `query` alone for answer mode: returns top-k BM25-scored chunks with heading breadcrumbs; full content cached for aio-webcontent.",
+			"aio-webfetch(url|urls, mode?, browser?, os?, proxy?, prune?, query?, topChunks?, interactive?, bypass?, bypassStrategies?, compile?, out?, cacheTtlSeconds?, start_index?, max_length?, format?, outline?): fetch URL(s) with anti-bot TLS fingerprinting, defuddle extraction, and optional AI summary. Default `format=markdown` saves to disk; pass `format=html|text|json|raw` for an in-memory body. Use the read tool on the saved path for full text. Pass `query` alone for answer mode: returns top-k BM25-scored chunks with heading breadcrumbs; full content cached for aio-webcontent. Pass `outline: true` for a ~50-token heading outline (shape of the page) instead of the body; full content still cached.",
 		promptGuidelines: [
 			"Use aio-webfetch when the user wants to retrieve specific webpage(s), article(s), or file(s).",
 			"Use aio-webpull when the user wants to download an entire site or docs collection.",
@@ -663,6 +821,12 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 				Type.Boolean({
 					description:
 						"Opt-in local-knowledge pre-check. Before the live fetch, search any locally-pulled corpus (from aio-webpull) for the URL's hostname using the fetch's `query` (or a query derived from the URL path). If relevant content is already pulled, it is surfaced as `details.localKnowledge` (top matching files, original URLs, and BM25 scores) plus a note in the output, so you can use cached local content instead of / alongside the network fetch. Default (absent) leaves the fetch completely unchanged.",
+				}),
+			),
+			outline: Type.Optional(
+				Type.Boolean({
+					description:
+						"Opt-in outline/TOC mode. After fetching, return ONLY a compact heading outline (total word count + per-section word counts, ~50 tokens) instead of the body, so you can see a page's shape and then fetch just the section you want (via `query`) or the whole page (via aio-webcontent). The full content is still saved to disk + cached as normal; only what is RETURNED changes. Applies to format: markdown.",
 				}),
 			),
 		}),
@@ -1041,6 +1205,8 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 									format: "markdown",
 									savedToDisk: false,
 									diffResult: diffText,
+									outline: extractOutline(notModifiedResult.content).headings,
+									wordCount: extractOutline(notModifiedResult.content).totalWords,
 								};
 							}
 
@@ -1067,6 +1233,8 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 									body: notModifiedResult.content,
 									format: "markdown",
 									savedToDisk: false,
+									outline: extractOutline(notModifiedResult.content).headings,
+									wordCount: extractOutline(notModifiedResult.content).totalWords,
 								};
 							}
 
@@ -1329,9 +1497,15 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 									format: "markdown",
 									savedToDisk: formatted.savedToDisk,
 									diffResult: diffText,
+									outline: extractOutline(formatted.body).headings,
+									wordCount: extractOutline(formatted.body).totalWords,
 								};
 							}
 
+							// UX4: pre-fetch relevance signal — a compact heading
+							// outline + word count over the FULL extraction, so the
+							// agent can judge whether the body is worth reading.
+							const relevanceOutline = extractOutline(result.content ?? "");
 							return {
 								ok: true,
 								url: result.url!,
@@ -1342,6 +1516,8 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 								body: formatted.body,
 								format: formatted.format,
 								savedToDisk: formatted.savedToDisk,
+								outline: relevanceOutline.headings,
+								wordCount: relevanceOutline.totalWords,
 							};
 						},
 					);
@@ -1464,6 +1640,12 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 					// is undefined and a readFile would throw.
 					const preview = r.body ?? "";
 
+					// Resolved output format + opt-in outline mode (UX1). Defined
+					// early so the AI-summary step can be skipped in outline mode.
+					const itemFormat = (r as any).format ?? "markdown";
+					const outlineMode =
+						params.outline === true && itemFormat === "markdown";
+
 					let summary: string | null = null;
 					let summarized = false;
 					const isGitHubUrl = (() => {
@@ -1501,7 +1683,7 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 						});
 
 					const isShort = preview.length <= MAX_PREVIEW_CHARS;
-					if (!skipSummary && !isShort && cdpAvailableGA()) {
+					if (!outlineMode && !skipSummary && !isShort && cdpAvailableGA()) {
 						const cacheKey = summaryCacheKey(
 							r.url as string,
 							injectSearchCtx ? searchCtx : undefined,
@@ -1536,7 +1718,6 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 						}
 					}
 
-					const itemFormat = (r as any).format ?? "markdown";
 					const responseId = (r as any).responseId as string | undefined;
 					let summaryNotice: string;
 					let displayContent: string;
@@ -1591,7 +1772,6 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 								`\nTitle: ${r.title}`,
 								`URL: ${r.url}`,
 								`Format: ${itemFormat}`,
-								`Response ID: ${responseId}`,
 								chunkFmt.header ? `\n${chunkFmt.header}` : "",
 								"\n---\n",
 								displayContent,
@@ -1625,6 +1805,8 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 									spinnerTick: details.spinnerTick,
 									content: displayContent,
 									format: itemFormat,
+									outline: (r as any).outline,
+									wordCount: (r as any).wordCount,
 									chunks,
 									items: details.items,
 								},
@@ -1640,7 +1822,16 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 							})
 						: null;
 
-					if (compactJsonPreview && !isShort) {
+					if (outlineMode) {
+						// UX1: return ONLY the heading outline, not the body. Full
+						// content is already saved/cached by the worker.
+						summaryNotice = r.outPath
+							? `\n[Outline mode: heading structure only. Full content (${preview.length} chars) saved to ${r.outPath}. Fetch a section with aio-webfetch(query) or the whole page with aio-webcontent.]`
+							: `\n[Outline mode: heading structure only. Full content (${preview.length} chars) cached — retrieve with aio-webcontent by URL.]`;
+						displayContent = buildOutlineDisplay(preview, {
+							url: r.url as string | undefined,
+						});
+					} else if (compactJsonPreview && !isShort) {
 						summaryNotice = "";
 						displayContent = compactJsonPreview;
 					} else if (summarized && summary) {
@@ -1651,11 +1842,28 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 					} else if (isShort) {
 						summaryNotice = "";
 						displayContent = preview;
+					} else if (preview.length > FRUGAL_PREVIEW_THRESHOLD_CHARS) {
+						// UX2: long content with no query/outline — show the outline
+						// + largest section instead of a blind head-truncation. Full
+						// content stays saved/cached; only the preview changes.
+						summaryNotice = r.outPath
+							? `\n[Frugal preview: outline + largest section shown (${preview.length} chars total). Full content saved to ${r.outPath}. Use aio-webcontent (by URL) or read the file for the rest.]`
+							: `\n[Frugal preview: outline + largest section shown (${preview.length} chars total). Full content cached — retrieve with aio-webcontent by URL.]`;
+						displayContent = buildFrugalPreview(preview, {
+							url: r.url as string | undefined,
+						});
 					} else {
 						summaryNotice = r.outPath
 							? `\n[Preview truncated: ${preview.length} chars total, ${MAX_PREVIEW_CHARS} chars shown. Use the read tool for full content.]`
 							: `\n[Preview truncated: ${preview.length} chars total, ${MAX_PREVIEW_CHARS} chars shown. Full result ID: ${responseId ?? "unavailable"}.]`;
 						displayContent = preview.slice(0, MAX_PREVIEW_CHARS);
+					}
+
+					// UX6: trim low-value frontmatter fields from the agent-visible
+					// preview (title + url kept; saved file keeps full frontmatter).
+					// No-op for outline/frugal/summary output (no leading frontmatter).
+					if (itemFormat === "markdown" && !outlineMode) {
+						displayContent = trimPreviewFrontmatter(displayContent);
 					}
 
 					// Apply hard token budget to the display content if requested.
@@ -1690,26 +1898,25 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 						params.overlapTokens ?? DEFAULT_OVERLAP_TOKENS,
 					);
 
-					const text = [
+					// UX5: the standalone `Response ID:` line is de-emphasized (agents
+					// retrieve by URL via aio-webcontent). The ID stays in `details`
+					// and in the non-markdown format label above.
+					const text = composeFetchText({
 						formatLabel,
-						`\nTitle: ${r.title}`,
-						`URL: ${r.url}`,
-						`Format: ${itemFormat}`,
-						`Response ID: ${responseId}`,
-						chunkFmt.header ? `\n${chunkFmt.header}` : "",
-						"\n---\n",
+						title: r.title,
+						url: r.url,
+						format: itemFormat,
+						responseId,
+						showResponseId: false,
+						chunkHeader: chunkFmt.header || undefined,
 						displayContent,
-						chunkFmt.body
-							? [
-									"\n\n---\n",
-									`## Chunks (${chunks!.length})\n`,
-									chunkFmt.body,
-								].join("\n")
-							: "",
-						chunkingErrors.length > 0
-							? `\n\n[WARN] Chunking failed: ${chunkingErrors.join("; ")}`
-							: "",
-					].join("\n");
+						chunkBody: chunkFmt.body || undefined,
+						chunkCount: chunks?.length,
+						warning:
+							chunkingErrors.length > 0
+								? `\n\n[WARN] Chunking failed: ${chunkingErrors.join("; ")}`
+								: undefined,
+					});
 
 					return {
 						content: [{ type: "text", text: text + localKnowledgeNote }],
@@ -1734,6 +1941,11 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 							// full in-memory body when the result is marked truncated.
 							content: displayContent,
 							format: itemFormat,
+							// UX1/UX4: outline mode flag + relevance signal for the TUI
+							// and for agents deciding whether to read the body.
+							outlineMode: outlineMode ? true : undefined,
+							outline: (r as any).outline,
+							wordCount: (r as any).wordCount,
 							chunks,
 							items: details.items,
 						},

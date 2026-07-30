@@ -12,6 +12,7 @@ import {
 	buildResultBuckets,
 	engineStatusNotes,
 	formatEngineLatency,
+	renderSearchResults,
 	type EngineStatusMap,
 } from "../search.ts";
 import { loadGoggles, type GogglesInput } from "../goggles.ts";
@@ -34,6 +35,7 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 			"Use aio-websearch when the user asks a question that requires current or external information not in your training data.",
 			"After getting search results, use aio-webfetch or aio-webpull to retrieve the full content of the most relevant result.",
 			"Runs DDG/Brave/Yahoo/Bing + Google in parallel. Google requires headless Chrome (auto-launched). Set google: false to skip.",
+			"Set compact: true for URL scouting — one line per result (title + URL + sourceType, no snippet) to minimize token waste.",
 		],
 		parameters: Type.Object({
 			query: Type.String({
@@ -51,6 +53,13 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 					description:
 						"Also search Google via Chrome CDP (headless by default; set GREEDY_SEARCH_VISIBLE=1 for visible mode). Default: true.",
 					default: true,
+				}),
+			),
+			compact: Type.Optional(
+				Type.Boolean({
+					description:
+						"Opt-in compact output for URL scouting: render ONE line per result with just title + URL + sourceType (official-docs/repo/academic/maintainer-blog/website/community/news/social) and NO snippet. Keeps the engine-count header and any non-ok engine notes. Default: false (full snippets).",
+					default: false,
 				}),
 			),
 			prefetch: Type.Optional(
@@ -75,6 +84,7 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 			setSearchContext(query);
 			const max = params.max ?? 15;
 			const useGoogle = params.google ?? true;
+			const compact = params.compact === true;
 			const startedAt = Date.now();
 			const goggles = await loadGoggles(params.goggles as GogglesInput);
 
@@ -298,14 +308,7 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 			const text = [
 				`Search results for "${query}" (${engineLabel.join(" + ")})${gogglesNote}`,
 				"",
-				...limited.map((r, i) => {
-					const domainTag = r.domain ? ` *(${r.domain})*` : "";
-					const srcTag =
-						r.sources && r.sources.length > 1
-							? ` — ${r.sources.join("+")}`
-							: "";
-					return `${i + 1}. **${r.title}**${domainTag}${srcTag}\n   ${r.url}\n   ${r.snippet}`;
-				}),
+				renderSearchResults(limited, { compact }),
 				prefetchNote,
 				googleNote,
 				engineNotes,
@@ -323,6 +326,7 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 					durationMs: Date.now() - startedAt,
 					prefetchCount: prefetchUrls.length,
 					goggles: goggles?.name,
+					compact,
 				},
 			};
 		},

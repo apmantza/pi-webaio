@@ -870,6 +870,49 @@ export function engineStatusNotes(engineStatus: EngineStatusMap): string[] {
 	return notes;
 }
 
+// ─── Result rendering (UX3 compact mode) ───────────────────────────
+// The per-result rendering used to live inline in the websearch tool,
+// which made it untestable offline. This pure helper renders just the
+// numbered result list so compact vs default output can be asserted
+// without touching the network or the TUI.
+
+/**
+ * Render the numbered result list portion of a search response (UX3).
+ *
+ * Default (`compact` false/omitted) preserves the historical three-line
+ * format — bold title + domain/source tags, then URL, then snippet — so
+ * existing consumers see byte-for-byte identical output.
+ *
+ * Compact mode renders ONE line per result with just title + URL +
+ * sourceType and no snippet body, for agents that are only scouting URLs
+ * to fetch. The source type falls back to a fresh classification when a
+ * result did not carry one (e.g. a Google-sourced result).
+ */
+export function renderSearchResults(
+	results: SearchResult[],
+	options: { compact?: boolean } = {},
+): string {
+	const compact = options.compact === true;
+	return results
+		.map((r, i) => {
+			if (compact) {
+				const sourceType =
+					r.sourceType ??
+					classifySourceType(
+						r.domain || extractDomain(r.url) || "",
+						r.title,
+						r.url,
+					);
+				return `${i + 1}. **${r.title}** — ${r.url} [${sourceType}]`;
+			}
+			const domainTag = r.domain ? ` *(${r.domain})*` : "";
+			const srcTag =
+				r.sources && r.sources.length > 1 ? ` — ${r.sources.join("+")}` : "";
+			return `${i + 1}. **${r.title}**${domainTag}${srcTag}\n   ${r.url}\n   ${r.snippet}`;
+		})
+		.join("\n");
+}
+
 // ─── Search web (main entry point) ─────────────────────────────────
 
 export async function searchWeb(
