@@ -153,7 +153,10 @@ test("queryIndex: respects the topK cap", async () => {
 		await buildIndex(dir);
 		const result = await queryIndex(dir, "programming software development", 3);
 		assert.ok(result.ok);
-		assert.ok(result.hits.length <= 3, `expected <=3 hits, got ${result.hits.length}`);
+		assert.ok(
+			result.hits.length <= 3,
+			`expected <=3 hits, got ${result.hits.length}`,
+		);
 	} finally {
 		await rm(dir, { recursive: true, force: true });
 	}
@@ -256,14 +259,24 @@ test("aio-webfetch: localCheck=true surfaces details.localKnowledge + note", asy
 		const tool = captureWebfetchTool();
 		const result = await tool.execute(
 			"test-id",
-			{ url: fastFailUrl(host), query: "widgets api endpoints", localCheck: true },
+			{
+				url: fastFailUrl(host),
+				query: "widgets api endpoints",
+				localCheck: true,
+			},
 			undefined,
 			undefined,
 			{},
 		);
-		assert.ok(result.details.localKnowledge, "details.localKnowledge should be set");
+		assert.ok(
+			result.details.localKnowledge,
+			"details.localKnowledge should be set",
+		);
 		assert.equal(result.details.localKnowledge.checked, true);
-		assert.ok(result.details.localKnowledge.hits.length > 0, "should list top hit(s)");
+		assert.ok(
+			result.details.localKnowledge.hits.length > 0,
+			"should list top hit(s)",
+		);
 		assert.equal(
 			result.details.localKnowledge.hits[0].url,
 			`https://${host}/api`,

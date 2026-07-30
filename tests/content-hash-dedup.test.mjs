@@ -207,7 +207,11 @@ test("webcontent diff-mode: section-level diff of current vs previous", async ()
 	const url = "https://example.com/f6/wc-diff-change";
 	drop(url);
 	storeContent(url, "T", "# Intro\n\nold intro\n\n# Kept\n\nsame");
-	storeContent(url, "T", "# Intro\n\nnew intro\n\n# Kept\n\nsame\n\n# Added\n\nbrand new");
+	storeContent(
+		url,
+		"T",
+		"# Intro\n\nnew intro\n\n# Kept\n\nsame\n\n# Added\n\nbrand new",
+	);
 	const tool = getWebcontentTool();
 	const res = await tool.execute("t4", { url, diff: true });
 	assert.equal(res.details.found, true);

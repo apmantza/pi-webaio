@@ -129,18 +129,18 @@ export async function buildIndex(outDir: string): Promise<void> {
 		chunks,
 	};
 
-	await writeFile(
-		join(outDir, INDEX_FILENAME),
-		JSON.stringify(index),
-		"utf8",
-	);
+	await writeFile(join(outDir, INDEX_FILENAME), JSON.stringify(index), "utf8");
 }
 
 // ─── Index loading ─────────────────────────────────────────────────────
 
 export type LoadIndexResult =
 	| { ok: true; index: WebpullIndex }
-	| { ok: false; reason: "missing" | "version_mismatch" | "corrupt"; message: string };
+	| {
+			ok: false;
+			reason: "missing" | "version_mismatch" | "corrupt";
+			message: string;
+	  };
 
 /**
  * Load and validate the index from `outDir`.
@@ -169,11 +169,7 @@ export async function loadIndex(outDir: string): Promise<LoadIndexResult> {
 		};
 	}
 
-	if (
-		typeof parsed !== "object" ||
-		parsed === null ||
-		!("version" in parsed)
-	) {
+	if (typeof parsed !== "object" || parsed === null || !("version" in parsed)) {
 		return {
 			ok: false,
 			reason: "corrupt",
@@ -209,7 +205,11 @@ export interface CorpusHit {
 
 export type QueryIndexResult =
 	| { ok: true; hits: CorpusHit[]; chunkCount: number; builtAt: string }
-	| { ok: false; reason: "missing" | "version_mismatch" | "corrupt"; message: string };
+	| {
+			ok: false;
+			reason: "missing" | "version_mismatch" | "corrupt";
+			message: string;
+	  };
 
 /**
  * Load the corpus index at `outDir` and return the top-`topK` BM25-ranked

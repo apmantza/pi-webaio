@@ -69,10 +69,9 @@ class BoundedMap<K, V> extends Map<K, V> {
 	}
 }
 
-export const summaryCache: Map<string, string> = new BoundedMap<
-	string,
-	string
->(MAX_SUMMARY_CACHE_ENTRIES); // url -> AI summary, session-scoped
+export const summaryCache: Map<string, string> = new BoundedMap<string, string>(
+	MAX_SUMMARY_CACHE_ENTRIES,
+); // url -> AI summary, session-scoped
 
 // ─── Cache key normalization ───────────────────────────────────────
 

@@ -25,10 +25,9 @@ const {
 	extractDeepWiki,
 } = await import("../src/verticals/deepwiki.ts");
 
-const {
-	findVerticalExtractor,
-	runVerticalExtractor,
-} = await import("../src/verticals/registry.ts");
+const { findVerticalExtractor, runVerticalExtractor } = await import(
+	"../src/verticals/registry.ts"
+);
 
 // ─── Context7: URL matching ────────────────────────────────────────
 
@@ -55,7 +54,10 @@ test("Context7: matchesContext7 matches library pages", () => {
 
 test("Context7: parseContext7Url derives library path + query", () => {
 	const a = parseContext7Url("https://context7.com/reactjs/react.dev");
-	assert.deepEqual(a, { libraryPath: "/reactjs/react.dev", query: "react.dev" });
+	assert.deepEqual(a, {
+		libraryPath: "/reactjs/react.dev",
+		query: "react.dev",
+	});
 
 	const b = parseContext7Url("https://context7.com/library/react");
 	assert.deepEqual(b, { libraryPath: "/library/react", query: "react" });
@@ -146,9 +148,7 @@ test("Context7: two-step flow resolves ID then fetches docs", async () => {
 		docsBody: "React is a library for building UIs.",
 	});
 	try {
-		const result = await extractContext7(
-			"https://context7.com/library/react",
-		);
+		const result = await extractContext7("https://context7.com/library/react");
 		assert.strictEqual(result?.ok, true);
 		assert.strictEqual(result?.title, "reactjs/react.dev");
 		assert.ok(result.content.includes("- **Library:** React"));
@@ -221,9 +221,7 @@ test("Context7: sends Bearer header only when CONTEXT7_API_KEY is set", async ()
 test("Context7: 404 on docs reports not-found error", async () => {
 	const stub = stubContext7Fetch({ docsStatus: 404, docsBody: "" });
 	try {
-		const result = await extractContext7(
-			"https://context7.com/nope/nothing",
-		);
+		const result = await extractContext7("https://context7.com/nope/nothing");
 		assert.strictEqual(result?.ok, false);
 		assert.strictEqual(result?.content, "");
 		assert.ok(/not found|no context7/i.test(result?.error ?? ""));
@@ -235,7 +233,10 @@ test("Context7: 404 on docs reports not-found error", async () => {
 // ─── DeepWiki: URL matching ────────────────────────────────────────
 
 test("DeepWiki: matchesDeepWiki matches repo URLs", () => {
-	assert.strictEqual(matchesDeepWiki("https://deepwiki.com/facebook/react"), true);
+	assert.strictEqual(
+		matchesDeepWiki("https://deepwiki.com/facebook/react"),
+		true,
+	);
 	assert.strictEqual(
 		matchesDeepWiki("https://www.deepwiki.com/vercel/next.js"),
 		true,
@@ -335,7 +336,10 @@ test("DeepWiki: parseAskQuestionResult falls back to plain markdown", () => {
 test("DeepWiki: parseAskQuestionResult returns null on error/empty", () => {
 	assert.strictEqual(parseAskQuestionResult(null), null);
 	assert.strictEqual(parseAskQuestionResult({ error: { message: "x" } }), null);
-	assert.strictEqual(parseAskQuestionResult({ result: { isError: true } }), null);
+	assert.strictEqual(
+		parseAskQuestionResult({ result: { isError: true } }),
+		null,
+	);
 	assert.strictEqual(parseAskQuestionResult({ result: {} }), null);
 });
 
@@ -392,7 +396,9 @@ function stubDeepWikiFetch(opts = {}) {
 				JSON.stringify({
 					jsonrpc: "2.0",
 					id: body.id,
-					result: { content: [{ type: "text", text: JSON.stringify(payload) }] },
+					result: {
+						content: [{ type: "text", text: JSON.stringify(payload) }],
+					},
 				}),
 				{ status: 200, headers: { "content-type": "application/json" } },
 			);

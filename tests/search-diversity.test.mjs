@@ -76,7 +76,10 @@ test("diversity cap: >2 same-domain results are demoted out of the top slice", (
 	assert.strictEqual(scored[5].result.domain, spam);
 	assert.strictEqual(scored[6].result.domain, spam);
 	// The three distinct-domain results fill the middle slots.
-	const middle = scored.slice(2, 5).map((s) => s.result.domain).sort();
+	const middle = scored
+		.slice(2, 5)
+		.map((s) => s.result.domain)
+		.sort();
 	assert.deepStrictEqual(middle, ["good-a.com", "good-b.com", "good-c.com"]);
 });
 
@@ -273,9 +276,21 @@ test("applyDomainDiversityCap: cap <= 0 disables the cap", () => {
 
 test("applyDomainDiversityCap: falls back to URL hostname when domain missing", () => {
 	const input = [
-		{ result: { title: "a", url: "https://x.com/1", snippet: "" }, score: 3, sources: [] },
-		{ result: { title: "b", url: "https://x.com/2", snippet: "" }, score: 2, sources: [] },
-		{ result: { title: "c", url: "https://x.com/3", snippet: "" }, score: 1, sources: [] },
+		{
+			result: { title: "a", url: "https://x.com/1", snippet: "" },
+			score: 3,
+			sources: [],
+		},
+		{
+			result: { title: "b", url: "https://x.com/2", snippet: "" },
+			score: 2,
+			sources: [],
+		},
+		{
+			result: { title: "c", url: "https://x.com/3", snippet: "" },
+			score: 1,
+			sources: [],
+		},
 	];
 	const out = applyDomainDiversityCap(input, 2);
 	// All three share hostname x.com → third deferred.

@@ -73,7 +73,9 @@ export function parseDeepWikiUrl(
  * (text/event-stream with one or more `data: {...}` lines). Returns the
  * parsed JSON-RPC message, or null if nothing parseable was found.
  */
-export function parseDeepWikiRpcBody(text: string): Record<string, unknown> | null {
+export function parseDeepWikiRpcBody(
+	text: string,
+): Record<string, unknown> | null {
 	const trimmed = text.trim();
 	if (!trimmed) return null;
 
@@ -120,8 +122,10 @@ function normalizeCitation(raw: unknown): DeepWikiCitation | null {
 		"";
 	if (!filePath) return null;
 	const cit: DeepWikiCitation = { filePath };
-	const lineStart = asNumber(c.line_start) ?? asNumber(c.lineStart) ?? asNumber(c.start);
-	const lineEnd = asNumber(c.line_end) ?? asNumber(c.lineEnd) ?? asNumber(c.end);
+	const lineStart =
+		asNumber(c.line_start) ?? asNumber(c.lineStart) ?? asNumber(c.start);
+	const lineEnd =
+		asNumber(c.line_end) ?? asNumber(c.lineEnd) ?? asNumber(c.end);
 	if (lineStart !== undefined) cit.lineStart = lineStart;
 	if (lineEnd !== undefined) cit.lineEnd = lineEnd;
 	if (typeof c.snippet === "string" && c.snippet) cit.snippet = c.snippet;
@@ -235,7 +239,11 @@ async function rpcCall(
 	});
 	const nextSession = res.headers.get("mcp-session-id") || sessionId;
 	const text = await res.text();
-	return { status: res.status, json: parseDeepWikiRpcBody(text), sessionId: nextSession };
+	return {
+		status: res.status,
+		json: parseDeepWikiRpcBody(text),
+		sessionId: nextSession,
+	};
 }
 
 /**

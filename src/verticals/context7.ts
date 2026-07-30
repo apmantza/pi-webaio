@@ -178,9 +178,7 @@ export async function extractContext7(
 			};
 			const first = Array.isArray(data.results) ? data.results[0] : null;
 			if (first && typeof first.id === "string" && first.id) {
-				libraryId = first.id.startsWith("/")
-					? first.id
-					: `/${first.id}`;
+				libraryId = first.id.startsWith("/") ? first.id : `/${first.id}`;
 				if (typeof first.name === "string") meta.name = first.name;
 				if (typeof first.version === "string") meta.version = first.version;
 				meta.trustScore = asNumber(first.trustScore);
@@ -223,7 +221,11 @@ export async function extractContext7(
 	}
 
 	const body = await res.text();
-	const docs = parseContext7Body(body, res.headers.get("content-type"), libraryId);
+	const docs = parseContext7Body(
+		body,
+		res.headers.get("content-type"),
+		libraryId,
+	);
 
 	// ── Build markdown ─────────────────────────────────────────────────
 	let md = `# ${docs.title}\n\n`;

@@ -1719,7 +1719,9 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 						: [],
 				];
 				return {
-					content: [{ type: "text", text: lines.join("\n") + localKnowledgeNote }],
+					content: [
+						{ type: "text", text: lines.join("\n") + localKnowledgeNote },
+					],
 					details: {
 						results,
 						...(localKnowledge ? { localKnowledge } : {}),
