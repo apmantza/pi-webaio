@@ -374,6 +374,14 @@ export async function fetchWithPlaywright(
 	 * Playwright.
 	 */
 	cookieCacheKeyForOrigin?: string | null,
+	/**
+	 * Optional out-param populated with the browser's HTTP response status
+	 * (`page.goto()` → `response.status()`, or 0 when there was no response).
+	 * Lets the caller distinguish a soft-block 404 that a real browser receives
+	 * as 200 (see smartFetch's Rung 1c) from a genuine 404 — which also 404s in
+	 * the browser. Existing callers leave this unset.
+	 */
+	statusOut?: { status: number },
 ): Promise<string | null> {
 	// SSRF guard: block requests to private IPs / loopback / cloud
 	// metadata endpoints. fetchWithRetry does this; fetchWithPlaywright
@@ -409,10 +417,11 @@ export async function fetchWithPlaywright(
 			pooled = await pool.acquirePage();
 			installSsrfRedirectGuard(pooled.page);
 			await applyStealth(pooled.page);
-			await pooled.page.goto(url, {
+			const nav = await pooled.page.goto(url, {
 				waitUntil: "domcontentloaded",
 				timeout: 15000,
 			});
+			if (statusOut) statusOut.status = nav?.status?.() ?? 0;
 			const html = await waitForBotProtectionToClear(pooled.page);
 			await injectCookiesFromPlaywright(
 				pooled.page,
@@ -444,10 +453,11 @@ export async function fetchWithPlaywright(
 				const page = await browser.newPage();
 				installSsrfRedirectGuard(page);
 				await applyStealth(page);
-				await page.goto(url, {
+				const nav = await page.goto(url, {
 					waitUntil: "domcontentloaded",
 					timeout: 15000,
 				});
+				if (statusOut) statusOut.status = nav?.status?.() ?? 0;
 				const html = await waitForBotProtectionToClear(page);
 				await injectCookiesFromPlaywright(
 					page,
@@ -728,6 +738,26 @@ export async function fetchWithRetry(
 
 // ─── Smart fetch (bot protection fallback, secret scan) ────────────
 
+/**
+ * Decide whether a browser render resolved a soft-block 404. The wreq rung
+ * returned `wreqStatus` (a 404 from a TLS-fingerprinted request); the browser
+ * rung then returned `browserStatus` with `hasHtml`. Only a 2xx browser render
+ * counts as a resolution — a genuine 404 also 404s in the browser, so it must
+ * NOT be treated as success (the caller falls through and fails fast).
+ */
+export function isSoftBlock404Resolved(
+	wreqStatus: number,
+	browserStatus: number,
+	hasHtml: boolean,
+): boolean {
+	return (
+		wreqStatus === 404 &&
+		hasHtml &&
+		browserStatus >= 200 &&
+		browserStatus < 300
+	);
+}
+
 export type SmartFetchResult = {
 	text: string;
 	url: string;
@@ -949,6 +979,52 @@ export async function smartFetch(
 			};
 		}
 		return null;
+	}
+
+	// ── Rung 1c: soft-block 404 → browser escalation ─────────────────
+	// Some edges (Vercel / Next.js — e.g. react.dev) return a bare HTTP 404 to
+	// TLS-fingerprinted requests that a real browser receives as 200.
+	// fetchWithRetry treats 404 as non-retryable and hands the response back, so
+	// the `!res` browser rung above never fires and the 404 would surface as a
+	// terminal http_error. Escalate once to the browser and accept only a 2xx
+	// render: a genuine 404 also 404s in the browser, so isSoftBlock404Resolved()
+	// stays false and we fall through to return the original 404 (fail-fast
+	// preserved). Opt out with PI_WEBAIO_404_BROWSER_ESCALATION=0.
+	if (
+		res.status === 404 &&
+		process.env.PI_WEBAIO_404_BROWSER_ESCALATION !== "0"
+	) {
+		recordDomainFailure(domain, "plain");
+		const statusOut = { status: 0 };
+		const pwHtml = await fetchWithPlaywright(
+			url,
+			options.browserPool,
+			options.wreqSession,
+			cookieKey,
+			statusOut,
+		);
+		const resolved = isSoftBlock404Resolved(
+			res.status,
+			statusOut.status,
+			!!pwHtml,
+		);
+		if (resolved && pwHtml) {
+			recordDomainSuccess(domain, "browser");
+			return {
+				text: pwHtml,
+				url,
+				status: statusOut.status,
+				headers: { get: () => "text/html" } as {
+					get(name: string): string | null;
+					has?(name: string): boolean;
+				},
+				downloadedBytes: pwHtml.length,
+				contentLength: pwHtml.length,
+				elapsedMs: Date.now() - startedAt,
+			};
+		}
+		// Browser also 404'd (or Playwright is unavailable) — genuine 404;
+		// fall through to read and return the original wreq response below.
 	}
 
 	let text: string;
