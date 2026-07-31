@@ -4,7 +4,9 @@
 
 pi-webaio is an **all-in-one web tools extension** for [pi](https://pi.dev) (the coding agent) that provides search, fetch, crawl, extraction, discovery, storage, compilation, RAG chunking, query-focused answer mode, offline corpus search, single-round research bundles, phase-aware error handling, TUI rendering, and (v0.4.1+) opt-in paywall bypass capabilities via 8 tools: `aio-websearch`, `aio-webfetch`, `aio-webcontent`, `aio-webresult`, `aio-webmap`, `aio-webpull`, `aio-webquery`, and `aio-webresearch`. It's published as `npm:pi-webaio` and installable via `pi install npm:pi-webaio`. The same eight tools are also exposed to non-pi MCP clients (Claude Code, Claude Desktop, etc.) through a stdio MCP server (`bin/pi-webaio-mcp.mjs`, `src/mcp-server.ts`).
 
-**Current version: 0.7.3** — SSRF DNS-pinning + fail-closed guard, secret redaction in output/errors, relatedness-gated search-context summaries, `blocked_ssrf` FetchError code (26 codes), TypeScript 7 build fix, pi 0.83 floor.
+**Current version: 0.8.0** — Context7 + DeepWiki verticals (21 built-in extractors), multi-source **cited** answer mode (`urls`+`query`), outline mode + frugal default preview, opt-in AI summarization, compact search, per-engine search status/latency + ~4.5s deadline, shared warm browser pool, lazy Jina extraction, CSS-cruft stripping (incl. `@media`) + heading-detection fallback, source trust-tier grading, content-hash dedup + `aio-webcontent` diff, local-knowledge pre-check, plus the SSRF/secret-redaction hardening from 0.7.3. 1207 tests / 51 suites.
+
+> **Internal-docs policy:** research / audit / inspiration notes — `docs/inspirations*.md`, `docs/pagemap-inspiration.md`, `docs/observability-gaps.md`, `docs/perf-improvements.md`, and root-level `inspiration7.md` — are **local-only working artifacts**. They are gitignored and must **never** be committed or shipped. Only user-facing docs (`README.md`, `docs/{features,tools,usage,architecture,custom-verticals,mcp}.md`) plus `ROADMAP.md` / `CHANGELOG.md` / `AGENTS.md` belong in the repo. When auditing or surveying, write findings to these local files, not to tracked docs.
 
 ## Architecture
 
