@@ -13,3 +13,9 @@ grep-test.json
 nul
 autoresearch.ideas.md
 autoresearch.jsonl
+# Internal research/audit docs — local-only, not shipped
+docs/pagemap-inspiration.md
+docs/inspirations3.md
+docs/inspirations8.md
+docs/observability-gaps.md
+docs/perf-improvements.md
