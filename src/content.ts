@@ -238,9 +238,35 @@ function isCssRuleLine(trimmed: string): boolean {
 	return true;
 }
 
+/** CSS at-rules that can wrap nested rule blocks (`@media (…) { .x { … } }`). */
+const CSS_AT_RULE_RE =
+	/^@(media|supports|keyframes|import|font-face|page|charset|namespace|layer|container|scope|property|document)\b/i;
+
+/**
+ * Classify a (trimmed, outside-any-fence) line for CSS at-rule cruft that the
+ * simple `isCssRuleLine` regex can't catch because at-rules nest braces
+ * (`@media (…) { .sel { prop:val } }`). Returns:
+ *  - `0`  — not an at-rule line;
+ *  - `-1` — a complete single-line at-rule (balanced braces) → strip this line;
+ *  - `>0` — opens a multi-line at-rule with this many unclosed `{` → skip lines
+ *           until the braces balance.
+ * Requires a CSS signal inside so prose that merely starts with an `@media`-like
+ * token is never touched.
+ */
+function cssAtRuleState(trimmed: string): number {
+	if (!CSS_AT_RULE_RE.test(trimmed) || !trimmed.includes("{")) return 0;
+	if (!/[.#:[>@~+]/.test(trimmed) && !/[a-z-]+\s*:/i.test(trimmed)) return 0;
+	const opens = (trimmed.match(/\{/g) || []).length;
+	const closes = (trimmed.match(/\}/g) || []).length;
+	if (opens === 0) return 0;
+	const delta = opens - closes;
+	return delta === 0 ? -1 : delta;
+}
+
 /**
  * Remove CSS/style cruft that leaked into extracted markdown: `<style>…</style>`
- * blocks and standalone single-line CSS rules. Fence-aware — anything inside a
+ * blocks, standalone single-line CSS rules, and CSS at-rules (`@media` /
+ * `@supports` / …, single- or multi-line). Fence-aware — anything inside a
  * ``` / ~~~ code fence (including ```css) is preserved verbatim. Idempotent.
  */
 export function stripCssCruft(markdown: string): string {
@@ -249,6 +275,7 @@ export function stripCssCruft(markdown: string): string {
 	let inFence = false;
 	let fenceChar = "";
 	let inStyle = false;
+	let atRuleDepth = 0;
 
 	for (const line of lines) {
 		// Fence tracking takes priority — code blocks are sacred.
@@ -278,6 +305,20 @@ export function stripCssCruft(markdown: string): string {
 		if (/<style\b[^>]*>/i.test(line)) {
 			// A style block that opens AND closes on one line.
 			if (!/<\/style\s*>/i.test(line)) inStyle = true;
+			continue;
+		}
+
+		// CSS at-rule cruft (`@media` / `@supports` / …), possibly multi-line.
+		if (atRuleDepth > 0) {
+			const opens = (line.match(/\{/g) || []).length;
+			const closes = (line.match(/\}/g) || []).length;
+			atRuleDepth = Math.max(0, atRuleDepth + opens - closes);
+			continue;
+		}
+		const atState = cssAtRuleState(line.trim());
+		if (atState === -1) continue; // complete single-line at-rule
+		if (atState > 0) {
+			atRuleDepth = atState; // multi-line at-rule begins
 			continue;
 		}
 

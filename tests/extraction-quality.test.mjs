@@ -68,7 +68,8 @@ test("selectFrugalSection: earlier position breaks a word-count tie", () => {
 });
 
 test("selectFrugalSection: CSS-heavy section is skipped even when it is the largest", () => {
-	const css = ".mw-parser-output .hlist dl,.mw-parser-output .hlist ol{margin:0;padding:0}";
+	const css =
+		".mw-parser-output .hlist dl,.mw-parser-output .hlist ol{margin:0;padding:0}";
 	const md = [
 		"## Overview",
 		"A genuinely useful overview paragraph with real prose in it.",
@@ -126,7 +127,9 @@ test("isMostlyNonProse: CSS/link bodies flagged, prose not", () => {
 	assert.ok(
 		isMostlyNonProse("https://a.com https://b.com https://c.com www.d.com"),
 	);
-	assert.ok(!isMostlyNonProse("This is a normal prose paragraph about a topic."));
+	assert.ok(
+		!isMostlyNonProse("This is a normal prose paragraph about a topic."),
+	);
 	assert.ok(!isMostlyNonProse("")); // empty → not non-prose
 });
 
@@ -148,6 +151,45 @@ test("stripCssCruft: removes .mw-parser-output rule cruft + <style> blocks", () 
 	assert.ok(!out.includes(".mw-parser-output"));
 	assert.ok(!out.includes("<style>"));
 	assert.ok(!out.includes("infobox"));
+});
+
+test("stripCssCruft: removes @media/@supports at-rules with nested braces", () => {
+	const input = [
+		"# Page",
+		"",
+		"@media(min-width:640px){.mw-parser-output .infobox{margin-left:1em;float:right}}",
+		"Real prose here.",
+		"@media screen{html.skin-theme-clientpref-night .mw-parser-output .infobox{background:#1f1f23!important}}",
+		"@supports (display:grid){.x{display:grid}}",
+		"More prose.",
+	].join("\n");
+	const out = stripCssCruft(input);
+	assert.ok(out.includes("# Page"));
+	assert.ok(out.includes("Real prose here."));
+	assert.ok(out.includes("More prose."));
+	assert.ok(!out.includes("@media"));
+	assert.ok(!out.includes("@supports"));
+	assert.ok(!out.includes("mw-parser-output"));
+});
+
+test("stripCssCruft: removes a MULTI-LINE @media at-rule via brace tracking", () => {
+	const input = [
+		"Before.",
+		"@media (min-width: 640px) {",
+		"  .mw-parser-output .infobox { margin-left: 1em; }",
+		"}",
+		"After.",
+	].join("\n");
+	const out = stripCssCruft(input);
+	assert.ok(out.includes("Before."));
+	assert.ok(out.includes("After."));
+	assert.ok(!out.includes("@media"));
+	assert.ok(!out.includes("mw-parser-output"));
+});
+
+test("stripCssCruft: leaves prose merely mentioning '@media' untouched", () => {
+	const input = "Use @media queries in CSS for responsive design.";
+	assert.strictEqual(stripCssCruft(input), input);
 });
 
 test("stripCssCruft: removes a multi-line <style> block", () => {
@@ -175,7 +217,10 @@ test("stripCssCruft: PRESERVES a fenced ```css code block verbatim", () => {
 	].join("\n");
 	const input = ["Some prose.", "", cssBlock, "", "More prose."].join("\n");
 	const out = stripCssCruft(input);
-	assert.ok(out.includes(cssBlock), "fenced css block must be byte-for-byte kept");
+	assert.ok(
+		out.includes(cssBlock),
+		"fenced css block must be byte-for-byte kept",
+	);
 	assert.ok(out.includes("Some prose."));
 	assert.ok(out.includes("More prose."));
 });
@@ -326,7 +371,9 @@ test("live: extractOutline finds sections on the real expressjs routing page", a
 		return;
 	}
 	// Mirror the pipeline's local extraction choice (Readability first).
-	const { extractReadability, preCleanHtml } = await import("../src/content.ts");
+	const { extractReadability, preCleanHtml } = await import(
+		"../src/content.ts"
+	);
 	const r = extractReadability(preCleanHtml(html), "https://expressjs.com/");
 	if (!r) {
 		t.skip("Readability produced no article for the live page");

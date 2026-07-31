@@ -208,8 +208,7 @@ function isFallbackHeadingLine(line: string, nextNonEmpty: string): boolean {
 	// code-identifier signal (`.`, `()`, `_`, backtick) for headings such as
 	// "app.route()" / "express.Router". This is what keeps an all-lowercase
 	// prose fragment ("just some plain prose") from matching.
-	const looksLikeTitle =
-		/^[A-Z]/.test(t) || /[`()._]/.test(t);
+	const looksLikeTitle = /^[A-Z]/.test(t) || /[`()._]/.test(t);
 	if (!looksLikeTitle) return false;
 	// Must be followed by real content: a prose line (long, or a terminated
 	// sentence). A short line followed by nothing/another short line is not
@@ -263,7 +262,10 @@ function detectFallbackHeadings(clean: string): OutlineHeading[] {
 	for (let k = 0; k < headingIdx.length; k++) {
 		const start = headingIdx[k]!;
 		const end = k + 1 < headingIdx.length ? headingIdx[k + 1]! : lines.length;
-		const body = lines.slice(start + 1, end).join("\n").trim();
+		const body = lines
+			.slice(start + 1, end)
+			.join("\n")
+			.trim();
 		headings.push({
 			level: 2,
 			text: lines[start]!.trim(),
@@ -320,7 +322,11 @@ const LOW_VALUE_HEADINGS = new Set([
 
 /** Normalize a heading for low-value comparison (trim, lower, strip trailing punct). */
 function normalizeHeading(text: string): string {
-	return text.trim().toLowerCase().replace(/[\s.:]+$/, "").replace(/\s+/g, " ");
+	return text
+		.trim()
+		.toLowerCase()
+		.replace(/[\s.:]+$/, "")
+		.replace(/\s+/g, " ");
 }
 
 /** Is this section's heading a known low-value tail/boilerplate section? */
