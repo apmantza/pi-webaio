@@ -12,16 +12,17 @@ extract, map, cache, chunk, and render web content for AI agents.
 pi-webaio registers eight pi tools:
 
 - `aio-websearch` — search DuckDuckGo, Brave, Yahoo, Bing, and Google in parallel
-- `aio-webfetch` — fetch one or many URLs into markdown or structured formats
-- `aio-webcontent` — retrieve cached content by URL
+- `aio-webfetch` — fetch one or many URLs into markdown or structured formats, with an opt-in heading outline, query-focused answer mode, and multi-source cited answers
+- `aio-webcontent` — retrieve cached content by URL (with opt-in section-level diff)
 - `aio-webresult` — retrieve cached results by response ID
 - `aio-webmap` — discover site pages or map GitHub repositories without fetching
 - `aio-webpull` — crawl/pull sites into local markdown files
 - `aio-webquery` — BM25 search over a locally-pulled corpus (offline, no re-fetching)
 - `aio-webresearch` — single-round research bundle: search → rank → fetch → cited evidence bundle on disk
 
-It includes anti-bot TLS fingerprinting, browser fallback, GitHub/YouTube/package
-registry extractors, RAG chunking, TUI progress rendering, phase-aware errors,
+It includes anti-bot TLS fingerprinting, browser fallback, 21 API-first
+extractors (GitHub, YouTube, npm/PyPI and other package registries, Context7,
+DeepWiki, and more), RAG chunking, TUI progress rendering, phase-aware errors,
 and opt-in paywall bypass support.
 
 ## Install

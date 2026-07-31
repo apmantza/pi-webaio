@@ -1,6 +1,7 @@
 # Custom Vertical Extractors
 
-pi-webaio ships ~20 built-in site extractors (PyPI, npm, Hacker News, Reddit, …).
+pi-webaio ships 21 built-in site extractors (PyPI, npm, Hacker News, Reddit,
+Context7, DeepWiki, …).
 You can add your own extractors for company wikis, niche sites, or anything else
 **without forking the package** — just drop `.mjs` files into a config directory.
 
@@ -80,7 +81,7 @@ all built-in extractors. They handle retries, timeouts, and the user's proxy
 settings automatically:
 
 | Helper | Returns |
-|---|---|
+| --- | --- |
 | `fetchJson(url)` | Parsed JSON (`unknown`) or `null` on error / non-2xx |
 | `fetchText(url)` | Raw response body as a string, or `null` on error |
 | `fetchHtml(url)` | Raw HTML body as a string, or `null` on error |
@@ -173,6 +174,7 @@ single warning to stderr like:
 ```
 
 Validation checks:
+
 - `name` — non-empty string
 - `match` — function, must not throw when called with `"https://example.com/"`
 - `extract` — function

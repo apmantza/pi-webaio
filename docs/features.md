@@ -6,13 +6,13 @@ Detailed feature reference for pi-webaio.
 
 ## Overview
 
-**pi-webaio** is a pi extension that gives your agent eyes on the web. It registers six tools that let pi search, fetch, discover, and archive web content — all without API keys or paid services.
+**pi-webaio** is a pi extension that gives your agent eyes on the web. It registers eight tools that let pi search, fetch, discover, and archive web content — all without API keys or paid services.
 
 When you search, pi-webaio queries 5 engines in parallel (DuckDuckGo, Brave, Yahoo, Bing, and Google via headless Chrome). Results that show up across multiple engines rank higher — consensus is a signal of quality. When you fetch a page, it tries 14 different extraction backends in order, stripping cookie banners and anti-bot noise along the way, so you get clean markdown instead of raw HTML soup. Paywalled news sites (NYT, WaPo, FT, WSJ, etc.) can be bypassed on opt-in with a strategy chain that tries archive.org, bot-UA impersonation, and Playwright with paywall-script blocking.
 
-Long pages are automatically **AI-summarized** via Google AI Mode (headless Chrome) — you get a concise overview instantly, while the full content is always saved to disk for later inspection. For sites with API-first extractors (GitHub, YouTube, npm, PyPI, crates.io, RubyGems, Packagist, pub.dev, Go, NuGet, Reddit, Hacker News, arXiv, Stack Exchange, Wikipedia, Open Library, DEV.to, SonarCloud, docs sites), pi-webaio bypasses HTML scraping entirely and pulls structured data directly.
+Long pages are **not** auto-summarized by default — instead you get a frugal, lossless preview (a heading outline plus the single largest content section), and the full content is always saved to disk. Pass `summarize: true` to opt in to an AI summary via Google AI Mode (headless Chrome). For sites with API-first extractors (GitHub, YouTube, npm, PyPI, crates.io, RubyGems, Packagist, pub.dev, Go, NuGet, Reddit, Hacker News, arXiv, Stack Exchange, Wikipedia, Open Library, DEV.to, SonarCloud, docs sites, Context7, DeepWiki), pi-webaio bypasses HTML scraping entirely and pulls structured data directly.
 
-For RAG pipelines, fetches can be returned as **paragraph-bounded chunks with overlap** (CJK-aware token estimation). All 6 tools ship with polished **TUI rendering** (real-time progress, elapsed time, phase/category badges, retry hints) and a **phase-aware error system** (26 failure codes × 10 fetch phases × 7 categories) that includes smart retry-timeout suggestions based on partial download progress.
+For RAG pipelines, fetches can be returned as **paragraph-bounded chunks with overlap** (CJK-aware token estimation). All 8 tools ship with polished **TUI rendering** (real-time progress, elapsed time, phase/category badges, retry hints) and a **phase-aware error system** (26 failure codes × 10 fetch phases × 7 categories) that includes smart retry-timeout suggestions based on partial download progress.
 
 It's built for agents that need to:
 
@@ -25,13 +25,25 @@ It's built for agents that need to:
 
 No API keys. No subscriptions. No brittle scraping scripts. Just `pi install npm:pi-webaio` and go.
 
-## How AI summarization works
+## Reading long pages: outline, frugal preview, and opt-in summary
 
-When you fetch a single URL with `aio-webfetch`, long pages are automatically summarized using Google AI Mode (via headless Chrome CDP). Here's the logic:
+Fetching a long page no longer dumps a blind head-truncation or pays for a lossy AI round-trip by default. `aio-webfetch` now has three reading modes, all of which still save + cache the full content:
+
+- **Outline mode** (`outline: true`) — returns only a compact heading outline (total word count + per-section word counts, ~50 tokens) instead of the body. It's the web equivalent of pi's `module_report`: see a page's shape first, then fetch just the section you want (via `query`) or the whole page (via `aio-webcontent`).
+- **Frugal default preview** — when extracted content exceeds ~6000 chars and no `query` / `outline` / AI summary applies, the returned preview is the heading outline plus the single largest *content* section (low-value tails like References / External links and CSS-heavy sections are skipped). Content between ~1800–6000 chars keeps the existing teaser.
+- **Opt-in AI summary** (`summarize: true`) — runs the Google AI Mode summary (relatedness-gated focused summary, annotated `_[focused on prior search]_` when a recent related search is injected). Off by default.
+
+Every fetch result also carries `wordCount` and a compact heading `outline` in `details`, so you can judge whether a page is worth reading before spending the tokens.
+
+### How AI summarization works (opt-in)
+
+When you fetch a single URL with `aio-webfetch` and pass `summarize: true`, long pages are summarized using Google AI Mode (via headless Chrome CDP). Here's the logic:
 
 1. **Short pages** (under ~1800 chars) — displayed in full, no summarization needed.
 2. **Long pages** — if Google Chrome is available, pi-webaio launches a headless Chrome instance, navigates to the URL, and captures the AI Mode summary.
-3. **Fallback** — if Chrome is unavailable or AI Mode fails, the first ~1800 chars are shown with a note that the full file was saved to disk.
+3. **Fallback** — if Chrome is unavailable or AI Mode fails, the frugal outline + largest-section preview is shown with a note that the full file was saved to disk.
+
+With `summarize` unset, long content falls through to the frugal / outline preview instead of paying the latency + token cost of a summary that usually restates what you already know from the URL. The full content is always saved + cached regardless.
 
 **Summarization is automatically skipped** for content that already comes from a structured pipeline:
 
@@ -88,7 +100,7 @@ SonarCloud URLs (`sonarcloud.io/project/...`) are fetched via the SonarCloud RES
 
 ### API-first extractors (vertical registry)
 
-These 19 sites are handled by [dedicated extractors](../src/verticals/) that use their public APIs:
+These 21 sites are handled by [dedicated extractors](../src/verticals/) that use their public APIs:
 
 | Site               | Extractor                        | API                                              |
 | ------------------ | -------------------------------- | ------------------------------------------------ |
@@ -108,6 +120,8 @@ These 19 sites are handled by [dedicated extractors](../src/verticals/) that use
 | **Go packages**    | `src/verticals/gopackages.ts`    | Go module proxy (proxy.golang.org)               |
 | **NuGet**          | `src/verticals/nuget.ts`         | NuGet Search API v3                              |
 | **GitLab**         | `src/verticals/gitlab.ts`        | GitLab REST API v4 (gitlab.com + self-hosted)    |
+| **Context7**       | `src/verticals/context7.ts`      | Context7 library-docs API (keyless two-step search → fetch; honors optional `CONTEXT7_API_KEY`) |
+| **DeepWiki**       | `src/verticals/deepwiki.ts`      | DeepWiki repo Q&A via MCP JSON-RPC (`deepwiki.com/{owner}/{repo}`, question from `?q=`/`?question=`) |
 | **Docs sites**     | `src/verticals/docs-site.ts`     | Docusaurus, GitBook, MDN, VitePress extraction   |
 
 All vertical extractors tag their output with `> via <name>`, which automatically skips AI summarization.
@@ -142,6 +156,12 @@ The bypass engine also triggers on **HTTP 403/401 from known paywall sites** (NY
 Set `PI_WEBAIO_DEBUG=1` to log every bypass attempt and confidence score — useful when triaging sites that still block.
 
 **Note:** The bypass flag is opt-in. A normal `aio-webfetch(url)` gets the regular auto-escalation pipeline. You must explicitly pass `bypass: true` to trigger the strategy chain — this is intentional, since paywall circumvention is a deliberate user action.
+
+## Multi-source cited answers
+
+`aio-webfetch(urls: […], query: "…")` fetches all the URLs, chunks each page, pools the chunks, and BM25-ranks the pool against the query. It returns the top-k most relevant chunks, each cited with its source URL + title + heading breadcrumb + score — verbatim supporting text explicitly labeled "verify against that source". This is **cited retrieval, not a generated answer**: nothing is paraphrased or invented. Single-URL answer mode (`query` on one URL) is unchanged, and the full content for every source is still cached for `aio-webcontent`.
+
+`url` also accepts an array directly (`aio-webfetch(url: ["…", "…"])`); `urls` still works and takes precedence when both are given.
 
 ## Output formats
 
@@ -193,9 +213,17 @@ The TUI error view shows the phase + category badge and the suggested retry hint
 
 ## How search ranking works
 
-When you search, pi-webaio queries 5 engines in parallel: DuckDuckGo, Brave, Yahoo, Bing, and Google (via headless Chrome). Results are scored by two signals:
+When you search, pi-webaio queries 5 engines in parallel: DuckDuckGo, Brave, Yahoo, Bing, and Google (via headless Chrome). Results are scored by several signals:
 
 - **Engine authority** — Google (5), Bing (3), DDG (2), Brave (2), Yahoo (1)
 - **Cross-engine consensus** — +2 for each additional engine that agrees on the same URL
+- **Source type** — each result is classified (`official-docs` / `repo` / `academic` / `maintainer-blog` / `website` / `community` / `news` / `social`) so official docs and repos outrank SEO blogspam and social results sink
+- **Preferred-domain boost** — a query-keyword → canonical official-domain map surfaces the right vendor docs (e.g. "prisma migrate" → `prisma.io`)
+- **Goggles** (opt-in) — rerank presets (`docs-first`, `research`, `news-balanced`) or custom rules, folded in as a purely additive term
+- **Domain diversity cap** — the top slice keeps at most N results per domain (default 2); excess same-domain results are deferred to the end, so one domain can't dominate the top (nothing is dropped — recall is preserved)
 
 A result returned by all 5 engines outranks a Google-only result. Metadata (title/snippet) comes from the highest-weight engine for each URL.
+
+The result header reports per-engine status and latency (e.g. `DDG:10 (1.2s)`), with a note for any non-ok engine — `_(Brave: cooled down after recent failures)_`, `_(Yahoo: HTTP 429)_`, `_(Bing: timed out after 4.5 s)_` — so a down or rate-limited engine never looks identical to a legitimately-empty one. Each engine runs against a ~4.5 s deadline so a stalled engine can't hold up the merge.
+
+Pass `compact: true` for URL scouting: one line per result (`{n}. **{title}** — {url} [{sourceType}]`), no snippet.

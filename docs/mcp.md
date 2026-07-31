@@ -23,6 +23,13 @@ other MCP-compatible host — **without requiring the pi coding-agent runtime**.
 | `aio-webquery`   | BM25 offline search over a previously pulled corpus |
 | `aio-webresearch`| Single-round research bundle: fan out search, rank/dedupe sources, fetch top-N, write a cited evidence bundle to disk |
 
+The MCP server exposes the **same parameters** the pi extension does, since tool
+definitions are captured from the shared registration functions. That includes
+the newer `aio-webfetch` params (`outline`, `summarize`, `query` answer mode,
+multi-source `urls` + `query` cited answers, `budgetTokens`, `diff`,
+`localCheck`), the `aio-webcontent` `diff` / `budgetTokens` / `query` params,
+and the `aio-websearch` `compact` / `goggles` / `prefetch` params.
+
 ---
 
 ## Claude Code setup
