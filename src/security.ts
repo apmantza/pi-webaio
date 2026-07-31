@@ -116,7 +116,7 @@ export function isPrivateIp(ip: string): boolean {
 	const version = isIP(ip);
 	if (version === 4) return isPrivateIPv4(ip);
 	if (version === 6) return isPrivateIPv6(ip);
-	return true; // unparseable = treat as dangerous
+	return true; // unparsable = treat as dangerous
 }
 
 // ─── Cloud-metadata floor (absolute, un-overridable) ───────────────
@@ -434,7 +434,7 @@ export interface SsrfValidation {
  * private/loopback/link-local ranges (subject to the CIDR allow-list).
  * Also blocks known metadata hostnames and cloud magic hostnames.
  *
- * FAIL-CLOSED: every abnormal condition — unparseable URL, DNS resolution
+ * FAIL-CLOSED: every abnormal condition — unparsable URL, DNS resolution
  * error, an empty answer set, or any unexpected throw — yields
  * `dangerous: true`. There is no path through this function that fails
  * open.
@@ -524,7 +524,7 @@ export async function validateUrlForSsrf(
 
 		return { dangerous: false, pinnedIps };
 	} catch {
-		// Unparseable URL or any unexpected throw — fail closed.
+		// Unparsable URL or any unexpected throw — fail closed.
 		return { dangerous: true, reason: "unparseable", pinnedIps: [] };
 	}
 }
@@ -595,7 +595,7 @@ function effectivePort(u: URL): number | null {
  * dangerous service ports — without a resolver call. Hostnames that would
  * only be caught after DNS resolution are NOT covered here (documented
  * limitation); the initial navigation is still fully validated by
- * {@link validateUrlForSsrf}. Fail-closed on an unparseable URL.
+ * {@link validateUrlForSsrf}. Fail-closed on an unparsable URL.
  */
 export function fastSsrfBlock(url: string): { dangerous: boolean; reason?: string } {
 	let u: URL;

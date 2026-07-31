@@ -66,7 +66,7 @@ export const PULL_CONCURRENCY_CEILING = 32;
 export const PULL_WORKERS_PER_HOST = 10;
 
 /**
- * Count the distinct hostnames in a set of target URLs. Unparseable URLs
+ * Count the distinct hostnames in a set of target URLs. Unparsable URLs
  * are ignored (they cannot be fetched anyway). Used to decide whether a
  * pull is single-host (rate-limiter-bound) or multi-host (where more
  * workers help). Exported for unit tests.
@@ -80,7 +80,7 @@ export function countDistinctHosts(targetUrls: string[]): number {
 			const host = new URL(s).hostname.toLowerCase();
 			if (host) hosts.add(host);
 		} catch {
-			/* unparseable URL — skip for host counting */
+			/* unparsable URL — skip for host counting */
 		}
 	}
 	return hosts.size;
@@ -106,7 +106,7 @@ export function computePullConcurrency(
 	const distinctHosts = countDistinctHosts(targetUrls);
 
 	if (distinctHosts <= 1) {
-		// Single-host (or empty/unparseable): one bucket, I/O-bound. CPU
+		// Single-host (or empty/unparsable): one bucket, I/O-bound. CPU
 		// count is irrelevant — clamp the per-host worker count and return.
 		return Math.min(
 			PULL_CONCURRENCY_CEILING,

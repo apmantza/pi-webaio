@@ -435,7 +435,7 @@ export function keywordOverlapRatio(
 }
 
 /**
- * Freshness score in [0, 1] from a (possibly missing/unparseable) published
+ * Freshness score in [0, 1] from a (possibly missing/unparsable) published
  * date. Unknown dates are neutral (0.5) rather than penalized — freshness
  * is a soft signal, not a requirement.
  */
