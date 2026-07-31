@@ -65,10 +65,15 @@ jobs:
       - name: Run full test suite (all suites)
         # One invocation — Node 24 --experimental-strip-types handles all
         # .mjs files and their .ts imports in ~8s (was 4m50s with tsx).
+        # Disable the shared browser pool (P2) — it keeps a live Chromium
+        # process alive after tests, which prevents child processes from
+        # exiting and hangs the test runner for 6h.
+        env:
+          PI_WEBAIO_SHARED_BROWSER_POOL: "0"
         run: npm run test:all
 
   # Simulates pi's real install path: a `git:` install runs `npm install
-  # --omit=dev`, which triggers `prepare` → `build:dist` FROM SOURCE with the
+  # --omit=dev`, which triggers `prepare` -> `build:dist` FROM SOURCE with the
   # dev-only @types/node ABSENT. That's the path that broke with TS2688 in
   # pi-lens (#193) and that the tarball-based install-test never exercises —
   # the tarball ships pre-built dist/, so it never re-runs the build under
@@ -199,8 +204,8 @@ jobs:
           INSTALL_DIR=$(npm root -g)/pi-webaio
           cd "$INSTALL_DIR"
           # Simulate how pi loads the extension: the compiled entry, loaded by node.
-          # ERR_MODULE_NOT_FOUND = missing dep → fail
-          # Any other error = expected in CI (no pi API available) → pass
+          # ERR_MODULE_NOT_FOUND = missing dep -> fail
+          # Any other error = expected in CI (no pi API available) -> pass
           # pi-coding-agent is a host-provided peer dep; its absence is expected here
           ENTRY=$(node -p "require('./package.json').pi.extensions[0]")
           echo "Loading entry: $ENTRY"
