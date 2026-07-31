@@ -156,6 +156,30 @@ cited-summary curator (pi-web-access `summary-review.ts`); F16 adds a lazy inlin
 redirect hook (georgebashi), per-URL fetch fallback provenance (pi-web-kit `fallback.ts`),
 byte-bounded LRU cache (recurring), X/Twitter vertical (pi-lab). Full detail in `docs/inspirations8.md` §8b.
 
+### New items from pagemap inspiration (`docs/pagemap-inspiration.md`, local-only)
+
+Source: [Retio-ai/Retio-pagemap](https://github.com/Retio-ai/Retio-pagemap)
+(AGPL-3.0) — port *ideas / approaches*, **not code** (AGPL is viral; independent
+reimplementation only). Assessed 2026-07-31. Much of the doc is already shipped
+(diff output → F6 / `aio-webcontent diff`, bot detection → `bot-detection.ts`,
+interactive elements → `interactive-elements.ts`, token-budget pruning) or
+off-mission; the genuinely new, on-mission ideas are below.
+
+| ID  | Feature                                | Detail                                                                                                                                                                                            | Effort |
+| --- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
+| F19 | **Page-type classifier**               | Detect `product` / `article` / `docs` / `login` / `error` / `listing` / `search_results` pages via JSON-LD / OpenGraph / `<meta>` + URL patterns + DOM heuristics (new `src/page-classifier.ts`). A natural extension of the `sourceType` we already compute for *search results*, applied to the *page itself*; unlocks per-type handling. Reimplement PageMap's 16-type classifier independently. | M      |
+| F20 | **Barrier detection + agent guidance** | Detect page-level obstacles — `login_required` / `cookie_consent` / `bot_blocked` / `region_restricted` / `error_page` / `age_verification` / `popup_overlay` — and return a `barrier` field with an actionable hint (e.g. "login form detected; authenticate first"). Builds on `bot-detection.ts` + the paywall bypass; immediately improves agent error handling. | M      |
+| F21 | **Structured agent output format**     | A `format: "structured"` (pagemap-style) option: URL / Title / Type + type-specific fields (Ecommerce / Article / …) + Actions (interactive refs) + Info (pruned content) + Images + Meta (tokens / interactables). Clean agent-consumable structure; depends on F19 (page type) + reuses `interactive-elements.ts`. | M      |
+
+**Deliberately NOT ported** (off-mission / low value): e-commerce deep coverage
+(30+ site-specific selectors — high-maintenance; pi-webaio is general-purpose +
+API-first verticals, not an e-commerce scraper); i18n keyword dictionaries
+(10-language price/rating/brand terms — niche, maintenance-heavy); chunk-based
+HTML-level pruning (real quality win but a large, risky extraction-pipeline
+rewrite); template caching (overlaps strategy-memory + session cache);
+browser-side DOM security scanner (overlaps `detectPromptInjection` +
+`[UNTRUSTED]` markers, and requires a browser).
+
 ---
 
 ## Sequencing
@@ -167,4 +191,5 @@ byte-bounded LRU cache (recurring), X/Twitter vertical (pi-lab). Full detail in 
 - **v0.8.x (remaining):** F11 (config layering — 5+ reference impls: xl0/webveil/rpiv/pi-search), F3 (stateful fetching), and new F15–F18 (keyless hosted-MCP search, fuzzy `findText`, in-flight coalescing, robots.txt Crawl-delay). F9/F5/F6/F8 shipped pre-0.8.0 (above).
 - **Browser-isolation cluster (F10/F13, + F3):** shares one answer — study thurstonsand/pi-web-tools `fetchers/local/` (worker over a socket) + web-spider-daemon `playwright-session-registry.ts` (per-session process) end-to-end before designing.
 - **Backlog:** F12 (coherent-fingerprint; thurstonsand headed-escalation is the reference), F14 (video/frame — reference verified in survey #8b via pi-web-access's Gemini-native-ingestion + ffmpeg-frame-export design; remaining work is adoption + a Windows cookie path).
+- **Pagemap-inspired (backlog):** F20 (barrier detection + agent guidance — highest agent-UX value; builds on `bot-detection.ts` + paywall bypass), then F19 (page-type classifier — unlocks per-type handling), then F21 (structured output — depends on F19). Port ideas only (AGPL — no code copy).
 - **Security cross-checks (DONE — survey #8):** H4–H7 — Playwright redirect guard added (wreq-js hops remain an unhookable documented limitation); IPv6 NAT64/benchmarking/discard-floor + hex-metadata coverage; dangerous-port blocklist (allow-list-aware, fails closed); homoglyph folding + base64-blob redaction + MCP error-path redaction parity. 36 new tests (`tests/security-crosscheck.test.mjs`).
