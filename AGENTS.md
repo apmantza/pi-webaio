@@ -248,7 +248,7 @@ pi-webaio/
 | Article extraction  | `@mozilla/readability` ^0.6.0 | Local article → text                                  |
 | Markdown conversion | `defuddle` ^0.19.2            | HTML → markdown (extractor comments stripped)         |
 | PDF                 | `pdf-parse` ^2.4.5            | Text extraction from PDFs                             |
-| Math                | `temml` + `mathml-to-latex`   | MathML → LaTeX in extracted content                   |
+| Math                | `temml`                       | MathML rendering in extracted content                  |
 | MCP server          | `@modelcontextprotocol/sdk`   | stdio MCP adapter for non-pi clients                  |
 | TUI components      | `@earendil-works/pi-tui`      | Markdown + text rendering (peer of pi)                |
 
@@ -453,7 +453,7 @@ TUI result rendering for all tools; phase-aware FetchError system; `format` para
 
 ## Dependencies
 
-- **Runtime**: `@modelcontextprotocol/sdk` (^1.30.0), `@earendil-works/pi-tui` (^0.83.0), `@mozilla/readability`, `defuddle` (^0.19.2), `linkedom`, `mathml-to-latex`, `pdf-parse`, `temml`, `turndown`, `typebox` (^1.1.34), `wreq-js`, `youtube-transcript-plus`
+- **Runtime**: `@modelcontextprotocol/sdk` (^1.30.0), `@earendil-works/pi-tui` (^0.83.0), `@mozilla/readability`, `defuddle` (^0.19.2), `linkedom`, `pdf-parse`, `temml`, `typebox` (^1.1.34), `wreq-js`, `youtube-transcript-plus`
 - **Peer**: `@earendil-works/pi-coding-agent` (^0.83.0)
 - **Optional**: `playwright` (^1.55.0)
 - **Dev**: `@types/node` (^26.x), `typescript` (^7.x — the project builds under TypeScript 7)
