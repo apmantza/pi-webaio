@@ -11,7 +11,7 @@ extract, map, cache, chunk, and render web content for AI agents.
 
 pi-webaio registers eight pi tools:
 
-- `aio-websearch` — search DuckDuckGo, Brave, Yahoo, Bing, and Google in parallel
+- `aio-websearch` — search DuckDuckGo, Brave, Yahoo, Bing, Mojeek, and Google in parallel
 - `aio-webfetch` — fetch one or many URLs into markdown or structured formats, with an opt-in heading outline, query-focused answer mode, and multi-source cited answers
 - `aio-webcontent` — retrieve cached content by URL (with opt-in section-level diff)
 - `aio-webresult` — retrieve cached results by response ID

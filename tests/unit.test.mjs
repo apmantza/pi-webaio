@@ -36,6 +36,7 @@ import {
 	extractDdgUrl,
 	parseBraveResults,
 	parseDuckDuckGoResults,
+	parseMojeekResults,
 } from "../src/search.ts";
 import { scanForSecrets } from "../src/security.ts";
 import {
@@ -604,6 +605,75 @@ test("parseBraveResults skips snippets without links", () => {
 test("parseBraveResults handles empty HTML", () => {
 	const results = parseBraveResults("");
 	assert.strictEqual(results.length, 0);
+});
+
+// ─── parseMojeekResults ───────────────────────────────────────────
+
+test("parseMojeekResults extracts results from Mojeek HTML", () => {
+	const html = `
+		<ul class="results-standard">
+			<li>
+				<h2><a class="title" href="https://nodejs.org">Node.js</a></h2>
+				<p class="s">Node.js is a JavaScript runtime built on Chrome's V8 engine.</p>
+			</li>
+			<li>
+				<h2><a class="title" href="https://deno.land">Deno</a></h2>
+				<p class="s">A modern runtime for JavaScript and TypeScript.</p>
+			</li>
+		</ul>
+	`;
+	const results = parseMojeekResults(html);
+	assert.strictEqual(results.length, 2);
+	assert.strictEqual(results[0].title, "Node.js");
+	assert.strictEqual(results[0].url, "https://nodejs.org/");
+	assert.ok(results[0].snippet.includes("JavaScript runtime"));
+	assert.strictEqual(results[1].title, "Deno");
+	assert.strictEqual(results[1].url, "https://deno.land/");
+});
+
+test("parseMojeekResults resolves relative hrefs against mojeek.com", () => {
+	const html = `
+		<ul class="results-standard">
+			<li>
+				<h2><a class="title" href="/search?q=foo">Relative</a></h2>
+				<p class="s">A relative link that should be filtered out.</p>
+			</li>
+		</ul>
+	`;
+	const results = parseMojeekResults(html);
+	// Relative mojeek.com links are filtered by checkSearchFilters.
+	assert.strictEqual(results.length, 0);
+});
+
+test("parseMojeekResults skips results without links", () => {
+	const html = `
+		<ul class="results-standard">
+			<li><h2><span class="title">No link</span></h2><p class="s">x</p></li>
+		</ul>
+	`;
+	const results = parseMojeekResults(html);
+	assert.strictEqual(results.length, 0);
+});
+
+test("parseMojeekResults handles empty HTML", () => {
+	const results = parseMojeekResults("");
+	assert.strictEqual(results.length, 0);
+});
+
+test("parseMojeekResults falls back to a.ob when a.title is absent (webserp pattern)", () => {
+	const html = `
+		<ul class="results-standard">
+			<li>
+				<h2><a class="ob" href="https://nodejs.org">Node.js</a></h2>
+				<p class="s">Node.js is a JavaScript runtime.</p>
+			</li>
+		</ul>
+	`;
+	const results = parseMojeekResults(html);
+	assert.strictEqual(results.length, 1);
+	assert.strictEqual(results[0].title, "Node.js");
+	assert.strictEqual(results[0].url, "https://nodejs.org/");
+	assert.ok(results[0].snippet.includes("JavaScript runtime"));
 });
 
 // ─── parseLocs ─────────────────────────────────────────────────────

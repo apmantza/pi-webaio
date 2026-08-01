@@ -29,12 +29,12 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 		name: "aio-websearch",
 		label: "Web Search",
 		description:
-			"Search the web; returns deduped, cross-engine ranked results with title, url, snippet, and sourceType (official-docs/repo/academic/maintainer-blog/website/community/news/social). No API keys — runs DDG, Brave, Yahoo, Bing, and Google in parallel, capped at ~7s (returns whatever is ready). Common: query, max. Situational: compact:true for URL-scouting (one line per result — title + url + sourceType, no snippet), goggles to rerank additively (presets: docs-first, research, news-balanced, or custom rules), prefetch to warm the cache with the top hits, google:false to skip Google.",
+			"Search the web; returns deduped, cross-engine ranked results with title, url, snippet, and sourceType (official-docs/repo/academic/maintainer-blog/website/community/news/social). No API keys — runs DDG, Brave, Yahoo, Bing, Mojeek, and Google in parallel, capped at ~7s (returns whatever is ready). Common: query, max. Situational: compact:true for URL-scouting (one line per result — title + url + sourceType, no snippet), goggles to rerank additively (presets: docs-first, research, news-balanced, or custom rules), prefetch to warm the cache with the top hits, google:false to skip Google.",
 		promptSnippet: "Search the web for current information or references",
 		promptGuidelines: [
 			"Use aio-websearch when the user asks a question that requires current or external information not in your training data.",
 			"After getting search results, use aio-webfetch or aio-webpull to retrieve the full content of the most relevant result.",
-			"Runs DDG/Brave/Yahoo/Bing + Google in parallel. Google requires headless Chrome (auto-launched). Set google: false to skip.",
+			"Runs DDG/Brave/Yahoo/Bing/Mojeek + Google in parallel. Google requires headless Chrome (auto-launched). Set google: false to skip.",
 			"Set compact: true for URL scouting — one line per result (title + URL + sourceType, no snippet) to minimize token waste.",
 		],
 		parameters: Type.Object({
@@ -116,7 +116,7 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 				? ensureChrome().catch(() => null)
 				: null;
 
-			const engineNames = ["DDG", "Brave", "Yahoo", "Bing"];
+			const engineNames = ["DDG", "Brave", "Yahoo", "Bing", "Mojeek"];
 			if (useGoogle) engineNames.push("Google");
 			onUpdate?.({
 				content: [
@@ -136,13 +136,14 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 						brave: r.braveCount,
 						yahoo: r.yahooCount,
 						bing: r.bingCount,
+						mojeek: r.mojeekCount,
 					},
 					engineStatus: r.engineStatus as EngineStatusMap | undefined,
 				}),
 				() => ({
 					source: "http" as const,
 					results: [] as SearchResult[],
-					httpCounts: { ddg: 0, brave: 0, yahoo: 0, bing: 0 },
+					httpCounts: { ddg: 0, brave: 0, yahoo: 0, bing: 0, mojeek: 0 },
 					engineStatus: undefined as EngineStatusMap | undefined,
 				}),
 			);
@@ -200,7 +201,7 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 
 			let httpResults: SearchResult[] = [];
 			let googleResults: SearchResult[] = [];
-			let httpCounts = { ddg: 0, brave: 0, yahoo: 0, bing: 0 };
+			let httpCounts = { ddg: 0, brave: 0, yahoo: 0, bing: 0, mojeek: 0 };
 			let engineStatus: EngineStatusMap | undefined;
 
 			if (result) {
@@ -249,12 +250,19 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 			const limited = merged.slice(0, MAX_TOTAL);
 
 			const engineLabel: string[] = [];
-			const httpEngineIds = ["ddg", "brave", "yahoo", "bing"] as const;
+			const httpEngineIds = [
+				"ddg",
+				"brave",
+				"yahoo",
+				"bing",
+				"mojeek",
+			] as const;
 			const httpEngineNames: Record<(typeof httpEngineIds)[number], string> = {
 				ddg: "DDG",
 				brave: "Brave",
 				yahoo: "Yahoo",
 				bing: "Bing",
+				mojeek: "Mojeek",
 			};
 			for (const id of httpEngineIds) {
 				const count = httpCounts[id];
@@ -351,6 +359,7 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 			if (details.braveCount) engines.push(`Brave:${details.braveCount}`);
 			if (details.yahooCount) engines.push(`Yahoo:${details.yahooCount}`);
 			if (details.bingCount) engines.push(`Bing:${details.bingCount}`);
+			if (details.mojeekCount) engines.push(`Mojeek:${details.mojeekCount}`);
 			if (details.googleCount) engines.push(`Google:${details.googleCount}`);
 			const engineStr = engines.join("+") || "HTTP";
 

@@ -16,7 +16,7 @@ pi-webaio/
 ├── pi-entry.mjs              ← pi.extensions entry. Prefers compiled dist/index.js, falls back to index.ts for git installs.
 ├── src/
 │   ├── google-ai.ts          ← TypeScript wrapper — spawns CDP child processes
-│   ├── search.ts             ← Multi-engine search (DDG, Brave, Yahoo, Bing) + engine health, caching, dedup, source-type ranking, goggles
+│   ├── search.ts             ← Multi-engine search (DDG, Brave, Yahoo, Bing, Mojeek) + engine health, caching, dedup, source-type ranking, goggles
 │   ├── discovery.ts          ← Sitemap parsing, nav link extraction, crawling (fan-out capped)
 │   ├── bot-detection.ts      ← Structured bot-block detection (Cloudflare, Anubis, etc.)
 │   ├── data-islands.ts       ← SPA hydration data recovery from <script> JSON
@@ -131,7 +131,7 @@ pi-webaio/
 
 ### 1. `aio-websearch`
 
-- Searches DuckDuckGo, Brave, Yahoo, Bing, and Google in parallel (5 engines)
+- Searches DuckDuckGo, Brave, Yahoo, Bing, Mojeek, and Google in parallel (6 engines)
 - Google uses headless Chrome via CDP (auto-launched)
 - 7-second cap — returns whatever is ready
 - 10-minute cache (persisted to disk)

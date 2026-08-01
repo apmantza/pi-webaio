@@ -278,6 +278,43 @@ export function parseBingResults(html: string): SearchResult[] {
 	return results;
 }
 
+export function parseMojeekResults(html: string): SearchResult[] {
+	const { document } = parseHTML(html);
+	const results: SearchResult[] = [];
+
+	// Mojeek renders organic results in a <ul class="results-standard"> with
+	// one <li> per result. Reference scrapers disagree on the title-link class:
+	// RivalSearchMCP uses bare `h2 a`, webserp uses `a.ob`, union-search-skill
+	// uses `a.title`. We try all three so a class-name change on Mojeek's side
+	// silently degrades to the next fallback rather than returning 0 results.
+	// Snippet is consistently `p.s` across all implementations.
+	for (const el of document.querySelectorAll("ul.results-standard li")) {
+		const a =
+			el.querySelector("h2 a.title, h2 a.ob, h2 a[class*='title'], h2 a") ||
+			null;
+		if (!a) continue;
+		const rawUrl = a.getAttribute("href") || "";
+		const title = a.textContent?.trim() || "";
+		if (!title || !rawUrl) continue;
+
+		let url: string | undefined;
+		try {
+			const u = new URL(rawUrl, "https://www.mojeek.com");
+			url = u.href;
+		} catch {
+			url = rawUrl;
+		}
+		if (!url || !/^https?:/i.test(url)) continue;
+		const hostname = extractDomain(url);
+		if (!hostname || !checkSearchFilters(url, hostname, ["mojeek.com"]))
+			continue;
+
+		const snippet = el.querySelector("p.s")?.textContent?.trim() || "";
+		results.push({ title, url, snippet, domain: hostname });
+	}
+	return results;
+}
+
 export function parseBraveResults(html: string): SearchResult[] {
 	const results: SearchResult[] = [];
 
@@ -577,6 +614,7 @@ export const ENGINE_WEIGHTS: Record<string, number> = {
 	bing: 3,
 	ddg: 2,
 	brave: 2,
+	mojeek: 2,
 	yahoo: 1,
 };
 
@@ -738,7 +776,7 @@ export function buildResultBuckets(
 // already-measured latency, P5) so callers can surface a compact note instead
 // of a silent zero.
 
-export type EngineId = "ddg" | "brave" | "yahoo" | "bing";
+export type EngineId = "ddg" | "brave" | "yahoo" | "bing" | "mojeek";
 
 /**
  * Outcome of a single engine in one search round. `http_<code>` covers any
@@ -769,9 +807,16 @@ export const ENGINE_DISPLAY_NAMES: Record<EngineId, string> = {
 	brave: "Brave",
 	yahoo: "Yahoo",
 	bing: "Bing",
+	mojeek: "Mojeek",
 };
 
-const ENGINE_IDS: readonly EngineId[] = ["ddg", "brave", "yahoo", "bing"];
+const ENGINE_IDS: readonly EngineId[] = [
+	"ddg",
+	"brave",
+	"yahoo",
+	"bing",
+	"mojeek",
+];
 
 /**
  * A single engine's observed outcome, as collected by `searchWeb`. `httpStatus`
@@ -934,6 +979,7 @@ export async function searchWeb(
 	braveCount: number;
 	yahooCount: number;
 	bingCount: number;
+	mojeekCount: number;
 	engineStatus: EngineStatusMap;
 }> {
 	const cached = getCachedSearch(query);
@@ -944,6 +990,7 @@ export async function searchWeb(
 			braveCount: 0,
 			yahooCount: 0,
 			bingCount: 0,
+			mojeekCount: 0,
 			// Served from cache: no engines actually ran this round. Attribute
 			// the cached results to DDG (mirroring ddgCount above) and mark the
 			// rest as not-attempted so no misleading notes are rendered.
@@ -980,6 +1027,11 @@ export async function searchWeb(
 			id: "bing" as const,
 			url: `https://www.bing.com/search?q=${encoded}`,
 			parser: parseBingResults,
+		},
+		{
+			id: "mojeek" as const,
+			url: `https://www.mojeek.com/search?q=${encoded}`,
+			parser: parseMojeekResults,
 		},
 	];
 
@@ -1068,7 +1120,7 @@ export async function searchWeb(
 
 	const settled = await Promise.all(promises);
 
-	const counts = { ddg: 0, brave: 0, yahoo: 0, bing: 0 };
+	const counts = { ddg: 0, brave: 0, yahoo: 0, bing: 0, mojeek: 0 };
 	const engineResults = new Map<string, EngineSource[]>();
 	const outcomes: EngineOutcome[] = [];
 
@@ -1135,6 +1187,7 @@ export async function searchWeb(
 		braveCount: counts.brave,
 		yahooCount: counts.yahoo,
 		bingCount: counts.bing,
+		mojeekCount: counts.mojeek,
 		engineStatus: buildEngineStatusMap(outcomes),
 	};
 }
