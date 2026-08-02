@@ -139,7 +139,7 @@ test("buildEngineStatusMap: always completes the map, defaulting unattempted eng
 		{ id: "ddg", httpStatus: 200, count: 5, latencyMs: 0 },
 	]);
 	assert.strictEqual(map.ddg.status, "ok");
-	for (const id of ["brave", "yahoo", "bing", "mojeek"]) {
+	for (const id of ["brave", "yahoo", "bing", "reddit"]) {
 		assert.strictEqual(map[id].status, "disabled");
 		assert.strictEqual(map[id].count, 0);
 		assert.strictEqual(map[id].latencyMs, 0);
@@ -239,12 +239,12 @@ test("searchWeb: keeps backward-compat count fields and adds a complete engineSt
 	assert.strictEqual(typeof r.braveCount, "number");
 	assert.strictEqual(typeof r.yahooCount, "number");
 	assert.strictEqual(typeof r.bingCount, "number");
-	assert.strictEqual(typeof r.mojeekCount, "number");
+	assert.strictEqual(typeof r.redditCount, "number");
 	assert.strictEqual(r.ddgCount, 1);
 
 	// New per-engine status map is present and complete for all five engines.
 	assert.ok(r.engineStatus, "engineStatus map must be present");
-	for (const id of ["ddg", "brave", "yahoo", "bing", "mojeek"]) {
+	for (const id of ["ddg", "brave", "yahoo", "bing", "reddit"]) {
 		const entry = r.engineStatus[id];
 		assert.ok(entry, `engineStatus.${id} must be present`);
 		assert.strictEqual(typeof entry.count, "number");
