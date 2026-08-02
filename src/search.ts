@@ -611,10 +611,10 @@ function domainMatchesPreferred(domain: string, preferred: string[]): boolean {
 
 export const ENGINE_WEIGHTS: Record<string, number> = {
 	google: 5,
+	reddit: 4,
 	bing: 3,
 	ddg: 2,
 	brave: 2,
-	mojeek: 2,
 	yahoo: 1,
 };
 
@@ -776,7 +776,7 @@ export function buildResultBuckets(
 // already-measured latency, P5) so callers can surface a compact note instead
 // of a silent zero.
 
-export type EngineId = "ddg" | "brave" | "yahoo" | "bing" | "mojeek";
+export type EngineId = "ddg" | "brave" | "yahoo" | "bing" | "reddit";
 
 /**
  * Outcome of a single engine in one search round. `http_<code>` covers any
@@ -807,7 +807,7 @@ export const ENGINE_DISPLAY_NAMES: Record<EngineId, string> = {
 	brave: "Brave",
 	yahoo: "Yahoo",
 	bing: "Bing",
-	mojeek: "Mojeek",
+	reddit: "Reddit",
 };
 
 const ENGINE_IDS: readonly EngineId[] = [
@@ -815,7 +815,7 @@ const ENGINE_IDS: readonly EngineId[] = [
 	"brave",
 	"yahoo",
 	"bing",
-	"mojeek",
+	"reddit",
 ];
 
 /**
@@ -979,7 +979,7 @@ export async function searchWeb(
 	braveCount: number;
 	yahooCount: number;
 	bingCount: number;
-	mojeekCount: number;
+	redditCount: number;
 	engineStatus: EngineStatusMap;
 }> {
 	const cached = getCachedSearch(query);
@@ -990,7 +990,7 @@ export async function searchWeb(
 			braveCount: 0,
 			yahooCount: 0,
 			bingCount: 0,
-			mojeekCount: 0,
+			redditCount: 0,
 			// Served from cache: no engines actually ran this round. Attribute
 			// the cached results to DDG (mirroring ddgCount above) and mark the
 			// rest as not-attempted so no misleading notes are rendered.
@@ -1027,11 +1027,6 @@ export async function searchWeb(
 			id: "bing" as const,
 			url: `https://www.bing.com/search?q=${encoded}`,
 			parser: parseBingResults,
-		},
-		{
-			id: "mojeek" as const,
-			url: `https://www.mojeek.com/search?q=${encoded}`,
-			parser: parseMojeekResults,
 		},
 	];
 
@@ -1120,7 +1115,7 @@ export async function searchWeb(
 
 	const settled = await Promise.all(promises);
 
-	const counts = { ddg: 0, brave: 0, yahoo: 0, bing: 0, mojeek: 0 };
+	const counts = { ddg: 0, brave: 0, yahoo: 0, bing: 0, reddit: 0 };
 	const engineResults = new Map<string, EngineSource[]>();
 	const outcomes: EngineOutcome[] = [];
 
@@ -1187,7 +1182,7 @@ export async function searchWeb(
 		braveCount: counts.brave,
 		yahooCount: counts.yahoo,
 		bingCount: counts.bing,
-		mojeekCount: counts.mojeek,
+		redditCount: counts.reddit,
 		engineStatus: buildEngineStatusMap(outcomes),
 	};
 }

@@ -21,6 +21,7 @@ import {
 	googleSearch,
 	cdpAvailable as cdpAvailableGA,
 } from "../google-ai.ts";
+import { searchReddit } from "../verticals/reddit_search.ts";
 import type { SearchResult } from "../types.ts";
 import { triggerPrefetch, DEFAULT_PREFETCH_COUNT } from "../prefetch.ts";
 
@@ -116,8 +117,20 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 				? ensureChrome().catch(() => null)
 				: null;
 
-			const engineNames = ["DDG", "Brave", "Yahoo", "Bing", "Mojeek"];
-			if (useGoogle) engineNames.push("Google");
+		const engineNames = ["DDG", "Brave", "Yahoo", "Bing"];
+		if (useGoogle) engineNames.push("Google");
+		const useReddit = process.env.REDDIT_CDP_SEARCH === "1";
+		const redditEnabled =
+			useReddit && cdpAvailableGA() && isProviderAvailable("reddit");
+		let redditStatus: string;
+		if (!useReddit) redditStatus = "disabled (reddit: false)";
+		else if (!cdpAvailableGA())
+			redditStatus = "unavailable (Chrome CDP not present)";
+		else if (!isProviderAvailable("reddit"))
+			redditStatus =
+				"unavailable (provider cooled down after recent failures)";
+		else redditStatus = "pending";
+		if (useReddit) engineNames.push("Reddit");
 			onUpdate?.({
 				content: [
 					{
@@ -136,14 +149,14 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 						brave: r.braveCount,
 						yahoo: r.yahooCount,
 						bing: r.bingCount,
-						mojeek: r.mojeekCount,
+						redditCount: r.redditCount,
 					},
 					engineStatus: r.engineStatus as EngineStatusMap | undefined,
 				}),
 				() => ({
 					source: "http" as const,
 					results: [] as SearchResult[],
-					httpCounts: { ddg: 0, brave: 0, yahoo: 0, bing: 0, mojeek: 0 },
+					httpCounts: { ddg: 0, brave: 0, yahoo: 0, bing: 0, reddit: 0 },
 					engineStatus: undefined as EngineStatusMap | undefined,
 				}),
 			);
@@ -183,6 +196,48 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 				});
 			}
 
+			// Reddit CDP search (synthetic engine — no external APIs)
+			let redditPromise: Promise<{
+				source: "reddit";
+				results: SearchResult[];
+			}>;
+			if (redditEnabled) {
+				redditPromise = (async () => {
+					try {
+						await chromeReady;
+						const r = await searchReddit(query);
+						if (!r) {
+							redditStatus =
+								"unavailable (CDP search returned null)";
+							return { source: "reddit" as const, results: [] };
+						}
+						if (!r.ok) {
+							redditStatus = `error (${r.error})`;
+							return { source: "reddit" as const, results: [] };
+						}
+						const results = r.results.map((item) => ({
+							title: item.title,
+							url: item.url,
+							snippet: `r/${item.subreddit} · ${item.score} pts · ${item.comments} comments`,
+							domain: extractDomain(item.url),
+						}));
+						redditStatus = results.length
+							? "ok"
+							: "empty (Reddit returned 0 results)";
+						return { source: "reddit" as const, results };
+					} catch (err) {
+						recordProviderNetworkFailure("reddit", String(err));
+						redditStatus = `error (${String(err).slice(0, 120)})`;
+						return { source: "reddit" as const, results: [] };
+				}
+			})();
+			} else {
+				redditPromise = Promise.resolve({
+					source: "reddit" as const,
+					results: [],
+				});
+			}
+
 			// Outer timeout must cover Chrome cold-start (≤30s) + actual search.
 			const OUTER_TIMEOUT = chromeReady ? 40000 : SEARCH_TIMEOUT;
 			let timeoutHandle: ReturnType<typeof setTimeout>;
@@ -191,7 +246,11 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 				timeoutHandle.unref?.();
 			});
 
-			const allPromise = Promise.all([httpPromise, googlePromise]);
+			const allPromise = Promise.all([
+				httpPromise,
+				googlePromise,
+				redditPromise,
+			]);
 			let result: Awaited<typeof allPromise> | null;
 			try {
 				result = await Promise.race([allPromise, timeoutPromise]);
@@ -201,16 +260,22 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 
 			let httpResults: SearchResult[] = [];
 			let googleResults: SearchResult[] = [];
-			let httpCounts = { ddg: 0, brave: 0, yahoo: 0, bing: 0, mojeek: 0 };
+			let redditResults: SearchResult[] = [];
+			let httpCounts = { ddg: 0, brave: 0, yahoo: 0, bing: 0, reddit: 0 };
 			let engineStatus: EngineStatusMap | undefined;
 
 			if (result) {
 				httpResults = result[0].results;
 				googleResults = result[1].results;
+				redditResults = result[2].results;
 				httpCounts = (result[0] as any).httpCounts ?? httpCounts;
 				engineStatus = (result[0] as any).engineStatus ?? engineStatus;
 			} else {
-				const settled = await Promise.allSettled([httpPromise, googlePromise]);
+				const settled = await Promise.allSettled([
+					httpPromise,
+					googlePromise,
+					redditPromise,
+				]);
 				if (settled[0].status === "fulfilled") {
 					httpResults = settled[0].value.results;
 					httpCounts = (settled[0].value as any).httpCounts ?? httpCounts;
@@ -218,6 +283,8 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 				}
 				if (settled[1].status === "fulfilled")
 					googleResults = settled[1].value.results;
+				if (settled[2].status === "fulfilled")
+					redditResults = settled[2].value.results;
 			}
 
 			const buckets = buildResultBuckets(httpResults, "http");
@@ -227,6 +294,15 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 					result: r,
 					engine: "google",
 					weight: ENGINE_WEIGHTS.google,
+				});
+				buckets.set(r.url, list);
+			}
+			for (const r of redditResults) {
+				const list = buckets.get(r.url) || [];
+				list.push({
+					result: r,
+					engine: "reddit",
+					weight: ENGINE_WEIGHTS.reddit,
 				});
 				buckets.set(r.url, list);
 			}
@@ -255,14 +331,15 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 				"brave",
 				"yahoo",
 				"bing",
-				"mojeek",
 			] as const;
-			const httpEngineNames: Record<(typeof httpEngineIds)[number], string> = {
+			const httpEngineNames: Record<
+				(typeof httpEngineIds)[number],
+				string,
+			> = {
 				ddg: "DDG",
 				brave: "Brave",
 				yahoo: "Yahoo",
 				bing: "Bing",
-				mojeek: "Mojeek",
 			};
 			for (const id of httpEngineIds) {
 				const count = httpCounts[id];
@@ -276,6 +353,8 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 			}
 			if (googleResults.length)
 				engineLabel.push(`Google:${googleResults.length}`);
+			if (redditResults.length)
+				engineLabel.push(`Reddit:${redditResults.length}`);
 			if (!engineLabel.length) engineLabel.push("HTTP");
 
 			// Trigger speculative prefetch of top-N result URLs in the background.
@@ -300,7 +379,14 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 				googleResults.length === 0 &&
 				googleStatus !== "disabled (google: false)"
 					? `\n_(Google: requested but returned nothing — ${googleStatus})_`
-					: "";
+				: "";
+			// Surface a requested-but-empty Reddit so a silent zero is visible.
+			const redditNote =
+				useReddit &&
+				redditResults.length === 0 &&
+				redditStatus !== "disabled (reddit: false)"
+					? `\n_(Reddit: requested but returned nothing — ${redditStatus})_`
+				: "";
 
 			// Surface any non-ok HTTP engine (down / rate-limited / cooled-down /
 			// empty) so a failed engine is distinguishable from a legitimately
@@ -319,6 +405,7 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 				renderSearchResults(limited, { compact }),
 				prefetchNote,
 				googleNote,
+				redditNote,
 				engineNotes,
 			].join("\n");
 
@@ -331,6 +418,8 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 					engineStatus,
 					googleCount: googleResults.length,
 					googleStatus,
+					redditCount: redditResults.length,
+					redditStatus,
 					durationMs: Date.now() - startedAt,
 					prefetchCount: prefetchUrls.length,
 					goggles: goggles?.name,
