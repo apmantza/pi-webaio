@@ -1,6 +1,7 @@
 // ─── Reddit search tool ────────────────────────────────────────────
 // Synthetic Reddit search via Chrome CDP — no external APIs.
-// Registered as `aio-reddit-search` when REDDIT_CDP_SEARCH=1.
+// Synthetic Reddit search via Chrome CDP — no external APIs.
+// Registered as `aio-reddit-search`.
 
 import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -11,13 +12,13 @@ export function registerRedditSearchTool(pi: ExtensionAPI): void {
 		name: "aio-reddit-search",
 		label: "Reddit Search",
 		description:
-			"Search Reddit via CDP (synthetic — no external APIs). " +
-			"Requires REDDIT_CDP_SEARCH=1 and the dedicated Chrome instance running. " +
+"Search Reddit via CDP (synthetic — no external APIs). " +
+			"Requires the dedicated Chrome instance running. " +
 			"Returns structured results: title, url, subreddit, score, comments, author.",
 		promptSnippet: "Search Reddit for discussions about a topic",
 		promptGuidelines: [
 			"Use aio-reddit-search when the user wants to find Reddit discussions on a topic.",
-			"Requires REDDIT_CDP_SEARCH=1 and the dedicated Chrome instance (node bin/launch.mjs).",
+			"Requires the dedicated Chrome instance (node bin/launch.mjs).",
 			"Results are deduplicated by URL and ordered by Reddit's relevance sort.",
 		],
 		parameters: Type.Object({
@@ -53,7 +54,7 @@ export function registerRedditSearchTool(pi: ExtensionAPI): void {
 					content: [
 						{
 							type: "text",
-							text: "Reddit search is unavailable. Set REDDIT_CDP_SEARCH=1 and ensure Chrome is running (node bin/launch.mjs).",
+							text: "Reddit search is unavailable. Ensure Chrome is running (node bin/launch.mjs).",
 						},
 					],
 					isError: true,

@@ -139,14 +139,11 @@ function buildBlockDetector(): string {
 }
 
 /**
- * Search Reddit via CDP. Returns null if Chrome/CDP is unavailable
- * or the env var REDDIT_CDP_SEARCH is not "1".
+ * Search Reddit via CDP. Returns null if Chrome/CDP is unavailable.
  */
 export async function searchReddit(
 	query: string,
 ): Promise<RedditSearchOutput | null> {
-	if (process.env.REDDIT_CDP_SEARCH !== "1") return null;
-
 	// Quick liveness probe — confirm Chrome is actually responding
 	const portPath = join(
 		process.env.CDP_PROFILE_DIR ||

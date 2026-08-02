@@ -101,10 +101,12 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 			const SEARCH_TIMEOUT = 7000;
 			// Chrome cold-start can take up to 30s; fire it in parallel so startup
 			// time does not consume the search-race window.
-			const googleEnabled =
-				useGoogle && cdpAvailableGA() && isProviderAvailable("google");
+			const redditEnabled =
+				cdpAvailableGA() && isProviderAvailable("reddit");
 			// Track why Google produced no results so a silent zero is surfaced
 			// instead of looking like Google was never attempted (B4).
+			const googleEnabled =
+				useGoogle && cdpAvailableGA() && isProviderAvailable("google");
 			let googleStatus: string;
 			if (!useGoogle) googleStatus = "disabled (google: false)";
 			else if (!cdpAvailableGA())
@@ -113,24 +115,20 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 				googleStatus =
 					"unavailable (provider cooled down after recent failures)";
 			else googleStatus = "pending";
-			const chromeReady = googleEnabled
-				? ensureChrome().catch(() => null)
-				: null;
-
-			const engineNames = ["DDG", "Brave", "Yahoo", "Bing"];
-			if (useGoogle) engineNames.push("Google");
-			const useReddit = process.env.REDDIT_CDP_SEARCH === "1";
-			const redditEnabled =
-				useReddit && cdpAvailableGA() && isProviderAvailable("reddit");
+			const chromeReady =
+				googleEnabled || redditEnabled
+					? ensureChrome().catch(() => null)
+					: null;
 			let redditStatus: string;
-			if (!useReddit) redditStatus = "disabled (reddit: false)";
-			else if (!cdpAvailableGA())
+			if (!cdpAvailableGA())
 				redditStatus = "unavailable (Chrome CDP not present)";
 			else if (!isProviderAvailable("reddit"))
 				redditStatus =
 					"unavailable (provider cooled down after recent failures)";
 			else redditStatus = "pending";
-			if (useReddit) engineNames.push("Reddit");
+			const engineNames = ["DDG", "Brave", "Yahoo", "Bing"];
+			if (useGoogle) engineNames.push("Google");
+			if (redditEnabled) engineNames.push("Reddit");
 			onUpdate?.({
 				content: [
 					{
@@ -373,7 +371,7 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 					: "";
 			// Surface a requested-but-empty Reddit so a silent zero is visible.
 			const redditNote =
-				useReddit &&
+				redditEnabled &&
 				redditResults.length === 0 &&
 				redditStatus !== "disabled (reddit: false)"
 					? `\n_(Reddit: requested but returned nothing — ${redditStatus})_`

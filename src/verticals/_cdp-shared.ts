@@ -5,6 +5,7 @@
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { tmpdir as osTmpdir } from "os";
+import http from "http";
 
 /** CDP connection timeout */
 const CDP_CONNECT_TIMEOUT_MS = 5_000;
@@ -38,12 +39,11 @@ export async function cdpIsAvailable(portPath?: string): Promise<boolean> {
 		if (!port || isNaN(port)) return false;
 
 		const probe = await new Promise<boolean>((resolve) => {
-			const req = new (require("http").ClientRequest)(
-				`http://localhost:${port}/json/version`,
-				(res: any) => resolve(res.statusCode === 200),
+			const req = http.get(`http://localhost:${port}/json/version`, (res) =>
+				resolve(res.statusCode === 200),
 			);
 			req.on("error", () => resolve(false));
-			req.setTimeout(800, () => {
+			req.setTimeout(3000, () => {
 				req.destroy();
 				resolve(false);
 			});
@@ -80,7 +80,9 @@ export class CDPClient {
 			this.#ws.onopen = () => resolve();
 			this.#ws.onerror = (e: any) =>
 				reject(new Error(`WebSocket error: ${e.message || e.type}`));
-			this.#ws.onclose = () => this.#closeHandlers.forEach((h) => h());
+			this.#ws.onclose = () => {
+				for (const h of this.#closeHandlers) h();
+			};
 			this.#ws.onmessage = (ev: any) => {
 				let msg: any;
 				try {
