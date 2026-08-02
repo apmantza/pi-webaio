@@ -117,20 +117,20 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 				? ensureChrome().catch(() => null)
 				: null;
 
-		const engineNames = ["DDG", "Brave", "Yahoo", "Bing"];
-		if (useGoogle) engineNames.push("Google");
-		const useReddit = process.env.REDDIT_CDP_SEARCH === "1";
-		const redditEnabled =
-			useReddit && cdpAvailableGA() && isProviderAvailable("reddit");
-		let redditStatus: string;
-		if (!useReddit) redditStatus = "disabled (reddit: false)";
-		else if (!cdpAvailableGA())
-			redditStatus = "unavailable (Chrome CDP not present)";
-		else if (!isProviderAvailable("reddit"))
-			redditStatus =
-				"unavailable (provider cooled down after recent failures)";
-		else redditStatus = "pending";
-		if (useReddit) engineNames.push("Reddit");
+			const engineNames = ["DDG", "Brave", "Yahoo", "Bing"];
+			if (useGoogle) engineNames.push("Google");
+			const useReddit = process.env.REDDIT_CDP_SEARCH === "1";
+			const redditEnabled =
+				useReddit && cdpAvailableGA() && isProviderAvailable("reddit");
+			let redditStatus: string;
+			if (!useReddit) redditStatus = "disabled (reddit: false)";
+			else if (!cdpAvailableGA())
+				redditStatus = "unavailable (Chrome CDP not present)";
+			else if (!isProviderAvailable("reddit"))
+				redditStatus =
+					"unavailable (provider cooled down after recent failures)";
+			else redditStatus = "pending";
+			if (useReddit) engineNames.push("Reddit");
 			onUpdate?.({
 				content: [
 					{
@@ -207,8 +207,7 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 						await chromeReady;
 						const r = await searchReddit(query);
 						if (!r) {
-							redditStatus =
-								"unavailable (CDP search returned null)";
+							redditStatus = "unavailable (CDP search returned null)";
 							return { source: "reddit" as const, results: [] };
 						}
 						if (!r.ok) {
@@ -229,8 +228,8 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 						recordProviderNetworkFailure("reddit", String(err));
 						redditStatus = `error (${String(err).slice(0, 120)})`;
 						return { source: "reddit" as const, results: [] };
-				}
-			})();
+					}
+				})();
 			} else {
 				redditPromise = Promise.resolve({
 					source: "reddit" as const,
@@ -326,16 +325,8 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 			const limited = merged.slice(0, MAX_TOTAL);
 
 			const engineLabel: string[] = [];
-			const httpEngineIds = [
-				"ddg",
-				"brave",
-				"yahoo",
-				"bing",
-			] as const;
-			const httpEngineNames: Record<
-				(typeof httpEngineIds)[number],
-				string,
-			> = {
+			const httpEngineIds = ["ddg", "brave", "yahoo", "bing"] as const;
+			const httpEngineNames: Record<(typeof httpEngineIds)[number], string> = {
 				ddg: "DDG",
 				brave: "Brave",
 				yahoo: "Yahoo",
@@ -379,14 +370,14 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 				googleResults.length === 0 &&
 				googleStatus !== "disabled (google: false)"
 					? `\n_(Google: requested but returned nothing — ${googleStatus})_`
-				: "";
+					: "";
 			// Surface a requested-but-empty Reddit so a silent zero is visible.
 			const redditNote =
 				useReddit &&
 				redditResults.length === 0 &&
 				redditStatus !== "disabled (reddit: false)"
 					? `\n_(Reddit: requested but returned nothing — ${redditStatus})_`
-				: "";
+					: "";
 
 			// Surface any non-ok HTTP engine (down / rate-limited / cooled-down /
 			// empty) so a failed engine is distinguishable from a legitimately
