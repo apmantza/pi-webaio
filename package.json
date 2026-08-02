@@ -119,7 +119,8 @@
     "pdf-parse": "^2.4.5",
     "typebox": "^1.1.34",
     "wreq-js": "^2.3.0",
-    "youtube-transcript-plus": "^2.0.0"
+    "youtube-transcript-plus": "^2.0.0",
+    "ws": "^8.21.1"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "^0.83.0"
@@ -133,6 +134,7 @@
   },
   "devDependencies": {
     "@types/node": "^26.1.2",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "@types/ws": "^8.18.1"
   }
 }
