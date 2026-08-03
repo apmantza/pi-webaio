@@ -50,6 +50,12 @@ export const MAX_RESPONSE_BYTES = 10 * 1024 * 1024; // 10 MB — streaming cap
 export const DEFAULT_TIMEOUT_MS = 30_000;
 /** Ceiling on the streaming body read, independent of wreq's timeout. */
 export const DEFAULT_BODY_READ_MS = 60_000;
+/** Total budget for one Playwright fallback when no caller timeout is given. */
+export const DEFAULT_PLAYWRIGHT_TIMEOUT_MS = 30_000;
+/** Maximum time spent waiting for the initial DOM navigation. */
+export const DEFAULT_PLAYWRIGHT_NAVIGATION_TIMEOUT_MS = 15_000;
+/** Maximum time spent waiting for a self-resolving bot challenge. */
+export const DEFAULT_PLAYWRIGHT_BOT_WAIT_TIMEOUT_MS = 15_000;
 const MAX_RETRIES = 2;
 const RETRY_INITIAL_DELAY_MS = 1000;
 const RETRYABLE_STATUS_CODES = new Set([429, 500, 502, 503, 504]);
@@ -59,6 +65,40 @@ const NON_RETRYABLE_STATUS_CODES = new Set([400, 401, 403, 404]);
 
 export function normalizeFetchedUrl(url: string): string {
 	return url.startsWith("http://") ? url.replace(/^http:/i, "https:") : url;
+}
+
+export interface PlaywrightTimeouts {
+	remainingMs: number;
+	navigationTimeoutMs: number;
+	botWaitTimeoutMs: number;
+}
+
+/**
+ * Derive bounded Playwright phase budgets from the caller's timeout. The
+ * helper is pure so timeout behavior can be regression-tested without a
+ * browser. Callers recalculate it after navigation, making the bot wait share
+ * the same overall budget instead of adding another full timeout.
+ */
+export function getPlaywrightTimeouts(
+	requestTimeoutMs?: number,
+	elapsedMs = 0,
+): PlaywrightTimeouts {
+	const total =
+		Number.isFinite(requestTimeoutMs) && (requestTimeoutMs ?? 0) >= 0
+			? (requestTimeoutMs as number)
+			: DEFAULT_PLAYWRIGHT_TIMEOUT_MS;
+	const remainingMs = Math.max(0, total - Math.max(0, elapsedMs));
+	return {
+		remainingMs,
+		navigationTimeoutMs: Math.min(
+			DEFAULT_PLAYWRIGHT_NAVIGATION_TIMEOUT_MS,
+			remainingMs,
+		),
+		botWaitTimeoutMs: Math.min(
+			DEFAULT_PLAYWRIGHT_BOT_WAIT_TIMEOUT_MS,
+			remainingMs,
+		),
+	};
 }
 
 // ─── Bot-block fallback ladder (observability audit P7) ─────────────
@@ -435,6 +475,8 @@ export async function fetchWithPlaywright(
 	 * the browser. Existing callers leave this unset.
 	 */
 	statusOut?: { status: number },
+	/** Caller-supplied whole-fallback budget; defaults to 30 seconds. */
+	requestTimeoutMs?: number,
 ): Promise<string | null> {
 	// SSRF guard: block requests to private IPs / loopback / cloud
 	// metadata endpoints. fetchWithRetry does this; fetchWithPlaywright
@@ -459,6 +501,16 @@ export async function fetchWithPlaywright(
 	} catch {
 		/* leave empty — pinning is best-effort */
 	}
+	const fallbackStartedAt = Date.now();
+	const phaseTimeouts = () =>
+		getPlaywrightTimeouts(requestTimeoutMs, Date.now() - fallbackStartedAt);
+	const requireTime = (): PlaywrightTimeouts => {
+		const timeouts = phaseTimeouts();
+		if (timeouts.remainingMs <= 0) {
+			throw new Error("Playwright timeout exceeded");
+		}
+		return timeouts;
+	};
 	const pinnedLaunchArgs = buildHostResolverRules(pinnedHost, ssrf.pinnedIps);
 	if (pool) {
 		// (redirect guard installed per-page below, after acquirePage)
@@ -470,12 +522,15 @@ export async function fetchWithPlaywright(
 			pooled = await pool.acquirePage();
 			installSsrfRedirectGuard(pooled.page);
 			await applyStealth(pooled.page);
+			const navTimeouts = requireTime();
 			const nav = await pooled.page.goto(url, {
 				waitUntil: "domcontentloaded",
-				timeout: 15000,
+				timeout: navTimeouts.navigationTimeoutMs,
 			});
 			if (statusOut) statusOut.status = nav?.status?.() ?? 0;
-			const html = await waitForBotProtectionToClear(pooled.page);
+			const html = await waitForBotProtectionToClear(pooled.page, {
+				timeoutMs: requireTime().botWaitTimeoutMs,
+			});
 			await injectCookiesFromPlaywright(
 				pooled.page,
 				url,
@@ -490,11 +545,17 @@ export async function fetchWithPlaywright(
 		}
 	}
 
+	// Do not start a second browser after the pooled attempt has consumed the
+	// caller's budget. This keeps a timed-out pooled navigation from doubling
+	// the requested timeout with a second launch/render attempt.
+	if (phaseTimeouts().remainingMs <= 0) return null;
+
 	try {
 		const { chromium } = await import("playwright");
 		for (const opts of [{ channel: "chrome" as const }, {}]) {
 			let browser: any = null;
 			try {
+				requireTime();
 				browser = await chromium.launch({
 					...opts,
 					headless: true,
@@ -506,12 +567,15 @@ export async function fetchWithPlaywright(
 				const page = await browser.newPage();
 				installSsrfRedirectGuard(page);
 				await applyStealth(page);
+				const navTimeouts = requireTime();
 				const nav = await page.goto(url, {
 					waitUntil: "domcontentloaded",
-					timeout: 15000,
+					timeout: navTimeouts.navigationTimeoutMs,
 				});
 				if (statusOut) statusOut.status = nav?.status?.() ?? 0;
-				const html = await waitForBotProtectionToClear(page);
+				const html = await waitForBotProtectionToClear(page, {
+					timeoutMs: requireTime().botWaitTimeoutMs,
+				});
 				await injectCookiesFromPlaywright(
 					page,
 					url,
@@ -1051,6 +1115,8 @@ export async function smartFetch(
 			browserPool,
 			options.wreqSession,
 			cookieKey,
+			undefined,
+			options.timeoutMs,
 		);
 		if (pwHtml) {
 			recordDomainSuccess(domain, "browser");
@@ -1096,6 +1162,8 @@ export async function smartFetch(
 			browserPool,
 			options.wreqSession,
 			cookieKey,
+			undefined,
+			options.timeoutMs,
 		);
 		if (pwHtml) {
 			recordDomainSuccess(domain, "browser");
@@ -1136,6 +1204,7 @@ export async function smartFetch(
 			options.wreqSession,
 			cookieKey,
 			statusOut,
+			options.timeoutMs,
 		);
 		const resolved = isSoftBlock404Resolved(
 			res.status,
@@ -1272,6 +1341,7 @@ export async function smartFetch(
 			options.wreqSession,
 			cookieKey,
 			pwStatusOut,
+			options.timeoutMs,
 		);
 		if (pwHtml) {
 			recordDomainSuccess(domain, "browser");

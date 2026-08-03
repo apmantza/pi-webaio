@@ -1328,6 +1328,9 @@ export async function pullPageEnhanced(
 						url,
 						opts?.browserPool,
 						opts?.wreqSession,
+						undefined,
+						undefined,
+						opts?.timeoutMs,
 					);
 					if (pwHtml) {
 						const pwResult = await pullPage(url, opts, _redirectCount, pwHtml);
@@ -1367,7 +1370,14 @@ export async function pullPageEnhanced(
 	}
 
 	if (mode === "browser") {
-		const pwHtml = await fetchWithPlaywright(url, opts?.browserPool);
+		const pwHtml = await fetchWithPlaywright(
+			url,
+			opts?.browserPool,
+			undefined,
+			undefined,
+			undefined,
+			opts?.timeoutMs,
+		);
 		if (pwHtml) {
 			return runAfterExtractHooks(
 				url,
