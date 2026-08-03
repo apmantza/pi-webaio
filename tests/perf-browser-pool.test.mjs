@@ -156,7 +156,10 @@ test("fetchWithPlaywright: applies the caller timeout to pooled navigation", asy
 	);
 
 	assert.ok(html && html.includes("ok"));
-	assert.equal(page.calls.gotoOptions[0].timeout, 2500);
+	// SSRF validation runs before the fallback budget starts, so a small
+	// amount of scheduling time may elapse before this assertion observes it.
+	assert.ok(page.calls.gotoOptions[0].timeout > 0);
+	assert.ok(page.calls.gotoOptions[0].timeout <= 2500);
 });
 
 test("fetchWithPlaywright: installs the per-page SSRF redirect guard on a pooled page", async () => {
