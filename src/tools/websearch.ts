@@ -13,6 +13,7 @@ import {
 	engineStatusNotes,
 	formatEngineLatency,
 	renderSearchResults,
+	type EngineStatus,
 	type EngineStatusMap,
 } from "../search.ts";
 import { loadGoggles, type GogglesInput } from "../goggles.ts";
@@ -24,18 +25,32 @@ import {
 import { searchReddit } from "../verticals/reddit_search.ts";
 import type { SearchResult } from "../types.ts";
 import { triggerPrefetch, DEFAULT_PREFETCH_COUNT } from "../prefetch.ts";
+import {
+	collectProviderResults,
+	shouldRunReddit,
+} from "../search-orchestration.ts";
+
+export const SEARCH_DEADLINE_MS = 7000;
+
+function classifyRedditStatus(status: string, count: number): EngineStatus {
+	if (count > 0 || status === "ok") return "ok";
+	if (status.startsWith("timeout")) return "timeout";
+	if (status.startsWith("error") || status.startsWith("unavailable"))
+		return "error";
+	return "empty";
+}
 
 export function registerWebsearchTool(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: "aio-websearch",
 		label: "Web Search",
 		description:
-			"Search the web; returns deduped, cross-engine ranked results with title, url, snippet, and sourceType (official-docs/repo/academic/maintainer-blog/website/community/news/social). No API keys — runs DDG, Brave, Yahoo, Bing, Mojeek, and Google in parallel, capped at ~7s (returns whatever is ready). Common: query, max. Situational: compact:true for URL-scouting (one line per result — title + url + sourceType, no snippet), goggles to rerank additively (presets: docs-first, research, news-balanced, or custom rules), prefetch to warm the cache with the top hits, google:false to skip Google.",
+			"Search the web; returns deduped, cross-engine ranked results with title, url, snippet, and sourceType (official-docs/repo/academic/maintainer-blog/website/community/news/social). No API keys — runs DDG, Brave, Yahoo, and Bing in parallel, capped at ~7s (returns deterministic partial results at the deadline). Google is enabled by default when Chrome CDP is available; Reddit is an automatic CDP companion whenever CDP is available, including when google:false. Common: query, max. Situational: compact:true for URL-scouting (one line per result — title + url + sourceType, no snippet), goggles to rerank additively (presets: docs-first, research, news-balanced, or custom rules), prefetch to warm the cache with the top hits, google:false to skip Google only.",
 		promptSnippet: "Search the web for current information or references",
 		promptGuidelines: [
 			"Use aio-websearch when the user asks a question that requires current or external information not in your training data.",
 			"After getting search results, use aio-webfetch or aio-webpull to retrieve the full content of the most relevant result.",
-			"Runs DDG/Brave/Yahoo/Bing/Mojeek + Google in parallel. Google requires headless Chrome (auto-launched). Set google: false to skip.",
+			"Runs DDG/Brave/Yahoo/Bing in parallel. Google requires headless Chrome (auto-launched) and is enabled by default. Reddit is also automatic when Chrome CDP is available; google: false skips Google but does not disable Reddit. Set google: false to skip Google.",
 			"Set compact: true for URL scouting — one line per result (title + URL + sourceType, no snippet) to minimize token waste.",
 		],
 		parameters: Type.Object({
@@ -98,11 +113,12 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 						? Math.floor(prefetchParam)
 						: 0;
 
-			const SEARCH_TIMEOUT = 7000;
-			// Chrome cold-start can take up to 30s; fire it in parallel so startup
-			// time does not consume the search-race window.
-			const redditEnabled =
-				cdpAvailableGA() && isProviderAvailable("reddit");
+			// Chrome cold-start can take up to 30s; fire it in parallel, but never
+			// let startup or a CDP provider extend the documented response deadline.
+			const redditEnabled = shouldRunReddit(
+				cdpAvailableGA(),
+				isProviderAvailable("reddit"),
+			);
 			// Track why Google produced no results so a silent zero is surfaced
 			// instead of looking like Google was never attempted (B4).
 			const googleEnabled =
@@ -147,7 +163,7 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 						brave: r.braveCount,
 						yahoo: r.yahooCount,
 						bing: r.bingCount,
-						redditCount: r.redditCount,
+						reddit: r.redditCount,
 					},
 					engineStatus: r.engineStatus as EngineStatusMap | undefined,
 				}),
@@ -168,7 +184,7 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 					try {
 						await chromeReady;
 						const g = await googleSearch(query, {
-							timeoutMs: SEARCH_TIMEOUT,
+							timeoutMs: SEARCH_DEADLINE_MS,
 							maxResults: max,
 						});
 						const results = g.results.map((r) => ({
@@ -195,9 +211,11 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 			}
 
 			// Reddit CDP search (synthetic engine — no external APIs)
+			const redditStartedAt = Date.now();
 			let redditPromise: Promise<{
 				source: "reddit";
 				results: SearchResult[];
+				latencyMs: number;
 			}>;
 			if (redditEnabled) {
 				redditPromise = (async () => {
@@ -206,11 +224,19 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 						const r = await searchReddit(query);
 						if (!r) {
 							redditStatus = "unavailable (CDP search returned null)";
-							return { source: "reddit" as const, results: [] };
+							return {
+								source: "reddit" as const,
+								results: [],
+								latencyMs: Date.now() - redditStartedAt,
+							};
 						}
 						if (!r.ok) {
 							redditStatus = `error (${r.error})`;
-							return { source: "reddit" as const, results: [] };
+							return {
+								source: "reddit" as const,
+								results: [],
+								latencyMs: r.elapsed,
+							};
 						}
 						const results = r.results.map((item) => ({
 							title: item.title,
@@ -221,39 +247,42 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 						redditStatus = results.length
 							? "ok"
 							: "empty (Reddit returned 0 results)";
-						return { source: "reddit" as const, results };
+						return {
+							source: "reddit" as const,
+							results,
+							latencyMs: r.elapsed,
+						};
 					} catch (err) {
 						recordProviderNetworkFailure("reddit", String(err));
 						redditStatus = `error (${String(err).slice(0, 120)})`;
-						return { source: "reddit" as const, results: [] };
+						return {
+							source: "reddit" as const,
+							results: [],
+							latencyMs: Date.now() - redditStartedAt,
+						};
 					}
 				})();
 			} else {
 				redditPromise = Promise.resolve({
 					source: "reddit" as const,
 					results: [],
+					latencyMs: 0,
 				});
 			}
 
-			// Outer timeout must cover Chrome cold-start (≤30s) + actual search.
-			const OUTER_TIMEOUT = chromeReady ? 40000 : SEARCH_TIMEOUT;
-			let timeoutHandle: ReturnType<typeof setTimeout>;
-			const timeoutPromise = new Promise<null>((r) => {
-				timeoutHandle = setTimeout(() => r(null), OUTER_TIMEOUT);
-				timeoutHandle.unref?.();
-			});
-
-			const allPromise = Promise.all([
-				httpPromise,
-				googlePromise,
-				redditPromise,
-			]);
-			let result: Awaited<typeof allPromise> | null;
-			try {
-				result = await Promise.race([allPromise, timeoutPromise]);
-			} finally {
-				clearTimeout(timeoutHandle!);
-			}
+			// This is a hard response deadline. Providers are observed as they settle;
+			// after timeout we use only the values already available and detach from
+			// late CDP completion. Do not replace this with allSettled: Reddit can
+			// spend 30s navigating plus 25s hydrating after the response is due.
+			const collected = await collectProviderResults(
+				[
+					["http", httpPromise],
+					["google", googlePromise],
+					["reddit", redditPromise],
+				],
+				SEARCH_DEADLINE_MS,
+			);
+			const result = collected.values;
 
 			let httpResults: SearchResult[] = [];
 			let googleResults: SearchResult[] = [];
@@ -261,27 +290,32 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 			let httpCounts = { ddg: 0, brave: 0, yahoo: 0, bing: 0, reddit: 0 };
 			let engineStatus: EngineStatusMap | undefined;
 
-			if (result) {
-				httpResults = result[0].results;
-				googleResults = result[1].results;
-				redditResults = result[2].results;
-				httpCounts = (result[0] as any).httpCounts ?? httpCounts;
-				engineStatus = (result[0] as any).engineStatus ?? engineStatus;
-			} else {
-				const settled = await Promise.allSettled([
-					httpPromise,
-					googlePromise,
-					redditPromise,
-				]);
-				if (settled[0].status === "fulfilled") {
-					httpResults = settled[0].value.results;
-					httpCounts = (settled[0].value as any).httpCounts ?? httpCounts;
-					engineStatus = (settled[0].value as any).engineStatus ?? engineStatus;
-				}
-				if (settled[1].status === "fulfilled")
-					googleResults = settled[1].value.results;
-				if (settled[2].status === "fulfilled")
-					redditResults = settled[2].value.results;
+			const httpResult = result.http as
+				| {
+						results: SearchResult[];
+						httpCounts: typeof httpCounts;
+						engineStatus?: EngineStatusMap;
+				  }
+				| undefined;
+			const googleResult = result.google as
+				| { results: SearchResult[] }
+				| undefined;
+			const redditResult = result.reddit as
+				| { results: SearchResult[]; latencyMs: number }
+				| undefined;
+			if (httpResult) {
+				httpResults = httpResult.results;
+				httpCounts = httpResult.httpCounts ?? httpCounts;
+				engineStatus = httpResult.engineStatus ?? engineStatus;
+			}
+			if (googleResult) googleResults = googleResult.results;
+			if (redditResult) redditResults = redditResult.results;
+
+			if (collected.timedOut) {
+				if (googleEnabled && !googleResult)
+					googleStatus = `timeout (search deadline ${SEARCH_DEADLINE_MS}ms)`;
+				if (redditEnabled && !redditResult)
+					redditStatus = `timeout (search deadline ${SEARCH_DEADLINE_MS}ms)`;
 			}
 
 			const buckets = buildResultBuckets(httpResults, "http");
@@ -304,8 +338,37 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 				buckets.set(r.url, list);
 			}
 
+			// Keep Reddit's count/status in the same engine map as the HTTP
+			// providers. This is the source of truth for notes and TUI output.
+			if (engineStatus && redditEnabled) {
+				engineStatus = {
+					...engineStatus,
+					reddit: {
+						count: redditResults.length,
+						status: redditResult
+							? classifyRedditStatus(redditStatus, redditResults.length)
+							: "timeout",
+						latencyMs: redditResult?.latencyMs ?? SEARCH_DEADLINE_MS,
+					},
+				};
+			}
+
 			const scored = scoreAndRankResults(buckets, query, goggles);
 			const merged = scored.map((s) => s.result);
+
+			const resultDetails = {
+				query,
+				results: merged.slice(0, 25),
+				...httpCounts,
+				engineStatus,
+				googleCount: googleResults.length,
+				googleStatus,
+				redditCount: redditResults.length,
+				redditStatus,
+				durationMs: Date.now() - startedAt,
+				deadlineMs: SEARCH_DEADLINE_MS,
+				timedOut: collected.timedOut,
+			};
 
 			if (!merged.length) {
 				return {
@@ -315,7 +378,7 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 							text: `No search results found for "${query}".`,
 						},
 					],
-					details: { query, results: [] },
+					details: resultDetails,
 				};
 			}
 
@@ -369,13 +432,8 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 				googleStatus !== "disabled (google: false)"
 					? `\n_(Google: requested but returned nothing — ${googleStatus})_`
 					: "";
-			// Surface a requested-but-empty Reddit so a silent zero is visible.
-			const redditNote =
-				redditEnabled &&
-				redditResults.length === 0 &&
-				redditStatus !== "disabled (reddit: false)"
-					? `\n_(Reddit: requested but returned nothing — ${redditStatus})_`
-					: "";
+			// Surface any non-ok engine (including Reddit) through the shared status
+			// map so counts, notes, and TUI output cannot disagree.
 
 			// Surface any non-ok HTTP engine (down / rate-limited / cooled-down /
 			// empty) so a failed engine is distinguishable from a legitimately
@@ -394,22 +452,14 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 				renderSearchResults(limited, { compact }),
 				prefetchNote,
 				googleNote,
-				redditNote,
 				engineNotes,
 			].join("\n");
 
 			return {
 				content: [{ type: "text", text }],
 				details: {
-					query,
+					...resultDetails,
 					results: limited,
-					...httpCounts,
-					engineStatus,
-					googleCount: googleResults.length,
-					googleStatus,
-					redditCount: redditResults.length,
-					redditStatus,
-					durationMs: Date.now() - startedAt,
 					prefetchCount: prefetchUrls.length,
 					goggles: goggles?.name,
 					compact,
@@ -437,8 +487,8 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 			if (details.braveCount) engines.push(`Brave:${details.braveCount}`);
 			if (details.yahooCount) engines.push(`Yahoo:${details.yahooCount}`);
 			if (details.bingCount) engines.push(`Bing:${details.bingCount}`);
-			if (details.mojeekCount) engines.push(`Mojeek:${details.mojeekCount}`);
 			if (details.googleCount) engines.push(`Google:${details.googleCount}`);
+			if (details.redditCount) engines.push(`Reddit:${details.redditCount}`);
 			const engineStr = engines.join("+") || "HTTP";
 
 			const dur = details.durationMs ?? 0;
