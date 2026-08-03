@@ -39,13 +39,24 @@ export async function cdpIsAvailable(portPath?: string): Promise<boolean> {
 		if (!port || isNaN(port)) return false;
 
 		const probe = await new Promise<boolean>((resolve) => {
-			const req = http.get(`http://localhost:${port}/json/version`, (res) =>
-				resolve(res.statusCode === 200),
-			);
-			req.on("error", () => resolve(false));
+			let settled = false;
+			const finish = (value: boolean) => {
+				if (settled) return;
+				settled = true;
+				resolve(value);
+			};
+			const req = http.get(`http://localhost:${port}/json/version`, (res) => {
+				// This is only a status probe. Consume and close the body so it
+				// cannot keep the agent's socket alive.
+				res.on("error", () => {});
+				res.resume();
+				res.destroy();
+				finish(res.statusCode === 200);
+			});
+			req.on("error", () => finish(false));
 			req.setTimeout(3000, () => {
 				req.destroy();
-				resolve(false);
+				finish(false);
 			});
 		});
 		return probe;
@@ -64,9 +75,15 @@ export class CDPClient {
 	#id = 0;
 	#pending = new Map<
 		number,
-		{ resolve: (v: any) => void; reject: (e: Error) => void }
+		{
+			resolve: (v: any) => void;
+			reject: (e: Error) => void;
+			timer: ReturnType<typeof setTimeout>;
+		}
 	>();
 	#closeHandlers: Array<() => void> = [];
+	#closed = false;
+	#opened = false;
 	wsUrl: string;
 
 	constructor(wsUrl: string) {
@@ -77,11 +94,28 @@ export class CDPClient {
 		const { default: WebSocket } = await import("ws");
 		return new Promise((resolve, reject) => {
 			this.#ws = new WebSocket(this.wsUrl);
-			this.#ws.onopen = () => resolve();
-			this.#ws.onerror = (e: any) =>
-				reject(new Error(`WebSocket error: ${e.message || e.type}`));
+			this.#ws.onopen = () => {
+				this.#opened = true;
+				resolve();
+			};
+			this.#ws.onerror = (e: any) => {
+				const error = new Error(`WebSocket error: ${e.message || e.type}`);
+				// WebSocket errors are terminal for this client. Mark it closed so
+				// a caller cannot enqueue more work between error and close events.
+				this.#closed = true;
+				if (this.#pending.size === 0) {
+					if (!this.#opened) reject(error);
+				} else this.#rejectPending(error);
+				try {
+					this.#ws.close();
+				} catch {
+					// The socket may already be closing.
+				}
+			};
 			this.#ws.onclose = () => {
-				for (const h of this.#closeHandlers) h();
+				this.#closed = true;
+				this.#rejectPending(new Error("CDP connection closed"));
+				for (const h of [...this.#closeHandlers]) h();
 			};
 			this.#ws.onmessage = (ev: any) => {
 				let msg: any;
@@ -91,7 +125,8 @@ export class CDPClient {
 					return;
 				}
 				if (msg.id && this.#pending.has(msg.id)) {
-					const { resolve, reject } = this.#pending.get(msg.id)!;
+					const { resolve, reject, timer } = this.#pending.get(msg.id)!;
+					clearTimeout(timer);
 					this.#pending.delete(msg.id);
 					if (msg.error) reject(new Error(msg.error.message));
 					else resolve(msg.result);
@@ -148,6 +183,12 @@ export class CDPClient {
 				reject(new Error(`Timeout waiting for event: ${method}`));
 			}, timeout);
 		});
+		// A caller can abandon an event wait when a competing CDP operation
+		// fails (for example, navigation can reject before loadEventFired). The
+		// returned promise still rejects for callers that await it, but observing
+		// the rejection here prevents an abandoned wait from becoming an
+		// unhandled rejection that takes down the pi host.
+		promise.catch(() => {});
 		return {
 			promise,
 			cancel() {
@@ -160,29 +201,55 @@ export class CDPClient {
 		};
 	}
 
+	#rejectPending(error: Error): void {
+		for (const { reject, timer } of this.#pending.values()) {
+			clearTimeout(timer);
+			reject(error);
+		}
+		this.#pending.clear();
+	}
+
 	send(method: string, params = {}, sessionId?: string): Promise<any> {
 		const id = ++this.#id;
 		return new Promise((resolve, reject) => {
-			this.#pending.set(id, { resolve, reject });
-			const msg: any = { id, method, params };
-			if (sessionId) msg.sessionId = sessionId;
-			this.#ws.send(JSON.stringify(msg));
-			setTimeout(() => {
+			if (this.#closed || !this.#ws) {
+				reject(new Error("CDP connection is closed"));
+				return;
+			}
+			const timer = setTimeout(() => {
 				if (this.#pending.has(id)) {
 					this.#pending.delete(id);
 					reject(new Error(`Timeout: ${method}`));
 				}
 			}, CDP_CONNECT_TIMEOUT_MS);
+			this.#pending.set(id, { resolve, reject, timer });
+			const msg: any = { id, method, params };
+			if (sessionId) msg.sessionId = sessionId;
+			try {
+				this.#ws.send(JSON.stringify(msg));
+			} catch (error) {
+				clearTimeout(timer);
+				this.#pending.delete(id);
+				reject(error instanceof Error ? error : new Error(String(error)));
+			}
 		});
 	}
 
 	close(): void {
+		if (this.#closed) return;
+		this.#closed = true;
+		this.#rejectPending(new Error("CDP connection closed"));
 		if (this.#ws) this.#ws.close();
 	}
 }
 
 /** Lazily capture the main execution context via brief Runtime.enable. */
 const mainCtxCache = new Map<string, number | null>();
+
+/** Forget a session's cached context after its target is closed or detached. */
+export function clearMainContext(sessionId: string): void {
+	mainCtxCache.delete(sessionId);
+}
 
 export async function captureMainContext(
 	cdp: CDPClient,
@@ -193,10 +260,16 @@ export async function captureMainContext(
 		if (params?.context) contexts.push(params.context);
 	});
 
-	await cdp.send("Runtime.enable", {}, sessionId);
-	await new Promise((r) => setTimeout(r, 100));
-	off();
-	await cdp.send("Runtime.disable", {}, sessionId).catch(() => {});
+	let enabled = false;
+	try {
+		await cdp.send("Runtime.enable", {}, sessionId);
+		enabled = true;
+		await new Promise((r) => setTimeout(r, 100));
+	} finally {
+		// Cleanup is required even when enable or the session itself fails.
+		off();
+		if (enabled) await cdp.send("Runtime.disable", {}, sessionId).catch(() => {});
+	}
 
 	let rootFrameId: string | null = null;
 	try {

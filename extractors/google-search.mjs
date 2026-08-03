@@ -12,6 +12,7 @@
 
 import {
 	cdp,
+	closeTarget,
 	formatAnswer,
 	getOrOpenTab,
 	handleError,
@@ -183,9 +184,11 @@ async function main() {
 
 	const { query, tabPrefix } = parseArgs(cleanArgs);
 
+	let tab;
+	let caughtError;
 	try {
 		await cdp(["list"]);
-		const tab = await getOrOpenTab(tabPrefix);
+		tab = await getOrOpenTab(tabPrefix);
 
 		// Navigate to google.com
 		await cdp(["nav", tab, "https://www.google.com"], 35000);
@@ -226,16 +229,14 @@ async function main() {
 			url: finalUrl,
 			results,
 		});
-
-		// Close the tab we created to prevent memory buildup
-		try {
-			await cdp(["evalraw", tab.slice(0, 8), "Target.closeTarget", JSON.stringify({ targetId: tab })]);
-		} catch {
-			// Ignore close errors
-		}
 	} catch (e) {
-		handleError(e);
+		caughtError = e;
+	} finally {
+		// A caller-supplied tab belongs to the caller; only tear down tabs we made.
+		if (!tabPrefix && tab) await closeTarget(tab);
 	}
+	// handleError exits the process, so invoke it only after teardown completes.
+	if (caughtError) handleError(caughtError);
 }
 
 main();

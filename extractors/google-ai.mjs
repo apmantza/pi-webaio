@@ -11,6 +11,7 @@
 
 import {
 	cdp,
+	closeTarget,
 	formatAnswer,
 	getOrOpenTab,
 	handleError,
@@ -67,10 +68,12 @@ async function main() {
 
 	const { query, tabPrefix, short, locale } = parseArgs(args);
 
+	let tab;
+	let caughtError;
 	try {
 		// Only refresh page list when creating a fresh tab (no prefix provided)
 		if (!tabPrefix) await cdp(["list"]);
-		const tab = await getOrOpenTab(tabPrefix);
+		tab = await getOrOpenTab(tabPrefix);
 
 		// Build URL with language parameter (default to English)
 		const langParam = locale ? `&hl=${encodeURIComponent(locale)}` : "&hl=en";
@@ -120,16 +123,14 @@ async function main() {
 			answer: formatAnswer(answer, short),
 			sources,
 		});
-
-		// Close the tab we created to prevent memory buildup
-		try {
-			await cdp(["evalraw", tab.slice(0, 8), "Target.closeTarget", JSON.stringify({ targetId: tab })]);
-		} catch {
-			// Ignore close errors
-		}
 	} catch (e) {
-		handleError(e);
+		caughtError = e;
+	} finally {
+		// A caller-supplied tab belongs to the caller; only tear down tabs we made.
+		if (!tabPrefix && tab) await closeTarget(tab);
 	}
+	// handleError exits the process, so invoke it only after teardown completes.
+	if (caughtError) handleError(caughtError);
 }
 
 main();

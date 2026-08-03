@@ -60,17 +60,39 @@ export async function getOrOpenTab(tabPrefix) {
 		throw new Error(
 			"No Chrome tabs found. Is Chrome running with --remote-debugging-port=9222?",
 		);
-	const raw = await cdp([
-		"evalraw",
-		anchor,
-		"Target.createTarget",
-		'{"url":"about:blank"}',
-	]);
-	const { targetId } = JSON.parse(raw);
-	await cdp(["list"]); // refresh cache
-	// Inject stealth patches for anti-detection coverage (both headless + visible)
-	injectHeadlessStealth(targetId.slice(0, 8)).catch(() => {});
-	return targetId;
+
+	let targetId;
+	try {
+		const raw = await cdp([
+			"evalraw",
+			anchor,
+			"Target.createTarget",
+			'{"url":"about:blank"}',
+		]);
+		targetId = JSON.parse(raw).targetId;
+		await cdp(["list"]); // refresh cache
+		// Navigation must not begin before the new-document stealth hook exists.
+		await injectHeadlessStealth(targetId.slice(0, 8));
+		return targetId;
+	} catch (error) {
+		if (targetId) await closeTarget(targetId);
+		throw error;
+	}
+}
+
+/** Close a target created by an extractor, ignoring teardown races. */
+export async function closeTarget(targetId) {
+	if (!targetId) return;
+	try {
+		await cdp([
+			"evalraw",
+			targetId.slice(0, 8),
+			"Target.closeTarget",
+			JSON.stringify({ targetId }),
+		]);
+	} catch {
+		// The target may already be destroyed or its daemon may be gone.
+	}
 }
 
 // ============================================================================

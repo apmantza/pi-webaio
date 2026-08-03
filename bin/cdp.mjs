@@ -533,18 +533,17 @@ async function waitForDocumentReady(cdp, sid, timeoutMs = NAVIGATION_TIMEOUT) {
 async function navStr(cdp, sid, url) {
 	await cdp.send("Page.enable", {}, sid);
 	const loadEvent = cdp.waitForEvent("Page.loadEventFired", NAVIGATION_TIMEOUT);
-	const result = await cdp.send("Page.navigate", { url }, sid);
-	if (result.errorText) {
+	try {
+		const result = await cdp.send("Page.navigate", { url }, sid);
+		if (result.errorText) throw new Error(result.errorText);
+		if (result.loaderId) await loadEvent.promise;
+		await waitForDocumentReady(cdp, sid, 5000);
+		return `Navigated to ${url}`;
+	} finally {
+		// Page.navigate may reject before a load event is delivered. Always
+		// cancel the waiter so its later timeout cannot reject unhandled.
 		loadEvent.cancel();
-		throw new Error(result.errorText);
 	}
-	if (result.loaderId) {
-		await loadEvent.promise;
-	} else {
-		loadEvent.cancel();
-	}
-	await waitForDocumentReady(cdp, sid, 5000);
-	return `Navigated to ${url}`;
 }
 
 async function netStr(cdp, sid) {

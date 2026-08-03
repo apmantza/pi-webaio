@@ -7,6 +7,7 @@ import {
 	getCdpWsUrl,
 	CDPClient,
 	evalInMainContext,
+	clearMainContext,
 	cdpIsAvailable,
 } from "./_cdp-shared.ts";
 import { existsSync } from "fs";
@@ -159,110 +160,98 @@ export async function searchReddit(
 	}
 
 	const startTime = Date.now();
+	let cdp: CDPClient | undefined;
+	let targetId: string | undefined;
+	let sessionId: string | undefined;
 
 	try {
 		const wsUrl = getCdpWsUrl();
-		const cdp = new CDPClient(wsUrl);
+		cdp = new CDPClient(wsUrl);
 		await cdp.connect();
 
-		// Create a fresh tab for each search
-		const { targetId } = await cdp.send("Target.createTarget", {
-			url: "about:blank",
-		});
-		const { sessionId } = await cdp.send("Target.attachToTarget", {
+		// Keep setup inside the cleanup scope so failed attach/Page.enable
+		// cannot leak a freshly created target or its socket.
+		({ targetId } = await cdp.send("Target.createTarget", { url: "about:blank" }));
+		({ sessionId } = await cdp.send("Target.attachToTarget", {
 			targetId,
 			flatten: true,
-		});
+		}));
+		if (!targetId || !sessionId) throw new Error("CDP target setup returned no identifiers");
 		await cdp.send("Page.enable", {}, sessionId);
 
+		// Navigate to Reddit search. Cancel the competing event wait on every
+		// navigation exit, including a failed Page.navigate command.
+		const searchUrl = `https://www.reddit.com/search?q=${encodeURIComponent(query)}&sort=relevance`;
+		const loadEvent = cdp.waitForEvent("Page.loadEventFired", CDP_NAV_TIMEOUT_MS);
 		try {
-			// Navigate to Reddit search
-			const searchUrl = `https://www.reddit.com/search?q=${encodeURIComponent(query)}&sort=relevance`;
-			const loadEvent = cdp.waitForEvent(
-				"Page.loadEventFired",
-				CDP_NAV_TIMEOUT_MS,
-			);
-			const navResult = await cdp.send(
-				"Page.navigate",
-				{ url: searchUrl },
-				sessionId,
-			);
-			if (navResult.errorText) {
-				throw new Error(`Navigation failed: ${navResult.errorText}`);
-			}
+			const navResult = await cdp.send("Page.navigate", { url: searchUrl }, sessionId);
+			if (navResult.errorText) throw new Error(`Navigation failed: ${navResult.errorText}`);
 			await loadEvent.promise;
+		} finally {
+			loadEvent.cancel();
+		}
 
-			// Wait for Reddit JS to hydrate + render results
-			const POLL_INTERVAL = 1_000;
-			const pollDeadline = Date.now() + CDP_HYDRATE_TIMEOUT_MS;
-			while (Date.now() < pollDeadline) {
-				const countRaw = await cdp.send(
-					"Runtime.evaluate",
-					{
-						expression: `document.querySelectorAll('[data-testid="sdui-post-unit"], [data-testid="search-post-unit"]').length`,
-						returnByValue: true,
-					},
-					sessionId,
-				);
-				const postCount = parseInt(countRaw.result.value, 10) || 0;
-				if (postCount > 0) break;
-				await new Promise((r) => setTimeout(r, POLL_INTERVAL));
-			}
-
-			// Check for block page
-			const blocked = await cdp.send(
+		// Wait for Reddit JS to hydrate + render results
+		const POLL_INTERVAL = 1_000;
+		const pollDeadline = Date.now() + CDP_HYDRATE_TIMEOUT_MS;
+		while (Date.now() < pollDeadline) {
+			const countRaw = await cdp.send(
 				"Runtime.evaluate",
-				{ expression: buildBlockDetector(), returnByValue: true },
+				{
+					expression: `document.querySelectorAll('[data-testid="sdui-post-unit"], [data-testid="search-post-unit"]').length`,
+					returnByValue: true,
+				},
 				sessionId,
 			);
-			if (blocked.result.value === "true") {
-				return {
-					ok: false,
-					query,
-					count: 0,
-					results: [],
-					elapsed: Date.now() - startTime,
-					error: "Reddit returned a verification/block page",
-				};
-			}
-
-			// Extract search results
-			const extractor = buildSearchExtractor();
-			const raw = await evalInMainContext(cdp, sessionId, extractor);
-
-			let posts: RedditSearchResult[];
-			try {
-				posts = JSON.parse(raw);
-			} catch {
-				return {
-					ok: false,
-					query,
-					count: 0,
-					results: [],
-					elapsed: Date.now() - startTime,
-					error: "Failed to parse search results",
-				};
-			}
-
-			// Deduplicate by URL
-			const seen = new Set<string>();
-			const unique = posts.filter((p) => {
-				if (seen.has(p.url)) return false;
-				seen.add(p.url);
-				return true;
-			});
-
-			return {
-				ok: true,
-				query,
-				count: unique.length,
-				results: unique,
-				elapsed: Date.now() - startTime,
-			};
-		} finally {
-			await cdp.send("Target.closeTarget", { targetId }).catch(() => {});
-			cdp.close();
+			const postCount = parseInt(countRaw.result.value, 10) || 0;
+			if (postCount > 0) break;
+			await new Promise((r) => setTimeout(r, POLL_INTERVAL));
 		}
+
+		const blocked = await cdp.send(
+			"Runtime.evaluate",
+			{ expression: buildBlockDetector(), returnByValue: true },
+			sessionId,
+		);
+		if (blocked.result.value === true) {
+			return {
+				ok: false,
+				query,
+				count: 0,
+				results: [],
+				elapsed: Date.now() - startTime,
+				error: "Reddit returned a verification/block page",
+			};
+		}
+
+		const raw = await evalInMainContext(cdp, sessionId, buildSearchExtractor());
+		let posts: RedditSearchResult[];
+		try {
+			posts = JSON.parse(raw);
+		} catch {
+			return {
+				ok: false,
+				query,
+				count: 0,
+				results: [],
+				elapsed: Date.now() - startTime,
+				error: "Failed to parse search results",
+			};
+		}
+
+		const seen = new Set<string>();
+		const unique = posts.filter((p) => {
+			if (seen.has(p.url)) return false;
+			seen.add(p.url);
+			return true;
+		});
+		return {
+			ok: true,
+			query,
+			count: unique.length,
+			results: unique,
+			elapsed: Date.now() - startTime,
+		};
 	} catch (err) {
 		return {
 			ok: false,
@@ -272,5 +261,9 @@ export async function searchReddit(
 			elapsed: Date.now() - startTime,
 			error: `Reddit search failed: ${(err as Error).message}`,
 		};
+	} finally {
+		if (cdp && targetId) await cdp.send("Target.closeTarget", { targetId }).catch(() => {});
+		if (sessionId) clearMainContext(sessionId);
+		cdp?.close();
 	}
 }
