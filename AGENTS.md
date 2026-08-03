@@ -16,7 +16,7 @@ pi-webaio/
 ├── pi-entry.mjs              ← pi.extensions entry. Prefers compiled dist/index.js, falls back to index.ts for git installs.
 ├── src/
 │   ├── google-ai.ts          ← TypeScript wrapper — spawns CDP child processes
-│   ├── search.ts             ← Multi-engine search (DDG, Brave, Yahoo, Bing, Mojeek) + engine health, caching, dedup, source-type ranking, goggles
+│   ├── search.ts             ← HTTP search (DDG, Brave, Yahoo, Bing) + engine health, caching, dedup, source-type ranking, goggles
 │   ├── discovery.ts          ← Sitemap parsing, nav link extraction, crawling (fan-out capped)
 │   ├── bot-detection.ts      ← Structured bot-block detection (Cloudflare, Anubis, etc.)
 │   ├── data-islands.ts       ← SPA hydration data recovery from <script> JSON
@@ -131,14 +131,14 @@ pi-webaio/
 
 ### 1. `aio-websearch`
 
-- Searches DuckDuckGo, Brave, Yahoo, Bing, Mojeek, and Google in parallel (6 engines)
+- Searches DuckDuckGo, Brave, Yahoo, and Bing plus Google and Reddit CDP companions when Chrome is available
 - Google uses headless Chrome via CDP (auto-launched)
 - 7-second cap — returns whatever is ready
 - 10-minute cache (persisted to disk)
 - Parameters: `query` (string), `max` (number, default 15), `google` (boolean, default true), `goggles` (optional rerank preset/rules), `prefetch` (opt-in speculative cache warm of top hits)
 - Returns deduplicated, cross-engine-scored results with title, URL, snippet, domain, sources, and a per-result `sourceType` (official-docs, repo, academic, maintainer-blog, website, community, news, social)
 - TUI: polished call/progress/result rendering with engine counts and per-result expand
-- Google can be skipped with `google: false`; when requested but empty, the result carries a `googleStatus` field and a note instead of silently dropping Google (v0.7.3)
+- Google can be skipped with `google: false`; Reddit is independent and remains automatic when CDP is available. When Google is requested but empty, the result carries a `googleStatus` field and a note instead of silently dropping Google (v0.7.3)
 
 ### 2. `aio-webfetch`
 

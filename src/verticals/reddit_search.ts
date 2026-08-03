@@ -1,7 +1,7 @@
 // ─── Reddit search (CDP) ───────────────────────────────────────────
 // Synthetic Reddit search via Chrome CDP — no external APIs, no PullPush.
 // Uses the dedicated Chrome instance (greedysearch-chrome-profile).
-// Activated by REDDIT_CDP_SEARCH=1 or when Chrome is available.
+// Activated automatically when the shared Chrome CDP instance is available.
 
 import {
 	getCdpWsUrl,

@@ -12,7 +12,7 @@ Common ways to use pi-webaio from inside pi.
 Use aio-websearch to find the latest React documentation
 ```
 
-Google search is on by default (via headless Chrome CDP). To skip it:
+Google search is on by default (via headless Chrome CDP). Reddit is also an automatic CDP companion when Chrome is available. To skip Google (without disabling Reddit):
 
 ```
 Use aio-websearch to search for "Rust serde" (google: false)

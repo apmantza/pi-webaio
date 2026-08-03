@@ -14,7 +14,7 @@ other MCP-compatible host — **without requiring the pi coding-agent runtime**.
 
 | MCP tool name    | Description |
 |------------------|-------------|
-| `aio-websearch`  | Search the web (DDG, Brave, Yahoo, Bing, Mojeek, Google) in parallel |
+| `aio-websearch`  | Search the web (DDG, Brave, Yahoo, Bing, Google, and Reddit CDP when available) with a hard 7s response deadline |
 | `aio-webfetch`   | Fetch one or more URLs and convert to markdown with anti-bot fingerprinting |
 | `aio-webcontent` | Retrieve previously fetched content from session cache by URL |
 | `aio-webresult`  | Retrieve a stored web scrape result by response ID |

@@ -8,7 +8,7 @@ Detailed feature reference for pi-webaio.
 
 **pi-webaio** is a pi extension that gives your agent eyes on the web. It registers eight tools that let pi search, fetch, discover, and archive web content — all without API keys or paid services.
 
-When you search, pi-webaio queries 6 engines in parallel (DuckDuckGo, Brave, Yahoo, Bing, Mojeek, and Google via headless Chrome). Results that show up across multiple engines rank higher — consensus is a signal of quality. When you fetch a page, it tries 14 different extraction backends in order, stripping cookie banners and anti-bot noise along the way, so you get clean markdown instead of raw HTML soup. Paywalled news sites (NYT, WaPo, FT, WSJ, etc.) can be bypassed on opt-in with a strategy chain that tries archive.org, bot-UA impersonation, and Playwright with paywall-script blocking.
+When you search, pi-webaio queries four HTTP engines (DuckDuckGo, Brave, Yahoo, and Bing) plus Google and an automatic Reddit CDP companion when Chrome is available. Results that show up across multiple engines rank higher — consensus is a signal of quality. When you fetch a page, it tries 14 different extraction backends in order, stripping cookie banners and anti-bot noise along the way, so you get clean markdown instead of raw HTML soup. Paywalled news sites (NYT, WaPo, FT, WSJ, etc.) can be bypassed on opt-in with a strategy chain that tries archive.org, bot-UA impersonation, and Playwright with paywall-script blocking.
 
 Long pages are **not** auto-summarized by default — instead you get a frugal, lossless preview (a heading outline plus the single largest content section), and the full content is always saved to disk. Pass `summarize: true` to opt in to an AI summary via Google AI Mode (headless Chrome). For sites with API-first extractors (GitHub, YouTube, npm, PyPI, crates.io, RubyGems, Packagist, pub.dev, Go, NuGet, Reddit, Hacker News, arXiv, Stack Exchange, Wikipedia, Open Library, DEV.to, SonarCloud, docs sites, Context7, DeepWiki), pi-webaio bypasses HTML scraping entirely and pulls structured data directly.
 
@@ -213,16 +213,16 @@ The TUI error view shows the phase + category badge and the suggested retry hint
 
 ## How search ranking works
 
-When you search, pi-webaio queries 6 engines in parallel: DuckDuckGo, Brave, Yahoo, Bing, Mojeek, and Google (via headless Chrome). Results are scored by several signals:
+When you search, pi-webaio queries four HTTP engines (DuckDuckGo, Brave, Yahoo, and Bing), Google (via headless Chrome), and Reddit (via CDP when available). Results are scored by several signals:
 
-- **Engine authority** — Google (5), Bing (3), DDG (2), Brave (2), Mojeek (2), Yahoo (1)
+- **Engine authority** — Google (5), Reddit (4), Bing (3), DDG (2), Brave (2), Yahoo (1)
 - **Cross-engine consensus** — +2 for each additional engine that agrees on the same URL
 - **Source type** — each result is classified (`official-docs` / `repo` / `academic` / `maintainer-blog` / `website` / `community` / `news` / `social`) so official docs and repos outrank SEO blogspam and social results sink
 - **Preferred-domain boost** — a query-keyword → canonical official-domain map surfaces the right vendor docs (e.g. "prisma migrate" → `prisma.io`)
 - **Goggles** (opt-in) — rerank presets (`docs-first`, `research`, `news-balanced`) or custom rules, folded in as a purely additive term
 - **Domain diversity cap** — the top slice keeps at most N results per domain (default 2); excess same-domain results are deferred to the end, so one domain can't dominate the top (nothing is dropped — recall is preserved)
 
-A result returned by all 6 engines outranks a Google-only result. Metadata (title/snippet) comes from the highest-weight engine for each URL.
+A result returned by all available engines outranks a Google-only result. Metadata (title/snippet) comes from the highest-weight engine for each URL. The overall search response has a hard 7-second deadline and may return deterministic partial results when CDP is slow.
 
 The result header reports per-engine status and latency (e.g. `DDG:10 (1.2s)`), with a note for any non-ok engine — `_(Brave: cooled down after recent failures)_`, `_(Yahoo: HTTP 429)_`, `_(Bing: timed out after 4.5 s)_` — so a down or rate-limited engine never looks identical to a legitimately-empty one. Each engine runs against a ~4.5 s deadline so a stalled engine can't hold up the merge.
 
