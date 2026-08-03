@@ -1,0 +1,58 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import {
+	collectProviderResults,
+	shouldRunReddit,
+} from "../src/search-orchestration.ts";
+
+test("collectProviderResults returns settled providers before the deadline", async () => {
+	const result = await collectProviderResults(
+		[
+			["fast", Promise.resolve("ready")],
+			["empty", Promise.reject(new Error("provider failed"))],
+		],
+		100,
+	);
+
+	assert.equal(result.timedOut, false);
+	assert.deepEqual(result.values, { fast: "ready" });
+});
+
+test("collectProviderResults returns partial results at the deadline", async () => {
+	const unhandled = [];
+	const onUnhandled = (reason) => unhandled.push(reason);
+	process.on("unhandledRejection", onUnhandled);
+	const started = Date.now();
+
+	try {
+		const result = await collectProviderResults(
+			[
+				["fast", Promise.resolve("ready")],
+				[
+					"late",
+					new Promise((_, reject) =>
+						setTimeout(() => reject(new Error("late provider failure")), 40),
+					),
+				],
+			],
+			10,
+		);
+
+		assert.equal(result.timedOut, true);
+		assert.deepEqual(result.values, { fast: "ready" });
+		assert.ok(Date.now() - started < 100, "deadline should return promptly");
+
+		// Let the abandoned provider settle. Its rejection must already be
+		// observed and must not become a host-level unhandled rejection.
+		await new Promise((resolve) => setTimeout(resolve, 60));
+		assert.deepEqual(unhandled, []);
+	} finally {
+		process.off("unhandledRejection", onUnhandled);
+	}
+});
+
+test("shouldRunReddit requires both CDP and provider availability", () => {
+	assert.equal(shouldRunReddit(true, true), true);
+	assert.equal(shouldRunReddit(false, true), false);
+	assert.equal(shouldRunReddit(true, false), false);
+});

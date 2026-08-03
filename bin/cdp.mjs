@@ -31,6 +31,14 @@ const MIN_TARGET_PREFIX_LEN = 8;
 const _tmpdir = tmpdir().replaceAll("\\", "/");
 const PAGES_CACHE = `${_tmpdir}/cdp-pages.json`;
 
+function parseJson(text, context = "JSON response") {
+	try {
+		return JSON.parse(text);
+	} catch (error) {
+		throw new Error(`Invalid ${context}`, { cause: error });
+	}
+}
+
 function sockPath(targetId) {
 	// Windows: use named pipes (reliable cross-platform IPC in Node.js)
 	if (platform() === "win32") return `\\\\.\\pipe\\cdp-${targetId}`;
@@ -146,7 +154,12 @@ class CDP {
 				rej(new Error(`WebSocket error: ${e.message || e.type}`));
 			this.#ws.onclose = () => this.#closeHandlers.forEach((h) => h());
 			this.#ws.onmessage = (ev) => {
-				const msg = JSON.parse(ev.data);
+				let msg;
+				try {
+					msg = parseJson(ev.data, "CDP message");
+				} catch {
+					return;
+				}
 				if (msg.id && this.#pending.has(msg.id)) {
 					const { resolve, reject } = this.#pending.get(msg.id);
 					this.#pending.delete(msg.id);
@@ -555,7 +568,7 @@ async function netStr(cdp, sid) {
     duration: Math.round(e.duration), size: e.transferSize
   })))`,
 	);
-	return JSON.parse(raw)
+	return parseJson(raw, "resource metrics")
 		.map(
 			(e) =>
 				`${String(e.duration).padStart(5)}ms  ${String(e.size || "?").padStart(8)}B  ${e.type.padEnd(8)}  ${e.name}`,
@@ -575,7 +588,7 @@ async function clickStr(cdp, sid, selector) {
     })()
   `;
 	const result = await evalStr(cdp, sid, expr);
-	const r = JSON.parse(result);
+	const r = parseJson(result, "click result");
 	if (!r.ok) throw new Error(r.error);
 	return `Clicked <${r.tag}> "${r.text}"`;
 }
@@ -871,7 +884,14 @@ function sendCommand(conn, req) {
 			if (idx === -1) return;
 			settled = true;
 			cleanup();
-			resolve(JSON.parse(buf.slice(0, idx)));
+			let response;
+			try {
+				response = parseJson(buf.slice(0, idx), "daemon response");
+			} catch (error) {
+				onError(error);
+				return;
+			}
+			resolve(response);
 			conn.end();
 		};
 
@@ -1052,7 +1072,10 @@ async function main() {
 			console.error('No page list cached. Run "cdp list" first.');
 			process.exit(1);
 		}
-		const pages = JSON.parse(readFileSync(PAGES_CACHE, "utf8"));
+		const pages = parseJson(
+			readFileSync(PAGES_CACHE, "utf8"),
+			"cached page list",
+		);
 		targetId = resolvePrefix(
 			targetPrefix,
 			pages.map((p) => p.targetId),

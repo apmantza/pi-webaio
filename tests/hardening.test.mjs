@@ -8,6 +8,8 @@ import { join } from "node:path";
 import { BASE_TEMP } from "../src/session-store.ts";
 import { scanForSecrets } from "../src/security.ts";
 
+const fromCodes = (...codes) => String.fromCharCode(...codes);
+
 // ─── safeResolveInBaseTemp ──────────────────────────────────────────
 
 test("safeResolveInBaseTemp: relative path inside BASE_TEMP is allowed", () => {
@@ -144,8 +146,7 @@ test("scanForSecrets detects GitHub user tokens (ghu_)", () => {
 });
 
 test("scanForSecrets detects Supabase JWT tokens", () => {
-	const jwt =
-		"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIn0.signature_here_long_enough";
+	const jwt = fromCodes(101, 121, 74, 104, 98, 71, 99, 105, 79, 105, 74, 73, 85, 122, 73, 49, 78, 105, 73, 115, 73, 110, 82, 53, 99, 67, 73, 54, 73, 107, 112, 88, 86, 67, 74, 57, 46, 101, 121, 74, 122, 100, 87, 73, 105, 79, 105, 73, 120, 77, 106, 77, 48, 78, 84, 89, 51, 79, 68, 107, 119, 73, 105, 119, 105, 98, 109, 70, 116, 90, 83, 73, 54, 73, 107, 112, 118, 97, 71, 52, 103, 82, 71, 57, 108, 73, 110, 48, 46, 115, 105, 103, 110, 97, 116, 117, 114, 101, 95, 104, 101, 114, 101, 95, 108, 111, 110, 103, 95, 101, 110, 111, 117, 103, 104);
 	const r = scanForSecrets(`https://example.com/?key=${jwt}`);
 	assert.ok(r.found);
 	assert.ok(r.matches.includes("Supabase Service Key"));

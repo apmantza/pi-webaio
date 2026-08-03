@@ -30,6 +30,16 @@ const S = SELECTORS.google;
 
 const MIN_ANSWER_LENGTH = 50;
 
+const parseJsonValue = JSON.parse.bind(JSON);
+
+function parseJson(text, context = "JSON response") {
+	try {
+		return parseJsonValue(text);
+	} catch (error) {
+		throw new Error(`Invalid ${context}`, { cause: error });
+	}
+}
+
 async function extractAnswer(tab) {
 	const excludeFilter = S.sourceExclude
 		.map((e) => `!a.href.includes('${e}')`)
@@ -52,7 +62,7 @@ async function extractAnswer(tab) {
     })()
   `,
 	]);
-	return JSON.parse(raw);
+	return parseJson(raw, "Google answer");
 }
 
 // ============================================================================

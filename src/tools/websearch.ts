@@ -274,7 +274,7 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 			// after timeout we use only the values already available and detach from
 			// late CDP completion. Do not replace this with allSettled: Reddit can
 			// spend 30s navigating plus 25s hydrating after the response is due.
-			const collected = await collectProviderResults(
+			const collected = await collectProviderResults<string, unknown>(
 				[
 					["http", httpPromise],
 					["google", googlePromise],
