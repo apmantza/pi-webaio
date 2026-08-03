@@ -14,8 +14,13 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { WebSocketServer } from "ws";
 
-const { cdpIsAvailable, captureMainContext, clearMainContext, CDPClient, evalInMainContext } =
-	await import("../src/verticals/_cdp-shared.ts");
+const {
+	cdpIsAvailable,
+	captureMainContext,
+	clearMainContext,
+	CDPClient,
+	evalInMainContext,
+} = await import("../src/verticals/_cdp-shared.ts");
 const { searchReddit } = await import("../src/verticals/reddit_search.ts");
 
 test("Reddit search: returns null when Chrome DevToolsActivePort is missing", async () => {
@@ -108,10 +113,21 @@ test("CDP liveness probe consumes and closes the response", async () => {
 	server.on("connection", (socket) => socket.once("close", requestClosed));
 	const dir = await mkdtemp(join(tmpdir(), "pi-webaio-cdp-"));
 	const port = server.address().port;
-	await writeFile(join(dir, "DevToolsActivePort"), `${port}\n/devtools/browser/test\n`);
+	await writeFile(
+		join(dir, "DevToolsActivePort"),
+		`${port}\n/devtools/browser/test\n`,
+	);
 	try {
 		assert.equal(await cdpIsAvailable(join(dir, "DevToolsActivePort")), true);
-		await Promise.race([closed, new Promise((_, reject) => setTimeout(() => reject(new Error("response socket remained open")), 500))]);
+		await Promise.race([
+			closed,
+			new Promise((_, reject) =>
+				setTimeout(
+					() => reject(new Error("response socket remained open")),
+					500,
+				),
+			),
+		]);
 	} finally {
 		await new Promise((resolve) => server.close(resolve));
 	}
@@ -127,7 +143,10 @@ test("execution-context listener is removed when Runtime.enable fails", async ()
 			throw new Error("session closed");
 		},
 	};
-	await assert.rejects(captureMainContext(failing, "session-failed"), /session closed/);
+	await assert.rejects(
+		captureMainContext(failing, "session-failed"),
+		/session closed/,
+	);
 	assert.equal(removed, true);
 });
 
@@ -142,9 +161,16 @@ test("execution-context listener cleanup and explicit cache cleanup", async () =
 		async send(method) {
 			calls.push(method);
 			if (method === "Runtime.enable") {
-				for (const handler of listeners) handler({ context: { id: 7, auxData: { isDefault: true, type: "default", frameId: "root" } } });
+				for (const handler of listeners)
+					handler({
+						context: {
+							id: 7,
+							auxData: { isDefault: true, type: "default", frameId: "root" },
+						},
+					});
 			}
-			if (method === "Page.getFrameTree") return { frameTree: { frame: { id: "root" } } };
+			if (method === "Page.getFrameTree")
+				return { frameTree: { frame: { id: "root" } } };
 			if (method === "Runtime.evaluate") return { result: { value: "ok" } };
 			return {};
 		},

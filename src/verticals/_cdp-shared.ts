@@ -268,7 +268,8 @@ export async function captureMainContext(
 	} finally {
 		// Cleanup is required even when enable or the session itself fails.
 		off();
-		if (enabled) await cdp.send("Runtime.disable", {}, sessionId).catch(() => {});
+		if (enabled)
+			await cdp.send("Runtime.disable", {}, sessionId).catch(() => {});
 	}
 
 	let rootFrameId: string | null = null;

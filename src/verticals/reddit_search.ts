@@ -171,21 +171,32 @@ export async function searchReddit(
 
 		// Keep setup inside the cleanup scope so failed attach/Page.enable
 		// cannot leak a freshly created target or its socket.
-		({ targetId } = await cdp.send("Target.createTarget", { url: "about:blank" }));
+		({ targetId } = await cdp.send("Target.createTarget", {
+			url: "about:blank",
+		}));
 		({ sessionId } = await cdp.send("Target.attachToTarget", {
 			targetId,
 			flatten: true,
 		}));
-		if (!targetId || !sessionId) throw new Error("CDP target setup returned no identifiers");
+		if (!targetId || !sessionId)
+			throw new Error("CDP target setup returned no identifiers");
 		await cdp.send("Page.enable", {}, sessionId);
 
 		// Navigate to Reddit search. Cancel the competing event wait on every
 		// navigation exit, including a failed Page.navigate command.
 		const searchUrl = `https://www.reddit.com/search?q=${encodeURIComponent(query)}&sort=relevance`;
-		const loadEvent = cdp.waitForEvent("Page.loadEventFired", CDP_NAV_TIMEOUT_MS);
+		const loadEvent = cdp.waitForEvent(
+			"Page.loadEventFired",
+			CDP_NAV_TIMEOUT_MS,
+		);
 		try {
-			const navResult = await cdp.send("Page.navigate", { url: searchUrl }, sessionId);
-			if (navResult.errorText) throw new Error(`Navigation failed: ${navResult.errorText}`);
+			const navResult = await cdp.send(
+				"Page.navigate",
+				{ url: searchUrl },
+				sessionId,
+			);
+			if (navResult.errorText)
+				throw new Error(`Navigation failed: ${navResult.errorText}`);
 			await loadEvent.promise;
 		} finally {
 			loadEvent.cancel();
@@ -262,7 +273,8 @@ export async function searchReddit(
 			error: `Reddit search failed: ${(err as Error).message}`,
 		};
 	} finally {
-		if (cdp && targetId) await cdp.send("Target.closeTarget", { targetId }).catch(() => {});
+		if (cdp && targetId)
+			await cdp.send("Target.closeTarget", { targetId }).catch(() => {});
 		if (sessionId) clearMainContext(sessionId);
 		cdp?.close();
 	}

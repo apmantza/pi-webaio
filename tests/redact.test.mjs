@@ -34,19 +34,389 @@ function renderAll(component, width = 120) {
 // intentionally fake test values as committed credentials.
 const fromCodes = (...codes) => String.fromCharCode(...codes);
 const fixture = (...parts) => parts.join("");
-const BEARER = fromCodes(97, 98, 99, 100, 101, 102, 49, 50, 51, 52, 53, 54, 55, 56, 57, 48, 65, 66, 67, 68, 69, 70);
-const BASIC = fromCodes(100, 88, 78, 108, 99, 106, 112, 119, 89, 88, 78, 122, 100, 50, 57, 121, 90, 65, 61, 61);
-const JWT = fromCodes(101, 121, 74, 104, 98, 71, 99, 105, 79, 105, 74, 73, 85, 122, 73, 49, 78, 105, 74, 57, 46, 101, 121, 74, 122, 100, 87, 73, 105, 79, 105, 73, 120, 77, 106, 77, 48, 78, 84, 89, 51, 79, 68, 107, 119, 73, 110, 48, 46, 100, 111, 122, 106, 103, 78, 114, 121, 80, 52, 74, 51, 106, 86, 109, 78, 72, 108, 48, 119, 53, 78, 95, 88, 103, 76, 48, 110, 51, 73, 57, 80, 108, 70, 85, 80, 48, 84, 72, 115, 82, 56, 85);
-const PEM_BODY = fromCodes(77, 73, 73, 66, 79, 103, 73, 66, 65, 65, 74, 66, 65, 75, 106, 51, 52, 71, 107, 120, 70, 104, 68, 57, 48, 118, 99, 78, 76, 89, 76, 73, 110, 70, 69, 88, 54, 80, 112, 121, 49, 116, 80, 102);
-const RSA_BEGIN = fromCodes(45, 45, 45, 45, 45, 66, 69, 71, 73, 78, 32, 82, 83, 65, 32, 80, 82, 73, 86, 65, 84, 69, 32, 75, 69, 89, 45, 45, 45, 45, 45);
-const RSA_END = fromCodes(45, 45, 45, 45, 45, 69, 78, 68, 32, 82, 83, 65, 32, 80, 82, 73, 86, 65, 84, 69, 32, 75, 69, 89, 45, 45, 45, 45, 45);
-const OPENSSH_BEGIN = fromCodes(45, 45, 45, 45, 45, 66, 69, 71, 73, 78, 32, 79, 80, 69, 78, 83, 83, 72, 32, 80, 82, 73, 86, 65, 84, 69, 32, 75, 69, 89, 45, 45, 45, 45, 45);
-const PASSWORD = fromCodes(83, 117, 112, 101, 114, 83, 101, 99, 114, 101, 116, 57, 57);
-const API_KEY = fromCodes(97, 98, 99, 100, 101, 102, 49, 50, 51, 52, 53, 54, 55, 56, 57, 48);
-const ACCESS_TOKEN = fromCodes(65, 49, 98, 50, 67, 51, 100, 52, 69, 53, 102, 54);
-const GITHUB_TOKEN = fromCodes(103, 104, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 65, 66, 67, 68, 69, 70);
-const CLIENT_SECRET = fromCodes(120, 121, 122, 88, 89, 90, 49, 50, 51, 52, 53, 54);
-const HUNTER_PASSWORD = fromCodes(72, 117, 110, 116, 101, 114, 50, 83, 101, 99, 114, 101, 116);
+const BEARER = fromCodes(
+	97,
+	98,
+	99,
+	100,
+	101,
+	102,
+	49,
+	50,
+	51,
+	52,
+	53,
+	54,
+	55,
+	56,
+	57,
+	48,
+	65,
+	66,
+	67,
+	68,
+	69,
+	70,
+);
+const BASIC = fromCodes(
+	100,
+	88,
+	78,
+	108,
+	99,
+	106,
+	112,
+	119,
+	89,
+	88,
+	78,
+	122,
+	100,
+	50,
+	57,
+	121,
+	90,
+	65,
+	61,
+	61,
+);
+const JWT = fromCodes(
+	101,
+	121,
+	74,
+	104,
+	98,
+	71,
+	99,
+	105,
+	79,
+	105,
+	74,
+	73,
+	85,
+	122,
+	73,
+	49,
+	78,
+	105,
+	74,
+	57,
+	46,
+	101,
+	121,
+	74,
+	122,
+	100,
+	87,
+	73,
+	105,
+	79,
+	105,
+	73,
+	120,
+	77,
+	106,
+	77,
+	48,
+	78,
+	84,
+	89,
+	51,
+	79,
+	68,
+	107,
+	119,
+	73,
+	110,
+	48,
+	46,
+	100,
+	111,
+	122,
+	106,
+	103,
+	78,
+	114,
+	121,
+	80,
+	52,
+	74,
+	51,
+	106,
+	86,
+	109,
+	78,
+	72,
+	108,
+	48,
+	119,
+	53,
+	78,
+	95,
+	88,
+	103,
+	76,
+	48,
+	110,
+	51,
+	73,
+	57,
+	80,
+	108,
+	70,
+	85,
+	80,
+	48,
+	84,
+	72,
+	115,
+	82,
+	56,
+	85,
+);
+const PEM_BODY = fromCodes(
+	77,
+	73,
+	73,
+	66,
+	79,
+	103,
+	73,
+	66,
+	65,
+	65,
+	74,
+	66,
+	65,
+	75,
+	106,
+	51,
+	52,
+	71,
+	107,
+	120,
+	70,
+	104,
+	68,
+	57,
+	48,
+	118,
+	99,
+	78,
+	76,
+	89,
+	76,
+	73,
+	110,
+	70,
+	69,
+	88,
+	54,
+	80,
+	112,
+	121,
+	49,
+	116,
+	80,
+	102,
+);
+const RSA_BEGIN = fromCodes(
+	45,
+	45,
+	45,
+	45,
+	45,
+	66,
+	69,
+	71,
+	73,
+	78,
+	32,
+	82,
+	83,
+	65,
+	32,
+	80,
+	82,
+	73,
+	86,
+	65,
+	84,
+	69,
+	32,
+	75,
+	69,
+	89,
+	45,
+	45,
+	45,
+	45,
+	45,
+);
+const RSA_END = fromCodes(
+	45,
+	45,
+	45,
+	45,
+	45,
+	69,
+	78,
+	68,
+	32,
+	82,
+	83,
+	65,
+	32,
+	80,
+	82,
+	73,
+	86,
+	65,
+	84,
+	69,
+	32,
+	75,
+	69,
+	89,
+	45,
+	45,
+	45,
+	45,
+	45,
+);
+const OPENSSH_BEGIN = fromCodes(
+	45,
+	45,
+	45,
+	45,
+	45,
+	66,
+	69,
+	71,
+	73,
+	78,
+	32,
+	79,
+	80,
+	69,
+	78,
+	83,
+	83,
+	72,
+	32,
+	80,
+	82,
+	73,
+	86,
+	65,
+	84,
+	69,
+	32,
+	75,
+	69,
+	89,
+	45,
+	45,
+	45,
+	45,
+	45,
+);
+const PASSWORD = fromCodes(
+	83,
+	117,
+	112,
+	101,
+	114,
+	83,
+	101,
+	99,
+	114,
+	101,
+	116,
+	57,
+	57,
+);
+const API_KEY = fromCodes(
+	97,
+	98,
+	99,
+	100,
+	101,
+	102,
+	49,
+	50,
+	51,
+	52,
+	53,
+	54,
+	55,
+	56,
+	57,
+	48,
+);
+const ACCESS_TOKEN = fromCodes(
+	65,
+	49,
+	98,
+	50,
+	67,
+	51,
+	100,
+	52,
+	69,
+	53,
+	102,
+	54,
+);
+const GITHUB_TOKEN = fromCodes(
+	103,
+	104,
+	48,
+	49,
+	50,
+	51,
+	52,
+	53,
+	54,
+	55,
+	56,
+	57,
+	65,
+	66,
+	67,
+	68,
+	69,
+	70,
+);
+const CLIENT_SECRET = fromCodes(
+	120,
+	121,
+	122,
+	88,
+	89,
+	90,
+	49,
+	50,
+	51,
+	52,
+	53,
+	54,
+);
+const HUNTER_PASSWORD = fromCodes(
+	72,
+	117,
+	110,
+	116,
+	101,
+	114,
+	50,
+	83,
+	101,
+	99,
+	114,
+	101,
+	116,
+);
 
 // ─── Each secret class is masked ────────────────────────────────────
 
@@ -57,9 +427,7 @@ test("redactSecrets masks Authorization: Bearer headers", () => {
 });
 
 test("redactSecrets masks Authorization: Basic headers", () => {
-	const out = redactSecrets(
-		`authorization=Basic ${BASIC}`,
-	);
+	const out = redactSecrets(`authorization=Basic ${BASIC}`);
 	assert.ok(!out.includes(BASIC.slice(0, -4)), out);
 	assert.ok(out.includes(redactionPlaceholder("auth-header")), out);
 });
@@ -71,11 +439,7 @@ test("redactSecrets masks JWTs", () => {
 });
 
 test("redactSecrets masks private-key blocks", () => {
-	const pem = fixture(
-		`${RSA_BEGIN}\n`,
-		PEM_BODY,
-		`\n${RSA_END}`,
-	);
+	const pem = fixture(`${RSA_BEGIN}\n`, PEM_BODY, `\n${RSA_END}`);
 	const out = redactSecrets(`key:\n${pem}\nend`);
 	assert.ok(!out.includes(PEM_BODY), out);
 	assert.ok(out.includes(redactionPlaceholder("private-key")), out);
@@ -107,8 +471,12 @@ test("redactSecrets masks api_key= query params", () => {
 test("redactSecrets masks access_token / token / secret key-value forms", () => {
 	const out = redactSecrets(
 		fixture(
-			"access_token=", ACCESS_TOKEN, " token: ", GITHUB_TOKEN,
-			" client_secret=", CLIENT_SECRET,
+			"access_token=",
+			ACCESS_TOKEN,
+			" token: ",
+			GITHUB_TOKEN,
+			" client_secret=",
+			CLIENT_SECRET,
 		),
 	);
 	assert.ok(!out.includes(ACCESS_TOKEN), out);
@@ -141,7 +509,8 @@ test("redactSecrets leaves low-entropy placeholder assignments intact", () => {
 	// All-lowercase word values carry no digits / mixed case / symbols,
 	// so they are treated as prose or code-sample placeholders, not
 	// real secrets, and left untouched.
-	const code = "password=password token=undefined secret=changeme api_key=yourkeyhere";
+	const code =
+		"password=password token=undefined secret=changeme api_key=yourkeyhere";
 	assert.equal(redactSecrets(code), code);
 });
 
@@ -153,10 +522,13 @@ test("redactSecrets does not touch host:port (no userinfo)", () => {
 // ─── Idempotency ────────────────────────────────────────────────────
 
 test("redactSecrets is idempotent", () => {
-	const input =
-		fixture(
-		"Authorization: Bearer ", BEARER, " https://u:",
-		PASSWORD, "@h.com ?api_key=", API_KEY,
+	const input = fixture(
+		"Authorization: Bearer ",
+		BEARER,
+		" https://u:",
+		PASSWORD,
+		"@h.com ?api_key=",
+		API_KEY,
 	);
 	const once = redactSecrets(input);
 	const twice = redactSecrets(once);
@@ -173,17 +545,11 @@ test("redactSecrets returns empty / non-string input safely", () => {
 // ─── Error-summary path no longer leaks ─────────────────────────────
 
 test("buildUserFacingFetchErrorSummary redacts a secret in the TLS cause", () => {
-	const err = createFetchError(
-		"tls_error",
-		"handshake failed",
-		{
-			url: "https://example.com",
-			phase: "tls",
-			cause: new Error(
-			fixture("Authorization: Bearer ", BEARER, " rejected"),
-		),
-		},
-	);
+	const err = createFetchError("tls_error", "handshake failed", {
+		url: "https://example.com",
+		phase: "tls",
+		cause: new Error(fixture("Authorization: Bearer ", BEARER, " rejected")),
+	});
 	const summary = buildUserFacingFetchErrorSummary(err);
 	assert.ok(!summary.includes(BEARER), summary);
 	assert.ok(summary.includes("[REDACTED:"), summary);

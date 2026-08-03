@@ -392,7 +392,8 @@ async function captureMainContext(cdp, sid) {
 	);
 	// Prefer the context whose frameId matches the root frame
 	const main =
-		(rootFrameId && defaults.find((ctx) => ctx.auxData?.frameId === rootFrameId)) ||
+		(rootFrameId &&
+			defaults.find((ctx) => ctx.auxData?.frameId === rootFrameId)) ||
 		defaults[0] ||
 		null;
 	return main?.id ?? null;
