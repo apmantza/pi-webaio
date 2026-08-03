@@ -97,11 +97,17 @@ fail-closed guard and non-overridable metadata floor must be preserved.
 
 | ID  | Feature                             | Detail                                                                                       | Effort |
 | --- | ----------------------------------- | -------------------------------------------------------------------------------------------- | ------ |
-| F10 | Worker-process browser-pool isolation | Crash-isolate each browser in a child worker *(pi-research)* — `src/browser-pool.ts`        | M/L    |
+| F10 | Worker-process browser-pool isolation | Crash-isolate each browser in a child worker *(pi-research)* — `src/browser-pool.ts`; Google-specific concurrency/performance design: [`speed.md`](speed.md) | M/L    |
 | F11 | Config layering                     | defaults → global → project → env → runtime (currently env-only) *(pi-web-agent, pi-stef)*   | M      |
 | F12 | Coherent-fingerprint refinement     | Prefer native coherence over injected JS getters in `applyStealth()` *(BetterWright)*        | M      |
 | F13 | Interactive browser-flow tool       | `goto/click/type/extract` automation *(pi-stef, BetterWright)* — likely out of scope         | L      |
 | F14 | Video / frame understanding         | Video Q&A for YouTube URLs + local files. **Reference verified (survey #8b — diegopetrucci/pi-web-access):** Q&A rides Gemini's native whole-video ingestion (pass the YouTube URL straight to Gemini; local files via resumable Gemini Files-API upload, poll until ACTIVE), with ffmpeg/yt-dlp frame *export* (≤12 JPEGs as base64) as a separate additive feature — NOT frame-sampled VLM Q&A; model gemini-3-flash-preview, 50 MB cap *(pi-web-access)* | L      |
+
+### Performance and concurrency
+
+| ID | Feature | Detail | Effort |
+| ---- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
+| F22 | **Concurrent-session Google CDP broker** | Shared Chrome process with session-scoped Google tab leases, cross-process broker IPC, per-tab serialization, heartbeat/orphan cleanup, warm-tab reuse, direct search navigation, timeout fencing, and Pi-safe failure handling. Design and rollout plan: [`speed.md`](speed.md) | M/L |
 
 ### New items from inspiration survey #8 (`docs/inspirations8.md`)
 
@@ -189,7 +195,9 @@ browser-side DOM security scanner (overlaps `detectPromptInjection` +
 - **Pre-0.8.0 feature work (DONE — on master):** F2 (source trust-tier + evidence-quality grading; `src/source-trust.ts` + opt-in `rankSources` `trustBoost`), F4 (backend `doctor`; `npm run diagnose:backends`), F9 (Context7 + DeepWiki keyless verticals), F5 (domain-diversified search ranking), F6 (content-hash dedup + `aio-webcontent` diff-mode), and F8 (opt-in local-knowledge pre-check before live fetch). 128 new tests across these; full suite 1026 / 0 fail.
 - **v0.8.0 (feature release):** F1 (iterative cited-report research loop — the centerpiece; F2's grading feeds it). Inspiration #8 de-risks it — assemble from pi-search's citation contract + web-spider's `PageGraph` + pi-source-drafts' journal substrate.
 - **v0.8.x (remaining):** F11 (config layering — 5+ reference impls: xl0/webveil/rpiv/pi-search), F3 (stateful fetching), and new F15–F18 (keyless hosted-MCP search, fuzzy `findText`, in-flight coalescing, robots.txt Crawl-delay). F9/F5/F6/F8 shipped pre-0.8.0 (above).
-- **Browser-isolation cluster (F10/F13, + F3):** shares one answer — study thurstonsand/pi-web-tools `fetchers/local/` (worker over a socket) + web-spider-daemon `playwright-session-registry.ts` (per-session process) end-to-end before designing.
+- **Performance backlog (F22):** instrument first; then warm Chrome, session-scoped warm tabs, direct search navigation, and finally the cross-process Google CDP broker. F22 is not a substitute for general F10 worker isolation or F3 storage isolation.
+- **Browser-isolation cluster (F10/F13, + F3):** shares one answer — study thurstonsand/pi-web-tools `fetchers/local/` (worker over a socket) + web-spider-daemon `playwright-session-registry.ts` (per-session process) end-to-end before designing. The Google-specific concurrency and time-to-answer proposal is documented in [`speed.md`](speed.md) as F22.
+- **F22 implementation order:** instrument first, then warm Chrome, session-scoped warm tabs, direct search navigation, and finally broker replacement of per-command CDP child processes. Do not launch one Chrome process per Pi session.
 - **Backlog:** F12 (coherent-fingerprint; thurstonsand headed-escalation is the reference), F14 (video/frame — reference verified in survey #8b via pi-web-access's Gemini-native-ingestion + ffmpeg-frame-export design; remaining work is adoption + a Windows cookie path).
 - **Pagemap-inspired (backlog):** F20 (barrier detection + agent guidance — highest agent-UX value; builds on `bot-detection.ts` + paywall bypass), then F19 (page-type classifier — unlocks per-type handling), then F21 (structured output — depends on F19). Port ideas only (AGPL — no code copy).
 - **Security cross-checks (DONE — survey #8):** H4–H7 — Playwright redirect guard added (wreq-js hops remain an unhookable documented limitation); IPv6 NAT64/benchmarking/discard-floor + hex-metadata coverage; dangerous-port blocklist (allow-list-aware, fails closed); homoglyph folding + base64-blob redaction + MCP error-path redaction parity. 36 new tests (`tests/security-crosscheck.test.mjs`).
