@@ -24,6 +24,7 @@ import {
 	getSharedBrowserPool,
 	closeSharedBrowserPool,
 	fetchWithPlaywright,
+	getPlaywrightTimeouts,
 } from "../src/fetch.ts";
 import { BrowserPool } from "../src/browser-pool.ts";
 
@@ -94,7 +95,7 @@ test("fetchWithPlaywright: blocks a dangerous URL fail-closed (no pool, no brows
 // installSsrfRedirectGuard hook that re-validates every redirect/subresource.
 
 function fakePooledPage() {
-	const calls = { route: [], goto: [], initScripts: 0 };
+	const calls = { route: [], goto: [], gotoOptions: [], initScripts: 0 };
 	return {
 		calls,
 		route(pattern, _cb) {
@@ -105,8 +106,9 @@ function fakePooledPage() {
 			calls.initScripts++;
 			return Promise.resolve();
 		},
-		goto(url, _opts) {
+		goto(url, opts) {
 			calls.goto.push(url);
+			calls.gotoOptions.push(opts);
 			return Promise.resolve({ status: () => 200 });
 		},
 		// Clean HTML → waitForBotProtectionToClear returns immediately.
@@ -118,6 +120,44 @@ function fakePooledPage() {
 		},
 	};
 }
+
+test("getPlaywrightTimeouts: shares a bounded overall budget across phases", () => {
+	assert.deepEqual(getPlaywrightTimeouts(), {
+		remainingMs: 30000,
+		navigationTimeoutMs: 15000,
+		botWaitTimeoutMs: 15000,
+	});
+	assert.deepEqual(getPlaywrightTimeouts(5000), {
+		remainingMs: 5000,
+		navigationTimeoutMs: 5000,
+		botWaitTimeoutMs: 5000,
+	});
+	assert.deepEqual(getPlaywrightTimeouts(5000, 4500), {
+		remainingMs: 500,
+		navigationTimeoutMs: 500,
+		botWaitTimeoutMs: 500,
+	});
+	assert.equal(getPlaywrightTimeouts(5000, 5000).remainingMs, 0);
+});
+
+test("fetchWithPlaywright: applies the caller timeout to pooled navigation", async () => {
+	const page = fakePooledPage();
+	const fakePool = {
+		acquirePage: async () => ({ page, release() {} }),
+	};
+
+	const html = await fetchWithPlaywright(
+		"http://93.184.216.34/",
+		fakePool,
+		undefined,
+		undefined,
+		undefined,
+		2500,
+	);
+
+	assert.ok(html && html.includes("ok"));
+	assert.equal(page.calls.gotoOptions[0].timeout, 2500);
+});
 
 test("fetchWithPlaywright: installs the per-page SSRF redirect guard on a pooled page", async () => {
 	const page = fakePooledPage();
