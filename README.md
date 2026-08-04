@@ -25,6 +25,12 @@ extractors (GitHub, YouTube, npm/PyPI and other package registries, Context7,
 DeepWiki, and more), RAG chunking, TUI progress rendering, phase-aware errors,
 and opt-in paywall bypass support.
 
+Google Search can optionally use the local CDP broker with
+`PI_WEBAIO_CDP_BROKER=1`; without the flag the legacy extractor is unchanged.
+The manual, live-only benchmark is `npm run bench:google-cdp -- --live
+--query "..." --samples 3`. It reports total/startup measurements; detailed CDP
+phase timings are not yet instrumented, and no speedup is inferred.
+
 ## Install
 
 ```bash

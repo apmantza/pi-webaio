@@ -95,13 +95,14 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 			),
 		}),
 
-		async execute(_toolCallId, params, _signal, onUpdate) {
+		async execute(_toolCallId, params, signal, onUpdate) {
 			const query = params.query;
 			setSearchContext(query);
 			const max = params.max ?? 15;
 			const useGoogle = params.google ?? true;
 			const compact = params.compact === true;
 			const startedAt = Date.now();
+			const searchDeadlineAt = startedAt + SEARCH_DEADLINE_MS;
 			const goggles = await loadGoggles(params.goggles as GogglesInput);
 
 			// Resolve prefetch count: false/undefined → 0, true → default, number → clamp ≥ 0.
@@ -133,7 +134,10 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 			else googleStatus = "pending";
 			const chromeReady =
 				googleEnabled || redditEnabled
-					? ensureChrome().catch(() => null)
+					? ensureChrome(undefined, {
+							deadlineAt: searchDeadlineAt,
+							signal,
+						}).catch(() => null)
 					: null;
 			let redditStatus: string;
 			if (!cdpAvailableGA())
@@ -186,6 +190,8 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 						const g = await googleSearch(query, {
 							timeoutMs: SEARCH_DEADLINE_MS,
 							maxResults: max,
+							signal,
+							deadlineAt: searchDeadlineAt,
 						});
 						const results = g.results.map((r) => ({
 							title: r.title,

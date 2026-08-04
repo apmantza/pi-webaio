@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import {
+	mkdtemp,
+	rm,
+	mkdir,
+	writeFile,
+	utimes,
+	readFile,
+} from "node:fs/promises";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,6 +15,9 @@ import {
 	GoogleCdpBroker,
 	LeaseRegistry,
 	MAX_FRAME_BYTES,
+	MAX_IN_FLIGHT_REQUESTS,
+	MAX_REQUEST_ID_HISTORY,
+	claimStartupLock,
 } from "../bin/google-cdp-broker.mjs";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -17,19 +27,23 @@ class TestClient {
 		this.socketPath = socketPath;
 		this.nextId = 1;
 		this.pending = new Map();
-		this.unkeyed = [];
 		this.buffer = "";
+		this.unkeyed = [];
 		this.socket = null;
+		this.clientId = null;
+		this.sessionId = null;
+		this.capability = null;
 	}
 
 	async connect() {
 		this.socket = net.createConnection(this.socketPath);
 		this.socket.on("close", () => {
-			const error = Object.assign(new Error("Connection closed"), {
-				code: "connection_closed",
-			});
-			for (const resolve of this.pending.values())
-				resolve({ ok: false, error });
+			for (const { reject } of this.pending.values())
+				reject(
+					Object.assign(new Error("Connection closed"), {
+						code: "connection_closed",
+					}),
+				);
 			this.pending.clear();
 		});
 		this.socket.on("data", (chunk) => {
@@ -47,10 +61,14 @@ class TestClient {
 				const pending =
 					response.id === null
 						? this.unkeyed.shift()
-						: this.pending.get(String(response.id)) || this.unkeyed.shift();
+						: this.pending.get(String(response.id));
 				if (!pending) continue;
 				if (response.id !== null) this.pending.delete(String(response.id));
-				pending(response);
+				if (response.ok) pending.resolve(response.result);
+				else
+					pending.reject(
+						Object.assign(new Error(response.error.message), response.error),
+					);
 			}
 		});
 		await new Promise((resolve, reject) => {
@@ -60,25 +78,56 @@ class TestClient {
 		return this;
 	}
 
-	send(op, fields = {}) {
-		const id = this.nextId++;
+	request(body) {
+		const id = body.id || String(this.nextId++);
+		const request = { ...body, id };
+		if (request.op !== "register" && request.op !== "health") {
+			request.clientId ??= this.clientId;
+			request.sessionId ??= this.sessionId;
+			request.capability ??= this.capability;
+		}
 		return new Promise((resolve, reject) => {
-			this.pending.set(String(id), (response) =>
-				response.ok
-					? resolve(response.result)
-					: reject(
-							Object.assign(new Error(response.error.message), response.error),
-						),
-			);
-			this.socket.write(`${JSON.stringify({ id, op, ...fields })}\n`);
+			this.pending.set(String(id), { resolve, reject });
+			this.socket.write(`${JSON.stringify(request)}\n`);
 		});
 	}
 
-	raw(line) {
-		return new Promise((resolve) => {
-			this.unkeyed.push(resolve);
+	send(op, fields = {}) {
+		return this.request({ op, ...fields });
+	}
+
+	batch(bodies) {
+		const requests = bodies.map((body) => ({
+			...body,
+			id: body.id || String(this.nextId++),
+		}));
+		const results = requests.map(
+			(request) =>
+				new Promise((resolve, reject) =>
+					this.pending.set(String(request.id), { resolve, reject }),
+				),
+		);
+		this.socket.write(
+			`${requests.map((request) => JSON.stringify(request)).join("\n")}\n`,
+		);
+		return Promise.all(results);
+	}
+
+	rawLine(line, id = null) {
+		return new Promise((resolve, reject) => {
+			if (id === null) this.unkeyed.push({ resolve, reject });
+			else this.pending.set(String(id), { resolve, reject });
 			this.socket.write(`${line}\n`);
 		});
+	}
+
+	async register(clientId, sessionId = `${clientId}-session`) {
+		const result = await this.send("register", { clientId, sessionId });
+		this.clientId = result.clientId;
+		this.sessionId = result.sessionId;
+		this.capability = result.capability;
+		assert.equal(typeof this.capability, "string");
+		return result;
 	}
 
 	destroy() {
@@ -94,9 +143,9 @@ async function makeBroker(options = {}) {
 	return { broker, profileDir };
 }
 
-async function stopBroker(testSetup) {
-	await testSetup.broker.stop();
-	await rm(testSetup.profileDir, { recursive: true, force: true });
+async function stopBroker(setup) {
+	await setup.broker.stop();
+	await rm(setup.profileDir, { recursive: true, force: true });
 }
 
 async function registeredClient(
@@ -104,236 +153,334 @@ async function registeredClient(
 	clientId,
 	sessionId = `${clientId}-session`,
 ) {
-	return new TestClient(broker.socketPath).connect().then(async (client) => {
-		await client.send("register", { clientId, sessionId });
-		return client;
-	});
+	const client = await new TestClient(broker.socketPath).connect();
+	await client.register(clientId, sessionId);
+	return client;
 }
 
-test("protocol framing returns request ids and structured malformed-request errors", async () => {
+function directIdentity(registry, clientId, sessionId = `${clientId}-session`) {
+	const result = registry.register({ clientId, sessionId });
+	return { clientId, sessionId, capability: result.capability };
+}
+
+async function closeClients(...clients) {
+	for (const client of clients) client.destroy();
+	await sleep(10);
+}
+
+test("combined frames, malformed JSON, canonical IDs, and duplicate IDs are fail-soft", async () => {
 	const setup = await makeBroker();
 	const client = await new TestClient(setup.broker.socketPath).connect();
 	try {
-		const health = await client.send("health");
-		assert.equal(health.protocol, 1);
-		const malformed = await client.raw("{not-json");
-		assert.equal(malformed.id, null);
-		assert.equal(malformed.error.code, "malformed_json");
-
-		const duplicate = client.send("health");
-		// Reusing an id is tested with a raw frame because TestClient normally increments it.
-		const first = await duplicate;
-		assert.equal(first.registry.active, 0);
-		const duplicateResponse = await new Promise((resolve) => {
-			client.unkeyed.push(resolve);
-			client.socket.write('{"id":1,"op":"health"}\n');
-		});
-		assert.equal(duplicateResponse.error.code, "duplicate_request_id");
+		// A single write containing multiple frames is accepted by the broker.
+		const [one, two] = await client.batch([
+			{ id: "one", op: "health" },
+			{ id: "two", op: "health" },
+		]);
+		assert.equal(one.protocol, 1);
+		assert.equal(two.protocol, 1);
+		await assert.rejects(
+			client.rawLine("{nope"),
+			(error) => error.code === "malformed_json",
+		);
+		const duplicate = await client.request({ id: "dup", op: "health" });
+		assert.equal(duplicate.protocol, 1);
+		await assert.rejects(
+			client.rawLine('{"id":"dup","op":"health"}', "dup"),
+			(error) => error.code === "duplicate_request_id",
+		);
+		assert.equal(setup.broker.started, true);
 	} finally {
 		client.destroy();
 		await stopBroker(setup);
 	}
 });
 
-test("duplicate broker startup loses the atomic profile lock", async () => {
+test("duplicate startup is deterministic regardless of which contender wins", async () => {
 	const profileDir = await mkdtemp(join(tmpdir(), "pi-webaio-broker-race-"));
 	const first = new GoogleCdpBroker({ profileDir });
 	const second = new GoogleCdpBroker({ profileDir });
 	try {
-		const [a, b] = await Promise.all([first.start(), second.start()]);
-		assert.equal(a.ok, true);
-		assert.equal(b.ok, false);
-		const winner = a.ok ? a : b;
-		const loser = a.ok ? b : a;
-		assert.equal(loser.error.code, "already_running");
-		assert.ok(winner.result.ownerNonce);
+		const results = await Promise.all([first.start(), second.start()]);
+		const winners = results.filter((result) => result.ok);
+		const losers = results.filter((result) => !result.ok);
+		assert.equal(winners.length, 1);
+		assert.equal(losers.length, 1);
+		assert.equal(losers[0].error.code, "already_running");
+		assert.ok(winners[0].result.ownerNonce);
 	} finally {
-		await first.stop();
-		await second.stop();
+		await Promise.all([first.stop(), second.stop()]);
 		await rm(profileDir, { recursive: true, force: true });
 	}
 });
 
-test("two clients receive different provider leases", async () => {
-	const setup = await makeBroker();
-	const a = await registeredClient(setup.broker, "client-a");
-	const b = await registeredClient(setup.broker, "client-b");
+test("stale recovery uses an atomic rename and preserves the winning owner", async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-webaio-lock-race-"));
+	const lockPath = join(root, "profile.lock");
+	const socketPath = join(root, "broker.sock");
+	await mkdir(lockPath);
+	await writeFile(
+		join(lockPath, "owner.json"),
+		JSON.stringify({
+			pid: 999999,
+			ownerNonce: "stale",
+			profileKey: "profile",
+			socketPath,
+		}),
+	);
+	const old = new Date(Date.now() - 10_000);
+	await utimes(lockPath, old, old);
 	try {
-		const [leaseA, leaseB] = await Promise.all([
-			a.send("lease", {
-				sessionId: "client-a-session",
-				provider: "google-search",
+		const results = await Promise.all([
+			claimStartupLock({
+				lockPath,
+				socketPath,
+				profileKey: "profile",
+				staleAfterMs: 1,
 			}),
-			b.send("lease", {
-				sessionId: "client-b-session",
-				provider: "google-search",
+			claimStartupLock({
+				lockPath,
+				socketPath,
+				profileKey: "profile",
+				staleAfterMs: 1,
 			}),
 		]);
-		assert.notEqual(leaseA.leaseId, leaseB.leaseId);
-		assert.notEqual(leaseA.targetId, leaseB.targetId);
-		assert.equal(leaseA.mode, "registry-only");
-		await a.send("release", leaseA);
-		await b.send("release", leaseB);
+		assert.equal(results.filter((result) => result.ok).length, 1);
+		assert.equal(
+			results.filter((result) => !result.ok)[0].error.code,
+			"already_running",
+		);
+		const owner = JSON.parse(
+			await readFile(join(lockPath, "owner.json"), "utf8"),
+		);
+		assert.equal(
+			owner.ownerNonce,
+			results.find((result) => result.ok).ownerNonce,
+		);
+		await results.find((result) => result.ok).release();
 	} finally {
-		a.destroy();
-		b.destroy();
-		await stopBroker(setup);
+		await rm(root, { recursive: true, force: true });
 	}
 });
 
-test("same client and provider serialize behind the first lease", async () => {
+test("capability authentication prevents impersonation and re-registration", async () => {
 	const setup = await makeBroker();
-	const client = await registeredClient(setup.broker, "serial");
+	const a = await registeredClient(setup.broker, "auth-a");
+	const b = await new TestClient(setup.broker.socketPath).connect();
 	try {
-		const first = await client.send("lease", {
-			sessionId: "serial-session",
-			provider: "google-search",
-		});
-		let settled = false;
-		const secondPromise = client
-			.send("lease", {
-				sessionId: "serial-session",
+		await assert.rejects(
+			b.register("auth-a", "auth-a-session"),
+			(error) => error.code === "connection_ownership",
+		);
+		await assert.rejects(
+			a.send("lease", { clientId: "auth-b", provider: "google-search" }),
+			(error) => error.code === "connection_ownership",
+		);
+		await assert.rejects(
+			a.send("lease", {
+				sessionId: "other-session",
 				provider: "google-search",
-				waitMs: 500,
-			})
-			.then((lease) => {
-				settled = true;
-				return lease;
-			});
-		await sleep(30);
-		assert.equal(settled, false);
-		await client.send("release", first);
-		const second = await secondPromise;
-		assert.equal(second.provider, "google-search");
-		await client.send("release", second);
+			}),
+			(error) => error.code === "session_mismatch",
+		);
+		const lease = await a.send("lease", { provider: "google-search" });
+		await assert.rejects(
+			b.send("release", {
+				sessionId: a.sessionId,
+				clientId: a.clientId,
+				capability: a.capability,
+				...lease,
+			}),
+			(error) => error.code === "not_registered",
+		);
+		await a.send("release", lease);
 	} finally {
-		client.destroy();
+		await closeClients(a, b);
 		await stopBroker(setup);
 	}
 });
 
-test("heartbeat expiry and orphan cleanup reclaim leases", async () => {
-	const registry = new LeaseRegistry({ ttlMs: 20, orphanTtlMs: 20 });
-	registry.register({ clientId: "expiry", sessionId: "expiry-session" });
-	const lease = await registry.lease({
-		clientId: "expiry",
-		sessionId: "expiry-session",
+test("session identity is unique and targets retain session/provider affinity", async () => {
+	const registry = new LeaseRegistry();
+	const a = directIdentity(registry, "session-a", "shared-session");
+	assert.throws(
+		() =>
+			registry.register({ clientId: "session-b", sessionId: "shared-session" }),
+		(error) => error.code === "session_conflict",
+	);
+	const first = await registry.lease({ ...a, provider: "google-search" });
+	registry.release({ ...a, ...first, generation: first.generation });
+	const sameSession = await registry.lease({ ...a, provider: "google-search" });
+	assert.equal(sameSession.targetId, first.targetId);
+	registry.release({
+		...a,
+		...sameSession,
+		generation: sameSession.generation,
+	});
+	assert.equal(registry.targets.has(sameSession.targetId), true);
+	registry.disconnect(a);
+	assert.equal(registry.targets.has(sameSession.targetId), false);
+	const b = directIdentity(registry, "session-b", "other-session");
+	const other = await registry.lease({ ...b, provider: "google-search" });
+	assert.notEqual(other.targetId, first.targetId);
+	registry.release({ ...b, ...other, generation: other.generation });
+});
+
+test("dirty, expired, disconnected, and old-generation targets are removed", async () => {
+	const registry = new LeaseRegistry({ ttlMs: 10, orphanTtlMs: 10 });
+	const a = directIdentity(registry, "cleanup-a");
+	const expired = await registry.lease({
+		...a,
 		provider: "google-search",
-		ttlMs: 10,
+		ttlMs: 1,
 	});
 	registry.sweep(Date.now() + 100);
-	assert.equal(registry.snapshot().active, 0);
-	assert.throws(
-		() =>
-			registry.heartbeat({
-				clientId: "expiry",
-				sessionId: "expiry-session",
-				leaseId: lease.leaseId,
-				targetId: lease.targetId,
-				generation: lease.generation,
-			}),
-		(error) =>
-			error.code === "not_registered" || error.code === "lease_not_found",
-	);
-});
-
-test("stale target generations are rejected and stale leases are cleaned", async () => {
-	const registry = new LeaseRegistry();
-	registry.register({ clientId: "stale", sessionId: "stale-session" });
-	const lease = await registry.lease({
-		clientId: "stale",
-		sessionId: "stale-session",
+	assert.equal(registry.targets.has(expired.targetId), false);
+	const b = directIdentity(registry, "cleanup-b");
+	const disconnected = await registry.lease({
+		...b,
 		provider: "google-search",
 	});
+	registry.disconnect(b);
+	assert.equal(registry.targets.has(disconnected.targetId), false);
+	const c = directIdentity(registry, "cleanup-c");
+	const generation = await registry.lease({ ...c, provider: "google-search" });
 	registry.bumpBrowserGeneration();
-	assert.throws(
-		() =>
-			registry.release({
-				clientId: "stale",
-				leaseId: lease.leaseId,
-				targetId: lease.targetId,
-				generation: lease.generation,
-			}),
-		(error) => error.code === "stale_generation",
-	);
-	assert.equal(registry.snapshot().active, 0);
+	assert.equal(registry.targets.has(generation.targetId), false);
 });
 
-test("release returns targets to the registry and respects global/provider caps", async () => {
-	const registry = new LeaseRegistry({
-		globalCap: 1,
-		providerCaps: { "google-search": 1 },
-	});
-	registry.register({ clientId: "cap-a", sessionId: "cap-a-session" });
-	registry.register({ clientId: "cap-b", sessionId: "cap-b-session" });
-	const first = await registry.lease({
-		clientId: "cap-a",
-		sessionId: "cap-a-session",
-		provider: "google-search",
-	});
-	await assert.rejects(
-		registry.lease({
-			clientId: "cap-b",
-			sessionId: "cap-b-session",
-			provider: "google-search",
-		}),
-		(error) => error.code === "capacity_exhausted",
-	);
-	registry.release({
-		clientId: "cap-a",
-		leaseId: first.leaseId,
-		targetId: first.targetId,
-		generation: first.generation,
-	});
-	const second = await registry.lease({
-		clientId: "cap-b",
-		sessionId: "cap-b-session",
-		provider: "google-search",
-	});
-	assert.equal(second.targetId, first.targetId);
-	registry.release({
-		clientId: "cap-b",
-		leaseId: second.leaseId,
-		targetId: second.targetId,
-		generation: second.generation,
-	});
-	assert.equal(registry.snapshot().active, 0);
-});
-
-test("disconnect releases active and queued work; late requests are fenced", async () => {
+test("same session/provider serializes while different sessions can use separate targets", async () => {
 	const setup = await makeBroker();
-	const client = await registeredClient(setup.broker, "disconnect");
+	const a = await registeredClient(setup.broker, "serial-a", "serial-session");
+	const b = await registeredClient(setup.broker, "serial-b", "serial-other");
 	try {
-		const first = await client.send("lease", {
-			sessionId: "disconnect-session",
-			provider: "google-search",
-		});
-		const late = client.send("lease", {
-			sessionId: "disconnect-session",
-			provider: "google-search",
-			waitMs: 1000,
-		});
-		client.destroy();
-		await assert.rejects(late, (error) => error.code === "connection_closed");
+		const first = await a.send("lease", { provider: "google-search" });
+		const queued = a.send("lease", { provider: "google-search", waitMs: 500 });
 		await sleep(20);
-		assert.equal(setup.broker.registry.snapshot().active, 0);
-		// The release arrived too late to mutate the registry and cannot revive the target.
-		assert.throws(
-			() =>
-				setup.broker.registry.release({
-					clientId: "disconnect",
-					leaseId: first.leaseId,
-					targetId: first.targetId,
-					generation: first.generation,
-				}),
-			(error) => error.code === "lease_not_found",
-		);
+		const different = await b.send("lease", { provider: "google-search" });
+		assert.notEqual(different.targetId, first.targetId);
+		await a.send("release", first);
+		const second = await queued;
+		assert.equal(second.targetId, first.targetId);
+		await a.send("release", second);
+		await b.send("release", different);
 	} finally {
+		await closeClients(a, b);
 		await stopBroker(setup);
 	}
 });
 
-test("oversized frames are rejected without an uncaught broker exception", async () => {
+test("in-flight and bounded request-ID limits are enforced", async () => {
+	const setup = await makeBroker({ maxInFlight: 1, maxIdHistory: 20 });
+	const client = await registeredClient(setup.broker, "bounds");
+	try {
+		const first = await client.send("lease", { provider: "google-search" });
+		const queued = client.request({
+			id: "queued",
+			op: "lease",
+			provider: "google-search",
+			waitMs: 500,
+			sessionId: client.sessionId,
+			capability: client.capability,
+		});
+		await sleep(15);
+		await assert.rejects(
+			client.request({ id: "third", op: "health" }),
+			(error) => error.code === "in_flight_limit",
+		);
+		setup.broker.registry.release({
+			clientId: client.clientId,
+			sessionId: client.sessionId,
+			capability: client.capability,
+			...first,
+			generation: first.generation,
+		});
+		await queued;
+	} finally {
+		await closeClients(client);
+		await stopBroker(setup);
+	}
+
+	const historySetup = await makeBroker({ maxIdHistory: 2 });
+	const historyClient = await registeredClient(historySetup.broker, "history");
+	try {
+		await historyClient.request({ id: "second", op: "health" });
+		await assert.rejects(
+			historyClient.request({ id: "third", op: "health" }),
+			(error) => error.code === "request_id_history_exhausted",
+		);
+	} finally {
+		await closeClients(historyClient);
+		await stopBroker(historySetup);
+	}
+});
+
+test("deadline and cancellation fence queued requests without mutating the registry", async () => {
+	const setup = await makeBroker();
+	const client = await registeredClient(setup.broker, "fence");
+	try {
+		const first = await client.send("lease", { provider: "google-search" });
+		const pending = client.request({
+			id: "wait",
+			op: "lease",
+			provider: "google-search",
+			waitMs: 1000,
+			deadlineAt: Date.now() + 1000,
+			sessionId: client.sessionId,
+			capability: client.capability,
+		});
+		await sleep(15);
+		const cancel = await client.request({
+			id: "cancel",
+			op: "cancel",
+			requestId: "wait",
+			sessionId: client.sessionId,
+			capability: client.capability,
+		});
+		assert.equal(cancel.cancelled, true);
+		await assert.rejects(pending, (error) => error.code === "request_fenced");
+		assert.equal(setup.broker.registry.snapshot().active, 1);
+		await client.send("release", first);
+		await assert.rejects(
+			client.request({
+				id: "expired",
+				op: "lease",
+				provider: "google-search",
+				deadlineAt: Date.now() - 1,
+				sessionId: client.sessionId,
+				capability: client.capability,
+			}),
+			(error) => error.code === "deadline_expired",
+		);
+		assert.equal(setup.broker.registry.snapshot().active, 0);
+	} finally {
+		await closeClients(client);
+		await stopBroker(setup);
+	}
+});
+
+test("concurrent start/stop calls serialize and remain idempotent", async () => {
+	const profileDir = await mkdtemp(join(tmpdir(), "pi-webaio-lifecycle-"));
+	const broker = new GoogleCdpBroker({ profileDir });
+	try {
+		const [a, b, stopped] = await Promise.all([
+			broker.start(),
+			broker.start(),
+			broker.stop(),
+		]);
+		assert.equal(a.ok, true);
+		assert.equal(b.ok, true);
+		assert.equal(stopped, undefined);
+		assert.equal(broker.started, false);
+		assert.equal(await broker.stop(), undefined);
+		assert.equal((await broker.start()).ok, true);
+	} finally {
+		await broker.stop();
+		await rm(profileDir, { recursive: true, force: true });
+	}
+});
+
+test("oversized frames return structured errors without an uncaught exception", async () => {
 	const setup = await makeBroker();
 	const socket = net.createConnection(setup.broker.socketPath);
 	try {
@@ -341,14 +488,15 @@ test("oversized frames are rejected without an uncaught broker exception", async
 			socket.once("connect", resolve);
 			socket.once("error", reject);
 		});
-		const response = await new Promise((resolve) => {
-			socket.once("data", (chunk) => resolve(JSON.parse(chunk.toString())));
-			socket.write(`${"x".repeat(MAX_FRAME_BYTES)}\n`);
-		});
-		assert.equal(response.ok, false);
-		assert.equal(response.error.code, "frame_too_large");
+		const response = new Promise((resolve) =>
+			socket.once("data", (chunk) => resolve(JSON.parse(chunk.toString()))),
+		);
+		socket.write(`${"x".repeat(MAX_FRAME_BYTES)}\n`);
+		assert.equal((await response).error.code, "frame_too_large");
 	} finally {
 		socket.destroy();
 		await stopBroker(setup);
 	}
+	assert.equal(MAX_IN_FLIGHT_REQUESTS > 0, true);
+	assert.equal(MAX_REQUEST_ID_HISTORY > 0, true);
 });

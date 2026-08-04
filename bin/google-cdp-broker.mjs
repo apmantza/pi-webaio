@@ -4,14 +4,25 @@
 // not replace the existing Google extractor and does not launch Chrome.
 
 import { createHash, randomUUID } from "node:crypto";
-import { open, mkdir, readFile, unlink, stat } from "node:fs/promises";
-import { existsSync, lstatSync, unlinkSync } from "node:fs";
+import {
+	mkdir,
+	readFile,
+	writeFile,
+	rm,
+	rename,
+	lstat,
+	chmod,
+} from "node:fs/promises";
 import net from "node:net";
 import { platform, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { BrowserCdpTransport } from "./cdp-browser-transport.mjs";
 
 export const MAX_FRAME_BYTES = 64 * 1024;
+export const MAX_REQUEST_ID_BYTES = 128;
+export const MAX_IN_FLIGHT_REQUESTS = 32;
+export const MAX_REQUEST_ID_HISTORY = 1024;
 export const DEFAULT_LEASE_TTL_MS = 30_000;
 export const DEFAULT_ORPHAN_TTL_MS = 15_000;
 export const DEFAULT_PROVIDER_CAPS = Object.freeze({
@@ -22,6 +33,7 @@ export const DEFAULT_PROVIDER_CAPS = Object.freeze({
 
 const PROFILE_ROOT = join(tmpdir(), "pi-webaio-google-cdp");
 const ALLOWED_PROVIDERS = new Set(Object.keys(DEFAULT_PROVIDER_CAPS));
+const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
 export class BrokerError extends Error {
 	constructor(code, message, details = undefined) {
@@ -40,7 +52,11 @@ function errorInfo(error) {
 			...(error.details === undefined ? {} : { details: error.details }),
 		};
 	}
-	return { code: "internal_error", message: String(error?.message || error) };
+	return {
+		code: error?.code || "internal_error",
+		message: String(error?.message || error),
+		...(error?.details === undefined ? {} : { details: error.details }),
+	};
 }
 
 function ok(result) {
@@ -61,6 +77,28 @@ function asString(value, name) {
 	return value;
 }
 
+function asCapability(value) {
+	if (typeof value !== "string" || value.length < 32 || value.length > 256)
+		throw new BrokerError(
+			"unauthorized",
+			"A broker-bound capability is required",
+		);
+	return value;
+}
+
+function asRequestId(value) {
+	if (
+		typeof value !== "string" ||
+		!ID_PATTERN.test(value) ||
+		Buffer.byteLength(value, "utf8") > MAX_REQUEST_ID_BYTES
+	)
+		throw new BrokerError(
+			"invalid_request_id",
+			"id must be a canonical bounded string",
+		);
+	return value;
+}
+
 function asPositiveInt(value, fallback, max) {
 	if (value === undefined) return fallback;
 	const number = Number(value);
@@ -75,6 +113,10 @@ function asPositiveInt(value, fallback, max) {
 
 function profileHash(profileKey) {
 	return createHash("sha256").update(profileKey).digest("hex").slice(0, 24);
+}
+
+function newCapability() {
+	return `${randomUUID()}-${randomUUID()}`;
 }
 
 export function brokerPaths(
@@ -104,7 +146,20 @@ function processIsAlive(pid) {
 	}
 }
 
-/** Claim the profile lock with O_EXCL. A live owner is never removed. */
+async function readLockRecord(lockPath) {
+	try {
+		return JSON.parse(await readFile(join(lockPath, "owner.json"), "utf8"));
+	} catch {
+		// Read the pre-directory format too, but recover it only via rename below.
+		try {
+			return JSON.parse(await readFile(lockPath, "utf8"));
+		} catch {
+			return undefined;
+		}
+	}
+}
+
+/** Claim a lock directory. Stale recovery is an atomic rename CAS. */
 export async function claimStartupLock({
 	lockPath,
 	socketPath,
@@ -121,31 +176,63 @@ export async function claimStartupLock({
 			),
 		);
 	}
-	await mkdir(dirname(lockPath), { recursive: true });
+	try {
+		await mkdir(dirname(lockPath), { recursive: true });
+	} catch (error) {
+		return fail(
+			new BrokerError("lock_failed", String(error?.message || error)),
+		);
+	}
 	const record = {
-		version: 1,
+		version: 2,
 		profileKey,
 		socketPath,
 		pid,
 		ownerNonce,
 		startedAt: new Date().toISOString(),
 	};
-
-	for (let attempt = 0; attempt < 2; attempt++) {
+	let recoveryAttempts = 0;
+	for (;;) {
 		try {
-			const handle = await open(lockPath, "wx", 0o600);
-			await handle.writeFile(`${JSON.stringify(record)}\n`, "utf8");
-			await handle.close();
+			await mkdir(lockPath, { recursive: false, mode: 0o700 });
+			try {
+				await writeFile(
+					join(lockPath, "owner.json"),
+					`${JSON.stringify(record)}\n`,
+					{
+						encoding: "utf8",
+						mode: 0o600,
+					},
+				);
+			} catch (writeError) {
+				await rm(lockPath, { recursive: true, force: true }).catch(() => {});
+				return fail(
+					new BrokerError(
+						"lock_failed",
+						String(writeError?.message || writeError),
+					),
+				);
+			}
 			return {
 				ok: true,
 				ownerNonce,
 				record,
 				async release() {
+					const current = await readLockRecord(lockPath);
+					if (current?.ownerNonce !== ownerNonce) return;
+					const tombstone = `${lockPath}.release-${ownerNonce}`;
 					try {
-						const current = JSON.parse(await readFile(lockPath, "utf8"));
-						if (current.ownerNonce === ownerNonce) await unlink(lockPath);
-					} catch {
-						// The broker may already have been cleaned up after a crash.
+						await rename(lockPath, tombstone);
+						const moved = await readLockRecord(tombstone);
+						if (moved?.ownerNonce !== ownerNonce) {
+							try {
+								await rename(tombstone, lockPath);
+							} catch {}
+							return;
+						}
+						await rm(tombstone, { recursive: true, force: true });
+					} catch (error) {
+						if (error?.code !== "ENOENT") throw error;
 					}
 				},
 			};
@@ -154,52 +241,179 @@ export async function claimStartupLock({
 				return fail(
 					new BrokerError("lock_failed", String(error?.message || error)),
 				);
-			let current;
-			try {
-				current = JSON.parse(await readFile(lockPath, "utf8"));
-			} catch {
-				current = undefined;
-			}
-			let oldEnough = false;
-			try {
-				oldEnough = Date.now() - (await stat(lockPath)).mtimeMs > staleAfterMs;
-			} catch {
-				oldEnough = true;
-			}
-			const live = processIsAlive(current?.pid);
-			if (live || !oldEnough) {
+		}
+		const current = await readLockRecord(lockPath);
+		if (current?.profileKey && current.profileKey !== profileKey)
+			return fail(
+				new BrokerError(
+					"lock_profile_mismatch",
+					"Lock belongs to another Chrome profile",
+				),
+			);
+		let oldEnough = false;
+		try {
+			oldEnough = Date.now() - (await lstat(lockPath)).mtimeMs > staleAfterMs;
+		} catch {
+			oldEnough = true;
+		}
+		const live = processIsAlive(current?.pid);
+		if (live || !oldEnough) {
+			return fail(
+				new BrokerError(
+					"already_running",
+					"A broker already owns this Chrome profile",
+					{
+						pid: current?.pid,
+						ownerNonce: current?.ownerNonce,
+						socketPath: current?.socketPath || socketPath,
+					},
+				),
+			);
+		}
+		// rename() is the compare-and-swap: only the contender that moves the
+		// exact stale directory may recover it. Never unlink a live owner's lock.
+		const quarantine = `${lockPath}.stale-${randomUUID()}`;
+		try {
+			await rename(lockPath, quarantine);
+			// Re-read the moved record before deleting it. A rename is atomic, but
+			// portable filesystems do not provide a general CAS across the rename
+			// and the cleanup. If the owner changed or the record is incomplete,
+			// preserve the moved directory and report the safe outcome.
+			const moved = await readLockRecord(quarantine);
+			if (
+				!moved?.ownerNonce ||
+				!current?.ownerNonce ||
+				moved.ownerNonce !== current.ownerNonce
+			) {
+				try {
+					await rename(quarantine, lockPath);
+				} catch {
+					// A new owner may already have claimed lockPath. Keeping the
+					// quarantine is safer than deleting either owner's record.
+				}
 				return fail(
 					new BrokerError(
 						"already_running",
 						"A broker already owns this Chrome profile",
 						{
-							pid: current?.pid,
-							ownerNonce: current?.ownerNonce,
-							socketPath: current?.socketPath || socketPath,
+							pid: moved?.pid ?? current?.pid,
+							ownerNonce: moved?.ownerNonce ?? current?.ownerNonce,
+							socketPath:
+								moved?.socketPath || current?.socketPath || socketPath,
 						},
 					),
 				);
 			}
-			try {
-				await unlink(lockPath);
-			} catch {
-				return fail(
-					new BrokerError(
-						"lock_race",
-						"A stale broker lock could not be removed",
-					),
-				);
+			await rm(quarantine, { recursive: true, force: true });
+		} catch (error) {
+			if (
+				["ENOENT", "EEXIST", "ENOTEMPTY", "EPERM", "EBUSY"].includes(
+					error?.code,
+				)
+			) {
+				recoveryAttempts++;
+				if (recoveryAttempts <= 32) {
+					await new Promise((resolveResult) => setTimeout(resolveResult, 5));
+					continue;
+				}
 			}
+			return fail(
+				new BrokerError(
+					"lock_race",
+					"A stale broker lock could not be atomically recovered",
+				),
+			);
 		}
 	}
-	return fail(
-		new BrokerError("lock_race", "Broker startup lost the profile lock race"),
-	);
 }
 
-function targetKey(clientId, sessionId, provider) {
-	return `${clientId}\u0000${sessionId}\u0000${provider}`;
+function targetKey(sessionId, provider) {
+	return `${sessionId}\u0000${provider}`;
 }
+
+const MAX_SEARCH_QUERY_BYTES = 256;
+// Keep this aligned with aio-websearch's documented per-engine range while
+// retaining a broker-side ceiling against unbounded browser extraction.
+export const MAX_SEARCH_RESULTS = 25;
+const DEFAULT_SEARCH_TIMEOUT_MS = 15_000;
+const SEARCH_POLL_INTERVAL_MS = 150;
+const SEARCH_REQUEST_FIELDS = new Set([
+	"id",
+	"op",
+	"deadlineAt",
+	"clientId",
+	"sessionId",
+	"capability",
+	"provider",
+	"query",
+	"maxResults",
+]);
+const SEARCH_FORBIDDEN_FIELDS = new Set([
+	"targetId",
+	"cdpTargetId",
+	"cdpSessionId",
+	"method",
+	"cdpMethod",
+	"params",
+	"url",
+	"script",
+	"expression",
+	"javascript",
+]);
+
+// This is intentionally a broker-owned expression. Search callers provide no
+// selector, script, URL, or CDP method; the only variable data is validated by
+// the broker before it is used to build the canonical navigation URL.
+const GOOGLE_SEARCH_EXTRACTION_SCRIPT = String.raw`(() => {
+	const consentSelectors = [
+		"button#L2AGLb",
+		"button[aria-label=\"Accept all\"]",
+		"button[aria-label=\"I agree\"]",
+		"form[action*=\"consent\"] button",
+	];
+	let consentDismissed = false;
+	for (const selector of consentSelectors) {
+		const button = document.querySelector(selector);
+		if (button instanceof HTMLElement && button.offsetParent !== null) {
+			button.click();
+			consentDismissed = true;
+			break;
+		}
+	}
+	const results = [];
+	const seen = new Set();
+	const headings = document.querySelectorAll("a[href^=\"http\"] h3");
+	for (const heading of headings) {
+		if (results.length >= 25) break;
+		const anchor = heading.closest("a");
+		if (!anchor) continue;
+		const url = anchor.href;
+		try {
+			const parsed = new URL(url);
+			const googleHost = parsed.hostname === "google.com" || parsed.hostname.endsWith(".google.com");
+			if (googleHost && !parsed.pathname.startsWith("/search")) continue;
+		} catch {
+			continue;
+		}
+		if (seen.has(url)) continue;
+		seen.add(url);
+		const title = (heading.innerText || heading.textContent || "").trim();
+		if (!title) continue;
+		const container = anchor.closest(".g, [data-sokoban-container], .MjjYud") || anchor.parentElement;
+		let snippetElement = container?.querySelector(".VwiC3b, [data-sncf], span.aCOpRe, .lEBKkf, div[style*=\"-webkit-line-clamp\"]");
+		if (!snippetElement && container) {
+			snippetElement = [...container.querySelectorAll("span, div")]
+				.filter((element) => {
+					const text = element.innerText?.trim();
+					return text && text.length > 30 && text !== title && !element.querySelector("h3");
+				})
+				.sort((left, right) => right.innerText.length - left.innerText.length)[0];
+		}
+		const snippet = (snippetElement?.innerText || "").trim().slice(0, 300);
+		results.push({ title, url, snippet });
+	}
+	return { consentDismissed, ready: document.readyState === "complete", results };
+})()`;
 
 function checkSignal(signal) {
 	if (signal?.aborted)
@@ -207,6 +421,131 @@ function checkSignal(signal) {
 			"request_fenced",
 			"Request was cancelled or its client disconnected",
 		);
+}
+
+function boundedCleanupDeadline(request, limitMs = 500) {
+	const requestDeadline = Number.isInteger(request?.deadlineAt)
+		? request.deadlineAt
+		: Date.now() + limitMs;
+	return Math.max(
+		Date.now() + 1,
+		Math.min(requestDeadline, Date.now() + limitMs),
+	);
+}
+
+function evaluationString(evaluation) {
+	const value = searchEvaluationValue(evaluation);
+	return typeof value === "string" ? value : undefined;
+}
+
+function isGoogleSearchLocation(value, expected) {
+	if (typeof value !== "string") return false;
+	try {
+		const actual = new URL(value);
+		const wanted = new URL(expected);
+		return (
+			actual.origin === wanted.origin &&
+			actual.pathname === "/search" &&
+			actual.searchParams.get("q") === wanted.searchParams.get("q") &&
+			actual.searchParams.get("num") === wanted.searchParams.get("num")
+		);
+	} catch {
+		return false;
+	}
+}
+
+function hasSearchControlCharacter(value) {
+	for (const character of value) {
+		const code = character.codePointAt(0);
+		if (code !== undefined && (code < 0x20 || code === 0x7f)) return true;
+	}
+	return false;
+}
+
+function validateSearchRequest(request) {
+	for (const field of SEARCH_FORBIDDEN_FIELDS)
+		if (Object.hasOwn(request, field))
+			throw new BrokerError(
+				"invalid_request",
+				`${field} is private to the broker and is not accepted for search`,
+			);
+	for (const field of Object.keys(request))
+		if (!SEARCH_REQUEST_FIELDS.has(field))
+			throw new BrokerError(
+				"invalid_request",
+				`${field} is not accepted for the broker search operation`,
+			);
+	if (request.provider !== "google-search")
+		throw new BrokerError(
+			"unsupported_provider",
+			"Search is only available for provider google-search",
+		);
+	if (
+		typeof request.query !== "string" ||
+		request.query.length === 0 ||
+		request.query.length > MAX_SEARCH_QUERY_BYTES ||
+		Buffer.byteLength(request.query, "utf8") > MAX_SEARCH_QUERY_BYTES ||
+		hasSearchControlCharacter(request.query) ||
+		!request.query.trim()
+	)
+		throw new BrokerError(
+			"invalid_request",
+			"query must be a bounded, non-empty search string",
+		);
+	const maxResults = request.maxResults === undefined ? 15 : request.maxResults;
+	if (
+		!Number.isInteger(maxResults) ||
+		maxResults < 1 ||
+		maxResults > MAX_SEARCH_RESULTS
+	)
+		throw new BrokerError(
+			"invalid_request",
+			`maxResults must be an integer from 1 to ${MAX_SEARCH_RESULTS}`,
+		);
+	return { query: request.query, maxResults };
+}
+
+function canonicalGoogleSearchUrl(query, maxResults) {
+	try {
+		const url = new URL("https://www.google.com/search");
+		url.searchParams.set("q", query);
+		url.searchParams.set("num", String(maxResults));
+		return url.href;
+	} catch {
+		throw new BrokerError("invalid_request", "Search URL could not be built");
+	}
+}
+
+function searchEvaluationValue(evaluation) {
+	const value = evaluation?.result?.value;
+	if (typeof value === "string") {
+		try {
+			return JSON.parse(value);
+		} catch {
+			return value;
+		}
+	}
+	return value && typeof value === "object" ? value : undefined;
+}
+
+function waitForSearchPoll(signal, deadlineAt) {
+	return new Promise((resolve, reject) => {
+		const delay = Math.max(
+			1,
+			Math.min(SEARCH_POLL_INTERVAL_MS, deadlineAt - Date.now()),
+		);
+		const timer = setTimeout(() => {
+			signal?.removeEventListener("abort", abort);
+			resolve();
+		}, delay);
+		const abort = () => {
+			clearTimeout(timer);
+			signal?.removeEventListener("abort", abort);
+			reject(new BrokerError("request_fenced", "Search was cancelled"));
+		};
+		if (signal?.aborted) abort();
+		else signal?.addEventListener("abort", abort, { once: true });
+	});
 }
 
 export class LeaseRegistry {
@@ -227,46 +566,77 @@ export class LeaseRegistry {
 			10 * 60_000,
 		);
 		this.clients = new Map();
+		this.sessions = new Map();
 		this.leases = new Map();
 		this.activeByKey = new Map();
 		this.targets = new Map();
 		this.waiters = new Map();
+		this.idleTargetTtlMs = asPositiveInt(
+			options.idleTargetTtlMs,
+			10 * 60_000,
+			60 * 60_000,
+		);
 		this.browserGeneration = 1;
 	}
 
-	register({ clientId, sessionId }) {
+	register({ clientId, sessionId, capability = newCapability() }) {
 		clientId = asString(clientId, "clientId");
 		sessionId = asString(sessionId, "sessionId");
+		capability = asCapability(capability);
 		const existing = this.clients.get(clientId);
-		if (existing && existing.sessionId !== sessionId) {
+		const sessionOwner = this.sessions.get(sessionId);
+		if (existing && existing.capability !== capability)
+			throw new BrokerError(
+				"connection_ownership",
+				"clientId is owned by another connection",
+			);
+		if (existing && existing.sessionId !== sessionId)
 			throw new BrokerError(
 				"client_conflict",
 				"clientId is already registered to another session",
 			);
-		}
+		if (sessionOwner && sessionOwner !== clientId)
+			throw new BrokerError(
+				"session_conflict",
+				"sessionId is already registered to another client",
+			);
 		const client = existing || {
 			clientId,
 			sessionId,
+			capability,
 			registeredAt: Date.now(),
 		};
 		client.lastHeartbeat = Date.now();
 		this.clients.set(clientId, client);
-		return { clientId, sessionId, heartbeatTtlMs: this.orphanTtlMs };
+		this.sessions.set(sessionId, clientId);
+		return {
+			clientId,
+			sessionId,
+			capability,
+			heartbeatTtlMs: this.orphanTtlMs,
+		};
 	}
 
-	assertClient(clientId, sessionId) {
+	assertClient({ clientId, sessionId, capability }) {
+		clientId = asString(clientId, "clientId");
+		sessionId = asString(sessionId, "sessionId");
+		capability = asCapability(capability);
 		const client = this.clients.get(clientId);
 		if (!client)
 			throw new BrokerError(
 				"not_registered",
 				"Client must register before leasing",
 			);
-		if (sessionId !== undefined && client.sessionId !== sessionId) {
+		if (client.sessionId !== sessionId)
 			throw new BrokerError(
 				"session_mismatch",
 				"sessionId does not match the registered client",
 			);
-		}
+		if (client.capability !== capability)
+			throw new BrokerError(
+				"unauthorized",
+				"Capability does not own this connection",
+			);
 		client.lastHeartbeat = Date.now();
 		return client;
 	}
@@ -275,39 +645,37 @@ export class LeaseRegistry {
 		if (
 			!ALLOWED_PROVIDERS.has(provider) ||
 			this.providerCaps[provider] === undefined
-		) {
+		)
 			throw new BrokerError(
 				"unsupported_provider",
 				`Provider is not enabled: ${provider}`,
 			);
-		}
 	}
 
 	async lease({
 		clientId,
 		sessionId,
+		capability,
 		provider,
 		ttlMs,
 		waitMs = this.ttlMs,
 		signal,
 	}) {
 		checkSignal(signal);
-		this.assertClient(clientId, sessionId);
+		this.assertClient({ clientId, sessionId, capability });
 		provider = asString(provider, "provider");
 		this.validateProvider(provider);
-		const key = targetKey(clientId, sessionId, provider);
-		const active = this.activeByKey.get(key);
-		if (active) {
+		const key = targetKey(sessionId, provider);
+		if (this.activeByKey.has(key))
 			return this.enqueue(
 				key,
-				{ clientId, sessionId, provider, ttlMs, signal },
+				{ clientId, sessionId, capability, provider, ttlMs, signal },
 				waitMs,
 			);
-		}
 		if (
 			this.activeCount() >= this.globalCap ||
 			this.providerActive(provider) >= this.providerCaps[provider]
-		) {
+		)
 			throw new BrokerError(
 				"capacity_exhausted",
 				"Lease concurrency cap reached",
@@ -320,8 +688,15 @@ export class LeaseRegistry {
 					},
 				},
 			);
-		}
-		return this.allocate({ key, clientId, sessionId, provider, ttlMs, signal });
+		return this.allocate({
+			key,
+			clientId,
+			sessionId,
+			capability,
+			provider,
+			ttlMs,
+			signal,
+		});
 	}
 
 	enqueue(key, request, waitMs) {
@@ -386,23 +761,25 @@ export class LeaseRegistry {
 		else waiter.resolve(value);
 	}
 
-	allocate({ key, clientId, sessionId, provider, ttlMs, signal }) {
+	allocate({ key, clientId, sessionId, capability, provider, ttlMs, signal }) {
 		checkSignal(signal);
 		const target =
 			[...this.targets.values()].find(
 				(candidate) =>
 					candidate.provider === provider &&
+					candidate.sessionId === sessionId &&
 					candidate.generation === this.browserGeneration &&
 					!candidate.busy &&
 					!candidate.dirty,
-			) || this.createTarget(provider);
+			) || this.createTarget(provider, sessionId);
 		target.busy = true;
-		const leaseId = randomUUID();
+		target.idleSince = null;
 		const lease = {
-			leaseId,
+			leaseId: randomUUID(),
 			key,
 			clientId,
 			sessionId,
+			capability,
 			provider,
 			targetId: target.targetId,
 			generation: target.generation,
@@ -410,18 +787,24 @@ export class LeaseRegistry {
 				Date.now() +
 				Math.min(Math.max(Number(ttlMs) || this.ttlMs, 1), 10 * 60_000),
 		};
-		this.leases.set(leaseId, lease);
-		this.activeByKey.set(key, leaseId);
+		this.leases.set(lease.leaseId, lease);
+		this.activeByKey.set(key, lease.leaseId);
 		return this.publicLease(lease);
 	}
 
-	createTarget(provider) {
+	createTarget(provider, sessionId) {
 		const target = {
 			targetId: `${provider}-${randomUUID()}`,
 			provider,
+			sessionId,
 			generation: this.browserGeneration,
 			busy: false,
 			dirty: false,
+			// CDP identifiers are deliberately internal registry state. They are
+			// never included in the IPC lease envelope.
+			cdpTargetId: null,
+			cdpSessionId: null,
+			idleSince: null,
 		};
 		this.targets.set(target.targetId, target);
 		return target;
@@ -434,7 +817,6 @@ export class LeaseRegistry {
 			provider: lease.provider,
 			generation: lease.generation,
 			expiresAt: lease.expiresAt,
-			// A real CDP target is deliberately not exposed by this prototype.
 			mode: "registry-only",
 		};
 	}
@@ -448,21 +830,36 @@ export class LeaseRegistry {
 		).length;
 	}
 
-	findLease({ clientId, leaseId, targetId, generation }) {
+	findLease({
+		clientId,
+		sessionId,
+		capability,
+		leaseId,
+		targetId,
+		generation,
+	}) {
+		this.assertClient({ clientId, sessionId, capability });
 		const lease = this.leases.get(leaseId);
 		if (!lease)
 			throw new BrokerError("lease_not_found", "Lease does not exist");
-		if (lease.clientId !== clientId)
-			throw new BrokerError("lease_owner", "Lease belongs to another client");
-		if (targetId !== lease.targetId)
+		if (
+			lease.clientId !== clientId ||
+			lease.capability !== capability ||
+			lease.sessionId !== sessionId
+		)
+			throw new BrokerError(
+				"lease_owner",
+				"Lease belongs to another connection",
+			);
+		if (targetId !== undefined && targetId !== lease.targetId)
 			throw new BrokerError(
 				"target_mismatch",
 				"targetId does not match the lease",
 			);
 		if (
-			generation !== lease.generation ||
+			(generation !== undefined && generation !== lease.generation) ||
 			lease.generation !== this.browserGeneration
-		) {
+		)
 			throw new BrokerError(
 				"stale_generation",
 				"Target belongs to an old browser generation",
@@ -472,46 +869,28 @@ export class LeaseRegistry {
 					currentGeneration: this.browserGeneration,
 				},
 			);
-		}
 		return lease;
 	}
 
 	release(request) {
-		const lease = this.leases.get(request.leaseId);
-		if (!lease)
-			throw new BrokerError("lease_not_found", "Lease does not exist");
-		if (lease.clientId !== request.clientId)
-			throw new BrokerError("lease_owner", "Lease belongs to another client");
-		if (request.targetId !== lease.targetId)
-			throw new BrokerError(
-				"target_mismatch",
-				"targetId does not match the lease",
-			);
-		const stale =
-			request.generation !== lease.generation ||
-			lease.generation !== this.browserGeneration;
-		this.retireLease(lease, stale);
-		if (stale)
-			throw new BrokerError(
-				"stale_generation",
-				"Target belongs to an old browser generation",
-				{
-					targetId: lease.targetId,
-					leaseGeneration: lease.generation,
-					currentGeneration: this.browserGeneration,
-				},
-			);
+		const lease = this.findLease(request);
+		this.retireLease(lease, false);
 		return { released: true, leaseId: lease.leaseId, targetId: lease.targetId };
 	}
 
 	heartbeat(request) {
-		const client = this.assertClient(request.clientId, request.sessionId);
+		const client = this.assertClient(request);
 		const now = Date.now();
 		if (!request.leaseId) {
 			let renewed = 0;
 			for (const lease of this.leases.values()) {
-				if (lease.clientId !== client.clientId) continue;
-				if (lease.generation !== this.browserGeneration) continue;
+				if (
+					lease.clientId !== client.clientId ||
+					lease.sessionId !== client.sessionId ||
+					lease.capability !== client.capability ||
+					lease.generation !== this.browserGeneration
+				)
+					continue;
 				lease.expiresAt = now + this.ttlMs;
 				renewed++;
 			}
@@ -529,9 +908,16 @@ export class LeaseRegistry {
 		const target = this.targets.get(lease.targetId);
 		if (target) {
 			target.busy = false;
-			target.dirty ||= dirty;
+			if (dirty || target.generation !== this.browserGeneration)
+				this.targets.delete(target.targetId);
+			else target.idleSince = Date.now();
 		}
 		this.drain(lease.key);
+	}
+
+	cancelLease(leaseId) {
+		const lease = this.leases.get(leaseId);
+		if (lease) this.retireLease(lease, true);
 	}
 
 	drain(key) {
@@ -542,28 +928,29 @@ export class LeaseRegistry {
 		if (!queue.length) this.waiters.delete(key);
 		if (waiter.settled) return this.drain(key);
 		try {
-			const value = this.lease(waiter).then(
+			void this.lease(waiter).then(
 				(lease) => this.finishWaiter(waiter, undefined, lease),
 				(error) => this.finishWaiter(waiter, error),
 			);
-			void value;
 		} catch (error) {
 			this.finishWaiter(waiter, error);
 		}
 	}
 
-	disconnect(clientId) {
-		if (!this.clients.has(clientId)) return { released: 0 };
+	disconnect(identity) {
+		if (typeof identity === "string") identity = { clientId: identity };
+		const client = this.clients.get(identity?.clientId);
+		if (!client) return { released: 0 };
+		if (identity.capability && client.capability !== identity.capability)
+			return { released: 0 };
 		let released = 0;
-		for (const lease of [...this.leases.values()]) {
-			if (lease.clientId === clientId) {
-				this.retireLease(lease, true);
-				released++;
-			}
-		}
 		for (const [key, queue] of this.waiters) {
 			for (const waiter of [...queue]) {
-				if (waiter.clientId !== clientId) continue;
+				if (
+					waiter.clientId !== client.clientId ||
+					waiter.capability !== client.capability
+				)
+					continue;
 				this.removeWaiter(key, waiter);
 				this.finishWaiter(
 					waiter,
@@ -571,32 +958,65 @@ export class LeaseRegistry {
 				);
 			}
 		}
-		this.clients.delete(clientId);
+		for (const lease of [...this.leases.values()]) {
+			if (
+				lease.clientId === client.clientId &&
+				lease.capability === client.capability
+			) {
+				this.retireLease(lease, true);
+				released++;
+			}
+		}
+		// A released warm target is safe only while its owning session remains
+		// registered. Remove idle targets when the session disconnects so a later
+		// client cannot inherit its page state by reusing the same session ID.
+		for (const [targetId, target] of this.targets) {
+			if (target.sessionId === client.sessionId) this.targets.delete(targetId);
+		}
+		this.clients.delete(client.clientId);
+		if (this.sessions.get(client.sessionId) === client.clientId)
+			this.sessions.delete(client.sessionId);
 		return { released };
 	}
 
-	close(clientId) {
-		return this.disconnect(clientId);
+	close(identity) {
+		return this.disconnect(identity);
 	}
 
 	bumpBrowserGeneration() {
 		this.browserGeneration++;
+		for (const lease of [...this.leases.values()])
+			this.retireLease(lease, true);
+		for (const [id, target] of this.targets)
+			if (target.generation !== this.browserGeneration) this.targets.delete(id);
 		return { generation: this.browserGeneration };
 	}
 
 	sweep(now = Date.now()) {
 		const expired = [];
-		for (const lease of [...this.leases.values()]) {
+		for (const lease of [...this.leases.values()])
 			if (lease.expiresAt <= now) {
 				expired.push(lease.leaseId);
 				this.retireLease(lease, true);
 			}
-		}
-		for (const [clientId, client] of this.clients) {
+		for (const client of [...this.clients.values()])
 			if (client.lastHeartbeat + this.orphanTtlMs <= now)
-				this.disconnect(clientId);
+				this.disconnect({
+					clientId: client.clientId,
+					capability: client.capability,
+				});
+		const evictedTargets = [];
+		for (const [targetId, target] of this.targets) {
+			if (
+				!target.busy &&
+				target.idleSince &&
+				target.idleSince + this.idleTargetTtlMs <= now
+			) {
+				this.targets.delete(targetId);
+				evictedTargets.push(targetId);
+			}
 		}
-		return { expiredLeases: expired };
+		return { expiredLeases: expired, evictedTargets };
 	}
 
 	snapshot() {
@@ -604,14 +1024,12 @@ export class LeaseRegistry {
 			generation: this.browserGeneration,
 			clients: this.clients.size,
 			active: this.activeCount(),
+			targets: this.targets.size,
 			globalCap: this.globalCap,
 			providers: Object.fromEntries(
 				Object.entries(this.providerCaps).map(([provider, cap]) => [
 					provider,
-					{
-						active: this.providerActive(provider),
-						cap,
-					},
+					{ active: this.providerActive(provider), cap },
 				]),
 			),
 			leases: [...this.leases.values()].map((lease) => this.publicLease(lease)),
@@ -619,30 +1037,41 @@ export class LeaseRegistry {
 	}
 }
 
-async function probeExistingCdp(port, timeoutMs = 1500) {
-	const controller = new AbortController();
-	const timer = setTimeout(() => controller.abort(), timeoutMs);
+async function validateProfileCdpPort(profileKey, expectedPort) {
+	const activePortPath = join(profileKey, "DevToolsActivePort");
+	let content;
 	try {
-		const response = await fetch(`http://127.0.0.1:${port}/json/version`, {
-			signal: controller.signal,
-		});
-		if (!response.ok)
-			throw new BrokerError(
-				"cdp_unavailable",
-				`CDP returned HTTP ${response.status}`,
-			);
-		const version = await response.json();
-		if (typeof version?.webSocketDebuggerUrl !== "string")
-			throw new BrokerError(
-				"cdp_invalid",
-				"CDP version response has no WebSocket URL",
-			);
-		return { connected: true, port, browser: version.Browser || null };
+		content = await readFile(activePortPath, "utf8");
 	} catch (error) {
-		return { connected: false, port, error: errorInfo(error) };
-	} finally {
-		clearTimeout(timer);
+		if (error?.code === "ENOENT") return;
+		throw new BrokerError(
+			"cdp_profile_mismatch",
+			"The Chrome profile DevToolsActivePort file could not be read",
+		);
 	}
+	const port = Number.parseInt(String(content).split(/\r?\n/, 1)[0], 10);
+	if (!Number.isInteger(port) || port !== expectedPort)
+		throw new BrokerError(
+			"cdp_profile_mismatch",
+			"Chrome profile is active on a different DevTools port",
+			{ expectedPort, actualPort: Number.isInteger(port) ? port : null },
+		);
+}
+
+async function endpointIsAlive(socketPath) {
+	return new Promise((resolveResult) => {
+		const socket = net.createConnection(socketPath);
+		let settled = false;
+		const finish = (alive) => {
+			if (settled) return;
+			settled = true;
+			socket.destroy();
+			resolveResult(alive);
+		};
+		socket.once("connect", () => finish(true));
+		socket.once("error", () => finish(false));
+		setTimeout(() => finish(true), 250).unref?.();
+	});
 }
 
 export class GoogleCdpBroker {
@@ -658,50 +1087,419 @@ export class GoogleCdpBroker {
 			Math.max(options.maxFrameBytes || MAX_FRAME_BYTES, 1024),
 			MAX_FRAME_BYTES,
 		);
+		this.maxInFlight = Math.min(
+			Math.max(options.maxInFlight || MAX_IN_FLIGHT_REQUESTS, 1),
+			MAX_IN_FLIGHT_REQUESTS,
+		);
+		this.maxIdHistory = Math.min(
+			Math.max(options.maxIdHistory || MAX_REQUEST_ID_HISTORY, 1),
+			MAX_REQUEST_ID_HISTORY,
+		);
 		this.registry = options.registry || new LeaseRegistry(options);
 		this.ownerNonce = randomUUID();
 		this.connections = new Set();
 		this.started = false;
 		this.server = null;
 		this.lock = null;
+		this.endpointOwned = false;
 		this.sweepTimer = null;
-		this.cdp = { connected: false, explicit: options.connectCdp === true };
 		this.cdpPort = Number(options.cdpPort || 9222);
+		this.cdp = {
+			connected: false,
+			explicit: options.connectCdp === true,
+			generation: this.registry.browserGeneration,
+			port: this.cdpPort,
+			browser: null,
+		};
+		this.cdpTransport =
+			options.cdpTransport ||
+			(options.connectCdp === true
+				? new BrowserCdpTransport({ port: this.cdpPort })
+				: null);
+		this.cdpTargets = new Map();
+		this.runtimeError = null;
+		this.lifecycle = Promise.resolve();
 	}
 
-	async start() {
-		if (this.started) return ok(this.info());
-		const lock = await claimStartupLock({
-			lockPath: this.lockPath,
-			socketPath: this.socketPath,
-			profileKey: this.profileKey,
-			ownerNonce: this.ownerNonce,
+	start() {
+		return this.serializeLifecycle(() => this.startInternal());
+	}
+	stop() {
+		return this.serializeLifecycle(() => this.stopInternal());
+	}
+	serializeLifecycle(action) {
+		const result = this.lifecycle.catch(() => {}).then(action);
+		this.lifecycle = result.catch(() => {});
+		return result;
+	}
+
+	attachCdpTransport() {
+		if (!this.cdpTransport || this.cdpTransportAttached) return;
+		this.cdpTransportAttached = true;
+		this.cdpTransport.on?.("close", (error) => this.handleCdpLoss(error));
+		this.cdpTransport.on?.("socketError", (error) => {
+			this.runtimeError = errorInfo(error);
 		});
+	}
+
+	handleCdpLoss(error) {
+		if (!this.cdp.explicit || !this.cdp.connected) return;
+		this.cdp.connected = false;
+		this.cdp.generation = this.registry.bumpBrowserGeneration().generation;
+		this.cdpTargets.clear();
+		if (error) this.runtimeError = errorInfo(error);
+	}
+
+	async cdpSend(method, params, request, signal, sessionId = undefined) {
+		if (!this.cdpTransport || !this.cdp.connected)
+			throw new BrokerError("cdp_disconnected", "CDP browser is disconnected");
+		checkSignal(signal);
+		try {
+			return await this.cdpTransport.send(method, params, {
+				sessionId,
+				signal,
+				deadlineAt: request?.deadlineAt,
+			});
+		} catch (error) {
+			if (signal?.aborted)
+				throw new BrokerError("request_fenced", "Request was cancelled");
+			throw error;
+		}
+	}
+
+	async closeCdpTarget(target, request = undefined) {
+		if (!target?.cdpTargetId) return;
+		const targetId = target.cdpTargetId;
+		target.cdpTargetId = null;
+		target.cdpSessionId = null;
+		this.cdpTargets.delete(target.targetId);
+		if (!this.cdp.connected) return;
+		try {
+			await this.cdpTransport.send(
+				"Target.closeTarget",
+				{ targetId },
+				{
+					deadlineAt: boundedCleanupDeadline(request),
+				},
+			);
+		} catch {
+			// Closing is best effort; browser loss already quarantines its targets.
+		}
+	}
+
+	async verifyCdpLocation(target, expected, request, signal, description) {
+		const deadlineAt =
+			request?.deadlineAt ?? Date.now() + DEFAULT_SEARCH_TIMEOUT_MS;
+		while (Date.now() < deadlineAt) {
+			checkSignal(signal);
+			const evaluation = await this.cdpSend(
+				"Runtime.evaluate",
+				{ expression: "location.href", returnByValue: true },
+				{ ...request, deadlineAt },
+				signal,
+				target.cdpSessionId,
+			);
+			if (evaluation?.exceptionDetails)
+				throw new BrokerError(
+					"cdp_protocol",
+					`${description} location check failed`,
+				);
+			if (expected(evaluationString(evaluation))) return;
+			await waitForSearchPoll(signal, deadlineAt);
+		}
+		throw new BrokerError(
+			"reset_failed",
+			`${description} did not reach the expected location`,
+		);
+	}
+
+	async resetCdpTarget(target, request, signal) {
+		if (!target?.cdpSessionId)
+			throw new BrokerError(
+				"target_unavailable",
+				"Lease has no attached CDP target",
+			);
+		const resetRequest = {
+			...request,
+			deadlineAt: boundedCleanupDeadline(request),
+		};
+		const navigation = await this.cdpSend(
+			"Page.navigate",
+			{ url: "about:blank" },
+			resetRequest,
+			signal,
+			target.cdpSessionId,
+		);
+		if (navigation?.errorText)
+			throw new BrokerError(
+				"reset_failed",
+				`Target reset failed: ${navigation.errorText}`,
+			);
+		await this.verifyCdpLocation(
+			target,
+			(value) => value === "about:blank",
+			resetRequest,
+			signal,
+			"Target reset",
+		);
+	}
+
+	async attachCdpTarget(target, request, signal) {
+		let created;
+		try {
+			created = await this.cdpSend(
+				"Target.createTarget",
+				{ url: "about:blank" },
+				request,
+				signal,
+			);
+			if (typeof created?.targetId !== "string" || !created.targetId)
+				throw new BrokerError("cdp_protocol", "CDP did not return a target ID");
+			target.cdpTargetId = created.targetId;
+			const attached = await this.cdpSend(
+				"Target.attachToTarget",
+				{ targetId: created.targetId, flatten: true },
+				request,
+				signal,
+			);
+			if (typeof attached?.sessionId !== "string" || !attached.sessionId)
+				throw new BrokerError(
+					"cdp_protocol",
+					"CDP did not return a session ID",
+				);
+			target.cdpSessionId = attached.sessionId;
+			this.cdpTargets.set(target.targetId, target);
+		} catch (error) {
+			await this.closeCdpTarget(target, request);
+			throw error;
+		}
+	}
+
+	publicCdpLease(lease) {
+		const result = this.registry.publicLease(lease);
+		delete result.targetId;
+		result.mode = "cdp";
+		return result;
+	}
+
+	async acquireCdpLease(lease, request, signal) {
+		const internalLease = this.registry.leases.get(lease.leaseId);
+		const target =
+			internalLease && this.registry.targets.get(internalLease.targetId);
+		if (!internalLease || !target)
+			throw new BrokerError(
+				"target_unavailable",
+				"Lease target is unavailable",
+			);
+		try {
+			if (target.cdpSessionId)
+				await this.resetCdpTarget(target, request, signal);
+			else await this.attachCdpTarget(target, request, signal);
+			checkSignal(signal);
+			return this.publicCdpLease(internalLease);
+		} catch (error) {
+			this.registry.cancelLease(internalLease.leaseId);
+			await this.closeCdpTarget(target, request);
+			throw error;
+		}
+	}
+
+	async releaseCdpLease(request, identity, signal) {
+		if (request.targetId !== undefined)
+			throw new BrokerError(
+				"invalid_request",
+				"CDP target IDs are private to the broker",
+			);
+		const lease = this.registry.findLease({ ...request, ...identity });
+		const target = this.registry.targets.get(lease.targetId);
+		try {
+			await this.resetCdpTarget(target, request, signal);
+			const result = this.registry.release({ ...request, ...identity });
+			return { released: true, leaseId: result.leaseId };
+		} catch (error) {
+			this.registry.retireLease(lease, true);
+			await this.closeCdpTarget(target, request);
+			throw error;
+		}
+	}
+
+	async extractGoogleSearchResults(request, sessionId, maxResults, signal) {
+		const deadlineAt =
+			request.deadlineAt || Date.now() + DEFAULT_SEARCH_TIMEOUT_MS;
+		while (Date.now() < deadlineAt) {
+			checkSignal(signal);
+			const evaluation = await this.cdpSend(
+				"Runtime.evaluate",
+				{
+					expression: GOOGLE_SEARCH_EXTRACTION_SCRIPT,
+					returnByValue: true,
+				},
+				request,
+				signal,
+				sessionId,
+			);
+			if (evaluation?.exceptionDetails)
+				throw new BrokerError(
+					"search_extraction_failed",
+					"Google result extraction failed",
+				);
+			const value = searchEvaluationValue(evaluation);
+			const results = Array.isArray(value?.results)
+				? value.results
+						.filter(
+							(result) =>
+								typeof result?.title === "string" &&
+								result.title.length > 0 &&
+								typeof result?.url === "string" &&
+								(result.url.startsWith("http://") ||
+									result.url.startsWith("https://")) &&
+								typeof result?.snippet === "string",
+						)
+						.slice(0, maxResults)
+				: [];
+			if (results.length > 0) return results;
+			if (Date.now() >= deadlineAt) break;
+			await waitForSearchPoll(signal, deadlineAt);
+		}
+		checkSignal(signal);
+		throw new BrokerError(
+			"search_timeout",
+			"Google search results were not ready before the deadline",
+		);
+	}
+
+	async searchGoogle(request, identity, signal) {
+		const { query, maxResults } = validateSearchRequest(request);
+		if (!this.cdp.explicit)
+			throw new BrokerError(
+				"cdp_required",
+				"Google search requires broker CDP mode",
+			);
+		checkSignal(signal);
+		const canonicalUrl = canonicalGoogleSearchUrl(query, maxResults);
+		let lease;
+		let target;
+		try {
+			lease = await this.registry.lease({
+				...identity,
+				provider: "google-search",
+				signal,
+			});
+			const internalLease = this.registry.leases.get(lease.leaseId);
+			target =
+				internalLease && this.registry.targets.get(internalLease.targetId);
+			if (!internalLease || !target)
+				throw new BrokerError(
+					"target_unavailable",
+					"Lease target is unavailable",
+				);
+			await this.acquireCdpLease(lease, request, signal);
+			checkSignal(signal);
+			const navigation = await this.cdpSend(
+				"Page.navigate",
+				{ url: canonicalUrl },
+				request,
+				signal,
+				target.cdpSessionId,
+			);
+			if (navigation?.errorText)
+				throw new BrokerError(
+					"navigation_failed",
+					`Google navigation failed: ${navigation.errorText}`,
+				);
+			await this.verifyCdpLocation(
+				target,
+				(value) => isGoogleSearchLocation(value, canonicalUrl),
+				request,
+				signal,
+				"Google search",
+			);
+			const results = await this.extractGoogleSearchResults(
+				request,
+				target.cdpSessionId,
+				maxResults,
+				signal,
+			);
+			checkSignal(signal);
+			await this.resetCdpTarget(target, request, signal);
+			checkSignal(signal);
+			this.registry.release({ ...identity, leaseId: lease.leaseId });
+			return { query, url: canonicalUrl, results };
+		} catch (error) {
+			if (lease && this.registry.leases.has(lease.leaseId))
+				this.registry.retireLease(lease, true);
+			if (target) await this.closeCdpTarget(target, request);
+			throw error;
+		}
+	}
+
+	async cleanupCdpTargets() {
+		for (const target of [...this.cdpTargets.values()])
+			if (!this.registry.targets.has(target.targetId))
+				await this.closeCdpTarget(target);
+	}
+
+	async startInternal() {
+		if (this.started) return ok(this.info());
+		let lock;
+		try {
+			lock = await claimStartupLock({
+				lockPath: this.lockPath,
+				socketPath: this.socketPath,
+				profileKey: this.profileKey,
+				ownerNonce: this.ownerNonce,
+			});
+		} catch (error) {
+			return fail(error);
+		}
 		if (!lock.ok) return lock;
 		this.lock = lock;
 		try {
-			if (platform() !== "win32") {
-				try {
-					if (
-						existsSync(this.socketPath) &&
-						lstatSync(this.socketPath).isSocket()
-					)
-						unlinkSync(this.socketPath);
-				} catch (error) {
+			if (this.cdp.explicit) {
+				if (!this.cdpTransport)
 					throw new BrokerError(
-						"socket_prepare_failed",
-						String(error?.message || error),
+						"cdp_unavailable",
+						"CDP transport is unavailable",
 					);
+				await validateProfileCdpPort(this.profileKey, this.cdpPort);
+				this.attachCdpTransport();
+				const cdpInfo = await this.cdpTransport.connect();
+				this.cdp = {
+					...this.cdp,
+					...cdpInfo,
+					connected: true,
+					generation: this.registry.browserGeneration,
+				};
+			}
+			if (platform() !== "win32") {
+				let exists = false;
+				try {
+					exists = (await lstat(this.socketPath)).isSocket();
+				} catch (error) {
+					if (error?.code !== "ENOENT") throw error;
+				}
+				if (exists) {
+					if (await endpointIsAlive(this.socketPath))
+						throw new BrokerError(
+							"endpoint_in_use",
+							"A live broker endpoint already exists",
+						);
+					await rm(this.socketPath, { force: true });
 				}
 			}
 			this.server = net.createServer((connection) => this.accept(connection));
-			this.server.on("error", () => {});
+			let listening = false;
+			this.server.on("error", (error) => {
+				this.runtimeError = errorInfo(error);
+				if (!listening) return;
+			});
 			await new Promise((resolveListen, rejectListen) => {
 				const onError = (error) => {
 					this.server?.off("listening", onListening);
 					rejectListen(error);
 				};
 				const onListening = () => {
+					listening = true;
 					this.server?.off("error", onError);
 					resolveListen();
 				};
@@ -709,34 +1507,52 @@ export class GoogleCdpBroker {
 				this.server.once("listening", onListening);
 				this.server.listen(this.socketPath);
 			});
+			if (platform() !== "win32") {
+				try {
+					await chmod(this.socketPath, 0o600);
+				} catch {
+					/* Unix permission tightening is best effort. */
+				}
+			} else {
+				// Windows named pipes have no equivalent portable mode bit; capability auth is the boundary.
+			}
+			this.endpointOwned = true;
 			this.started = true;
 			this.sweepTimer = setInterval(
 				() => {
 					try {
 						this.registry.sweep();
-					} catch {
-						/* cleanup is fail-soft */
+						void this.cleanupCdpTargets();
+					} catch (error) {
+						this.runtimeError = errorInfo(error);
 					}
 				},
 				Math.max(250, Math.min(this.registry.ttlMs, 5000)),
 			);
 			this.sweepTimer.unref?.();
-			if (this.cdp.explicit) this.cdp = await probeExistingCdp(this.cdpPort);
 			return ok(this.info());
 		} catch (error) {
-			await this.stop();
+			await this.stopInternal();
 			return fail(error);
 		}
 	}
 
 	info() {
+		const registry = this.registry.snapshot();
 		return {
 			profileKey: this.profileKey,
 			socketPath: this.socketPath,
 			ownerNonce: this.ownerNonce,
 			protocol: 1,
-			cdp: this.cdp,
-			registry: this.registry.snapshot(),
+			cdp: {
+				...this.cdp,
+				...(this.cdp.explicit && this.cdpTransport?.info
+					? { connected: Boolean(this.cdpTransport.info().connected) }
+					: {}),
+				generation: registry.generation,
+			},
+			runtimeError: this.runtimeError,
+			registry,
 		};
 	}
 
@@ -745,9 +1561,12 @@ export class GoogleCdpBroker {
 			connection,
 			buffer: "",
 			clientId: null,
+			sessionId: null,
+			capability: newCapability(),
 			closed: false,
 			seenIds: new Set(),
 			pending: new Map(),
+			paused: false,
 		};
 		this.connections.add(state);
 		connection.setNoDelay?.(true);
@@ -756,6 +1575,10 @@ export class GoogleCdpBroker {
 		connection.on("error", close);
 		connection.on("end", close);
 		connection.on("close", close);
+		connection.on("drain", () => {
+			state.paused = false;
+			connection.resume?.();
+		});
 	}
 
 	disconnect(state) {
@@ -763,7 +1586,13 @@ export class GoogleCdpBroker {
 		state.closed = true;
 		for (const controller of state.pending.values()) controller.abort();
 		state.pending.clear();
-		if (state.clientId) this.registry.disconnect(state.clientId);
+		if (state.clientId)
+			this.registry.disconnect({
+				clientId: state.clientId,
+				sessionId: state.sessionId,
+				capability: state.capability,
+			});
+		void this.cleanupCdpTargets();
 		this.connections.delete(state);
 	}
 
@@ -771,16 +1600,15 @@ export class GoogleCdpBroker {
 		if (state.closed || state.connection.destroyed) return;
 		const line = `${JSON.stringify(payload)}\n`;
 		if (Buffer.byteLength(line) > this.maxFrameBytes) {
-			state.connection.destroy(
-				new BrokerError(
-					"frame_too_large",
-					"Broker response exceeds frame limit",
-				),
-			);
+			this.disconnect(state);
+			state.connection.destroy(new Error("response frame too large"));
 			return;
 		}
 		try {
-			state.connection.write(line);
+			if (!state.connection.write(line)) {
+				state.paused = true;
+				state.connection.pause?.();
+			}
 		} catch {
 			this.disconnect(state);
 		}
@@ -789,21 +1617,21 @@ export class GoogleCdpBroker {
 	receive(state, chunk) {
 		if (state.closed) return;
 		state.buffer += chunk.toString("utf8");
-		if (Buffer.byteLength(state.buffer) > this.maxFrameBytes) {
-			this.write(state, {
-				id: null,
-				ok: false,
-				error: {
-					code: "frame_too_large",
-					message: "Request exceeds frame limit",
-				},
-			});
-			state.connection.destroy();
-			return;
-		}
-		const lines = state.buffer.split("\n");
-		state.buffer = lines.pop() || "";
-		for (const line of lines) {
+		let newline;
+		while ((newline = state.buffer.indexOf("\n")) !== -1) {
+			const line = state.buffer.slice(0, newline);
+			state.buffer = state.buffer.slice(newline + 1);
+			if (Buffer.byteLength(line, "utf8") + 1 > this.maxFrameBytes) {
+				this.write(state, {
+					id: null,
+					ok: false,
+					error: {
+						code: "frame_too_large",
+						message: "Request exceeds frame limit",
+					},
+				});
+				continue;
+			}
 			if (!line.trim()) continue;
 			let request;
 			try {
@@ -819,25 +1647,49 @@ export class GoogleCdpBroker {
 				});
 				continue;
 			}
-			void this.dispatch(state, request).catch(() => {
-				// dispatch always converts failures; this is a final promise fence.
+			void this.dispatch(state, request).catch((error) => {
+				this.runtimeError = errorInfo(error);
 			});
+		}
+		if (Buffer.byteLength(state.buffer, "utf8") >= this.maxFrameBytes) {
+			this.write(state, {
+				id: null,
+				ok: false,
+				error: {
+					code: "frame_too_large",
+					message: "Request exceeds frame limit",
+				},
+			});
+			state.buffer = "";
 		}
 	}
 
+	validateDeadline(request) {
+		if (request.deadlineAt === undefined) return;
+		if (!Number.isInteger(request.deadlineAt) || request.deadlineAt <= 0)
+			throw new BrokerError(
+				"invalid_deadline",
+				"deadlineAt must be an absolute millisecond timestamp",
+			);
+		if (request.deadlineAt <= Date.now())
+			throw new BrokerError("deadline_expired", "Request deadline has expired");
+	}
+
 	async dispatch(state, request) {
-		const id =
-			request &&
-			(typeof request.id === "string" || typeof request.id === "number")
-				? request.id
-				: null;
-		if (id === null || typeof request !== "object" || Array.isArray(request)) {
+		let id = null;
+		try {
+			id = asRequestId(request?.id);
+		} catch (error) {
+			this.write(state, { id: null, ok: false, error: errorInfo(error) });
+			return;
+		}
+		if (!request || typeof request !== "object" || Array.isArray(request)) {
 			this.write(state, {
 				id,
 				ok: false,
 				error: {
 					code: "invalid_request",
-					message: "Request object needs a string or numeric id",
+					message: "Request must be an object",
 				},
 			});
 			return;
@@ -853,18 +1705,87 @@ export class GoogleCdpBroker {
 			});
 			return;
 		}
+		if (state.seenIds.size >= this.maxIdHistory) {
+			this.write(state, {
+				id,
+				ok: false,
+				error: {
+					code: "request_id_history_exhausted",
+					message: "Request id history limit reached",
+				},
+			});
+			return;
+		}
 		state.seenIds.add(id);
+		// Cancellation is a control frame, not normal work. It must remain
+		// deliverable even when all normal request slots are occupied.
+		if (request.op !== "cancel" && state.pending.size >= this.maxInFlight) {
+			this.write(state, {
+				id,
+				ok: false,
+				error: {
+					code: "in_flight_limit",
+					message: "Too many in-flight requests",
+				},
+			});
+			return;
+		}
+		try {
+			this.validateDeadline(request);
+		} catch (error) {
+			this.write(state, { id, ok: false, error: errorInfo(error) });
+			return;
+		}
 		const controller = new AbortController();
 		state.pending.set(id, controller);
-		let response;
+		let timer;
+		if (request.deadlineAt !== undefined)
+			timer = setTimeout(
+				() => controller.abort(),
+				request.deadlineAt - Date.now(),
+			);
 		try {
-			response = await this.operation(state, request, controller.signal);
+			const response = await this.operation(state, request, controller.signal);
+			if (controller.signal.aborted)
+				throw new BrokerError(
+					"request_fenced",
+					"Request completed after its deadline or cancellation",
+				);
 			if (!state.closed) this.write(state, { id, ...response });
 		} catch (error) {
 			if (!state.closed) this.write(state, { id, ...fail(error) });
 		} finally {
+			clearTimeout(timer);
 			state.pending.delete(id);
 		}
+	}
+
+	identityFor(state, request) {
+		if (!state.clientId || !state.sessionId)
+			throw new BrokerError(
+				"not_registered",
+				"Register this connection before using broker operations",
+			);
+		if (request.clientId !== undefined && request.clientId !== state.clientId)
+			throw new BrokerError(
+				"connection_ownership",
+				"clientId does not match this connection",
+			);
+		if (request.sessionId !== state.sessionId)
+			throw new BrokerError(
+				"session_mismatch",
+				"sessionId must match the registered identity",
+			);
+		if (request.capability !== state.capability)
+			throw new BrokerError(
+				"unauthorized",
+				"Broker-bound capability is required",
+			);
+		return {
+			clientId: state.clientId,
+			sessionId: state.sessionId,
+			capability: state.capability,
+		};
 	}
 
 	async operation(state, request, signal) {
@@ -873,46 +1794,98 @@ export class GoogleCdpBroker {
 			throw new BrokerError("invalid_request", "op is required");
 		if (op === "health") return ok(this.info());
 		if (op === "register") {
+			if (
+				state.clientId &&
+				(request.clientId !== state.clientId ||
+					request.sessionId !== state.sessionId)
+			)
+				throw new BrokerError(
+					"connection_ownership",
+					"A connection cannot be re-registered under another identity",
+				);
+			checkSignal(signal);
 			const result = this.registry.register({
 				clientId: request.clientId,
 				sessionId: request.sessionId,
+				capability: state.capability,
 			});
 			state.clientId = result.clientId;
+			state.sessionId = result.sessionId;
 			return ok(result);
 		}
-		if (
-			!state.clientId ||
-			(request.clientId !== undefined && request.clientId !== state.clientId)
-		) {
-			throw new BrokerError(
-				"not_registered",
-				"Register this connection before using broker operations",
-			);
+		const identity = this.identityFor(state, request);
+		this.registry.assertClient(identity);
+		if (op === "cancel") {
+			const requestId = asRequestId(request.requestId);
+			if (requestId === request.id)
+				throw new BrokerError(
+					"invalid_request",
+					"A request cannot cancel itself",
+				);
+			const pending = state.pending.get(requestId);
+			if (!pending) return ok({ cancelled: false, requestId });
+			pending.abort();
+			return ok({ cancelled: true, requestId });
 		}
 		checkSignal(signal);
 		switch (op) {
+			case "search":
+				return ok(await this.searchGoogle(request, identity, signal));
 			case "lease": {
-				const result = await this.registry.lease({
-					clientId: state.clientId,
-					sessionId: request.sessionId,
-					provider: request.provider,
-					ttlMs: request.ttlMs,
-					waitMs: request.waitMs,
-					signal,
-				});
-				checkSignal(signal);
-				return ok(result);
+				let lease;
+				try {
+					lease = await this.registry.lease({
+						...identity,
+						provider: request.provider,
+						ttlMs: request.ttlMs,
+						waitMs: request.waitMs,
+						signal,
+					});
+					checkSignal(signal);
+					if (this.cdp.explicit)
+						return ok(await this.acquireCdpLease(lease, request, signal));
+				} catch (error) {
+					if (lease) this.registry.cancelLease(lease.leaseId);
+					throw error;
+				}
+				return ok(lease);
 			}
 			case "release":
 				return ok(
-					this.registry.release({ ...request, clientId: state.clientId }),
+					this.cdp.explicit
+						? await this.releaseCdpLease(request, identity, signal)
+						: this.registry.release({ ...request, ...identity }),
 				);
+			case "reset": {
+				if (!this.cdp.explicit)
+					throw new BrokerError(
+						"unsupported_operation",
+						"Reset requires CDP mode",
+					);
+				if (request.targetId !== undefined)
+					throw new BrokerError(
+						"invalid_request",
+						"CDP target IDs are private to the broker",
+					);
+				const lease = this.registry.findLease({ ...request, ...identity });
+				const target = this.registry.targets.get(lease.targetId);
+				try {
+					await this.resetCdpTarget(target, request, signal);
+				} catch (error) {
+					this.registry.retireLease(lease, true);
+					await this.closeCdpTarget(target, request);
+					throw error;
+				}
+				return ok({ reset: true, leaseId: lease.leaseId });
+			}
 			case "heartbeat":
-				return ok(
-					this.registry.heartbeat({ ...request, clientId: state.clientId }),
-				);
-			case "close":
-				return ok(this.registry.close(state.clientId));
+				return ok(this.registry.heartbeat({ ...request, ...identity }));
+			case "close": {
+				const result = this.registry.close(identity);
+				void this.cleanupCdpTargets();
+				setImmediate(() => this.disconnect(state));
+				return ok(result);
+			}
 			default:
 				throw new BrokerError(
 					"unsupported_operation",
@@ -921,7 +1894,7 @@ export class GoogleCdpBroker {
 		}
 	}
 
-	async stop() {
+	async stopInternal() {
 		if (this.sweepTimer) clearInterval(this.sweepTimer);
 		this.sweepTimer = null;
 		for (const state of [...this.connections]) {
@@ -930,7 +1903,7 @@ export class GoogleCdpBroker {
 			} catch {}
 			this.disconnect(state);
 		}
-		if (this.server) {
+		if (this.server)
 			await new Promise((resolveClose) => {
 				try {
 					this.server.close(() => resolveClose());
@@ -938,11 +1911,35 @@ export class GoogleCdpBroker {
 					resolveClose();
 				}
 			});
-		}
 		this.server = null;
+		if (this.cdpTransport) {
+			try {
+				await this.cdpTransport.close();
+			} catch (error) {
+				this.runtimeError = errorInfo(error);
+			}
+		}
+		this.cdp.connected = false;
+		this.cdpTargets.clear();
 		this.started = false;
-		if (this.lock) await this.lock.release();
-		this.lock = null;
+		// Keep the startup lock while removing our endpoint: otherwise a new
+		// owner could bind the path between release() and cleanup().
+		if (this.endpointOwned && platform() !== "win32") {
+			try {
+				await rm(this.socketPath, { force: true });
+			} catch (error) {
+				this.runtimeError = errorInfo(error);
+			}
+		}
+		this.endpointOwned = false;
+		if (this.lock) {
+			try {
+				await this.lock.release();
+			} catch (error) {
+				this.runtimeError = errorInfo(error);
+			}
+			this.lock = null;
+		}
 	}
 }
 
@@ -955,6 +1952,7 @@ function parseCli(args) {
 		else if (arg === "--connect-cdp") options.connectCdp = true;
 		else if (arg === "--cdp-port") options.cdpPort = Number(args[++i]);
 		else if (arg === "--global-cap") options.globalCap = Number(args[++i]);
+		else if (arg === "--parent-stdin") options.parentStdin = true;
 		else if (arg === "--help" || arg === "-h") options.help = true;
 		else throw new BrokerError("invalid_cli", `Unknown option: ${arg}`);
 	}
@@ -962,7 +1960,7 @@ function parseCli(args) {
 	return { ...paths, ...options };
 }
 
-const USAGE = `google-cdp-broker (F22 prototype, registry-only by default)\n\nUsage: node bin/google-cdp-broker.mjs [--profile DIR] [--connect-cdp] [--cdp-port PORT]\n\nThe broker does not launch Chrome. --connect-cdp only probes an existing\ndedicated Chrome; no production Google path uses this prototype.\n`;
+const USAGE = `google-cdp-broker (F22 prototype, registry-only by default)\n\nUsage: node bin/google-cdp-broker.mjs [--profile DIR] [--connect-cdp] [--cdp-port PORT] [--parent-stdin]\n\nThe broker does not launch Chrome. --connect-cdp only probes an existing\ndedicated Chrome; no production Google path uses this prototype.\n`;
 
 async function main() {
 	try {
@@ -986,6 +1984,13 @@ async function main() {
 		};
 		process.once("SIGINT", shutdown);
 		process.once("SIGTERM", shutdown);
+		if (options.parentStdin) {
+			// The production wrapper gives the broker a pipe. EOF means the
+			// wrapper died; this stops only the broker and never touches Chrome.
+			process.stdin.resume();
+			process.stdin.once("end", shutdown);
+			process.stdin.once("error", shutdown);
+		}
 	} catch (error) {
 		process.stderr.write(`${JSON.stringify(fail(error))}\n`);
 		process.exitCode = 1;
@@ -995,6 +2000,5 @@ async function main() {
 if (
 	process.argv[1] &&
 	resolve(process.argv[1]) === fileURLToPath(import.meta.url)
-) {
+)
 	void main();
-}
