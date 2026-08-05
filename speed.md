@@ -149,3 +149,24 @@ A local benchmark should compare cold/warm runs at one, two, and four concurrent
 ## Relationship to the roadmap
 
 This is F22, a dedicated Google-CDP performance/concurrency item. F10 remains the general worker-process/browser crash-isolation item; F22 does not complete F10. F3 remains the cookie/profile/session-state item; session-scoped tabs do not provide F3-level storage isolation. The first target is Google CDP time-to-answer and cross-session race safety.
+
+## Live measurement log
+
+### 2026-08-05 — warm legacy vs broker Google search
+
+Command: `node scripts/bench-google-cdp.mjs --live --query "pi coding agent" --samples 3` (Windows, Chrome already running via the shared profile).
+
+| Lane | n | completed | p50 | p95 |
+| --- | --- | --- | --- | --- |
+| legacy-first/warm | 3 | 3 | 6407.8 ms | 6813.4 ms |
+| broker-first/warm | 3 | 3 | 5888.6 ms | 5958.8 ms |
+
+Known limitations of this sample (no speedup is claimed from it):
+
+- Order effect: the legacy lane ran first and warmed Chrome; the broker lane benefited from that warm state.
+- The first sample of each lane includes startup (Chrome warm for legacy; broker spawn + CDP connect for broker), so "warm" is approximate.
+- n=3 is a bounded sample justified by live-Google politeness, not a statistical one.
+- Only total time is measured; broker IPC, target setup, and navigation/extraction phases are not yet instrumented.
+- No cold-restart measurement: the harness does not kill/relaunch Chrome between lanes.
+
+Interpretation: both lanes complete live Google searches end-to-end within comparable wall time; the broker lane showed a small p50 edge (~500 ms) that the confounds above fully explain. The measurement satisfies the #92 requirement to record like-for-like numbers before any speedup claim; phase instrumentation and cold-restart runs remain follow-ups.
