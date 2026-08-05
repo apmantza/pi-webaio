@@ -503,22 +503,28 @@ test("session cache normalizes http keys", () => {
 });
 
 test("session cache evicts expired entries", () => {
-	const cache = createSessionCache({ ttlMs: 1 });
+	// Generous TTL + explicit aging keeps this deterministic regardless of
+	// how much wall-clock time passes between store and read.
+	const cache = createSessionCache({ ttlMs: 60_000 });
 	cache.storeContent("https://example.com", "Example", "# Hello");
-	// Manually age the entry
+	// Manually age the entry well past the TTL
 	const entry = cache.store.get("https://example.com");
-	entry.timestamp = Date.now() - 100;
+	entry.timestamp = Date.now() - 120_000;
 	const stored = cache.getStoredContent("https://example.com");
 	assert.strictEqual(stored, null);
 });
 
 test("session cache cleanup removes expired entries", () => {
-	const cache = createSessionCache({ ttlMs: 1 });
+	// Use a comfortable TTL and age the expired entry explicitly: a 1ms TTL
+	// makes this test timing-dependent (a slow runner can cross the expiry
+	// boundary between store and cleanup, flaking the "fresh entry survives"
+	// assertion — seen in CI).
+	const cache = createSessionCache({ ttlMs: 60_000 });
 	cache.storeContent("https://old.com", "Old", "content");
 	cache.storeContent("https://new.com", "New", "content");
-	// Age only the first entry
+	// Age only the first entry well past the TTL
 	const oldEntry = cache.store.get("https://old.com");
-	oldEntry.timestamp = Date.now() - 100;
+	oldEntry.timestamp = Date.now() - 120_000;
 	cache.cleanupSessionCache();
 	assert.strictEqual(cache.store.has("https://old.com"), false);
 	assert.strictEqual(cache.store.has("https://new.com"), true);

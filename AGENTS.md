@@ -8,6 +8,10 @@ pi-webaio is an **all-in-one web tools extension** for [pi](https://pi.dev) (the
 
 > **Internal-docs policy:** research / audit / inspiration notes — `docs/inspirations*.md`, `docs/pagemap-inspiration.md`, `docs/observability-gaps.md`, `docs/perf-improvements.md`, and root-level `inspiration7.md` — are **local-only working artifacts**. They are gitignored and must **never** be committed or shipped. Only user-facing docs (`README.md`, `docs/{features,tools,usage,architecture,custom-verticals,mcp}.md`) plus `ROADMAP.md` / `CHANGELOG.md` / `AGENTS.md` belong in the repo. When auditing or surveying, write findings to these local files, not to tracked docs.
 
+## Mandatory adversarial review
+
+Every implementation change must receive a separate adversarial review before it is declared complete or merged. The review must inspect the actual diff, challenge the stated acceptance criteria, look for regressions and failure-path gaps, and report actionable findings with priorities and file/symbol locations. Run the relevant tests and diagnostics after addressing findings. Do not treat an implementer agent's summary as review evidence; use an independent read-only reviewer, and do not commit or push until the review is resolved.
+
 ## Architecture
 
 ```
