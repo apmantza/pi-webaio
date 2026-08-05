@@ -239,4 +239,4 @@ async function main() {
 	if (caughtError) handleError(caughtError);
 }
 
-main();
+main().catch((error) => handleError(error));

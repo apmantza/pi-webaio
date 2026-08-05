@@ -13,6 +13,7 @@ import {
 import { existsSync } from "fs";
 import { join } from "path";
 import { tmpdir as osTmpdir } from "os";
+import { randomInt } from "crypto";
 
 /** Page navigation timeout */
 const CDP_NAV_TIMEOUT_MS = 30_000;
@@ -117,6 +118,12 @@ function buildSearchExtractor(): string {
   `;
 }
 
+export function isRedditBlocked(value: unknown): boolean {
+	// Runtime.evaluate with returnByValue returns the primitive boolean. Do not
+	// compare against the CLI client's string serialization.
+	return value === true;
+}
+
 function buildBlockDetector(): string {
 	return String.raw`
     (function() {
@@ -137,6 +144,40 @@ function buildBlockDetector(): string {
       return false;
     })()
   `;
+}
+
+/**
+ * Best-effort recovery for targets whose Target.createTarget response was
+ * lost (Chrome created the target but the CDP reply never arrived, so the
+ * caller never learned its targetId): close any page target carrying our
+ * unique marker URL that was not present in the pre-create snapshot.
+ *
+ * The marker URL makes recovery race-safe under concurrency: a bare
+ * about:blank match could close a live target created by a concurrent search
+ * or another CDP consumer during the (up to 5s) recovery window, so each
+ * search creates its target with a per-call marker fragment and recovery
+ * matches only that exact URL. Skipped when the snapshot itself failed —
+ * without a baseline we cannot tell new targets from pre-existing ones, and
+ * closing the wrong target would be worse than the leak. Never throws.
+ */
+async function recoverLeakedTargets(
+	cdp: CDPClient,
+	snapshotIds: Set<string> | undefined,
+	markerUrl: string,
+): Promise<void> {
+	if (!snapshotIds) return;
+	try {
+		const targets = await cdp.send("Target.getTargets");
+		for (const info of targets?.targetInfos ?? []) {
+			const id = info?.targetId;
+			if (typeof id !== "string" || snapshotIds.has(id)) continue;
+			if (info?.type !== "page" || info?.url !== markerUrl) continue;
+			await cdp.send("Target.closeTarget", { targetId: id }).catch(() => {});
+		}
+	} catch {
+		// Recovery is best-effort; a dead connection must not mask the
+		// original setup error.
+	}
 }
 
 /**
@@ -169,17 +210,56 @@ export async function searchReddit(
 		cdp = new CDPClient(wsUrl);
 		await cdp.connect();
 
+		// Leak-recovery snapshot: record which targets exist BEFORE we create
+		// ours, so that if the Target.createTarget response is lost (Chrome
+		// created the target but we never learn its targetId and `finally`
+		// cannot close it), we can find and close the orphan afterwards.
+		// Trade-off: one extra cheap getTargets round-trip (~few ms) on every
+		// search, including the happy path, in exchange for guaranteed
+		// no-leaked-targets. Correctness first; snapshot failure itself must
+		// never abort the search.
+		let snapshotIds: Set<string> | undefined;
+		try {
+			const targets = await cdp.send("Target.getTargets");
+			snapshotIds = new Set(
+				(targets?.targetInfos ?? [])
+					.map((t: any) => t?.targetId)
+					.filter((id: unknown): id is string => typeof id === "string"),
+			);
+		} catch {
+			snapshotIds = undefined;
+		}
+
 		// Keep setup inside the cleanup scope so failed attach/Page.enable
 		// cannot leak a freshly created target or its socket.
-		({ targetId } = await cdp.send("Target.createTarget", {
-			url: "about:blank",
-		}));
-		({ sessionId } = await cdp.send("Target.attachToTarget", {
+		// Unique marker URL so leak recovery can identify exactly our orphan
+		// target without ever touching targets created by concurrent searches
+		// or other CDP consumers. A data: URL round-trips reliably through
+		// Target.createTarget/getTargets (an about:blank fragment might not),
+		// and the pid+random suffix makes cross-search collisions impossible.
+		const markerUrl = `data:text/plain,pi-webaio-${process.pid}-${randomInt(0, 2 ** 31)}`;
+		let created: { targetId?: string } | undefined;
+		try {
+			created = await cdp.send("Target.createTarget", {
+				url: markerUrl,
+			});
+		} catch {
+			// Response lost or timed out — the target may still exist in
+			// Chrome even though we have no targetId for it.
+			created = undefined;
+		}
+		targetId = created?.targetId;
+		if (!targetId) {
+			await recoverLeakedTargets(cdp, snapshotIds, markerUrl);
+			throw new Error("CDP target setup returned no target id");
+		}
+
+		const attached = await cdp.send("Target.attachToTarget", {
 			targetId,
 			flatten: true,
-		}));
-		if (!targetId || !sessionId)
-			throw new Error("CDP target setup returned no identifiers");
+		});
+		sessionId = attached?.sessionId;
+		if (!sessionId) throw new Error("CDP target setup returned no session id");
 		await cdp.send("Page.enable", {}, sessionId);
 
 		// Navigate to Reddit search. Cancel the competing event wait on every
@@ -224,7 +304,7 @@ export async function searchReddit(
 			{ expression: buildBlockDetector(), returnByValue: true },
 			sessionId,
 		);
-		if (blocked.result.value === true) {
+		if (isRedditBlocked(blocked.result.value)) {
 			return {
 				ok: false,
 				query,
@@ -273,8 +353,20 @@ export async function searchReddit(
 			error: `Reddit search failed: ${(err as Error).message}`,
 		};
 	} finally {
-		if (cdp && targetId)
-			await cdp.send("Target.closeTarget", { targetId }).catch(() => {});
+		// Cleanup covers create, attach, Page.enable, navigation, evaluation,
+		// parsing, timeout, and cancellation failures. Teardown is strictly
+		// best-effort: never throw out of finally and never leave an unhandled
+		// rejection. If closeTarget fails or times out, retry exactly once
+		// while the connection may still be open; when the socket is already
+		// dead the retry rejects immediately, so it costs nothing. Always drop
+		// the socket afterwards.
+		if (cdp && targetId) {
+			try {
+				await cdp.send("Target.closeTarget", { targetId });
+			} catch {
+				await cdp.send("Target.closeTarget", { targetId }).catch(() => {});
+			}
+		}
 		if (sessionId) clearMainContext(sessionId);
 		cdp?.close();
 	}

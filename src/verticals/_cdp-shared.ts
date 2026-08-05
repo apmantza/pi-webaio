@@ -81,9 +81,9 @@ export class CDPClient {
 			timer: ReturnType<typeof setTimeout>;
 		}
 	>();
-	#closeHandlers: Array<() => void> = [];
+	#closeHandlers = new Set<() => void>();
+	#closeHandlersNotified = false;
 	#closed = false;
-	#opened = false;
 	wsUrl: string;
 
 	constructor(wsUrl: string) {
@@ -91,21 +91,27 @@ export class CDPClient {
 	}
 
 	async connect(): Promise<void> {
+		if (this.#closed) throw new Error("CDP connection is closed");
 		const { default: WebSocket } = await import("ws");
 		return new Promise((resolve, reject) => {
+			let settled = false;
+			const failConnect = (error: Error) => {
+				if (settled) return;
+				settled = true;
+				reject(error);
+			};
 			this.#ws = new WebSocket(this.wsUrl);
 			this.#ws.onopen = () => {
-				this.#opened = true;
+				if (settled) return;
+				settled = true;
 				resolve();
 			};
 			this.#ws.onerror = (e: any) => {
 				const error = new Error(`WebSocket error: ${e.message || e.type}`);
-				// WebSocket errors are terminal for this client. Mark it closed so
-				// a caller cannot enqueue more work between error and close events.
 				this.#closed = true;
-				if (this.#pending.size === 0) {
-					if (!this.#opened) reject(error);
-				} else this.#rejectPending(error);
+				this.#rejectPending(error);
+				this.#notifyClose();
+				failConnect(error);
 				try {
 					this.#ws.close();
 				} catch {
@@ -115,7 +121,8 @@ export class CDPClient {
 			this.#ws.onclose = () => {
 				this.#closed = true;
 				this.#rejectPending(new Error("CDP connection closed"));
-				for (const h of [...this.#closeHandlers]) h();
+				this.#notifyClose();
+				failConnect(new Error("CDP connection closed"));
 			};
 			this.#ws.onmessage = (ev: any) => {
 				let msg: any;
@@ -146,7 +153,15 @@ export class CDPClient {
 	#fireHandlers(method: string, params: any, msg: any): void {
 		const handlers = this.#handlers.get(method);
 		if (handlers) {
-			for (const h of [...handlers]) h(params, msg);
+			for (const h of [...handlers]) {
+				try {
+					// Observe the return value so an async handler rejecting
+					// after an await cannot become an unhandled rejection.
+					void Promise.resolve(h(params, msg)).catch(() => {});
+				} catch {
+					// Event observers must not break the WebSocket message loop.
+				}
+			}
 		}
 	}
 
@@ -160,45 +175,78 @@ export class CDPClient {
 		};
 	}
 
-	onClose(handler: () => void): void {
-		this.#closeHandlers.push(handler);
+	onClose(handler: () => void): () => void {
+		if (this.#closeHandlersNotified) {
+			// Already closed: fire immediately (once) so late registrants
+			// still settle instead of hanging forever.
+			try {
+				void Promise.resolve(handler()).catch(() => {});
+			} catch {
+				// Close observers must not create an unhandled rejection.
+			}
+			return () => {};
+		}
+		this.#closeHandlers.add(handler);
+		return () => this.#closeHandlers.delete(handler);
 	}
 
 	waitForEvent(method: string, timeout = CDP_CONNECT_TIMEOUT_MS) {
+		if (this.#closed) {
+			// Already closed: reject immediately instead of waiting out the
+			// full timeout.
+			const promise = Promise.reject(new Error("CDP connection closed"));
+			promise.catch(() => {});
+			return { promise, cancel() {} };
+		}
 		let settled = false;
 		let off: (() => void) | undefined;
+		let offClose: (() => void) | undefined;
 		let timer: ReturnType<typeof setTimeout>;
+		let resolveWait: (value: any) => void;
+		const finish = (settle: (value: any) => void, value: any) => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			off?.();
+			offClose?.();
+			settle(value);
+		};
 		const promise = new Promise<any>((resolve, reject) => {
-			off = this.onEvent(method, (params) => {
-				if (settled) return;
-				settled = true;
-				clearTimeout(timer);
-				off?.();
-				resolve(params);
-			});
-			timer = setTimeout(() => {
-				if (settled) return;
-				settled = true;
-				off?.();
-				reject(new Error(`Timeout waiting for event: ${method}`));
-			}, timeout);
+			resolveWait = resolve;
+			off = this.onEvent(method, (params) => finish(resolve, params));
+			offClose = this.onClose(() =>
+				finish(reject, new Error("CDP connection closed")),
+			);
+			timer = setTimeout(
+				() =>
+					finish(
+						reject,
+						new Error(`Timeout waiting for event: ${method}`),
+					),
+				 timeout,
+			);
 		});
-		// A caller can abandon an event wait when a competing CDP operation
-		// fails (for example, navigation can reject before loadEventFired). The
-		// returned promise still rejects for callers that await it, but observing
-		// the rejection here prevents an abandoned wait from becoming an
-		// unhandled rejection that takes down the pi host.
 		promise.catch(() => {});
 		return {
 			promise,
 			cancel() {
-				if (!settled) {
-					settled = true;
-					clearTimeout(timer);
-					off?.();
-				}
+				if (!settled) finish(resolveWait, undefined);
 			},
 		};
+	}
+
+	#notifyClose(): void {
+		if (this.#closeHandlersNotified) return;
+		this.#closeHandlersNotified = true;
+		for (const h of [...this.#closeHandlers]) {
+			try {
+				// Observe the return value so an async handler rejecting
+				// after an await cannot become an unhandled rejection.
+				void Promise.resolve(h()).catch(() => {});
+			} catch {
+				// Close observers must not create an unhandled rejection.
+			}
+		}
 	}
 
 	#rejectPending(error: Error): void {
@@ -239,7 +287,12 @@ export class CDPClient {
 		if (this.#closed) return;
 		this.#closed = true;
 		this.#rejectPending(new Error("CDP connection closed"));
-		if (this.#ws) this.#ws.close();
+		this.#notifyClose();
+		try {
+			this.#ws?.close();
+		} catch {
+			// The socket may already be closing.
+		}
 	}
 }
 

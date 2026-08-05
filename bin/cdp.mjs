@@ -12,14 +12,17 @@
 import { spawn } from "node:child_process";
 import {
 	existsSync,
+	mkdirSync,
 	readdirSync,
 	readFileSync,
+	renameSync,
 	unlinkSync,
 	writeFileSync,
 } from "node:fs";
 import net from "node:net";
 import { homedir, platform, tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 const TIMEOUT = 90000;
 const NAVIGATION_TIMEOUT = 30000;
@@ -90,20 +93,162 @@ function getWsUrl() {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-function listDaemonSockets() {
-	// Named pipes on Windows aren't enumerable as filesystem entries
-	if (platform() === "win32") return [];
-	const tmp = tmpdir();
+// ---------------------------------------------------------------------------
+// Daemon registry — durable record of running daemons. Named pipes on
+// Windows are not enumerable as filesystem entries, so `cdp stop` needs a
+// per-daemon JSON file to discover them. All registry IO is best-effort:
+// failures must never break daemon startup or CLI commands.
+// ---------------------------------------------------------------------------
+
+const DAEMON_REGISTRY_DIR = `${_tmpdir}/pi-cdp-daemons`;
+
+function _daemonRegistryPath(targetId) {
+	return join(DAEMON_REGISTRY_DIR, `${targetId}.json`);
+}
+
+function _writeDaemonRegistry(targetId) {
 	try {
-		return readdirSync(tmp)
-			.filter((f) => f.startsWith("cdp-") && f.endsWith(".sock"))
-			.map((f) => ({
-				targetId: f.slice(4, -5),
-				socketPath: join(tmp, f),
-			}));
+		mkdirSync(DAEMON_REGISTRY_DIR, { recursive: true, mode: 0o700 });
+		// Atomic write: compose in a temp file and rename into place so a
+		// concurrent lister can never observe a torn/partial record. A torn
+		// read previously surfaced as a JSON parse failure, which the lister
+		// treated as "stale by definition" and DELETED a live daemon's entry.
+		const finalPath = _daemonRegistryPath(targetId);
+		const tmpPath = `${finalPath}.${process.pid}.tmp`;
+		writeFileSync(
+			tmpPath,
+			JSON.stringify({
+				targetId,
+				socketPath: sockPath(targetId),
+				pid: process.pid,
+				startedAt: Date.now(),
+			}),
+			{ mode: 0o600 },
+		);
+		renameSync(tmpPath, finalPath);
+	} catch {
+		// Best-effort: a registry failure must not kill the daemon.
+		try {
+			unlinkSync(`${_daemonRegistryPath(targetId)}.${process.pid}.tmp`);
+		} catch {}
+	}
+}
+
+function _removeDaemonRegistryFile(path) {
+	try {
+		unlinkSync(path);
+	} catch {}
+}
+
+function _removeDaemonRegistry(targetId) {
+	_removeDaemonRegistryFile(_daemonRegistryPath(targetId));
+}
+
+function _isPidAlive(pid) {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		// EPERM means the process exists but is not ours to signal.
+		return error?.code === "EPERM";
+	}
+}
+
+function _probeSocket(socketPath) {
+	return new Promise((resolve) => {
+		let settled = false;
+		const finish = (ok) => {
+			if (settled) return;
+			settled = true;
+			resolve(ok);
+		};
+		let conn;
+		try {
+			conn = net.connect(socketPath);
+		} catch {
+			return finish(false);
+		}
+		const timer = setTimeout(() => {
+			try { conn.destroy(); } catch {}
+			finish(false);
+		}, 1000);
+		conn.on("connect", () => {
+			clearTimeout(timer);
+			try { conn.destroy(); } catch {}
+			finish(true);
+		});
+		conn.on("error", () => {
+			clearTimeout(timer);
+			finish(false);
+		});
+	});
+}
+
+async function _listDaemonSocketsFromRegistry() {
+	let files;
+	try {
+		files = readdirSync(DAEMON_REGISTRY_DIR).filter((f) =>
+			f.endsWith(".json"),
+		);
 	} catch {
 		return [];
 	}
+	const live = [];
+	for (const file of files) {
+		const path = join(DAEMON_REGISTRY_DIR, file);
+		let record;
+		try {
+			record = JSON.parse(readFileSync(path, "utf8"));
+		} catch {
+			// Unreadable/torn entry: skip it but DO NOT delete. Deleting on
+			// parse failure could remove a live daemon's entry if a writer
+			// and this reader ever raced. A genuinely stale entry is removed
+			// by the dead-pid check below instead.
+			continue;
+		}
+		const valid =
+			record &&
+			typeof record.targetId === "string" &&
+			typeof record.socketPath === "string" &&
+			Number.isInteger(record.pid);
+		if (!valid) {
+			// Structurally invalid, but still do not delete on the read path;
+			// only the dead-pid check below may remove entries.
+			continue;
+		}
+		if (!_isPidAlive(record.pid)) {
+			_removeDaemonRegistryFile(path); // stale entry, best-effort removal
+			continue;
+		}
+		if (!(await _probeSocket(record.socketPath))) {
+			// Daemon process is alive but not accepting connections (yet or
+			// anymore). Skip it but keep the entry — deleting could race a
+			// daemon that is still starting up.
+			continue;
+		}
+		live.push({ targetId: record.targetId, socketPath: record.socketPath });
+	}
+	return live;
+}
+
+async function listDaemonSockets() {
+	if (platform() !== "win32") {
+		// Unix: socket files are enumerable — keep this as the primary source.
+		const tmp = tmpdir();
+		try {
+			const found = readdirSync(tmp)
+				.filter((f) => f.startsWith("cdp-") && f.endsWith(".sock"))
+				.map((f) => ({
+					targetId: f.slice(4, -5),
+					socketPath: join(tmp, f),
+				}));
+			if (found.length > 0) return found;
+		} catch {
+			// Fall through to the registry.
+		}
+	}
+	// Windows (named pipes are not enumerable) and the Unix fallback.
+	return _listDaemonSocketsFromRegistry();
 }
 
 function resolvePrefix(prefix, candidates, noun = "target", missingHint = "") {
@@ -144,15 +289,39 @@ class CDP {
 	#id = 0;
 	#pending = new Map();
 	#eventHandlers = new Map();
-	#closeHandlers = [];
+	#closeHandlers = new Set();
+	#closeNotified = false;
+	#closed = false;
 
 	async connect(wsUrl) {
-		return new Promise((res, rej) => {
+		if (this.#closed) throw new Error("CDP connection is closed");
+		return new Promise((resolve, reject) => {
+			let settled = false;
+			const fail = (error) => {
+				if (settled) return;
+				settled = true;
+				reject(error);
+			};
 			this.#ws = new WebSocket(wsUrl);
-			this.#ws.onopen = () => res();
-			this.#ws.onerror = (e) =>
-				rej(new Error(`WebSocket error: ${e.message || e.type}`));
-			this.#ws.onclose = () => this.#closeHandlers.forEach((h) => h());
+			this.#ws.onopen = () => {
+				if (settled) return;
+				settled = true;
+				resolve();
+			};
+			this.#ws.onerror = (e) => {
+				const error = new Error(`WebSocket error: ${e.message || e.type}`);
+				this.#closed = true;
+				this.#rejectPending(error);
+				this.#notifyClose();
+				fail(error);
+				try { this.#ws.close(); } catch {}
+			};
+			this.#ws.onclose = () => {
+				this.#closed = true;
+				this.#rejectPending(new Error("CDP connection closed"));
+				this.#notifyClose();
+				fail(new Error("CDP connection closed"));
+			};
 			this.#ws.onmessage = (ev) => {
 				let msg;
 				try {
@@ -161,13 +330,20 @@ class CDP {
 					return;
 				}
 				if (msg.id && this.#pending.has(msg.id)) {
-					const { resolve, reject } = this.#pending.get(msg.id);
+					const pending = this.#pending.get(msg.id);
 					this.#pending.delete(msg.id);
-					if (msg.error) reject(new Error(msg.error.message));
-					else resolve(msg.result);
+					clearTimeout(pending.timer);
+					if (msg.error) pending.reject(new Error(msg.error.message));
+					else pending.resolve(msg.result);
 				} else if (msg.method && this.#eventHandlers.has(msg.method)) {
 					for (const handler of [...this.#eventHandlers.get(msg.method)]) {
-						handler(msg.params || {}, msg);
+						try {
+							// Observe the return value so an async handler rejecting
+							// after an await cannot become an unhandled rejection.
+							void Promise.resolve(handler(msg.params || {}, msg)).catch(() => {});
+						} catch {
+							// Handler errors must not break the message loop.
+						}
 					}
 				}
 			};
@@ -177,16 +353,26 @@ class CDP {
 	send(method, params = {}, sessionId) {
 		const id = ++this.#id;
 		return new Promise((resolve, reject) => {
-			this.#pending.set(id, { resolve, reject });
-			const msg = { id, method, params };
-			if (sessionId) msg.sessionId = sessionId;
-			this.#ws.send(JSON.stringify(msg));
-			setTimeout(() => {
+			if (this.#closed || !this.#ws) {
+				reject(new Error("CDP connection is closed"));
+				return;
+			}
+			const timer = setTimeout(() => {
 				if (this.#pending.has(id)) {
 					this.#pending.delete(id);
 					reject(new Error(`Timeout: ${method}`));
 				}
 			}, TIMEOUT);
+			this.#pending.set(id, { resolve, reject, timer });
+			const msg = { id, method, params };
+			if (sessionId) msg.sessionId = sessionId;
+			try {
+				this.#ws.send(JSON.stringify(msg));
+			} catch (error) {
+				clearTimeout(timer);
+				this.#pending.delete(id);
+				reject(error instanceof Error ? error : new Error(String(error)));
+			}
 		});
 	}
 
@@ -202,40 +388,86 @@ class CDP {
 	}
 
 	waitForEvent(method, timeout = TIMEOUT) {
+		if (this.#closed) {
+			// Already closed: reject immediately instead of waiting out the
+			// full timeout.
+			const promise = Promise.reject(new Error("CDP connection closed"));
+			promise.catch(() => {});
+			return { promise, cancel() {} };
+		}
 		let settled = false;
 		let off;
+		let offClose;
 		let timer;
+		let resolveWait;
+		const finish = (settle, value) => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			off?.();
+			offClose?.();
+			settle(value);
+		};
 		const promise = new Promise((resolve, reject) => {
-			off = this.onEvent(method, (params) => {
-				if (settled) return;
-				settled = true;
-				clearTimeout(timer);
-				off();
-				resolve(params);
-			});
-			timer = setTimeout(() => {
-				if (settled) return;
-				settled = true;
-				off();
-				reject(new Error(`Timeout waiting for event: ${method}`));
-			}, timeout);
+			resolveWait = resolve;
+			off = this.onEvent(method, (params) => finish(resolve, params));
+			offClose = this.onClose(() =>
+				finish(reject, new Error("CDP connection closed")),
+			);
+			timer = setTimeout(
+				() => finish(reject, new Error(`Timeout waiting for event: ${method}`)),
+				timeout,
+			);
 		});
+		promise.catch(() => {});
 		return {
 			promise,
 			cancel() {
-				if (settled) return;
-				settled = true;
-				clearTimeout(timer);
-				off?.();
+				if (!settled) finish(resolveWait, undefined);
 			},
 		};
 	}
 
 	onClose(handler) {
-		this.#closeHandlers.push(handler);
+		if (this.#closeNotified) {
+			// Already closed: fire immediately (once) so late registrants
+			// still settle instead of hanging forever.
+			try {
+				void Promise.resolve(handler()).catch(() => {});
+			} catch {
+				// Close observers must not create an unhandled rejection.
+			}
+			return () => {};
+		}
+		this.#closeHandlers.add(handler);
+		return () => this.#closeHandlers.delete(handler);
+	}
+	#notifyClose() {
+		if (this.#closeNotified) return;
+		this.#closeNotified = true;
+		for (const handler of [...this.#closeHandlers]) {
+			try {
+				// Observe the return value so an async handler rejecting
+				// after an await cannot become an unhandled rejection.
+				void Promise.resolve(handler()).catch(() => {});
+			} catch {
+				// Close observers must not create an unhandled rejection.
+			}
+		}
+	}
+	#rejectPending(error) {
+		for (const pending of this.#pending.values()) {
+			clearTimeout(pending.timer);
+			pending.reject(error);
+		}
+		this.#pending.clear();
 	}
 	close() {
-		this.#ws.close();
+		if (this.#closed) return;
+		this.#closed = true;
+		this.#rejectPending(new Error("CDP connection closed"));
+		this.#notifyClose();
+		try { this.#ws?.close(); } catch {}
 	}
 }
 
@@ -707,6 +939,7 @@ async function runDaemon(targetId) {
 		try {
 			unlinkSync(sp);
 		} catch {}
+		_removeDaemonRegistry(targetId);
 		cdp.close();
 		process.exit(0);
 	}
@@ -797,6 +1030,16 @@ async function runDaemon(targetId) {
 
 	const server = net.createServer((conn) => {
 		let buf = "";
+		conn.on("error", () => {});
+		const writeResponse = (response) => {
+			try {
+				const payload = `${JSON.stringify(response)}\n`;
+				if (response.stopAfter) conn.end(payload, shutdown);
+				else conn.write(payload);
+			} catch {
+				// The client may have disconnected while CDP work was pending.
+			}
+		};
 		conn.on("data", (chunk) => {
 			buf += chunk.toString();
 			const lines = buf.split("\n");
@@ -807,16 +1050,18 @@ async function runDaemon(targetId) {
 				try {
 					req = JSON.parse(line);
 				} catch {
-					conn.write(
-						`${JSON.stringify({ ok: false, error: "Invalid JSON request", id: null })}\n`,
-					);
+					writeResponse({ ok: false, error: "Invalid JSON request", id: null });
 					continue;
 				}
-				handleCommand(req).then((res) => {
-					const payload = `${JSON.stringify({ ...res, id: req.id })}\n`;
-					if (res.stopAfter) conn.end(payload, shutdown);
-					else conn.write(payload);
-				});
+				void handleCommand(req).then(
+					(res) => writeResponse({ ...res, id: req.id }),
+					(error) =>
+						writeResponse({
+							ok: false,
+							error: error instanceof Error ? error.message : String(error),
+							id: req.id,
+						}),
+				);
 			}
 		});
 	});
@@ -824,7 +1069,13 @@ async function runDaemon(targetId) {
 	try {
 		unlinkSync(sp);
 	} catch {}
-	server.listen(sp);
+	server.on("error", (error) => {
+		process.stderr.write(`Daemon: listen failed: ${error.message}\n`);
+		process.exit(1);
+	});
+	server.listen(sp, () => {
+		_writeDaemonRegistry(targetId);
+	});
 }
 
 // ---------------------------------------------------------------------------
@@ -883,8 +1134,6 @@ function sendCommand(conn, req) {
 			buf += chunk.toString();
 			const idx = buf.indexOf("\n");
 			if (idx === -1) return;
-			settled = true;
-			cleanup();
 			let response;
 			try {
 				response = parseJson(buf.slice(0, idx), "daemon response");
@@ -892,8 +1141,10 @@ function sendCommand(conn, req) {
 				onError(error);
 				return;
 			}
+			settled = true;
+			cleanup();
 			resolve(response);
-			conn.end();
+			try { conn.end(); } catch {}
 		};
 
 		const onError = (error) => {
@@ -922,12 +1173,17 @@ function sendCommand(conn, req) {
 		conn.on("end", onEnd);
 		conn.on("close", onClose);
 		req.id = 1;
-		conn.write(`${JSON.stringify(req)}\n`);
+		try {
+			conn.write(`${JSON.stringify(req)}\n`);
+		} catch (error) {
+			onError(error instanceof Error ? error : new Error(String(error)));
+		}
 	});
 }
 
-function findAnyDaemonSocket() {
-	return listDaemonSockets()[0]?.socketPath || null;
+async function findAnyDaemonSocket() {
+	const daemons = await listDaemonSockets();
+	return daemons[0]?.socketPath || null;
 }
 
 // ---------------------------------------------------------------------------
@@ -935,7 +1191,7 @@ function findAnyDaemonSocket() {
 // ---------------------------------------------------------------------------
 
 async function stopDaemons(targetPrefix) {
-	const daemons = listDaemonSockets();
+	const daemons = await listDaemonSockets();
 
 	if (targetPrefix) {
 		const targetId = resolvePrefix(
@@ -1023,7 +1279,7 @@ async function main() {
 
 	if (cmd === "list" || cmd === "ls") {
 		let pages;
-		const existingSock = findAnyDaemonSocket();
+		const existingSock = await findAnyDaemonSocket();
 		if (existingSock) {
 			try {
 				const conn = await connectToSocket(existingSock);
@@ -1061,7 +1317,7 @@ async function main() {
 	}
 
 	let targetId;
-	const daemonTargetIds = listDaemonSockets().map((d) => d.targetId);
+	const daemonTargetIds = (await listDaemonSockets()).map((d) => d.targetId);
 	const daemonMatches = daemonTargetIds.filter((id) =>
 		id.toUpperCase().startsWith(targetPrefix.toUpperCase()),
 	);
@@ -1125,7 +1381,33 @@ async function main() {
 	}
 }
 
-main().catch((e) => {
-	console.error(e.message);
-	process.exit(1);
-});
+// Run main() only when executed directly — tests import this module for its
+// exported helpers without triggering the CLI.
+const _isMainEntry = (() => {
+	try {
+		return (
+			Boolean(process.argv[1]) &&
+			import.meta.url === pathToFileURL(process.argv[1]).href
+		);
+	} catch {
+		return false;
+	}
+})();
+
+if (_isMainEntry) {
+	main().catch((e) => {
+		console.error(e.message);
+		process.exit(1);
+	});
+}
+
+// Internal helpers exported for tests (tests/cdp-lifecycle.test.mjs).
+export {
+	CDP,
+	sockPath,
+	_isPidAlive,
+	_daemonRegistryPath,
+	_writeDaemonRegistry,
+	_removeDaemonRegistry,
+	_listDaemonSocketsFromRegistry,
+};

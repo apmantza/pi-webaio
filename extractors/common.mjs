@@ -28,16 +28,26 @@ export function cdp(args, timeoutMs = 30000) {
 		});
 		let out = "";
 		let err = "";
+		let settled = false;
+		const timer = setTimeout(() => {
+			try { proc.kill(); } catch {}
+			if (!settled) {
+				settled = true;
+				reject(new Error(`cdp timeout: ${args[0]}`));
+			}
+		}, timeoutMs);
+		const finish = (callback, value) => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			callback(value);
+		};
 		proc.stdout.on("data", (d) => (out += d));
 		proc.stderr.on("data", (d) => (err += d));
-		const timer = setTimeout(() => {
-			proc.kill();
-			reject(new Error(`cdp timeout: ${args[0]}`));
-		}, timeoutMs);
+		proc.on("error", (error) => finish(reject, error));
 		proc.on("close", (code) => {
-			clearTimeout(timer);
-			if (code === 0) resolve(out.trim());
-			else reject(new Error(err.trim() || `cdp exit ${code}`));
+			if (code === 0) finish(resolve, out.trim());
+			else finish(reject, new Error(err.trim() || `cdp exit ${code}`));
 		});
 	});
 }
@@ -70,6 +80,8 @@ export async function getOrOpenTab(tabPrefix) {
 			'{"url":"about:blank"}',
 		]);
 		targetId = JSON.parse(raw).targetId;
+		if (typeof targetId !== "string" || !targetId)
+			throw new Error("Target.createTarget returned no target id");
 		await cdp(["list"]); // refresh cache
 		// Navigation must not begin before the new-document stealth hook exists.
 		await injectHeadlessStealth(targetId.slice(0, 8));
@@ -82,7 +94,7 @@ export async function getOrOpenTab(tabPrefix) {
 
 /** Close a target created by an extractor, ignoring teardown races. */
 export async function closeTarget(targetId) {
-	if (!targetId) return;
+	if (typeof targetId !== "string" || !targetId) return;
 	try {
 		await cdp([
 			"evalraw",
