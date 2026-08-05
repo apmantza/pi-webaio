@@ -17,7 +17,13 @@
 
 import { strict as assert } from "node:assert";
 import { spawn } from "node:child_process";
-import { existsSync, writeFileSync, unlinkSync, readdirSync } from "node:fs";
+import {
+	existsSync,
+	writeFileSync,
+	unlinkSync,
+	readdirSync,
+	utimesSync,
+} from "node:fs";
 import { dirname } from "node:path";
 import net from "node:net";
 import { platform, tmpdir } from "node:os";
@@ -325,6 +331,59 @@ test("daemon registry: dead-pid entries are removed; corrupt entries are skipped
 	} finally {
 		_removeDaemonRegistry(staleId);
 		_removeDaemonRegistry(bogusId);
+	}
+});
+
+test("daemon registry: sweep removes aged .tmp orphans, keeps fresh ones, and preserves live .json entries", async () => {
+	const suffix = `${process.pid}-${Date.now().toString(36)}`;
+	const liveId = `sweeplive-${suffix}`;
+	const sp = sockPath(liveId);
+	const connections = new Set();
+	const server = net.createServer((conn) => {
+		connections.add(conn);
+		conn.on("close", () => connections.delete(conn));
+		conn.on("error", () => {});
+	});
+	await new Promise((resolve) => server.listen(sp, resolve));
+	const staleTmp = `${_daemonRegistryPath(`stale-${suffix}`)}.1234.tmp`;
+	const freshTmp = `${_daemonRegistryPath(`fresh-${suffix}`)}.5678.tmp`;
+	try {
+		_writeDaemonRegistry(liveId); // also ensures the registry dir exists
+		writeFileSync(staleTmp, '{"orphaned":true');
+		writeFileSync(freshTmp, '{"mid-rename":true');
+		// Fake a crash more than 10 minutes ago.
+		const aged = new Date(Date.now() - 11 * 60 * 1000);
+		utimesSync(staleTmp, aged, aged);
+
+		const found = await _listDaemonSocketsFromRegistry();
+
+		assert.equal(
+			existsSync(staleTmp),
+			false,
+			"aged .tmp orphan must be swept",
+		);
+		assert.equal(
+			existsSync(freshTmp),
+			true,
+			"fresh .tmp file must survive (writer may be mid-rename)",
+		);
+		const entry = found.find((d) => d.targetId === liveId);
+		assert.ok(entry, "live .json entry must still round-trip during the sweep");
+		assert.equal(entry.socketPath, sp);
+	} finally {
+		_removeDaemonRegistry(liveId);
+		for (const tmp of [staleTmp, freshTmp]) {
+			try {
+				unlinkSync(tmp);
+			} catch {}
+		}
+		for (const conn of connections) conn.destroy();
+		await new Promise((resolve) => server.close(resolve));
+		if (platform() !== "win32") {
+			try {
+				unlinkSync(sp);
+			} catch {}
+		}
 	}
 });
 

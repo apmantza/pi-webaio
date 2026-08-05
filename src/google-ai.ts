@@ -58,10 +58,23 @@ export interface GoogleSearchResult {
 	snippet: string;
 }
 
+/**
+ * Broker-owned search phase instrumentation (milliseconds). Additive and
+ * only present on the broker path — the legacy path never reports timings.
+ */
+export interface BrokerSearchTimings {
+	targetSetupMs: number;
+	navigationMs: number;
+	extractionMs: number;
+	resetMs: number;
+}
+
 export interface GoogleSearchOutput {
 	query: string;
 	url: string;
 	results: GoogleSearchResult[];
+	/** Broker search-phase timings; absent on the legacy path. */
+	timings?: BrokerSearchTimings;
 }
 
 export interface ChromeStatus {
@@ -729,6 +742,9 @@ export async function googleSearchWithDependencies(
 			signal: options.signal,
 		});
 		searchStarted = true;
+		// The broker envelope is additive: when the broker reports phase
+		// `timings` they flow through to the caller unchanged. The legacy
+		// branch above never produces a `timings` field.
 		return await client.search(query, {
 			maxResults: options.maxResults,
 			signal: options.signal,

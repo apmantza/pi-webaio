@@ -79,6 +79,54 @@ test("broker branch passes deadline and returns the existing output shape", asyn
 	}
 });
 
+test("broker branch passes search timings through additively", async () => {
+	process.env.PI_WEBAIO_CDP_BROKER = "1";
+	const timings = {
+		targetSetupMs: 12.5,
+		navigationMs: 34,
+		extractionMs: 5.25,
+		resetMs: 3,
+	};
+	try {
+		const withTimings = await googleSearchWithDependencies(
+			"timings",
+			{ timeoutMs: 2000 },
+			{
+				ensureChrome: async () => ({ running: true, ready: true }),
+				connectBroker: async () => ({
+					search: async (query) => ({ ...output(query), timings }),
+					close() {},
+				}),
+			},
+		);
+		assert.equal(withTimings.query, "timings");
+		assert.deepEqual(withTimings.timings, timings);
+
+		// A broker that reports no timings leaves the shape untouched.
+		const withoutTimings = await googleSearchWithDependencies(
+			"no-timings",
+			{ timeoutMs: 2000 },
+			{
+				ensureChrome: async () => ({ running: true, ready: true }),
+				connectBroker: async () => ({
+					search: async (query) => output(query),
+					close() {},
+				}),
+			},
+		);
+		assert.equal("timings" in withoutTimings, false);
+
+		// The legacy path never carries timings.
+		delete process.env.PI_WEBAIO_CDP_BROKER;
+		const legacy = await googleSearchWithDependencies("legacy-shape", {}, {
+			legacySearch: async (query) => output(query),
+		});
+		assert.equal("timings" in legacy, false);
+	} finally {
+		restoreFlag();
+	}
+});
+
 test("broker startup/IPC failure falls back only with budget remaining", async () => {
 	process.env.PI_WEBAIO_CDP_BROKER = "1";
 	let legacyCalls = 0;

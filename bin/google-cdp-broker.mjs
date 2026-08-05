@@ -1377,54 +1377,81 @@ export class GoogleCdpBroker {
 			);
 		checkSignal(signal);
 		const canonicalUrl = canonicalGoogleSearchUrl(query, maxResults);
+		// Best-effort phase instrumentation. Boundaries: lease/target
+		// acquisition -> Page.navigate start -> navigation confirmed ->
+		// extraction complete -> reset/release. Each phase records its
+		// elapsed time as it settles (even when it throws), and the
+		// successful envelope exposes the totals additively as `timings`.
+		const timings = {
+			targetSetupMs: 0,
+			navigationMs: 0,
+			extractionMs: 0,
+			resetMs: 0,
+		};
+		const timePhase = async (phase, action) => {
+			const started = performance.now();
+			try {
+				return await action();
+			} finally {
+				timings[phase] = Math.max(0, performance.now() - started);
+			}
+		};
 		let lease;
 		let target;
 		try {
-			lease = await this.registry.lease({
-				...identity,
-				provider: "google-search",
-				signal,
+			await timePhase("targetSetupMs", async () => {
+				lease = await this.registry.lease({
+					...identity,
+					provider: "google-search",
+					signal,
+				});
+				const internalLease = this.registry.leases.get(lease.leaseId);
+				target =
+					internalLease && this.registry.targets.get(internalLease.targetId);
+				if (!internalLease || !target)
+					throw new BrokerError(
+						"target_unavailable",
+						"Lease target is unavailable",
+					);
+				await this.acquireCdpLease(lease, request, signal);
+				checkSignal(signal);
 			});
-			const internalLease = this.registry.leases.get(lease.leaseId);
-			target =
-				internalLease && this.registry.targets.get(internalLease.targetId);
-			if (!internalLease || !target)
-				throw new BrokerError(
-					"target_unavailable",
-					"Lease target is unavailable",
+			await timePhase("navigationMs", async () => {
+				const navigation = await this.cdpSend(
+					"Page.navigate",
+					{ url: canonicalUrl },
+					request,
+					signal,
+					target.cdpSessionId,
 				);
-			await this.acquireCdpLease(lease, request, signal);
-			checkSignal(signal);
-			const navigation = await this.cdpSend(
-				"Page.navigate",
-				{ url: canonicalUrl },
-				request,
-				signal,
-				target.cdpSessionId,
-			);
-			if (navigation?.errorText)
-				throw new BrokerError(
-					"navigation_failed",
-					`Google navigation failed: ${navigation.errorText}`,
+				if (navigation?.errorText)
+					throw new BrokerError(
+						"navigation_failed",
+						`Google navigation failed: ${navigation.errorText}`,
+					);
+				await this.verifyCdpLocation(
+					target,
+					(value) => isGoogleSearchLocation(value, canonicalUrl),
+					request,
+					signal,
+					"Google search",
 				);
-			await this.verifyCdpLocation(
-				target,
-				(value) => isGoogleSearchLocation(value, canonicalUrl),
-				request,
-				signal,
-				"Google search",
-			);
-			const results = await this.extractGoogleSearchResults(
-				request,
-				target.cdpSessionId,
-				maxResults,
-				signal,
+			});
+			const results = await timePhase("extractionMs", () =>
+				this.extractGoogleSearchResults(
+					request,
+					target.cdpSessionId,
+					maxResults,
+					signal,
+				),
 			);
 			checkSignal(signal);
-			await this.resetCdpTarget(target, request, signal);
-			checkSignal(signal);
-			this.registry.release({ ...identity, leaseId: lease.leaseId });
-			return { query, url: canonicalUrl, results };
+			await timePhase("resetMs", async () => {
+				await this.resetCdpTarget(target, request, signal);
+				checkSignal(signal);
+				this.registry.release({ ...identity, leaseId: lease.leaseId });
+			});
+			return { query, url: canonicalUrl, results, timings };
 		} catch (error) {
 			if (lease && this.registry.leases.has(lease.leaseId))
 				this.registry.retireLease(lease, true);

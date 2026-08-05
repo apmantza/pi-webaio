@@ -16,6 +16,7 @@ import {
 	readdirSync,
 	readFileSync,
 	renameSync,
+	statSync,
 	unlinkSync,
 	writeFileSync,
 } from "node:fs";
@@ -101,6 +102,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // ---------------------------------------------------------------------------
 
 const DAEMON_REGISTRY_DIR = `${_tmpdir}/pi-cdp-daemons`;
+// Orphaned `.tmp` files from _writeDaemonRegistry's atomic write (a hard
+// crash between writeFileSync and renameSync) are swept once older than this.
+const REGISTRY_TMP_MAX_AGE_MS = 10 * 60 * 1000;
 
 function _daemonRegistryPath(targetId) {
 	return join(DAEMON_REGISTRY_DIR, `${targetId}.json`);
@@ -142,6 +146,27 @@ function _removeDaemonRegistryFile(path) {
 
 function _removeDaemonRegistry(targetId) {
 	_removeDaemonRegistryFile(_daemonRegistryPath(targetId));
+}
+
+function _sweepStaleRegistryTmpFiles(entries) {
+	// Best-effort cleanup of orphaned atomic-write temp files left behind by
+	// a crash between writeFileSync and renameSync in _writeDaemonRegistry.
+	// Fresh `.tmp` files may belong to a writer mid-rename — only remove
+	// clearly stale ones, and never let this break daemon listing.
+	const cutoff = Date.now() - REGISTRY_TMP_MAX_AGE_MS;
+	for (const file of entries) {
+		if (!file.endsWith(".tmp")) continue;
+		const path = join(DAEMON_REGISTRY_DIR, file);
+		let mtimeMs;
+		try {
+			mtimeMs = statSync(path).mtimeMs;
+		} catch {
+			// Unstat-able: skip it rather than delete on a guess.
+			continue;
+		}
+		if (mtimeMs >= cutoff) continue; // fresh — writer may be mid-rename
+		_removeDaemonRegistryFile(path);
+	}
 }
 
 function _isPidAlive(pid) {
@@ -187,12 +212,12 @@ function _probeSocket(socketPath) {
 async function _listDaemonSocketsFromRegistry() {
 	let files;
 	try {
-		files = readdirSync(DAEMON_REGISTRY_DIR).filter((f) =>
-			f.endsWith(".json"),
-		);
+		files = readdirSync(DAEMON_REGISTRY_DIR);
 	} catch {
 		return [];
 	}
+	_sweepStaleRegistryTmpFiles(files);
+	files = files.filter((f) => f.endsWith(".json"));
 	const live = [];
 	for (const file of files) {
 		const path = join(DAEMON_REGISTRY_DIR, file);

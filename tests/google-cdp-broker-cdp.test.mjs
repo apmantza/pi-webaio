@@ -451,6 +451,29 @@ test("broker-owned search navigates canonically, extracts results, resets, and r
 			},
 		]);
 		assert.equal(result.url, "https://www.google.com/search?q=pi+broker&num=2");
+		// Search phase timings are additive on the envelope, numeric, and
+		// non-negative on a successful fake-CDP search.
+		assert.ok(result.timings, "search envelope carries timings");
+		for (const key of [
+			"targetSetupMs",
+			"navigationMs",
+			"extractionMs",
+			"resetMs",
+		]) {
+			assert.equal(
+				typeof result.timings[key],
+				"number",
+				`timings.${key} is a number`,
+			);
+			assert.ok(
+				Number.isFinite(result.timings[key]),
+				`timings.${key} is finite`,
+			);
+			assert.ok(
+				result.timings[key] >= 0,
+				`timings.${key} is non-negative`,
+			);
+		}
 		assert.equal(setup.broker.registry.snapshot().active, 0);
 		assert.equal(setup.broker.registry.snapshot().targets, 1);
 		const searchNavigation = setup.fake.socket.sent.find(
