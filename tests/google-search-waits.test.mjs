@@ -8,7 +8,7 @@ import {
 } from "../extractors/google-search.mjs";
 
 test("jsEvalLiteral escapes code-generation hazards", () => {
-	const literal = jsEvalLiteral('</script>\u2028\u2029');
+	const literal = jsEvalLiteral("</script>\u2028\u2029");
 	assert.equal(literal, '"\\u003c/script\\u003e\\u2028\\u2029"');
 });
 

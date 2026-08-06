@@ -203,6 +203,10 @@ test("inferPreferredDomains: dedupes when multiple keywords hit overlapping doma
 
 // ─── scoreAndRankResults ordering invariants (issue #61 + #63) ─────
 
+test("engine weights keep synthetic Reddit below primary Bing results", () => {
+	assert.ok(ENGINE_WEIGHTS.bing > ENGINE_WEIGHTS.reddit);
+});
+
 function engineSource(engine, result) {
 	return { engine, weight: ENGINE_WEIGHTS[engine] || 1, result };
 }

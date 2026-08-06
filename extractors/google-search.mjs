@@ -36,8 +36,10 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // passed to Runtime.evaluate: line separators and HTML-significant characters
 // should remain escaped in the generated JavaScript source.
 export function jsEvalLiteral(value) {
-	return JSON.stringify(value).replace(/[<>\u2028\u2029]/g, (character) =>
-		`\\u${character.codePointAt(0).toString(16).padStart(4, "0")}`,
+	return JSON.stringify(value).replace(
+		/[<>\u2028\u2029]/g,
+		(character) =>
+			`\\u${character.codePointAt(0).toString(16).padStart(4, "0")}`,
 	);
 }
 

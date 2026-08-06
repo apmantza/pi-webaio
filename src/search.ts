@@ -611,7 +611,9 @@ function domainMatchesPreferred(domain: string, preferred: string[]): boolean {
 
 export const ENGINE_WEIGHTS: Record<string, number> = {
 	google: 5,
-	reddit: 4,
+	// Reddit is an automatic synthetic/community companion, not a primary
+	// general-web authority; keep it below Bing in cross-engine ranking.
+	reddit: 2,
 	bing: 3,
 	ddg: 2,
 	brave: 2,
