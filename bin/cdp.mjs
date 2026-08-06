@@ -194,12 +194,16 @@ function _probeSocket(socketPath) {
 			return finish(false);
 		}
 		const timer = setTimeout(() => {
-			try { conn.destroy(); } catch {}
+			try {
+				conn.destroy();
+			} catch {}
 			finish(false);
 		}, 1000);
 		conn.on("connect", () => {
 			clearTimeout(timer);
-			try { conn.destroy(); } catch {}
+			try {
+				conn.destroy();
+			} catch {}
 			finish(true);
 		});
 		conn.on("error", () => {
@@ -339,7 +343,9 @@ class CDP {
 				this.#rejectPending(error);
 				this.#notifyClose();
 				fail(error);
-				try { this.#ws.close(); } catch {}
+				try {
+					this.#ws.close();
+				} catch {}
 			};
 			this.#ws.onclose = () => {
 				this.#closed = true;
@@ -365,7 +371,9 @@ class CDP {
 						try {
 							// Observe the return value so an async handler rejecting
 							// after an await cannot become an unhandled rejection.
-							void Promise.resolve(handler(msg.params || {}, msg)).catch(() => {});
+							void Promise.resolve(handler(msg.params || {}, msg)).catch(
+								() => {},
+							);
 						} catch {
 							// Handler errors must not break the message loop.
 						}
@@ -492,7 +500,9 @@ class CDP {
 		this.#closed = true;
 		this.#rejectPending(new Error("CDP connection closed"));
 		this.#notifyClose();
-		try { this.#ws?.close(); } catch {}
+		try {
+			this.#ws?.close();
+		} catch {}
 	}
 }
 
@@ -1169,7 +1179,9 @@ function sendCommand(conn, req) {
 			settled = true;
 			cleanup();
 			resolve(response);
-			try { conn.end(); } catch {}
+			try {
+				conn.end();
+			} catch {}
 		};
 
 		const onError = (error) => {

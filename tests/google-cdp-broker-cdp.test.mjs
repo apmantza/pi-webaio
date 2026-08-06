@@ -469,10 +469,7 @@ test("broker-owned search navigates canonically, extracts results, resets, and r
 				Number.isFinite(result.timings[key]),
 				`timings.${key} is finite`,
 			);
-			assert.ok(
-				result.timings[key] >= 0,
-				`timings.${key} is non-negative`,
-			);
+			assert.ok(result.timings[key] >= 0, `timings.${key} is non-negative`);
 		}
 		assert.equal(setup.broker.registry.snapshot().active, 0);
 		assert.equal(setup.broker.registry.snapshot().targets, 1);

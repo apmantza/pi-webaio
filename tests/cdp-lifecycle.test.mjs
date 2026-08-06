@@ -271,9 +271,9 @@ test("daemon registry: live entry round-trips through write/list", async () => {
 	try {
 		_writeDaemonRegistry(targetId);
 		// Atomic write must not leave a stray .tmp file behind.
-		const leftovers = readdirSync(dirname(_daemonRegistryPath(targetId))).filter(
-			(f) => f.includes(`${targetId}.json.`) && f.endsWith(".tmp"),
-		);
+		const leftovers = readdirSync(
+			dirname(_daemonRegistryPath(targetId)),
+		).filter((f) => f.includes(`${targetId}.json.`) && f.endsWith(".tmp"));
 		assert.deepEqual(leftovers, [], "no temp registry files should remain");
 		const found = await _listDaemonSocketsFromRegistry();
 		const entry = found.find((d) => d.targetId === targetId);
@@ -314,7 +314,10 @@ test("daemon registry: dead-pid entries are removed; corrupt entries are skipped
 			false,
 			"dead-pid entry must be filtered out",
 		);
-		assert.equal(found.some((d) => d.targetId === bogusId), false);
+		assert.equal(
+			found.some((d) => d.targetId === bogusId),
+			false,
+		);
 		assert.equal(
 			existsSync(_daemonRegistryPath(staleId)),
 			false,
@@ -357,11 +360,7 @@ test("daemon registry: sweep removes aged .tmp orphans, keeps fresh ones, and pr
 
 		const found = await _listDaemonSocketsFromRegistry();
 
-		assert.equal(
-			existsSync(staleTmp),
-			false,
-			"aged .tmp orphan must be swept",
-		);
+		assert.equal(existsSync(staleTmp), false, "aged .tmp orphan must be swept");
 		assert.equal(
 			existsSync(freshTmp),
 			true,

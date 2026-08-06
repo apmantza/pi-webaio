@@ -61,7 +61,8 @@ function numberOrNull(value) {
 	return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-const sleep = (ms) => new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
+const sleep = (ms) =>
+	new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
 
 // Always the dedicated profile: google-ai.ts hardcodes it for both the legacy
 // and broker lanes (and sets CDP_PROFILE_DIR itself for child processes).
@@ -121,9 +122,7 @@ async function stopColdChrome() {
 		if (!response.ok) throw new Error(`HTTP ${response.status}`);
 		webSocketDebuggerUrl = (await response.json()).webSocketDebuggerUrl;
 	} catch {
-		console.log(
-			`cold: port ${port} not responding; treating as already cold`,
-		);
+		console.log(`cold: port ${port} not responding; treating as already cold`);
 		return;
 	}
 	if (!webSocketDebuggerUrl) {
@@ -200,9 +199,7 @@ async function stopColdChrome() {
 		}
 		await sleep(250);
 	}
-	console.log(
-		"cold: Chrome did not confirm shutdown within 10s; continuing",
-	);
+	console.log("cold: Chrome did not confirm shutdown within 10s; continuing");
 }
 
 async function measure(
