@@ -152,7 +152,7 @@ This is F22, a dedicated Google-CDP performance/concurrency item. F10 remains th
 
 ## Live measurement log
 
-### 2026-08-05 — warm legacy vs broker Google search
+### 2026-08-05 — warm legacy vs broker Google search (INVALIDATED)
 
 Command: `node scripts/bench-google-cdp.mjs --live --query "pi coding agent" --samples 3` (Windows, Chrome already running via the shared profile).
 
@@ -161,12 +161,46 @@ Command: `node scripts/bench-google-cdp.mjs --live --query "pi coding agent" --s
 | legacy-first/warm | 3 | 3 | 6407.8 ms | 6813.4 ms |
 | broker-first/warm | 3 | 3 | 5888.6 ms | 5958.8 ms |
 
-Known limitations of this sample (no speedup is claimed from it):
+**Invalidated**: the broker lane never ran broker code in this sample. Two
+protocol bugs (missing `provider` field in the client search frame; a broken
+`brokerPaths` seam in `ensureGoogleBroker`) made every broker search fail and
+silently fall back to legacy — both lanes measured the legacy path. Fixed in
+commit 30ab13d; see the corrected entries below.
 
-- Order effect: the legacy lane ran first and warmed Chrome; the broker lane benefited from that warm state.
-- The first sample of each lane includes startup (Chrome warm for legacy; broker spawn + CDP connect for broker), so "warm" is approximate.
-- n=3 is a bounded sample justified by live-Google politeness, not a statistical one.
-- Only total time is measured; broker IPC, target setup, and navigation/extraction phases are not yet instrumented.
-- No cold-restart measurement: the harness does not kill/relaunch Chrome between lanes.
+### 2026-08-06 — corrected warm + cold legacy vs broker Google search
 
-Interpretation: both lanes complete live Google searches end-to-end within comparable wall time; the broker lane showed a small p50 edge (~500 ms) that the confounds above fully explain. The measurement satisfies the #92 requirement to record like-for-like numbers before any speedup claim; phase instrumentation and cold-restart runs remain follow-ups.
+Machine: Windows, dedicated greedysearch Chrome profile, live Google, query
+"pi coding agent". Harness: `scripts/bench-google-cdp.mjs` with `--cold`
+(graceful `Browser.close` before each sample) and phase timings derived from
+the broker envelope (`timings`: targetSetupMs, navigationMs, extractionMs,
+resetMs). Cold lanes ran as separate invocations so each lane starts from a
+killed Chrome.
+
+| Lane | n | completed | p50 | p95 |
+| --- | --- | --- | --- | --- |
+| legacy-first/warm | 3 | 3 | 5617.3 ms | 6325.5 ms |
+| broker-first/warm | 3 | 3 | 659.1 ms | 1009.7 ms |
+| legacy-first/cold | 2 | 2 | 6475.8 ms | 11936.4 ms |
+| broker-first/cold | 2 | 2 | 1061.0 ms | 1133.8 ms |
+
+Broker warm phase breakdown (representative sample): targetSetup ~30 ms,
+navigation ~116 ms, extraction ~163-328 ms, reset ~22-35 ms.
+
+Known limitations (stated, not waived):
+
+- Order effect: in the warm run the legacy lane ran first; the broker lane
+  benefited from a fully warm Chrome/profile. The cold lanes control for
+  startup and still show a large gap.
+- n=3 warm / n=2 cold are bounded samples justified by live-Google politeness,
+  not statistical estimates.
+- broker-ipc phase is still not instrumented (total minus broker phases
+  includes IPC + queueing + client overhead).
+- Single machine; cold-start cost varies with disk cache and system load.
+
+Interpretation: with the protocol bugs fixed, the broker path completes warm
+Google searches in ~0.7 s p50 versus ~5.6 s legacy (~8x on this run), and
+cold samples in ~1.1 s versus ~6.5 s (~6x). The gap is dominated by the
+legacy path creating a fresh tab with stealth injection and waiting for full
+page load + interactive submission, while the broker reuses session-scoped
+warm targets. This is a measured difference on one machine under the stated
+confounds — reproducible via the harness, not a universal claim.
