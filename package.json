@@ -121,7 +121,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
-    "@earendil-works/pi-tui": "^0.83.0",
+    "@earendil-works/pi-tui": "^0.83.0 || ^0.84.0",
     "@mozilla/readability": "^0.6.0",
     "defuddle": "^0.19.2",
     "linkedom": "^0.18.12",
@@ -132,7 +132,7 @@
     "ws": "^8.21.1"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "^0.83.0"
+    "@earendil-works/pi-coding-agent": "^0.83.0 || ^0.84.0"
   },
   "overrides": {
     "protobufjs": "^7.6.5",
