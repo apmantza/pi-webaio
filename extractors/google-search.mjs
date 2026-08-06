@@ -32,6 +32,15 @@ let phaseStartedAt = Date.now();
 const searchStartedAt = Date.now();
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// JSON.stringify is not sufficient when a value is interpolated into code
+// passed to Runtime.evaluate: line separators and HTML-significant characters
+// should remain escaped in the generated JavaScript source.
+export function jsEvalLiteral(value) {
+	return JSON.stringify(value).replace(/[<>\u2028\u2029]/g, (character) =>
+		`\\u${character.codePointAt(0).toString(16).padStart(4, "0")}`,
+	);
+}
+
 /** Close the current phase stopwatch and attribute it to `name`. */
 export function markPhase(name) {
 	const now = Date.now();
@@ -95,7 +104,7 @@ async function typeIntoSearchBox(tab, text) {
       el.value = '';
       document.execCommand('insertText', false, t);
       return true;
-    })(${JSON.stringify(text)})
+    })(${jsEvalLiteral(text)})
   `,
 	]);
 }
@@ -305,7 +314,7 @@ async function main() {
 					[
 						"eval",
 						tab,
-						`document.querySelector('${SEARCH_BOX.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}')?.value === ${JSON.stringify(query)}`,
+						`document.querySelector('${SEARCH_BOX.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}')?.value === ${jsEvalLiteral(query)}`,
 					],
 					probeTimeoutMs,
 				).catch(() => "false");
@@ -327,7 +336,7 @@ async function main() {
 					[
 						"eval",
 						tab,
-						`(() => { try { const u = new URL(location.href); const h = u.hostname.toLowerCase(); const googleHost = h === "google.com" || h.endsWith(".google.com") || new RegExp(${JSON.stringify(GOOGLE_REGIONAL_HOST_RE.source)}).test(h); return u.protocol === "https:" && googleHost && u.pathname === "/search" && u.searchParams.get("q") === ${JSON.stringify(query)}; } catch { return false; } })()`,
+						`(() => { try { const u = new URL(location.href); const h = u.hostname.toLowerCase(); const googleHost = h === "google.com" || h.endsWith(".google.com") || new RegExp(${JSON.stringify(GOOGLE_REGIONAL_HOST_RE.source)}).test(h); return u.protocol === "https:" && googleHost && u.pathname === "/search" && u.searchParams.get("q") === ${jsEvalLiteral(query)}; } catch { return false; } })()`,
 					],
 					probeTimeoutMs,
 				).catch(() => "false");

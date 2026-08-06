@@ -2,9 +2,15 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
 	isGoogleSearchUrl,
+	jsEvalLiteral,
 	submitSearch,
 	waitForCondition,
 } from "../extractors/google-search.mjs";
+
+test("jsEvalLiteral escapes code-generation hazards", () => {
+	const literal = jsEvalLiteral('</script>\u2028\u2029');
+	assert.equal(literal, '"\\u003c/script\\u003e\\u2028\\u2029"');
+});
 
 test("isGoogleSearchUrl accepts Google search URLs and rejects lookalikes", () => {
 	assert.equal(
