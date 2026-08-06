@@ -10,32 +10,76 @@
 // Output (stdout): JSON { query, url, results: [{ title, url, snippet }] }
 // Errors go to stderr only — stdout is always clean JSON for piping.
 
+import { pathToFileURL } from "node:url";
 import {
 	cdp,
 	closeTarget,
-	formatAnswer,
 	getOrOpenTab,
 	handleError,
 	outputJson,
 	parseArgs,
 	prepareArgs,
-	TIMING,
 	validateQuery,
 } from "./common.mjs";
 import { dismissConsent } from "./consent.mjs";
+
+// ─── Legacy phase timing instrumentation ────────────────────────────
+// Opt-in via PI_WEBAIO_LEGACY_TIMINGS=1. Timing output is written to stderr
+// so the extractor's stdout JSON contract remains unchanged.
+const LEGACY_TIMINGS_ENABLED = process.env.PI_WEBAIO_LEGACY_TIMINGS === "1";
+const phaseTimings = {};
+let phaseStartedAt = Date.now();
+const searchStartedAt = Date.now();
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Close the current phase stopwatch and attribute it to `name`. */
+export function markPhase(name) {
+	const now = Date.now();
+	phaseTimings[name] = (phaseTimings[name] || 0) + (now - phaseStartedAt);
+	phaseStartedAt = now;
+}
+
+/** Emit collected phase timings to stderr (no-op unless env-gated on). */
+export function emitPhaseTimings(extra = {}) {
+	if (!LEGACY_TIMINGS_ENABLED) return;
+	process.stderr.write(
+		`PI_WEBAIO_LEGACY_TIMINGS ${JSON.stringify({
+			phases: phaseTimings,
+			...extra,
+		})}\n`,
+	);
+}
+
+/**
+ * Poll an asynchronous condition until it returns a truthy value or expires.
+ * The first probe is immediate; callers can inject sleep for deterministic tests.
+ */
+export async function waitForCondition(
+	probe,
+	{
+		timeoutMs = 15000,
+		intervalMs = 100,
+		sleepFn = sleep,
+		nowFn = Date.now,
+	} = {},
+) {
+	const deadline = nowFn() + timeoutMs;
+	while (nowFn() < deadline) {
+		const remainingBeforeProbe = deadline - nowFn();
+		const value = await probe(Math.max(1, remainingBeforeProbe));
+		if (value) return value;
+		const remaining = deadline - nowFn();
+		if (remaining <= 0) break;
+		await sleepFn(Math.min(intervalMs, remaining));
+	}
+	return null;
+}
 
 // ─── Locale-agnostic selectors ──────────────────────────────────────
 
 // Search box: textarea[name="q"] works across all Google locales
 const SEARCH_BOX = 'textarea[name="q"], input[name="q"]';
 // Submit: form button or keyboard Enter (we'll use Enter which is universal)
-// Result containers: try multiple selectors that work across Google layouts
-const RESULT_SELECTORS = [
-	".g", // classic result container
-	"[data-sokoban-container]", // newer layout
-	".MjjYud", // mobile-first layout
-	"div:has(> a > h3)", // catch-all: div containing a link with heading
-];
 
 // ─── Type into search box (locale-agnostic) ─────────────────────────
 
@@ -56,23 +100,58 @@ async function typeIntoSearchBox(tab, text) {
 	]);
 }
 
+const GOOGLE_REGIONAL_HOST_RE =
+	/^(?:www\.)?google\.(?:[a-z]{2,3}|[a-z]{2,3}\.[a-z]{2})$/;
+
+function isGoogleHost(hostname) {
+	return (
+		hostname === "google.com" ||
+		hostname.endsWith(".google.com") ||
+		GOOGLE_REGIONAL_HOST_RE.test(hostname)
+	);
+}
+
+export function isGoogleSearchUrl(rawUrl, query) {
+	try {
+		const url = new URL(rawUrl);
+		const hostname = url.hostname.toLowerCase();
+		const googleHost = isGoogleHost(hostname);
+		return (
+			url.protocol === "https:" &&
+			googleHost &&
+			url.pathname === "/search" &&
+			url.searchParams.get("q") === query
+		);
+	} catch {
+		return false;
+	}
+}
+
 // ─── Submit search (press Enter — locale agnostic) ──────────────────
 
-async function submitSearch(tab) {
-	// Press Enter key on the search box
-	await cdp([
+export async function submitSearch(tab, cdpFn = cdp) {
+	// Press Enter key on the search box. The returned promise includes the
+	// delayed native submit so form/rerender failures reject through CDP.
+	await cdpFn([
 		"eval",
 		tab,
 		`
     (function() {
       var el = document.querySelector('${SEARCH_BOX.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}');
-      if (!el) return false;
-      el.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter', code:'Enter', keyCode:13, which:13, bubbles:true}));
-      // Also try form submission as fallback
-      var form = el.closest('form');
-      if (form) {
-        setTimeout(function() { form.submit(); }, 100);
+      if (!el) {
+        var active = document.activeElement;
+        if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA') && active.name === 'q') el = active;
       }
+      if (!el) throw new Error('Google search form is unavailable');
+      var form = el.closest('form');
+      if (!form) throw new Error('Google search form is unavailable');
+      el.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter', code:'Enter', keyCode:13, which:13, bubbles:true}));
+      // Do not await across navigation: Chrome destroys this execution
+      // context as soon as submit begins. The caller verifies the resulting
+      // Google search URL before accepting results.
+      setTimeout(function() {
+        try { HTMLFormElement.prototype.submit.call(form); } catch (_) {}
+      }, 100);
       return true;
     })()
   `,
@@ -142,24 +221,24 @@ async function extractResults(tab, maxResults = 10) {
 
 // ─── Wait for search results to load ───────────────────────────────
 
-async function waitForResults(tab, timeoutMs = 15000) {
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline) {
-		await new Promise((r) => setTimeout(r, 600));
-		const found = await cdp([
-			"eval",
-			tab,
-			"document.querySelectorAll('a[href^=\"http\"] h3').length",
-		]).catch(() => "0");
-		const count = parseInt(found, 10) || 0;
-		if (count >= 3) return count;
-	}
-	const found = await cdp([
-		"eval",
-		tab,
-		"document.querySelectorAll('a[href^=\"http\"] h3').length",
-	]).catch(() => "0");
-	return parseInt(found, 10) || 0;
+export async function waitForResults(tab, timeoutMs = 15000) {
+	let lastCount = 0;
+	const count = await waitForCondition(
+		async (probeTimeoutMs) => {
+			const found = await cdp(
+				[
+					"eval",
+					tab,
+					"document.querySelectorAll('a[href^=\"http\"] h3').length",
+				],
+				probeTimeoutMs,
+			).catch(() => "0");
+			lastCount = parseInt(found, 10) || 0;
+			return lastCount >= 3 ? lastCount : null;
+		},
+		{ timeoutMs, intervalMs: 100 },
+	);
+	return count || lastCount;
 }
 
 // ============================================================================
@@ -186,43 +265,95 @@ async function main() {
 
 	let tab;
 	let caughtError;
+	let timingExtra;
 	try {
 		await cdp(["list"]);
 		tab = await getOrOpenTab(tabPrefix);
+		markPhase("setup");
 
-		// Navigate to google.com
+		// Navigate to google.com. The input condition below replaces the old
+		// unconditional post-navigation sleep; slow pages remain bounded.
 		await cdp(["nav", tab, "https://www.google.com"], 35000);
-		await new Promise((r) => setTimeout(r, TIMING.postNavSlow));
+		markPhase("homepageLoad");
 		await dismissConsent(tab, cdp);
+		markPhase("consent");
 
-		// Wait for search box to be ready
-		const deadline = Date.now() + 15000;
-		while (Date.now() < deadline) {
-			const ready = await cdp([
-				"eval",
-				tab,
-				`!!document.querySelector('${SEARCH_BOX.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}')`,
-			]).catch(() => "false");
-			if (ready === "true") break;
-			await new Promise((r) => setTimeout(r, TIMING.inputPoll));
-		}
+		const ready = await waitForCondition(
+			async (probeTimeoutMs) => {
+				const found = await cdp(
+					[
+						"eval",
+						tab,
+						`!!document.querySelector('${SEARCH_BOX.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}')`,
+					],
+					probeTimeoutMs,
+				).catch(() => "false");
+				return found === "true";
+			},
+			{ timeoutMs: 15000, intervalMs: 100 },
+		);
+		markPhase("inputWait");
+		if (!ready)
+			throw new Error("Google search box did not appear within 15000ms");
 
-		// Type query and submit
+		// Type query and submit. Verify the value instead of sleeping for a fixed
+		// post-type interval, preserving a bounded fallback for slow hydration.
 		await typeIntoSearchBox(tab, query);
-		await new Promise((r) => setTimeout(r, TIMING.postType));
+		const typed = await waitForCondition(
+			async (probeTimeoutMs) => {
+				const value = await cdp(
+					[
+						"eval",
+						tab,
+						`document.querySelector('${SEARCH_BOX.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}')?.value === ${JSON.stringify(query)}`,
+					],
+					probeTimeoutMs,
+				).catch(() => "false");
+				return value === "true";
+			},
+			{ timeoutMs: 3000, intervalMs: 100 },
+		);
+		markPhase("typing");
+		if (!typed) throw new Error("Google search box did not accept the query");
 		await submitSearch(tab);
+		markPhase("submit");
 
-		// Wait for results
+		// Require the requested search URL before inspecting headings. This
+		// prevents a caller-supplied tab's previous result DOM from satisfying
+		// the result condition during the submit/navigation gap.
+		const navigated = await waitForCondition(
+			async (probeTimeoutMs) => {
+				const state = await cdp(
+					[
+						"eval",
+						tab,
+						`(() => { try { const u = new URL(location.href); const h = u.hostname.toLowerCase(); const googleHost = h === "google.com" || h.endsWith(".google.com") || new RegExp(${JSON.stringify(GOOGLE_REGIONAL_HOST_RE.source)}).test(h); return u.protocol === "https:" && googleHost && u.pathname === "/search" && u.searchParams.get("q") === ${JSON.stringify(query)}; } catch { return false; } })()`,
+					],
+					probeTimeoutMs,
+				).catch(() => "false");
+				return state === "true";
+			},
+			{ timeoutMs: 15000, intervalMs: 100 },
+		);
+		if (!navigated)
+			throw new Error(
+				"Google search navigation did not reach the requested query",
+			);
+
+		// Wait for results with immediate, condition-driven probes.
 		const count = await waitForResults(tab, 15000);
-		if (count === 0) {
-			throw new Error("No search results found on page");
-		}
+		markPhase("resultsLoad");
 
 		// Extract results
 		const results = await extractResults(tab, maxResults);
+		if (count === 0 || results.length === 0)
+			throw new Error("No search results found on page");
 		const finalUrl = await cdp(["eval", tab, "document.location.href"]).catch(
 			() => `https://www.google.com/search?q=${encodeURIComponent(query)}`,
 		);
+		markPhase("extraction");
+
+		timingExtra = { ok: true, resultCount: results.length };
 
 		outputJson({
 			query,
@@ -235,8 +366,24 @@ async function main() {
 		// A caller-supplied tab belongs to the caller; only tear down tabs we made.
 		if (!tabPrefix && tab) await closeTarget(tab);
 	}
+	if (caughtError)
+		timingExtra = {
+			ok: false,
+			error: String(caughtError?.message || caughtError),
+		};
+	if (timingExtra)
+		emitPhaseTimings({
+			...timingExtra,
+			totalMs: Date.now() - searchStartedAt,
+		});
 	// handleError exits the process, so invoke it only after teardown completes.
 	if (caughtError) handleError(caughtError);
 }
 
-main().catch((error) => handleError(error));
+// Tests import the condition helpers without starting a live extractor.
+if (
+	process.argv[1] &&
+	import.meta.url === pathToFileURL(process.argv[1]).href
+) {
+	main().catch((error) => handleError(error));
+}

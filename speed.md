@@ -204,3 +204,35 @@ legacy path creating a fresh tab with stealth injection and waiting for full
 page load + interactive submission, while the broker reuses session-scoped
 warm targets. This is a measured difference on one machine under the stated
 confounds — reproducible via the harness, not a universal claim.
+
+### 2026-08-06 — issue #94 legacy wait experiment
+
+Query: `pi coding agent`; Windows; live Google; dedicated Chrome profile; direct
+legacy extractor invocations. Baseline used commit `6915125` (original waits);
+the optimized variant is the current uncommitted condition-driven experiment.
+Each variant completed 10/10 searches with positive result counts.
+
+| Variant | n | completed | positive results | p50 | p95 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| baseline waits | 10 | 10 | 10 | 5161 ms | 5331 ms |
+| condition-driven waits | 10 | 10 | 10 | 3631 ms | 4081 ms |
+
+The final optimized runs returned 6–7 results on every sample. A separate
+instrumented baseline sample (n=3, before wait replacement) measured the fixed phases as:
+`postNavWait` 1206–1211 ms, `postTypeWait` 302–308 ms, with `resultsLoad`
+1050–1218 ms. Representative optimized phase output was setup 1076–2192 ms,
+homepageLoad 521–1023 ms, inputWait 120–294 ms, typing 249–423 ms,
+resultsLoad 314–694 ms, and extraction 250–607 ms. Setup includes the existing
+CDP/tab setup and is not a wait-removal target.
+
+The first optimized attempt after strict submission validation was invalidated
+at 0/10: awaiting delayed form submission crossed a destroyed Chrome execution
+context. The implementation was corrected by scheduling native submit and
+requiring the post-submit URL; the table reports only the corrected 10/10 run.
+
+Interpretation: the final condition-driven variant reduced p50 wall time by
+~1530 ms (~30%) in this bounded sample, with no observed success/result-count
+regression. This is not a universal performance claim: n=10, one machine/query, changing
+Google/Chrome state, and p95 remains sensitive to startup/renderer variance.
+The fixed `submitSearch` 100 ms in-page delay was intentionally left unchanged;
+stealth ordering and the default Google path remain otherwise unchanged.

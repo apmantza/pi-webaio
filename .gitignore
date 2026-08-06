@@ -14,6 +14,7 @@ nul
 autoresearch.ideas.md
 autoresearch.jsonl
 # Internal research/audit docs — local-only, not shipped
+docs/inspirations*.md
 docs/pagemap-inspiration.md
 docs/inspirations3.md
 docs/inspirations8.md
