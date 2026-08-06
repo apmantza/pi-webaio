@@ -40,6 +40,21 @@ function startFakeBroker({ delaySearchMs = 0 } = {}) {
 						})}\n`,
 					);
 				} else if (request.op === "search") {
+					// Mirror the real broker: search requires provider "google-search".
+					if (request.provider !== "google-search") {
+						socket.write(
+							`${JSON.stringify({
+								id: request.id,
+								ok: false,
+								error: {
+									code: "unsupported_provider",
+									message:
+										"Search is only available for provider google-search",
+								},
+							})}\n`,
+						);
+						return;
+					}
 					setTimeout(() => {
 						if (!socket.destroyed)
 							socket.write(

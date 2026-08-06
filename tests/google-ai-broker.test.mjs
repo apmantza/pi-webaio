@@ -118,9 +118,13 @@ test("broker branch passes search timings through additively", async () => {
 
 		// The legacy path never carries timings.
 		delete process.env.PI_WEBAIO_CDP_BROKER;
-		const legacy = await googleSearchWithDependencies("legacy-shape", {}, {
-			legacySearch: async (query) => output(query),
-		});
+		const legacy = await googleSearchWithDependencies(
+			"legacy-shape",
+			{},
+			{
+				legacySearch: async (query) => output(query),
+			},
+		);
 		assert.equal("timings" in legacy, false);
 	} finally {
 		restoreFlag();
@@ -212,4 +216,17 @@ test("broker infrastructure classification is narrow", () => {
 		false,
 	);
 	assert.equal(isBrokerInfrastructureError(new Error("plain")), false);
+});
+
+test("broker client module satisfies the BrokerModule seam contract", async () => {
+	// Regression: ensureGoogleBroker() loads this exact module and calls
+	// module.brokerPaths() + module.connectGoogleCdpBroker(). A missing
+	// export used to fail only at runtime inside the retry loop, silently
+	// falling back to legacy for every broker search. Pin the contract here.
+	const module = await import("../extractors/google-cdp-broker-client.mjs");
+	assert.equal(typeof module.brokerPaths, "function");
+	assert.equal(typeof module.connectGoogleCdpBroker, "function");
+	const paths = module.brokerPaths();
+	assert.equal(typeof paths.socketPath, "string");
+	assert.ok(paths.socketPath.length > 0);
 });

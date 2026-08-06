@@ -263,6 +263,41 @@ test("stale recovery uses an atomic rename and preserves the winning owner", asy
 	}
 });
 
+test("a dead owner pid allows immediate takeover without the age gate", async () => {
+	// A broker that is killed without releasing its lock must not block a
+	// successor for the full staleAfterMs window: a dead pid cannot race, so
+	// the lock is stale by definition. (The age gate remains only for records
+	// with no valid owner pid.)
+	const root = await mkdtemp(join(tmpdir(), "pi-webaio-lock-deadpid-"));
+	const lockPath = join(root, "profile.lock");
+	const socketPath = join(root, "broker.sock");
+	await mkdir(lockPath);
+	await writeFile(
+		join(lockPath, "owner.json"),
+		JSON.stringify({
+			pid: 999999,
+			ownerNonce: "dead-owner",
+			profileKey: "profile",
+			socketPath,
+		}),
+	);
+	// Fresh mtime: the lock was "just created". A huge staleAfterMs means the
+	// age gate can never pass — takeover must succeed via the dead-pid rule.
+	try {
+		const claim = await claimStartupLock({
+			lockPath,
+			socketPath,
+			profileKey: "profile",
+			staleAfterMs: 24 * 60 * 60_000,
+		});
+		assert.equal(claim.ok, true, "dead-pid lock must be taken over");
+		assert.notEqual(claim.ownerNonce, "dead-owner");
+		await claim.release();
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
 test("capability authentication prevents impersonation and re-registration", async () => {
 	const setup = await makeBroker();
 	const a = await registeredClient(setup.broker, "auth-a");

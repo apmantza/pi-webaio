@@ -6,6 +6,9 @@
 import { randomUUID } from "node:crypto";
 import net from "node:net";
 import { brokerPaths } from "../bin/google-cdp-broker.mjs";
+// Re-exported for the google-ai BrokerModule seam (loadBrokerModule), which
+// resolves the socket path before connecting.
+export { brokerPaths };
 
 export const BROKER_CLIENT_PROTOCOL = 1;
 export const BROKER_CLIENT_DEFAULT_TIMEOUT_MS = 1_500;
@@ -402,6 +405,7 @@ export class GoogleCdpBrokerClient {
 			this.requestInternal(
 				{
 					op: "search",
+					provider: "google-search",
 					query,
 					maxResults: Math.min(maxResults, 25),
 					clientId: CLIENT_ID,

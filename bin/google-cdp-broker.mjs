@@ -257,7 +257,26 @@ export async function claimStartupLock({
 			oldEnough = true;
 		}
 		const live = processIsAlive(current?.pid);
-		if (live || !oldEnough) {
+		const hasOwnerPid = Number.isInteger(current?.pid) && current.pid > 0;
+		if (live) {
+			return fail(
+				new BrokerError(
+					"already_running",
+					"A broker already owns this Chrome profile",
+					{
+						pid: current?.pid,
+						ownerNonce: current?.ownerNonce,
+						socketPath: current?.socketPath || socketPath,
+					},
+				),
+			);
+		}
+		// A dead owner pid is stale by definition — the lock cannot be racing
+		// anyone, so take it over without waiting out the age gate. Without a
+		// valid owner pid (unreadable/record-mid-write), keep the age gate: it
+		// protects the tiny mkdir→writeFile window of a writer that has not
+		// recorded its pid yet.
+		if (!hasOwnerPid && !oldEnough) {
 			return fail(
 				new BrokerError(
 					"already_running",
