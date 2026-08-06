@@ -6,11 +6,13 @@
  * as child processes.
  */
 
+import { createHash, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { debug } from "./debug.ts";
 
 // ─── Paths ───────────────────────────────────────────────────────────
 
@@ -81,6 +83,40 @@ export interface ChromeStatus {
 	running: boolean;
 	pid?: number;
 	ready: boolean;
+}
+
+type BrokerAttemptPhase =
+	| "startup"
+	| "connect"
+	| "register"
+	| "search"
+	| "navigation"
+	| "extraction"
+	| "reset"
+	| "release";
+
+type BrokerAttemptFallbackOutcome =
+	| "not_attempted"
+	| "skipped"
+	| "succeeded"
+	| "failed";
+
+interface BrokerAttemptEnvelope {
+	schema: "pi-webaio.broker-attempt";
+	version: 1;
+	/** Opaque per-attempt identifier; never a broker or CDP identifier. */
+	requestId: string;
+	provider: "google-search";
+	queryHash: string;
+	queryLength: number;
+	outcome: "success" | "failure";
+	phase: BrokerAttemptPhase;
+	durationMs: number;
+	remainingBudgetMs: number;
+	brokerTimings?: BrokerSearchTimings;
+	sanitizedError?: { code?: string; message: string };
+	fallbackOutcome: BrokerAttemptFallbackOutcome;
+	fallbackReason?: "aborted" | "deadline" | "no_budget" | "broker_failure" | "not_applicable";
 }
 
 type BrokerClient = {
@@ -157,6 +193,84 @@ export function brokerFallbackHasTime(deadlineAt: number | undefined): boolean {
 		deadlineAt === undefined ||
 		deadlineAt - Date.now() > BROKER_MIN_FALLBACK_BUDGET_MS
 	);
+}
+
+function errorCode(error: unknown): string | undefined {
+	const code = (error as { code?: unknown })?.code;
+	return typeof code === "string" && code.length > 0 ? code : undefined;
+}
+
+function brokerPhaseForError(
+	error: unknown,
+	lastPhase: BrokerAttemptPhase,
+): BrokerAttemptPhase {
+	const code = errorCode(error)?.toLowerCase();
+	if (code?.includes("register")) return "register";
+	if (code?.includes("navigation") || code === "navigate_failed")
+		return "navigation";
+	if (code?.includes("extract")) return "extraction";
+	if (code?.includes("reset")) return "reset";
+	if (code?.includes("release") || code?.includes("lease")) return "release";
+	if (
+		code === "connect_failed" ||
+		code === "connect_timeout" ||
+		code === "connection_closed" ||
+		code === "cdp_disconnected" ||
+		code === "cdp_unavailable" ||
+		code === "cdp_required"
+	)
+		return lastPhase === "startup" ? "startup" : "connect";
+	return lastPhase;
+}
+
+function sanitizeBrokerError(
+	error: unknown,
+	query: string,
+): { code?: string; message: string } {
+	const rawCode = errorCode(error);
+	const code =
+		rawCode && /^[A-Za-z0-9_.-]{1,64}$/.test(rawCode) ? rawCode : undefined;
+	let message = String((error as { message?: unknown })?.message || error);
+	if (query) message = message.split(query).join("[redacted-query]");
+	message = message
+		.replace(/https?:\/\/[^\s"']+/gi, "[redacted-url]")
+		.replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/gi, "[redacted-id]")
+		.replace(/\b[0-9a-f]{24,}\b/gi, "[redacted-id]")
+		.replace(
+			/\b(target(?:Id)?|session(?:Id)?|client(?:Id)?|tab|capabilit(?:y|ies)|cookie|credential|token|password|secret|authorization)\s*(?:[=:]|\s)\s*[^,;\s]+/gi,
+			"$1=[redacted]",
+		)
+		.slice(0, 240);
+	return code ? { code, message } : { message };
+}
+
+function safeBrokerTimings(value: unknown): BrokerSearchTimings | undefined {
+	if (!value || typeof value !== "object") return undefined;
+	const source = value as Record<string, unknown>;
+	const names = ["targetSetupMs", "navigationMs", "extractionMs", "resetMs"] as const;
+	const timings = {} as BrokerSearchTimings;
+	for (const name of names) {
+		const number = source[name];
+		if (typeof number !== "number" || !Number.isFinite(number) || number < 0)
+			return undefined;
+		timings[name] = Math.min(number, 86_400_000);
+	}
+	return timings;
+}
+
+function emitBrokerAttemptEnvelope(envelope: BrokerAttemptEnvelope): void {
+	// JSON keeps the diagnostic structured while the debug helper keeps it
+	// stderr-only and catches logging failures. The envelope intentionally has
+	// no raw query, CDP target, session, capability, cookie, or credential data.
+	try {
+		debug("broker", JSON.stringify(envelope));
+	} catch {
+		// A diagnostic must never affect the provider result.
+	}
+}
+
+function isBrokerCancellation(error: unknown, signal?: AbortSignal): boolean {
+	return signal?.aborted === true || errorCode(error) === "request_fenced";
 }
 
 async function awaitWithinBudget<T>(
@@ -703,6 +817,8 @@ export interface GoogleSearchDependencies {
 		query: string,
 		options: GoogleSearchOptions,
 	) => Promise<GoogleSearchOutput>;
+	/** Cleanup/quarantine the broker before an isolated legacy attempt. */
+	cleanupBroker?: (client?: BrokerClient) => Promise<void> | void;
 }
 
 /** Injectable seam used by offline tests; production callers use googleSearch. */
@@ -726,41 +842,149 @@ export async function googleSearchWithDependencies(
 				brokerOptions.deadlineAt,
 				brokerOptions.signal,
 			));
-	let searchStarted = false;
+	const cleanup =
+		dependencies.cleanupBroker ??
+		(async (client?: BrokerClient) => {
+			try {
+				client?.close();
+			} catch {
+				// Continue to process quarantine even if client teardown is broken.
+			}
+			await closeGoogleBroker();
+		});
+	const requestId = randomUUID();
+	const queryHash = createHash("sha256").update(query).digest("hex");
+	const attemptStartedAt = Date.now();
+	let phase: BrokerAttemptPhase = "startup";
+	let client: BrokerClient | undefined;
+
+	const makeEnvelope = (
+		outcome: BrokerAttemptEnvelope["outcome"],
+		fallbackOutcome: BrokerAttemptFallbackOutcome,
+		fallbackReason?: BrokerAttemptEnvelope["fallbackReason"],
+		error?: unknown,
+		result?: GoogleSearchOutput,
+	): BrokerAttemptEnvelope => ({
+		schema: "pi-webaio.broker-attempt",
+		version: 1,
+		requestId,
+		provider: "google-search",
+		queryHash,
+		queryLength: query.length,
+		outcome,
+		phase: outcome === "failure" ? brokerPhaseForError(error, phase) : phase,
+		durationMs: Math.max(Date.now() - attemptStartedAt, 0),
+		remainingBudgetMs: Math.max(deadlineAt - Date.now(), 0),
+		...(safeBrokerTimings(result?.timings)
+			? { brokerTimings: safeBrokerTimings(result?.timings) }
+			: {}),
+		...(error ? { sanitizedError: sanitizeBrokerError(error, query) } : {}),
+		fallbackOutcome,
+		...(fallbackReason ? { fallbackReason } : {}),
+	});
+
+	const emitFailure = (
+		error: unknown,
+		fallbackOutcome: BrokerAttemptFallbackOutcome,
+		fallbackReason?: BrokerAttemptEnvelope["fallbackReason"],
+	) => emitBrokerAttemptEnvelope(
+		makeEnvelope("failure", fallbackOutcome, fallbackReason, error),
+	);
+
 	try {
-		await ensure(options.headless, {
-			deadlineAt,
-			signal: options.signal,
-		});
-		if (!brokerFallbackHasTime(deadlineAt))
-			throw Object.assign(new Error("Broker startup deadline expired"), {
-				code: "connect_timeout",
-			});
-		const client = await connect({
-			profileDir,
-			deadlineAt,
-			signal: options.signal,
-		});
-		searchStarted = true;
-		// The broker envelope is additive: when the broker reports phase
-		// `timings` they flow through to the caller unchanged. The legacy
-		// branch above never produces a `timings` field.
-		return await client.search(query, {
-			maxResults: options.maxResults,
-			signal: options.signal,
-			deadlineAt,
-		});
+		await awaitWithinBudget(
+			Promise.resolve().then(() =>
+				ensure(options.headless, {
+					deadlineAt,
+					signal: options.signal,
+				}),
+			),
+			{ deadlineAt, signal: options.signal },
+		);
+		phase = "connect";
+		const connectedClient = await awaitWithinBudget(
+			Promise.resolve().then(() =>
+				connect({
+					profileDir,
+					deadlineAt,
+					signal: options.signal,
+				}),
+			),
+			{ deadlineAt, signal: options.signal },
+		);
+		client = connectedClient;
+		phase = "search";
+		const result = await awaitWithinBudget(
+			Promise.resolve().then(() =>
+				connectedClient.search(query, {
+					maxResults: options.maxResults,
+					signal: options.signal,
+					deadlineAt,
+				}),
+			),
+			{ deadlineAt, signal: options.signal },
+		);
+		emitBrokerAttemptEnvelope(makeEnvelope("success", "not_attempted", undefined, undefined, result));
+		return result;
 	} catch (error) {
-		const canFallback =
-			!options.signal?.aborted &&
-			(!searchStarted || isBrokerInfrastructureError(error)) &&
-			brokerFallbackHasTime(deadlineAt);
-		if (!canFallback) throw error;
-		return legacySearch(query, {
-			...options,
-			timeoutMs: Math.max(deadlineAt - Date.now(), 1),
-			deadlineAt,
-		});
+		// Attach a rejection handler before any cleanup wait can fence the
+		// broker promise. This is important when a broker ignores AbortSignal.
+		const cleanupPromise = Promise.resolve().then(() => cleanup(client));
+		cleanupPromise.catch(() => undefined);
+
+		const aborted = isBrokerCancellation(error, options.signal);
+		const expired = Date.now() >= deadlineAt;
+		if (aborted || expired || !brokerFallbackHasTime(deadlineAt)) {
+			emitFailure(
+				error,
+				"skipped",
+				aborted ? "aborted" : expired ? "deadline" : "no_budget",
+			);
+			throw error;
+		}
+
+		// Quarantine/reset the failed broker before using the legacy extractor.
+		// It gets a fresh extractor process and fresh target; no broker client or
+		// lease is passed to this call.
+		try {
+			await awaitWithinBudget(cleanupPromise, {
+				deadlineAt,
+				signal: options.signal,
+			});
+		} catch {
+			// A release failure is itself a broker failure, but must not prevent an
+			// otherwise safe legacy fallback while budget remains.
+		}
+		if (isBrokerCancellation(error, options.signal)) {
+			emitFailure(error, "skipped", "aborted");
+			throw error;
+		}
+		if (Date.now() >= deadlineAt || !brokerFallbackHasTime(deadlineAt)) {
+			emitFailure(
+				error,
+				"skipped",
+				Date.now() >= deadlineAt ? "deadline" : "no_budget",
+			);
+			throw error;
+		}
+
+		try {
+			const legacyResult = await awaitWithinBudget(
+				Promise.resolve().then(() =>
+					legacySearch(query, {
+						...options,
+						timeoutMs: Math.max(deadlineAt - Date.now(), 1),
+						deadlineAt,
+					}),
+				),
+				{ deadlineAt, signal: options.signal },
+			);
+			emitFailure(error, "succeeded", "broker_failure");
+			return legacyResult;
+		} catch (legacyError) {
+			emitFailure(error, "failed", "broker_failure");
+			throw legacyError;
+		}
 	}
 }
 

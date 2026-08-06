@@ -28,5 +28,12 @@ export function debugEnabled(): boolean {
  */
 export function debug(scope: string, ...args: unknown[]): void {
 	if (!debugEnabled()) return;
-	console.error(`[pi-webaio:${scope}]`, ...args);
+	// Diagnostics are strictly best-effort. A replaced console in an embedding
+	// host (or a closed stderr stream) must never turn a provider failure into a
+	// search failure.
+	try {
+		console.error(`[pi-webaio:${scope}]`, ...args);
+	} catch {
+		// Intentionally ignored: debug output is not part of the tool contract.
+	}
 }
