@@ -3,6 +3,7 @@ import { test } from "node:test";
 import {
 	googleSearchWithDependencies,
 	isBrokerInfrastructureError,
+	notifyGoogleBrokerProcessEventForTests,
 } from "../src/google-ai.ts";
 
 const savedFlag = process.env.PI_WEBAIO_CDP_BROKER;
@@ -436,6 +437,40 @@ test("broker diagnostic redacts complete auth credentials and JWTs at the envelo
 	}
 });
 
+test("the final envelope boundary redacts short credentials and spaced broker ID labels", async () => {
+	process.env.PI_WEBAIO_CDP_BROKER = "1";
+	const query = "short envelope query";
+	const values = [
+		"Authorization: Bearer b",
+		"Authorization: Basic x",
+		"a.b.c",
+		"Target ID: target-short",
+		"Session ID = session-short",
+		"Client ID client-short",
+	];
+	try {
+		const { captured } = await captureBrokerDiagnostic(() =>
+			googleSearchWithDependencies(query, { timeoutMs: 2000 }, {
+				ensureChrome: async () => ({ running: true, ready: true }),
+				connectBroker: async () => ({
+					search: async () => {
+						throw Object.assign(new Error(
+							`Authorization: Bearer b; Authorization: Basic x; token=a.b.c; Target ID: target-short; Session ID = session-short; Client ID client-short`,
+						), { code: "connection_closed" });
+					},
+					close() {},
+				}),
+				legacySearch: async (value) => output(value),
+			}),
+		);
+		for (const value of [query, ...values]) assert.equal(captured.includes(value), false, value);
+		assert.match(captured, /redacted-authorization/);
+		assert.match(captured, /redacted-id/);
+	} finally {
+		restoreFlag();
+	}
+});
+
 test("caller abort fences fallback with a skipped envelope outcome", async () => {
 	process.env.PI_WEBAIO_CDP_BROKER = "1";
 	const controller = new AbortController();
@@ -547,6 +582,38 @@ test("cleanup failures are diagnosed and do not race legacy fallback", async () 
 	}
 });
 
+test("cleanup timeout is bounded and does not block the next broker acquisition", async () => {
+	process.env.PI_WEBAIO_CDP_BROKER = "1";
+	let connectCalls = 0;
+	try {
+		await assert.rejects(
+			googleSearchWithDependencies("cleanup-timeout", { timeoutMs: 2000 }, {
+				ensureChrome: async () => ({ running: true, ready: true }),
+				connectBroker: async () => ({
+					search: async () => { throw Object.assign(new Error("broker failed"), { code: "connection_closed" }); },
+					close() {},
+				}),
+				cleanupBroker: async () => new Promise(() => {}),
+				legacySearch: async () => output("wrong"),
+			}),
+			(error) => error.code === "connection_closed",
+		);
+		const started = Date.now();
+		const result = await googleSearchWithDependencies("after-cleanup-timeout", { timeoutMs: 2000 }, {
+			ensureChrome: async () => ({ running: true, ready: true }),
+			connectBroker: async () => {
+				connectCalls++;
+				return { search: async (query) => output(query), close() {} };
+			},
+		});
+		assert.equal(result.query, "after-cleanup-timeout");
+		assert.equal(connectCalls, 1);
+		assert.ok(Date.now() - started < 1000);
+	} finally {
+		restoreFlag();
+	}
+});
+
 test("search-phase connection errors retain the search phase", async () => {
 	process.env.PI_WEBAIO_CDP_BROKER = "1";
 	try {
@@ -631,6 +698,47 @@ test("concurrent broker users are not closed by one failed fallback", async () =
 		const secondResult = await second;
 		assert.equal(secondResult.query, "second");
 		assert.equal(closeCalls, 0);
+	} finally {
+		restoreFlag();
+	}
+});
+
+test("a process-event fence defers shared-client teardown until the last user releases", async () => {
+	process.env.PI_WEBAIO_CDP_BROKER = "1";
+	let searchStarts = 0;
+	let releaseSecond;
+	const secondMayFinish = new Promise((resolve) => { releaseSecond = resolve; });
+	let closeCalls = 0;
+	const sharedClient = {
+		search: async (query) => {
+			searchStarts++;
+			if (query === "first") {
+				while (searchStarts < 2) await new Promise((resolve) => setTimeout(resolve, 1));
+				await notifyGoogleBrokerProcessEventForTests(sharedClient);
+				throw Object.assign(new Error("process exited"), { code: "connection_closed" });
+			}
+			await secondMayFinish;
+			return output(query);
+		},
+		close: () => { closeCalls++; },
+	};
+	try {
+		const first = googleSearchWithDependencies("first", { timeoutMs: 2000 }, {
+			ensureChrome: async () => ({ running: true, ready: true }),
+			connectBroker: async () => sharedClient,
+			legacySearch: async (query) => output(`legacy-${query}`),
+		});
+		const second = googleSearchWithDependencies("second", { timeoutMs: 2000 }, {
+			ensureChrome: async () => ({ running: true, ready: true }),
+			connectBroker: async () => sharedClient,
+			legacySearch: async (query) => output(`legacy-${query}`),
+		});
+		const firstResult = await first;
+		assert.equal(firstResult.query, "legacy-first");
+		assert.equal(closeCalls, 0);
+		releaseSecond();
+		assert.equal((await second).query, "second");
+		assert.equal(closeCalls, 1);
 	} finally {
 		restoreFlag();
 	}

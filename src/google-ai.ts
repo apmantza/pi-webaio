@@ -172,8 +172,13 @@ let chromeLaunchPromise: Promise<ChromeStatus> | null = null;
 let brokerClient: BrokerClient | null = null;
 let brokerClientPromise: Promise<BrokerClient> | null = null;
 let brokerProcess: ReturnType<typeof spawn> | null = null;
+let brokerDeferredProcess: ReturnType<typeof spawn> | null = null;
 const brokerClientUsers = new Map<BrokerClient, number>();
 let brokerLifecycleTail: Promise<void> = Promise.resolve();
+let brokerGenerationUnavailable = false;
+let brokerTeardownPending = false;
+const retiredBrokerClients = new Set<BrokerClient>();
+const BROKER_CLEANUP_TIMEOUT_MS = 250;
 const BROKER_MIN_FALLBACK_BUDGET_MS = 1_000;
 
 function brokerEnabled(): boolean {
@@ -236,10 +241,11 @@ function sanitizeBrokerError(
 	const code =
 		rawCode && /^[A-Za-z0-9_.-]{1,64}$/.test(rawCode) ? rawCode : undefined;
 	let message = String((error as { message?: unknown })?.message || error);
-	// Apply the repository-wide redactor before the legacy structural masks.
-	// In particular, do not turn `Authorization: Bearer <value>` into a
-	// partially masked string that leaves the credential remainder behind.
-	message = redactSecrets(message);
+	// Apply both the repository redactor and the strict envelope boundary before
+	// the legacy structural masks. In particular, do not turn
+	// `Authorization: Bearer <value>` into a partially masked string that leaves
+	// a short credential remainder behind.
+	message = sanitizeBrokerEnvelopeText(message, query);
 	if (query) message = message.split(query).join("[redacted-query]");
 	message = message
 		.replace(/https?:\/\/[^\s"']+/gi, "[redacted-url]")
@@ -251,6 +257,36 @@ function sanitizeBrokerError(
 		)
 		.slice(0, 240);
 	return code ? { code, message } : { message };
+}
+
+// The general redactor deliberately has minimum-length/entropy guards to avoid
+// damaging normal documents. An envelope is different: it is a small, closed
+// diagnostic boundary, so every credential-shaped value and every broker ID
+// label must be removed even when the value is one character long.
+const BROKER_AUTH_VALUE_RE =
+	/\b(?:authorization\s*[:=]\s*)(?:bearer|basic|token)\s+[^\s,;\"'}\]]+/gi;
+const BROKER_JWT_RE =
+	/\b[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g;
+const BROKER_ID_WITH_VALUE_RE =
+	/\b(?:target\s*id|session\s*id|client\s*id|targetid|sessionid|clientid|target|session|client)\s*\"?\s*(?:[:=]|\s)\s*\"?[^,;\s}\"']+/gi;
+const BROKER_ID_LABEL_RE =
+	/\b(?:target\s*id|session\s*id|client\s*id|targetid|sessionid|clientid)\b/gi;
+
+function sanitizeBrokerEnvelopeText(text: string, query: string): string {
+	let safe = redactSecrets(text);
+	if (query) {
+		// The first replacement handles ordinary error strings; the second handles
+		// a query that was JSON-escaped by a newly-added envelope field.
+		safe = safe.split(query).join("[redacted-query]");
+		const escapedQuery = JSON.stringify(query);
+		if (escapedQuery) safe = safe.split(escapedQuery.slice(1, -1)).join("[redacted-query]");
+	}
+	safe = safe
+		.replace(BROKER_AUTH_VALUE_RE, "[redacted-authorization]")
+		.replace(BROKER_JWT_RE, "[redacted-jwt]")
+		.replace(BROKER_ID_WITH_VALUE_RE, "[redacted-id]")
+		.replace(BROKER_ID_LABEL_RE, "[redacted-id-label]");
+	return safe;
 }
 
 function safeBrokerTimings(value: unknown): BrokerSearchTimings | undefined {
@@ -267,12 +303,15 @@ function safeBrokerTimings(value: unknown): BrokerSearchTimings | undefined {
 	return timings;
 }
 
-function emitBrokerAttemptEnvelope(envelope: BrokerAttemptEnvelope): void {
+function emitBrokerAttemptEnvelope(
+	envelope: BrokerAttemptEnvelope,
+	query: string,
+): void {
 	// Redact the final serialized envelope too. This is the last boundary before
 	// diagnostics leave the process, so a newly-added field cannot bypass the
 	// sensitive-value masking in sanitizeBrokerError().
 	try {
-		debug("broker", redactSecrets(JSON.stringify(envelope)));
+		debug("broker", sanitizeBrokerEnvelopeText(JSON.stringify(envelope), query));
 	} catch {
 		// A diagnostic must never affect the provider result.
 	}
@@ -378,100 +417,33 @@ async function loadBrokerModule(): Promise<BrokerModule> {
 	return (await import(moduleUrl)) as unknown as BrokerModule;
 }
 
-async function ensureGoogleBroker(
-	profileDir: string,
-	deadlineAt: number,
-	signal?: AbortSignal,
-): Promise<BrokerClient> {
-	if (brokerClient && brokerClient.connected !== false) return brokerClient;
-	if (brokerClientPromise) return brokerClientPromise;
-	brokerClientPromise = (async () => {
-		const module = await loadBrokerModule();
-		const brokerBin = resolvePath("bin", "google-cdp-broker.mjs");
-		const paths = module.brokerPaths(profileDir);
-		const connect = () =>
-			module.connectGoogleCdpBroker({
-				profileDir,
-				socketPath: paths.socketPath,
-				deadlineAt,
-				signal,
-			});
-		let lastError: unknown;
-		for (;;) {
-			if (signal?.aborted)
-				throw Object.assign(new Error("Broker request was cancelled"), {
-					code: "request_fenced",
-				});
-			if (Date.now() >= deadlineAt)
-				throw Object.assign(new Error("Broker startup deadline expired"), {
-					code: "connect_timeout",
-				});
-			try {
-				const connected = await connect();
-				brokerClient = connected;
-				return connected;
-			} catch (error) {
-				lastError = error;
-			}
-			if (!brokerProcess || brokerProcess.exitCode !== null) {
-				brokerProcess = spawn(
-					process.execPath,
-					[
-						brokerBin,
-						"--profile",
-						profileDir,
-						"--connect-cdp",
-						"--cdp-port",
-						"9222",
-						"--parent-stdin",
-					],
-					{ stdio: ["pipe", "ignore", "ignore"] },
-				);
-				const ownedProcess = brokerProcess;
-				ownedProcess.once("error", () => {
-					if (brokerProcess === ownedProcess) {
-						brokerProcess = null;
-						brokerClient?.close();
-						brokerClient = null;
-					}
-				});
-				ownedProcess.once("exit", () => {
-					if (brokerProcess === ownedProcess) {
-						brokerProcess = null;
-						brokerClient?.close();
-						brokerClient = null;
-					}
-				});
-			}
-			await new Promise<void>((resolve) =>
-				setTimeout(resolve, Math.min(40, Math.max(deadlineAt - Date.now(), 1))),
-			);
-			if (Date.now() >= deadlineAt && lastError) throw lastError;
-		}
-	})();
-	try {
-		return await brokerClientPromise;
-	} finally {
-		brokerClientPromise = null;
-	}
-}
+type BrokerResources = {
+	client: BrokerClient | null;
+	processHandle: ReturnType<typeof spawn> | null;
+};
 
-export async function closeGoogleBroker(
-	expectedClient?: BrokerClient,
-): Promise<void> {
-	// An expected client is an ownership check. A stale request must not close a
-	// newer singleton that another request acquired after it failed.
-	if (expectedClient && brokerClient !== expectedClient) return;
-	const client = brokerClient;
-	const processHandle = brokerProcess;
+function detachBrokerResources(expectedClient?: BrokerClient): BrokerResources | null {
+	if (expectedClient && brokerClient !== expectedClient) return null;
+	const resources = {
+		client: brokerClient,
+		processHandle: brokerProcess ?? brokerDeferredProcess,
+	};
 	brokerClient = null;
 	brokerProcess = null;
+	brokerDeferredProcess = null;
+	brokerGenerationUnavailable = true;
+	brokerTeardownPending = false;
+	return resources;
+}
+
+async function teardownBrokerResources(resources: BrokerResources): Promise<void> {
 	let closeError: unknown;
 	try {
-		client?.close();
+		resources.client?.close();
 	} catch (error) {
 		closeError = error;
 	}
+	const processHandle = resources.processHandle;
 	if (processHandle && processHandle.exitCode === null) {
 		try {
 			processHandle.stdin?.end();
@@ -499,6 +471,227 @@ export async function closeGoogleBroker(
 		});
 	}
 	if (closeError) throw closeError;
+}
+
+async function runBoundedCleanup(
+	operation: () => Promise<void> | void,
+): Promise<void> {
+	const cleanupPromise = Promise.resolve().then(operation);
+	// A custom cleanup hook is test/integration surface and may never settle.
+	// Attach a sink to its eventual rejection, then release the lifecycle queue
+	// at a hard bound so a later broker generation can still be acquired.
+	cleanupPromise.catch(() => undefined);
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	try {
+		await Promise.race([
+			cleanupPromise,
+			new Promise<never>((_, reject) => {
+				timer = setTimeout(
+					() =>
+						reject(
+						Object.assign(new Error("Broker cleanup timed out"), {
+							code: "cleanup_timeout",
+							}),
+					),
+					BROKER_CLEANUP_TIMEOUT_MS,
+				);
+			}),
+		]);
+	} finally {
+		if (timer) clearTimeout(timer);
+	}
+}
+
+async function handleBrokerProcessEvent(
+	ownedProcess: ReturnType<typeof spawn>,
+): Promise<void> {
+	if (brokerProcess !== ownedProcess) return;
+	// Do not close the singleton while another request owns a lease. The
+	// generation is unavailable immediately, preventing new users from joining;
+	// teardown is serialized after the last active user releases it.
+	brokerProcess = null;
+	brokerGenerationUnavailable = true;
+	if (brokerClient && (brokerClientUsers.get(brokerClient) ?? 0) > 0) {
+		retiredBrokerClients.add(brokerClient);
+		brokerTeardownPending = true;
+		return;
+	}
+	const resources = detachBrokerResources();
+	if (resources) {
+		try {
+			await teardownBrokerResources(resources);
+		} catch (error) {
+			debug("broker", "process-event cleanup failed", sanitizeBrokerError(error, ""));
+		}
+	}
+}
+
+/**
+ * Narrow injectable equivalent of the child-process error/exit path. Tests use
+ * it to drive the same lease-aware coordinator without depending on OS process
+ * scheduling; production handlers call handleBrokerProcessEvent() directly.
+ */
+export async function notifyGoogleBrokerProcessEventForTests(
+	client: BrokerClient,
+): Promise<void> {
+	await withBrokerLifecycle(async () => {
+		brokerGenerationUnavailable = true;
+		if ((brokerClientUsers.get(client) ?? 0) > 0) {
+			retiredBrokerClients.add(client);
+			brokerTeardownPending = true;
+			return;
+		}
+		await teardownBrokerResources({ client, processHandle: null });
+	});
+}
+
+async function ensureGoogleBroker(
+	profileDir: string,
+	deadlineAt: number,
+	signal?: AbortSignal,
+): Promise<BrokerClient> {
+	if (
+		brokerClient &&
+		brokerClient.connected !== false &&
+		!brokerGenerationUnavailable
+	)
+		return brokerClient;
+	if (
+		brokerGenerationUnavailable &&
+		brokerTeardownPending &&
+		[...brokerClientUsers.values()].some((count) => count > 0)
+	)
+		throw Object.assign(new Error("Broker generation unavailable"), {
+			code: "connection_closed",
+		});
+	if (brokerClientPromise) return brokerClientPromise;
+	brokerClientPromise = (async () => {
+		const module = await loadBrokerModule();
+		const brokerBin = resolvePath("bin", "google-cdp-broker.mjs");
+		const paths = module.brokerPaths(profileDir);
+		const connect = () =>
+			module.connectGoogleCdpBroker({
+				profileDir,
+				socketPath: paths.socketPath,
+				deadlineAt,
+				signal,
+			});
+		let lastError: unknown;
+		for (;;) {
+			if (signal?.aborted)
+				throw Object.assign(new Error("Broker request was cancelled"), {
+					code: "request_fenced",
+				});
+			if (Date.now() >= deadlineAt)
+				throw Object.assign(new Error("Broker startup deadline expired"), {
+					code: "connect_timeout",
+				});
+			try {
+				const connected = await connect();
+				// A process event may have fenced this connection while connect() was
+				// in flight. Never publish a client from an unavailable generation.
+				if (brokerGenerationUnavailable) {
+					try {
+						connected.close();
+					} catch {
+						// The connection is already unusable.
+					}
+					throw Object.assign(new Error("Broker generation unavailable"), {
+						code: "connection_closed",
+					});
+				}
+				brokerClient = connected;
+				brokerGenerationUnavailable = false;
+				return connected;
+			} catch (error) {
+				lastError = error;
+			}
+			if (!brokerProcess || brokerProcess.exitCode !== null) {
+				brokerGenerationUnavailable = false;
+				brokerProcess = spawn(
+					process.execPath,
+					[
+						brokerBin,
+						"--profile",
+						profileDir,
+						"--connect-cdp",
+						"--cdp-port",
+						"9222",
+						"--parent-stdin",
+					],
+					{ stdio: ["pipe", "ignore", "ignore"] },
+				);
+				const ownedProcess = brokerProcess;
+				ownedProcess.once("error", () => {
+					void withBrokerLifecycle(() => handleBrokerProcessEvent(ownedProcess)).catch(
+						() => undefined,
+					);
+				});
+				ownedProcess.once("exit", () => {
+					void withBrokerLifecycle(() => handleBrokerProcessEvent(ownedProcess)).catch(
+						() => undefined,
+					);
+				});
+			}
+			await new Promise<void>((resolve) =>
+				setTimeout(resolve, Math.min(40, Math.max(deadlineAt - Date.now(), 1))),
+			);
+			if (Date.now() >= deadlineAt && lastError) throw lastError;
+		}
+	})();
+	try {
+		return await brokerClientPromise;
+	} finally {
+		brokerClientPromise = null;
+	}
+}
+
+async function releaseBrokerLease(client: BrokerClient): Promise<void> {
+	await withBrokerLifecycle(async () => {
+		const remaining = releaseBrokerClient(client);
+		if (remaining === 0 && retiredBrokerClients.delete(client)) {
+			const deferredProcess = brokerDeferredProcess;
+			brokerDeferredProcess = null;
+			try {
+				await teardownBrokerResources({ client, processHandle: deferredProcess });
+			} catch (error) {
+				debug("broker", "deferred cleanup failed", sanitizeBrokerError(error, ""));
+			}
+		}
+		if (
+			remaining === 0 &&
+			brokerTeardownPending &&
+			brokerClient === client
+		) {
+			const resources = detachBrokerResources(client);
+			if (resources) {
+				try {
+					await teardownBrokerResources(resources);
+				} catch (error) {
+					debug("broker", "deferred cleanup failed", sanitizeBrokerError(error, ""));
+				}
+			}
+		}
+	});
+}
+
+export async function closeGoogleBroker(
+	expectedClient?: BrokerClient,
+): Promise<void> {
+	return withBrokerLifecycle(async () => {
+		if (expectedClient && brokerClient !== expectedClient) return;
+		if (brokerClient && (brokerClientUsers.get(brokerClient) ?? 0) > 0) {
+			retiredBrokerClients.add(brokerClient);
+			brokerDeferredProcess = brokerProcess;
+			brokerProcess = null;
+			brokerGenerationUnavailable = true;
+			brokerTeardownPending = true;
+			return;
+		}
+		const resources = detachBrokerResources(expectedClient);
+		if (!resources) return;
+		await teardownBrokerResources(resources);
+	});
 }
 
 async function acquireGoogleChildSlot(
@@ -956,6 +1149,7 @@ export async function googleSearchWithDependencies(
 	) =>
 		emitBrokerAttemptEnvelope(
 			makeEnvelope("failure", fallbackOutcome, fallbackReason, error),
+			query,
 		);
 
 	try {
@@ -996,27 +1190,46 @@ export async function googleSearchWithDependencies(
 		);
 		emitBrokerAttemptEnvelope(
 			makeEnvelope("success", "not_attempted", undefined, undefined, result),
+			query,
 		);
 		if (retainedClient && client) {
-			releaseBrokerClient(client);
+			await releaseBrokerLease(client);
 			retainedClient = false;
 		}
 		return result;
 	} catch (error) {
 		const cleanupPromise = withBrokerLifecycle(async () => {
+			let cleanupResources: BrokerResources | null = null;
 			if (retainedClient && client) {
 				retainedClient = false;
-				if (releaseBrokerClient(client) > 0) {
+				const remaining = releaseBrokerClient(client);
+				if (remaining > 0) {
 					cleanupOutcome = "skipped_shared";
 					return;
 				}
+			// Quarantine before invoking an arbitrary cleanup hook. A timed-out
+			// hook must not leave a client eligible for a later acquisition.
+			if (brokerClient === client) cleanupResources = detachBrokerResources(client);
+			else if (retiredBrokerClients.delete(client)) {
+				const deferredProcess = brokerDeferredProcess;
+				brokerDeferredProcess = null;
+				cleanupResources = { client, processHandle: deferredProcess };
+			}
 			}
 			if (!client && cleanup === defaultCleanup) {
 				cleanupOutcome = "not_attempted";
 				return;
 			}
+			if (cleanup === defaultCleanup && client && !cleanupResources)
+				// The injectable connect seam does not populate the production
+				// singleton, but the acquired client still needs deterministic close.
+				cleanupResources = { client, processHandle: null };
 			try {
-				await cleanup(client);
+				await runBoundedCleanup(() =>
+					cleanup === defaultCleanup && cleanupResources
+						? teardownBrokerResources(cleanupResources)
+						: cleanup(client),
+				);
 				cleanupOutcome = "succeeded";
 			} catch (cleanupFailure) {
 				cleanupOutcome = "failed";
@@ -1028,10 +1241,25 @@ export async function googleSearchWithDependencies(
 		const aborted = isBrokerCancellation(error, options.signal);
 		const expired = Date.now() >= deadlineAt;
 		if (aborted || expired || !brokerFallbackHasTime(deadlineAt)) {
+			try {
+				// Cleanup has its own hard bound, independent of the already-fired
+				// request fence, so the lifecycle tail always settles and diagnostics
+				// include failures/timeouts for abort/deadline paths too.
+				await cleanupPromise;
+			} catch (cleanupWaitError) {
+				cleanupOutcome = "failed";
+				cleanupError = cleanupWaitError;
+			}
 			emitFailure(
 				error,
 				"skipped",
-				aborted ? "aborted" : expired ? "deadline" : "no_budget",
+				cleanupOutcome === "failed"
+					? "cleanup_failed"
+					: aborted
+						? "aborted"
+						: expired
+						? "deadline"
+						: "no_budget",
 			);
 			throw error;
 		}
