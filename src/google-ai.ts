@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { debug } from "./debug.ts";
+import { redactSecrets } from "./redact.ts";
 
 // ─── Paths ───────────────────────────────────────────────────────────
 
@@ -116,7 +117,15 @@ interface BrokerAttemptEnvelope {
 	brokerTimings?: BrokerSearchTimings;
 	sanitizedError?: { code?: string; message: string };
 	fallbackOutcome: BrokerAttemptFallbackOutcome;
-	fallbackReason?: "aborted" | "deadline" | "no_budget" | "broker_failure" | "not_applicable";
+	fallbackReason?:
+		| "aborted"
+		| "deadline"
+		| "no_budget"
+		| "broker_failure"
+		| "cleanup_failed"
+		| "not_applicable";
+	cleanupOutcome?: "succeeded" | "failed" | "skipped_shared" | "not_attempted";
+	cleanupError?: { code?: string; message: string };
 }
 
 type BrokerClient = {
@@ -163,6 +172,8 @@ let chromeLaunchPromise: Promise<ChromeStatus> | null = null;
 let brokerClient: BrokerClient | null = null;
 let brokerClientPromise: Promise<BrokerClient> | null = null;
 let brokerProcess: ReturnType<typeof spawn> | null = null;
+const brokerClientUsers = new Map<BrokerClient, number>();
+let brokerLifecycleTail: Promise<void> = Promise.resolve();
 const BROKER_MIN_FALLBACK_BUDGET_MS = 1_000;
 
 function brokerEnabled(): boolean {
@@ -211,15 +222,9 @@ function brokerPhaseForError(
 	if (code?.includes("extract")) return "extraction";
 	if (code?.includes("reset")) return "reset";
 	if (code?.includes("release") || code?.includes("lease")) return "release";
-	if (
-		code === "connect_failed" ||
-		code === "connect_timeout" ||
-		code === "connection_closed" ||
-		code === "cdp_disconnected" ||
-		code === "cdp_unavailable" ||
-		code === "cdp_required"
-	)
-		return lastPhase === "startup" ? "startup" : "connect";
+	// Transport errors are not intrinsically connect-phase errors. A closed
+	// connection during search belongs to search, while the same error during
+	// startup belongs to startup. Keep the phase observed at the call site.
 	return lastPhase;
 }
 
@@ -231,6 +236,10 @@ function sanitizeBrokerError(
 	const code =
 		rawCode && /^[A-Za-z0-9_.-]{1,64}$/.test(rawCode) ? rawCode : undefined;
 	let message = String((error as { message?: unknown })?.message || error);
+	// Apply the repository-wide redactor before the legacy structural masks.
+	// In particular, do not turn `Authorization: Bearer <value>` into a
+	// partially masked string that leaves the credential remainder behind.
+	message = redactSecrets(message);
 	if (query) message = message.split(query).join("[redacted-query]");
 	message = message
 		.replace(/https?:\/\/[^\s"']+/gi, "[redacted-url]")
@@ -259,11 +268,11 @@ function safeBrokerTimings(value: unknown): BrokerSearchTimings | undefined {
 }
 
 function emitBrokerAttemptEnvelope(envelope: BrokerAttemptEnvelope): void {
-	// JSON keeps the diagnostic structured while the debug helper keeps it
-	// stderr-only and catches logging failures. The envelope intentionally has
-	// no raw query, CDP target, session, capability, cookie, or credential data.
+	// Redact the final serialized envelope too. This is the last boundary before
+	// diagnostics leave the process, so a newly-added field cannot bypass the
+	// sensitive-value masking in sanitizeBrokerError().
 	try {
-		debug("broker", JSON.stringify(envelope));
+		debug("broker", redactSecrets(JSON.stringify(envelope)));
 	} catch {
 		// A diagnostic must never affect the provider result.
 	}
@@ -273,10 +282,57 @@ function isBrokerCancellation(error: unknown, signal?: AbortSignal): boolean {
 	return signal?.aborted === true || errorCode(error) === "request_fenced";
 }
 
+function assertBrokerBudget(options: {
+	deadlineAt: number;
+	signal?: AbortSignal;
+}): void {
+	if (options.signal?.aborted)
+		throw Object.assign(new Error("Request was cancelled"), {
+			code: "request_fenced",
+		});
+	if (options.deadlineAt <= Date.now())
+		throw Object.assign(new Error("Request deadline expired"), {
+			code: "connect_timeout",
+		});
+}
+
+/** Serialize broker acquisition and teardown, while leases protect active users. */
+function withBrokerLifecycle<T>(operation: () => Promise<T>): Promise<T> {
+	const run = brokerLifecycleTail.then(operation);
+	brokerLifecycleTail = run.then(
+		() => undefined,
+		() => undefined,
+	);
+	return run;
+}
+
+function retainBrokerClient(client: BrokerClient): void {
+	brokerClientUsers.set(client, (brokerClientUsers.get(client) ?? 0) + 1);
+}
+
+function releaseBrokerClient(client: BrokerClient): number {
+	const remaining = Math.max((brokerClientUsers.get(client) ?? 1) - 1, 0);
+	if (remaining === 0) brokerClientUsers.delete(client);
+	else brokerClientUsers.set(client, remaining);
+	return remaining;
+}
+
 async function awaitWithinBudget<T>(
-	promise: Promise<T>,
+	operation: Promise<T> | (() => Promise<T>),
 	options: { deadlineAt?: number; signal?: AbortSignal },
 ): Promise<T> {
+	// A thunk is essential for broker operations: constructing a promise can
+	// start ensure/connect/search before this helper has a chance to fence it.
+	if (options.signal?.aborted)
+		throw Object.assign(new Error("Request was cancelled"), {
+			code: "request_fenced",
+		});
+	if (options.deadlineAt !== undefined && options.deadlineAt <= Date.now())
+		throw Object.assign(new Error("Request deadline expired"), {
+			code: "connect_timeout",
+		});
+	const promise =
+		typeof operation === "function" ? operation() : operation;
 	if (options.deadlineAt === undefined && !options.signal) return promise;
 	return new Promise<T>((resolve, reject) => {
 		let settled = false;
@@ -298,12 +354,6 @@ async function awaitWithinBudget<T>(
 		if (options.signal?.aborted) return abort();
 		options.signal?.addEventListener("abort", abort, { once: true });
 		if (options.deadlineAt !== undefined) {
-			if (options.deadlineAt <= Date.now())
-				return finish(
-					Object.assign(new Error("Request deadline expired"), {
-						code: "connect_timeout",
-					}),
-				);
 			timer = setTimeout(
 				() =>
 					finish(
@@ -406,37 +456,49 @@ async function ensureGoogleBroker(
 	}
 }
 
-export async function closeGoogleBroker(): Promise<void> {
+export async function closeGoogleBroker(
+	expectedClient?: BrokerClient,
+): Promise<void> {
+	// An expected client is an ownership check. A stale request must not close a
+	// newer singleton that another request acquired after it failed.
+	if (expectedClient && brokerClient !== expectedClient) return;
 	const client = brokerClient;
 	const processHandle = brokerProcess;
 	brokerClient = null;
 	brokerProcess = null;
-	client?.close();
-	if (!processHandle || processHandle.exitCode !== null) return;
+	let closeError: unknown;
 	try {
-		processHandle.stdin?.end();
+		client?.close();
 	} catch (error) {
-		void error;
+		closeError = error;
 	}
-	await new Promise<void>((resolve) => {
-		let settled = false;
-		const finish = () => {
-			if (settled) return;
-			settled = true;
-			clearTimeout(timer);
-			resolve();
-		};
-		const timer = setTimeout(() => {
-			try {
-				processHandle.kill();
-			} catch (error) {
-				void error;
-			}
-			finish();
-		}, 1_000);
-		processHandle.once("exit", finish);
-		processHandle.once("error", finish);
-	});
+	if (processHandle && processHandle.exitCode === null) {
+		try {
+			processHandle.stdin?.end();
+		} catch (error) {
+			closeError ??= error;
+		}
+		await new Promise<void>((resolve) => {
+			let settled = false;
+			const finish = () => {
+				if (settled) return;
+				settled = true;
+				clearTimeout(timer);
+				resolve();
+			};
+			const timer = setTimeout(() => {
+				try {
+					processHandle.kill();
+				} catch (error) {
+					closeError ??= error;
+				}
+				finish();
+			}, 1_000);
+			processHandle.once("exit", finish);
+			processHandle.once("error", finish);
+		});
+	}
+	if (closeError) throw closeError;
 }
 
 async function acquireGoogleChildSlot(
@@ -842,21 +904,21 @@ export async function googleSearchWithDependencies(
 				brokerOptions.deadlineAt,
 				brokerOptions.signal,
 			));
-	const cleanup =
-		dependencies.cleanupBroker ??
-		(async (client?: BrokerClient) => {
-			try {
-				client?.close();
-			} catch {
-				// Continue to process quarantine even if client teardown is broken.
-			}
-			await closeGoogleBroker();
-		});
+	const defaultCleanup = async (ownedClient?: BrokerClient) => {
+		// No client means this attempt never acquired the singleton. In
+		// particular, a failed connect must not tear down a broker another request
+		// acquired concurrently.
+		if (ownedClient) await closeGoogleBroker(ownedClient);
+	};
+	const cleanup = dependencies.cleanupBroker ?? defaultCleanup;
 	const requestId = randomUUID();
 	const queryHash = createHash("sha256").update(query).digest("hex");
 	const attemptStartedAt = Date.now();
 	let phase: BrokerAttemptPhase = "startup";
 	let client: BrokerClient | undefined;
+	let retainedClient = false;
+	let cleanupOutcome: BrokerAttemptEnvelope["cleanupOutcome"];
+	let cleanupError: unknown;
 
 	const makeEnvelope = (
 		outcome: BrokerAttemptEnvelope["outcome"],
@@ -881,55 +943,86 @@ export async function googleSearchWithDependencies(
 		...(error ? { sanitizedError: sanitizeBrokerError(error, query) } : {}),
 		fallbackOutcome,
 		...(fallbackReason ? { fallbackReason } : {}),
+		...(cleanupOutcome ? { cleanupOutcome } : {}),
+		...(cleanupError
+			? { cleanupError: sanitizeBrokerError(cleanupError, query) }
+			: {}),
 	});
 
 	const emitFailure = (
 		error: unknown,
 		fallbackOutcome: BrokerAttemptFallbackOutcome,
 		fallbackReason?: BrokerAttemptEnvelope["fallbackReason"],
-	) => emitBrokerAttemptEnvelope(
-		makeEnvelope("failure", fallbackOutcome, fallbackReason, error),
-	);
+	) =>
+		emitBrokerAttemptEnvelope(
+			makeEnvelope("failure", fallbackOutcome, fallbackReason, error),
+		);
 
 	try {
 		await awaitWithinBudget(
-			Promise.resolve().then(() =>
+			() =>
 				ensure(options.headless, {
 					deadlineAt,
 					signal: options.signal,
 				}),
-			),
 			{ deadlineAt, signal: options.signal },
 		);
 		phase = "connect";
 		const connectedClient = await awaitWithinBudget(
-			Promise.resolve().then(() =>
-				connect({
-					profileDir,
-					deadlineAt,
-					signal: options.signal,
+			() =>
+				withBrokerLifecycle(async () => {
+					assertBrokerBudget({ deadlineAt, signal: options.signal });
+					const acquired = await connect({
+						profileDir,
+						deadlineAt,
+						signal: options.signal,
+					});
+					retainBrokerClient(acquired);
+					client = acquired;
+					retainedClient = true;
+					return acquired;
 				}),
-			),
 			{ deadlineAt, signal: options.signal },
 		);
-		client = connectedClient;
 		phase = "search";
 		const result = await awaitWithinBudget(
-			Promise.resolve().then(() =>
+			() =>
 				connectedClient.search(query, {
 					maxResults: options.maxResults,
 					signal: options.signal,
 					deadlineAt,
 				}),
-			),
 			{ deadlineAt, signal: options.signal },
 		);
-		emitBrokerAttemptEnvelope(makeEnvelope("success", "not_attempted", undefined, undefined, result));
+		emitBrokerAttemptEnvelope(
+			makeEnvelope("success", "not_attempted", undefined, undefined, result),
+		);
+		if (retainedClient && client) {
+			releaseBrokerClient(client);
+			retainedClient = false;
+		}
 		return result;
 	} catch (error) {
-		// Attach a rejection handler before any cleanup wait can fence the
-		// broker promise. This is important when a broker ignores AbortSignal.
-		const cleanupPromise = Promise.resolve().then(() => cleanup(client));
+		const cleanupPromise = withBrokerLifecycle(async () => {
+			if (retainedClient && client) {
+				retainedClient = false;
+				if (releaseBrokerClient(client) > 0) {
+					cleanupOutcome = "skipped_shared";
+					return;
+				}
+			}
+			if (!client && cleanup === defaultCleanup) {
+				cleanupOutcome = "not_attempted";
+				return;
+			}
+			try {
+				await cleanup(client);
+				cleanupOutcome = "succeeded";
+			} catch (cleanupFailure) {
+				cleanupOutcome = "failed";
+				cleanupError = cleanupFailure;
+			}
+		});
 		cleanupPromise.catch(() => undefined);
 
 		const aborted = isBrokerCancellation(error, options.signal);
@@ -943,17 +1036,33 @@ export async function googleSearchWithDependencies(
 			throw error;
 		}
 
-		// Quarantine/reset the failed broker before using the legacy extractor.
-		// It gets a fresh extractor process and fresh target; no broker client or
-		// lease is passed to this call.
 		try {
 			await awaitWithinBudget(cleanupPromise, {
 				deadlineAt,
 				signal: options.signal,
 			});
-		} catch {
-			// A release failure is itself a broker failure, but must not prevent an
-			// otherwise safe legacy fallback while budget remains.
+		} catch (cleanupWaitError) {
+			cleanupOutcome = "failed";
+			cleanupError = cleanupWaitError;
+			const cleanupAborted = isBrokerCancellation(
+				cleanupWaitError,
+				options.signal,
+			);
+			const cleanupExpired = Date.now() >= deadlineAt;
+			emitFailure(
+				error,
+				"skipped",
+				cleanupAborted
+					? "aborted"
+					: cleanupExpired
+						? "deadline"
+						: "cleanup_failed",
+			);
+			throw error;
+		}
+		if (cleanupOutcome === "failed") {
+			emitFailure(error, "skipped", "cleanup_failed");
+			throw error;
 		}
 		if (isBrokerCancellation(error, options.signal)) {
 			emitFailure(error, "skipped", "aborted");
@@ -970,19 +1079,31 @@ export async function googleSearchWithDependencies(
 
 		try {
 			const legacyResult = await awaitWithinBudget(
-				Promise.resolve().then(() =>
+				() =>
 					legacySearch(query, {
 						...options,
 						timeoutMs: Math.max(deadlineAt - Date.now(), 1),
 						deadlineAt,
 					}),
-				),
 				{ deadlineAt, signal: options.signal },
 			);
 			emitFailure(error, "succeeded", "broker_failure");
 			return legacyResult;
 		} catch (legacyError) {
-			emitFailure(error, "failed", "broker_failure");
+			const legacyAborted = isBrokerCancellation(
+				legacyError,
+				options.signal,
+			);
+			const legacyExpired = Date.now() >= deadlineAt;
+			if (legacyAborted || legacyExpired) {
+				emitFailure(
+					error,
+					"skipped",
+					legacyAborted ? "aborted" : "deadline",
+				);
+			} else {
+				emitFailure(error, "failed", "broker_failure");
+			}
 			throw legacyError;
 		}
 	}

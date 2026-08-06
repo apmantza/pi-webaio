@@ -350,8 +350,11 @@ test("explicit abort skips fallback and fences a late broker rejection", async (
 	}
 });
 
-test("expired broker deadlines skip fallback and record the reason", async () => {
+test("expired broker deadlines skip fallback and preflight every broker callback", async () => {
 	process.env.PI_WEBAIO_CDP_BROKER = "1";
+	let ensureCalls = 0;
+	let connectCalls = 0;
+	let searchCalls = 0;
 	let legacyCalls = 0;
 	try {
 		const { captured } = await captureBrokerDiagnostic(() =>
@@ -360,7 +363,20 @@ test("expired broker deadlines skip fallback and record the reason", async () =>
 					"expired",
 					{ deadlineAt: Date.now() - 1, timeoutMs: 1 },
 					{
-						ensureChrome: async () => ({ running: true, ready: true }),
+						ensureChrome: async () => {
+							ensureCalls++;
+							return { running: true, ready: true };
+						},
+						connectBroker: async () => {
+							connectCalls++;
+							return {
+								search: async () => {
+									searchCalls++;
+									return output("wrong");
+								},
+								close() {},
+							};
+						},
 						legacySearch: async () => {
 							legacyCalls++;
 							return output("wrong");
@@ -371,9 +387,86 @@ test("expired broker deadlines skip fallback and record the reason", async () =>
 			),
 		);
 		const envelope = parseEnvelope(captured);
+		assert.equal(ensureCalls, 0);
+		assert.equal(connectCalls, 0);
+		assert.equal(searchCalls, 0);
 		assert.equal(legacyCalls, 0);
 		assert.equal(envelope.fallbackOutcome, "skipped");
 		assert.equal(envelope.fallbackReason, "deadline");
+	} finally {
+		restoreFlag();
+	}
+});
+
+test("broker diagnostic redacts complete auth credentials and JWTs at the envelope boundary", async () => {
+	process.env.PI_WEBAIO_CDP_BROKER = "1";
+	const bearer = "Bearer full-bearer-credential-987654321";
+	const basic = "Basic dXNlcjpmdWxsLWJhc2ljLXNlY3JldA==";
+	const jwt = "eyJhbGciOiJIUzI1NiJ9.full-jwt-payload-987654321.signature-987654321";
+	try {
+		const { captured } = await captureBrokerDiagnostic(() =>
+			googleSearchWithDependencies(
+				"credential-envelope",
+				{ timeoutMs: 2000 },
+				{
+					ensureChrome: async () => ({ running: true, ready: true }),
+					connectBroker: async () => ({
+						search: async () => {
+							throw Object.assign(
+								new Error(
+									`Authorization: ${bearer}; Authorization: ${basic}; token=${jwt}`,
+								),
+								{ code: "connection_closed" },
+							);
+						},
+						close() {},
+					}),
+					legacySearch: async (query) => output(query),
+				},
+			),
+		);
+		const envelope = parseEnvelope(captured);
+		const envelopeJson = JSON.stringify(envelope);
+		for (const credential of [bearer, basic, jwt]) {
+			assert.equal(captured.includes(credential), false, credential);
+			assert.equal(envelopeJson.includes(credential), false, credential);
+		}
+	} finally {
+		restoreFlag();
+	}
+});
+
+test("caller abort fences fallback with a skipped envelope outcome", async () => {
+	process.env.PI_WEBAIO_CDP_BROKER = "1";
+	const controller = new AbortController();
+	controller.abort();
+	let ensureCalls = 0;
+	let legacyCalls = 0;
+	try {
+		const { captured } = await captureBrokerDiagnostic(() =>
+			assert.rejects(
+				googleSearchWithDependencies(
+					"aborted-before-start",
+					{ timeoutMs: 2000, signal: controller.signal },
+					{
+						ensureChrome: async () => {
+							ensureCalls++;
+							return { running: true, ready: true };
+						},
+						legacySearch: async () => {
+							legacyCalls++;
+							return output("wrong");
+						},
+					},
+				),
+				(error) => error.code === "request_fenced",
+			),
+		);
+		const envelope = parseEnvelope(captured);
+		assert.equal(ensureCalls, 0);
+		assert.equal(legacyCalls, 0);
+		assert.equal(envelope.fallbackOutcome, "skipped");
+		assert.equal(envelope.fallbackReason, "aborted");
 	} finally {
 		restoreFlag();
 	}
@@ -407,6 +500,137 @@ test("legacy failure is surfaced after broker failure and is diagnosed", async (
 		);
 		const envelope = parseEnvelope(captured);
 		assert.equal(envelope.fallbackOutcome, "failed");
+	} finally {
+		restoreFlag();
+	}
+});
+
+test("cleanup failures are diagnosed and do not race legacy fallback", async () => {
+	process.env.PI_WEBAIO_CDP_BROKER = "1";
+	let legacyCalls = 0;
+	try {
+		const { captured } = await captureBrokerDiagnostic(() =>
+			assert.rejects(
+				googleSearchWithDependencies(
+					"cleanup-failure",
+					{ timeoutMs: 2000 },
+					{
+						ensureChrome: async () => ({ running: true, ready: true }),
+						connectBroker: async () => ({
+							search: async () => {
+								throw Object.assign(new Error("broker failed"), {
+									code: "connection_closed",
+								});
+							},
+							close() {},
+						}),
+						cleanupBroker: async () => {
+							throw new Error("cleanup did not complete");
+						},
+						legacySearch: async (query) => {
+							legacyCalls++;
+							return output(query);
+						},
+					},
+				),
+				(error) => error.code === "connection_closed",
+			),
+		);
+		const envelope = parseEnvelope(captured);
+		assert.equal(legacyCalls, 0);
+		assert.equal(envelope.fallbackOutcome, "skipped");
+		assert.equal(envelope.fallbackReason, "cleanup_failed");
+		assert.equal(envelope.cleanupOutcome, "failed");
+		assert.match(envelope.cleanupError.message, /cleanup did not complete/);
+	} finally {
+		restoreFlag();
+	}
+});
+
+test("search-phase connection errors retain the search phase", async () => {
+	process.env.PI_WEBAIO_CDP_BROKER = "1";
+	try {
+		const { captured } = await captureBrokerDiagnostic(() =>
+			googleSearchWithDependencies(
+				"search-phase",
+				{ timeoutMs: 2000 },
+				{
+					ensureChrome: async () => ({ running: true, ready: true }),
+					connectBroker: async () => ({
+						search: async () => {
+							throw Object.assign(new Error("connection closed during search"), {
+								code: "connection_closed",
+							});
+						},
+						close() {},
+					}),
+					legacySearch: async (query) => output(query),
+				},
+			),
+		);
+		assert.equal(parseEnvelope(captured).phase, "search");
+	} finally {
+		restoreFlag();
+	}
+});
+
+test("concurrent broker users are not closed by one failed fallback", async () => {
+	process.env.PI_WEBAIO_CDP_BROKER = "1";
+	let searchStarts = 0;
+	let releaseBoth;
+	const bothSearching = new Promise((resolve) => {
+		releaseBoth = resolve;
+	});
+	let releaseSecond;
+	const secondFinished = new Promise((resolve) => {
+		releaseSecond = resolve;
+	});
+	let closeCalls = 0;
+	const sharedClient = {
+		search: async (query) => {
+			searchStarts++;
+			if (searchStarts === 2) releaseBoth();
+			if (query === "first") {
+				await bothSearching;
+				throw Object.assign(new Error("shared connection closed"), {
+					code: "connection_closed",
+				});
+			}
+			await secondFinished;
+			return output(query);
+		},
+		close: () => {
+			closeCalls++;
+		},
+	};
+	try {
+		const first = googleSearchWithDependencies(
+			"first",
+			{ timeoutMs: 2000 },
+			{
+				ensureChrome: async () => ({ running: true, ready: true }),
+				connectBroker: async () => sharedClient,
+				cleanupBroker: async (client) => client?.close(),
+				legacySearch: async (query) => output(`legacy-${query}`),
+			},
+		);
+		const second = googleSearchWithDependencies(
+			"second",
+			{ timeoutMs: 2000 },
+			{
+				ensureChrome: async () => ({ running: true, ready: true }),
+				connectBroker: async () => sharedClient,
+				cleanupBroker: async (client) => client?.close(),
+				legacySearch: async (query) => output(`legacy-${query}`),
+			},
+		);
+		const firstResult = await first;
+		assert.equal(firstResult.query, "legacy-first");
+		assert.equal(closeCalls, 0);
+		releaseSecond();
+		const secondResult = await second;
+		assert.equal(secondResult.query, "second");
+		assert.equal(closeCalls, 0);
 	} finally {
 		restoreFlag();
 	}
