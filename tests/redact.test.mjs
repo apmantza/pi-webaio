@@ -5,7 +5,12 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { redactSecrets, redactionPlaceholder } from "../src/redact.ts";
+import {
+	redactBrokerEnvelopeFields,
+	scrubBrokerEnvelopeValue,
+	redactSecrets,
+	redactionPlaceholder,
+} from "../src/redact.ts";
 import {
 	buildUserFacingFetchErrorSummary,
 	createFetchError,
@@ -420,6 +425,71 @@ const HUNTER_PASSWORD = fromCodes(
 
 // ─── Each secret class is masked ────────────────────────────────────
 
+test("broker envelope field scrubber masks quoted, short, and ID-shaped values", () => {
+	const raw = [
+		'"api_key":"a"',
+		"cookies = b",
+		"authorization: c",
+		"token d",
+		"client-secret='e'",
+		'cdpTargetId:"f"',
+		"cdp session id = g",
+		"lease-id h",
+		'\\"requestId\\":\\"i\\"',
+	].join(" | ");
+	const scrubbed = redactBrokerEnvelopeFields(raw);
+	for (const [field, value] of [
+		["api_key", "a"],
+		["cookies", "b"],
+		["authorization", "c"],
+		["token", "d"],
+		["client-secret", "e"],
+		["cdpTargetId", "f"],
+		["cdp session id", "g"],
+		["lease-id", "h"],
+		["requestId", "i"],
+	])
+		assert.doesNotMatch(
+			scrubbed,
+			new RegExp(`${field}\\s*[:=]?\\s*["']?${value}(?:["']|\\s|$)`),
+			field,
+		);
+	for (const field of [
+		"api_key",
+		"cookies",
+		"authorization",
+		"token",
+		"client-secret",
+		"cdpTargetId",
+		"cdp session id",
+		"lease-id",
+		"requestId",
+	]) assert.equal(scrubbed.includes(field), true, field);
+});
+
+test("structured broker scrubbing redacts every sensitive value type and preserves keys", () => {
+	const values = {
+		accessToken: "at-short",
+		access_token: 42,
+		"access-token": { raw: "object-secret" },
+		"access token": ["spaced-secret", false],
+		password: null,
+		clientId: "id-short",
+		client_id: 7,
+		"client-id": { nested: "id-object" },
+		capability: "cap-short",
+		capabilities: ["cap-array", 9],
+		ordinary: "preserve-me",
+	};
+	const serialized = JSON.stringify(scrubBrokerEnvelopeValue(values));
+	for (const raw of [
+		"at-short", "object-secret", "spaced-secret", "id-short", "id-object",
+		"cap-short", "cap-array",
+	]) assert.equal(serialized.includes(raw), false, raw);
+	for (const field of Object.keys(values)) assert.equal(serialized.includes(`\"${field}\"`), true, field);
+	assert.equal(serialized.includes("preserve-me"), true);
+});
+
 test("redactSecrets masks Authorization: Bearer headers", () => {
 	const out = redactSecrets(`Authorization: Bearer ${BEARER}`);
 	assert.ok(!out.includes(BEARER), out);
@@ -430,6 +500,21 @@ test("redactSecrets masks Authorization: Basic headers", () => {
 	const out = redactSecrets(`authorization=Basic ${BASIC}`);
 	assert.ok(!out.includes(BASIC.slice(0, -4)), out);
 	assert.ok(out.includes(redactionPlaceholder("auth-header")), out);
+});
+
+test("redactSecrets masks whitespace-delimited and standalone short auth forms", () => {
+	const values = [
+		"Authorization Bearer x",
+		"Authorization Basic y",
+		"Bearer z",
+		"Basic q",
+	];
+	const out = redactSecrets(values.join(" | "));
+	for (const value of values) assert.equal(out.includes(value), false, value);
+	assert.equal(
+		(out.match(/\[REDACTED:auth-header\]/g) || []).length,
+		values.length,
+	);
 });
 
 test("redactSecrets masks JWTs", () => {

@@ -51,11 +51,248 @@ export function redactionPlaceholder(type: RedactionType): string {
 	return `[REDACTED:${type}]`;
 }
 
+/**
+ * Broker diagnostics have a smaller and stricter trust boundary than normal
+ * fetched text.  These fields are credential/opaque-ID carriers even when
+ * their values are short, quoted, or otherwise fail the general entropy
+ * checks below.  Keep the labels intact so the diagnostic remains useful,
+ * while replacing the complete value.
+ */
+export type BrokerEnvelopeFieldType =
+	| "redacted-authorization"
+	| "redacted-credential"
+	| "redacted-id";
+
+/** Normalize broker diagnostic field aliases without changing their spelling in output. */
+export function normalizeBrokerEnvelopeField(field: string): string {
+	return field.replace(/[^A-Za-z0-9]/g, "").toLowerCase();
+}
+
+// Keep normalized aliases and their source spellings in one table. The
+// normalizer accepts camelCase, snake_case, kebab-case, and spaced JSON-ish
+// labels; the word lists also drive the text matcher, so structured and text
+// scrubbing cannot silently diverge.
+const BROKER_ENVELOPE_FIELD_ALIASES: Readonly<Record<string, readonly string[]>> = {
+	apikey: ["api", "key"],
+	accesskey: ["access", "key"],
+	accesstoken: ["access", "token"],
+	authtoken: ["auth", "token"],
+	refreshtoken: ["refresh", "token"],
+	sessiontoken: ["session", "token"],
+	idtoken: ["id", "token"],
+	clientsecret: ["client", "secret"],
+	clientcredential: ["client", "credential"],
+	clientcredentials: ["client", "credentials"],
+	secretkey: ["secret", "key"],
+	secret: ["secret"],
+	token: ["token"],
+	password: ["password"],
+	passwd: ["passwd"],
+	pwd: ["pwd"],
+	cookie: ["cookie"],
+	cookies: ["cookies"],
+	authorization: ["authorization"],
+	auth: ["auth"],
+	credential: ["credential"],
+	credentials: ["credentials"],
+	capability: ["capability"],
+	capabilities: ["capabilities"],
+	clientid: ["client", "id"],
+	targetid: ["target", "id"],
+	sessionid: ["session", "id"],
+	leaseid: ["lease", "id"],
+	requestid: ["request", "id"],
+	cdptargetid: ["cdp", "target", "id"],
+	cdpsessionid: ["cdp", "session", "id"],
+	brokerid: ["broker", "id"],
+	connectionid: ["connection", "id"],
+	client: ["client"],
+	target: ["target"],
+	session: ["session"],
+	lease: ["lease"],
+	request: ["request"],
+};
+const BROKER_ENVELOPE_CREDENTIAL_FIELDS = new Set([
+	"apikey", "accesskey", "accesstoken", "authtoken", "refreshtoken",
+	"sessiontoken", "idtoken", "clientsecret", "clientcredential",
+	"clientcredentials", "secretkey", "secret", "token", "password",
+	"passwd", "pwd", "cookie", "cookies", "authorization", "auth",
+	"credential", "credentials", "capability", "capabilities",
+]);
+const BROKER_ENVELOPE_ID_FIELDS = new Set([
+	"clientid", "targetid", "sessionid", "leaseid", "requestid",
+	"cdptargetid", "cdpsessionid", "brokerid", "connectionid", "client",
+	"target", "session", "lease", "request",
+]);
+
+/** Return the strict envelope category for a field alias, or undefined for ordinary fields. */
+export function brokerEnvelopeFieldType(
+	field: string,
+): BrokerEnvelopeFieldType | undefined {
+	const normalized = normalizeBrokerEnvelopeField(field);
+	if (normalized === "authorization" || normalized === "auth")
+		return "redacted-authorization";
+	if (BROKER_ENVELOPE_ID_FIELDS.has(normalized)) return "redacted-id";
+	if (BROKER_ENVELOPE_CREDENTIAL_FIELDS.has(normalized))
+		return "redacted-credential";
+	return undefined;
+}
+
+const escapeRegExp = (value: string): string =>
+	value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const brokerEnvelopeFieldPatterns = Object.keys(BROKER_ENVELOPE_FIELD_ALIASES)
+	// Permit separators between any letters as well as between semantic words.
+	// This keeps text scrubbing aligned with normalizeBrokerEnvelopeField(), so
+	// e.g. accessToken/access_token/access-token/access token are one alias.
+	.map((alias) => [...alias].map(escapeRegExp).join("[\\s_-]*"))
+	.sort((left, right) => right.length - left.length);
+const BROKER_ENVELOPE_FIELD_RE = new RegExp(
+	`(^|[^A-Za-z0-9_])(["']?)(${brokerEnvelopeFieldPatterns.join("|")})(?:\\\\?["'])?`,
+	"gi",
+);
+
+/**
+ * Scrub key/value fields in a broker diagnostic string. This intentionally
+ * does not use entropy heuristics and does not replace arbitrary occurrences
+ * of a caller-provided query. It understands JSON-ish quoted values (including
+ * escaped quotes), unquoted assignments, and whitespace-delimited fields.
+ */
+export function redactBrokerEnvelopeFields(text: string): string {
+	if (text == null) return "";
+	if (typeof text !== "string") text = String(text);
+	if (!text) return text;
+
+	let output = "";
+	let cursor = 0;
+	BROKER_ENVELOPE_FIELD_RE.lastIndex = 0;
+	let match: RegExpExecArray | null;
+	while ((match = BROKER_ENVELOPE_FIELD_RE.exec(text))) {
+		const fieldEnd = BROKER_ENVELOPE_FIELD_RE.lastIndex;
+		let valueStart = fieldEnd;
+		while (/\s/.test(text[valueStart] || "")) valueStart++;
+		let separatorEnd = valueStart;
+		if (text[separatorEnd] === ":" || text[separatorEnd] === "=") {
+			separatorEnd++;
+			while (/\s/.test(text[separatorEnd] || "")) separatorEnd++;
+		} else if (separatorEnd === fieldEnd) {
+			// A bare field label is not a value assignment.
+			continue;
+		}
+		if (separatorEnd >= text.length) continue;
+
+		let valueEnd = separatorEnd;
+		let opening = "";
+		let closing = "";
+		if (text[valueEnd] === "{" || text[valueEnd] === "[") {
+			const stack = [text[valueEnd] === "{" ? "}" : "]"];
+			let quote = "";
+			for (valueEnd++; valueEnd < text.length && stack.length > 0; valueEnd++) {
+				const character = text[valueEnd];
+				if (quote) {
+					if (character === "\\") valueEnd++;
+					else if (character === quote) quote = "";
+					continue;
+				}
+				if (character === '"' || character === "'") {
+					quote = character;
+					continue;
+				}
+				if (character === "{" || character === "[")
+					stack.push(character === "{" ? "}" : "]");
+				else if (character === stack[stack.length - 1]) stack.pop();
+			}
+		} else if (text[valueEnd] === "\\" && (text[valueEnd + 1] === '"' || text[valueEnd + 1] === "'")) {
+			opening = text.slice(valueEnd, valueEnd + 2);
+			valueEnd += 2;
+			for (; valueEnd < text.length; valueEnd++) {
+				if (text[valueEnd] === "\\" && text[valueEnd + 1] === opening[1]) {
+					closing = opening;
+					break;
+				}
+				if (text[valueEnd] === "\\") {
+					valueEnd++;
+					continue;
+				}
+			}
+		} else if (text[valueEnd] === '"' || text[valueEnd] === "'") {
+			opening = text[valueEnd++];
+			for (; valueEnd < text.length; valueEnd++) {
+				if (text[valueEnd] === "\\") {
+					valueEnd++;
+					continue;
+				}
+				if (text[valueEnd] === opening) {
+					closing = opening;
+					break;
+				}
+			}
+		} else {
+			while (
+				valueEnd < text.length &&
+				!/[\s,;\]}]/.test(text[valueEnd])
+			)
+				valueEnd++;
+		}
+		if (valueEnd <= separatorEnd || (!closing && opening)) continue;
+
+		const fieldType = brokerEnvelopeFieldType(match[3]);
+		if (!fieldType) continue;
+		const replacement = `[${fieldType}]`;
+		output += text.slice(cursor, separatorEnd);
+		output += opening + replacement + closing;
+		cursor = closing ? valueEnd + closing.length : valueEnd;
+		BROKER_ENVELOPE_FIELD_RE.lastIndex = cursor;
+	}
+	return output + text.slice(cursor);
+}
+
+/**
+ * Scrub a broker diagnostic value before JSON serialization. Sensitive field
+ * names win over value type: numbers, booleans, nulls, arrays, and objects are
+ * all replaced when carried by a credential/ID alias. Ordinary strings still
+ * receive the broad, entropy-aware redactor. The recursion deliberately builds
+ * plain JSON data, so custom toJSON methods cannot reintroduce a raw value.
+ */
+export function scrubBrokerEnvelopeValue(
+	value: unknown,
+	key?: string,
+	preserveRootRequestId = false,
+): unknown {
+	const isRootCorrelationId =
+		preserveRootRequestId &&
+		key === "requestId" &&
+		typeof value === "string" &&
+		/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+	const fieldType = key ? brokerEnvelopeFieldType(key) : undefined;
+	if (fieldType && !isRootCorrelationId) return `[${fieldType}]`;
+	if (typeof value === "string")
+		return isRootCorrelationId ? value : redactBrokerEnvelopeFields(redactSecrets(value));
+	if (Array.isArray(value))
+		return value.map((item) => scrubBrokerEnvelopeValue(item));
+	if (value && typeof value === "object") {
+		return Object.fromEntries(
+			Object.entries(value).map(([entryKey, entryValue]) => [
+				entryKey,
+				scrubBrokerEnvelopeValue(
+					entryValue,
+					entryKey,
+					preserveRootRequestId && entryKey === "requestId",
+				),
+			]),
+		);
+	}
+	if (typeof value === "bigint") return String(value);
+	if (typeof value === "function" || typeof value === "symbol") return undefined;
+	return value;
+}
+
 // ─── Authorization headers ──────────────────────────────────────────
-// `Authorization: Bearer <tok>`, `Authorization: Basic <tok>`,
-// `authorization=token <tok>`. Unambiguous — always mask the token.
+// Authorization forms may be emitted by different transports as
+// `Authorization: Bearer <tok>`, `Authorization Bearer <tok>`,
+// `authorization=Basic <tok>`, or as a standalone `Bearer <tok>` /
+// `Basic <tok>`. These are unambiguous, so short values are masked too.
 const AUTH_HEADER_RE =
-	/\b(authorization\s*[:=]\s*(?:bearer|basic|token)\s+)([A-Za-z0-9._~+/=-]{6,})/gi;
+	/\b((?:authorization\s*(?:[:=]\s*)?(?:bearer|basic|token)|(?:bearer|basic))\s+)([A-Za-z0-9._~+/=-]+)(?=$|[\s,;"'\]}])/gi;
 
 // ─── JWTs ───────────────────────────────────────────────────────────
 // Three base64url segments; the header segment always starts `eyJ`
