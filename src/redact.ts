@@ -233,12 +233,21 @@ export function redactBrokerEnvelopeFields(text: string): string {
 			)
 				valueEnd++;
 		}
-		if (valueEnd <= separatorEnd || (!closing && opening)) continue;
+		if (valueEnd <= separatorEnd) continue;
 
 		const fieldType = brokerEnvelopeFieldType(match[3]);
 		if (!fieldType) continue;
 		const replacement = `[${fieldType}]`;
 		output += text.slice(cursor, separatorEnd);
+		if (opening && !closing) {
+			// An opening quote without a matching close is still a sensitive
+			// assignment. Fail closed by consuming the entire remaining value;
+			// continuing here would append it unchanged after the loop.
+			output += opening + replacement;
+			cursor = text.length;
+			BROKER_ENVELOPE_FIELD_RE.lastIndex = text.length;
+			break;
+		}
 		output += opening + replacement + closing;
 		cursor = closing ? valueEnd + closing.length : valueEnd;
 		BROKER_ENVELOPE_FIELD_RE.lastIndex = cursor;

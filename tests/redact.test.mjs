@@ -467,6 +467,30 @@ test("broker envelope field scrubber masks quoted, short, and ID-shaped values",
 	]) assert.equal(scrubbed.includes(field), true, field);
 });
 
+test("unterminated quoted broker fields fail closed through the end of the value", () => {
+	const cases = [
+		["api_key", String.raw`api_key="api-raw`],
+		["client_secret", String.raw`client_secret='client-raw`],
+		["authorization", String.raw`authorization="auth-raw`],
+		["token", String.raw`token='token-raw`],
+		["password", String.raw`password="password-raw`],
+		["secret", String.raw`secret='secret-raw`],
+		["access_token", String.raw`access_token="access-raw`],
+		["requestId", String.raw`requestId='request-raw`],
+		["clientId", String.raw`clientId="client-id-raw`],
+		["cdpTargetId", String.raw`cdpTargetId='cdp-target-raw`],
+		["cdpSessionId", String.raw`cdpSessionId="cdp-session-raw`],
+		["lease", String.raw`lease='lease-raw`],
+		["capability", String.raw`capability="capability-raw`],
+		["escaped", String.raw`token=\\"escaped-raw`],
+	];
+	for (const [field, raw] of cases) {
+		const scrubbed = redactBrokerEnvelopeFields(raw);
+		assert.equal(scrubbed.includes(raw.slice(raw.indexOf("=") + 1).replace(/^['"]/, "")), false, field);
+		assert.equal(scrubbed.includes("raw"), false, field);
+	}
+});
+
 test("structured broker scrubbing redacts every sensitive value type and preserves keys", () => {
 	const values = {
 		accessToken: "at-short",
