@@ -93,8 +93,10 @@ function getChromeVersion(chromePath) {
 	} catch {}
 
 	// Fallback: `chrome --version` — works on macOS/Linux where Chrome is a CLI process.
+	// execFileSync (no shell) so a chromePath containing shell metacharacters cannot
+	// be interpreted (CWE-78).
 	try {
-		const out = execSync(`"${chromePath}" --version`, {
+		const out = execFileSync(chromePath, ["--version"], {
 			encoding: "utf8",
 			timeout: 5000,
 		}).trim();
@@ -237,6 +239,9 @@ function isRunning() {
 function getPortPid(port) {
 	try {
 		const os = platform();
+		// Numeric validation: port flows into shell-less arg arrays and regexes
+		// below, so reject anything non-numeric up front (CWE-78 hardening).
+		if (!Number.isInteger(port) || port <= 0 || port > 65535) return null;
 		if (os === "win32") {
 			const out = execSync(`netstat -ano -p TCP 2>nul`, { encoding: "utf8" });
 			const regex = new RegExp(
@@ -246,13 +251,24 @@ function getPortPid(port) {
 			const match = out.match(regex);
 			return match ? Number.parseInt(match[1], 10) : null;
 		}
-		const out = execSync(
-			String.raw`lsof -i :${port} -t 2>/dev/null || ss -tlnp 2>/dev/null | grep :${port} | grep -oP 'pid=\K\d+'`,
-			{
-				encoding: "utf8",
-			},
-		).trim();
-		return out ? Number.parseInt(out.split("\n")[0], 10) : null;
+		// lsof first, then ss — no shell (execFileSync arg arrays), so a
+		// hostile port value cannot reach a shell (CWE-78). The port is
+		// already validated as a plain integer above.
+		try {
+			const lsofOut = execFileSync(
+				"lsof",
+				["-i", `:${port}`, "-t"],
+				{ encoding: "utf8" },
+			).trim();
+			if (lsofOut) return Number.parseInt(lsofOut.split("\n")[0], 10) || null;
+		} catch {
+			// lsof absent or failed — fall through to ss.
+		}
+		const ssOut = execFileSync("ss", ["-tlnp"], { encoding: "utf8" })
+			.split("\n")
+			.find((line) => line.includes(`:${port}`));
+		const match = ssOut?.match(/pid=(\d+)/);
+		return match ? Number.parseInt(match[1], 10) : null;
 	} catch {
 		return null;
 	}
@@ -261,7 +277,11 @@ function getPortPid(port) {
 function killProcess(pid) {
 	try {
 		if (platform() === "win32") {
-			execSync(`taskkill /F /T /PID ${pid}`, { stdio: "ignore" });
+			// taskkill via arg array — no shell, so pid cannot inject flags
+			// or commands (CWE-78).
+			execFileSync("taskkill", ["/F", "/T", "/PID", String(pid)], {
+				stdio: "ignore",
+			});
 		} else {
 			process.kill(pid, "SIGTERM");
 		}

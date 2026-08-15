@@ -36,7 +36,7 @@ function validateWebSocketUrl(value, expectedPort = undefined) {
 	if (url.protocol !== "ws:" && url.protocol !== "wss:")
 		throw new CdpTransportError(
 			"cdp_invalid",
-			"CDP endpoint must use ws:// or wss://",
+			"CDP endpoint must use the ws or wss protocol (loopback only)",
 		);
 	if (!["127.0.0.1", "localhost", "[::1]", "::1"].includes(url.hostname))
 		throw new CdpTransportError("cdp_invalid", "CDP endpoint must be loopback");

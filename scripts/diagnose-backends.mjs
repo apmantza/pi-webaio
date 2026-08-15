@@ -231,7 +231,20 @@ export function tempBase(osTmpdir) {
 // ─── Command / HTTP runners (injectable for tests) ──────────────────
 
 // Run a command synchronously with a hard timeout. Never throws.
+// `cmd` is validated as a plain executable path (no shell metacharacters,
+// no leading dash, no whitespace) before reaching child_process — the
+// callers pass resolved binaries (`which`/`where` and a gh path from PATH),
+// and this guard keeps any future caller from injecting shell syntax
+// (CWE-78 hardening; spawnSync already uses arg arrays with no shell).
 export function runCommand(cmd, args, timeoutMs) {
+	if (
+		typeof cmd !== "string" ||
+		cmd.length === 0 ||
+		cmd.startsWith("-") ||
+		/\s|[&|;<>$`'"\\]/.test(cmd)
+	) {
+		return { ok: false, code: null, stdout: "", stderr: "", timedOut: false };
+	}
 	try {
 		const out = spawnSync(cmd, args, {
 			encoding: "utf8",
