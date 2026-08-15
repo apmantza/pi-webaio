@@ -227,7 +227,7 @@ export function parseYahooResults(html: string): SearchResult[] {
 
 		if (!url || !/^https?:/i.test(url)) continue;
 		if (
-			!checkSearchFilters(url, new URL(url).hostname, [
+			!checkSearchFilters(url, extractDomain(url) ?? "", [
 				"search.yahoo.com",
 				"video.search.yahoo.com",
 				"r.search.yahoo.com",
@@ -270,7 +270,7 @@ export function parseBingResults(html: string): SearchResult[] {
 		}
 
 		if (!url || !/^https?:/i.test(url)) continue;
-		if (!checkSearchFilters(url, new URL(url).hostname, ["bing.com"])) continue;
+		if (!checkSearchFilters(url, extractDomain(url) ?? "", ["bing.com"])) continue;
 
 		const snippet = el.querySelector(".b_caption p")?.textContent?.trim() || "";
 		results.push({ title, url, snippet, domain: extractDomain(url) });

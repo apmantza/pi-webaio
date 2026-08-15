@@ -159,15 +159,19 @@ export class BrowserPool {
 	async drain(): Promise<void> {
 		this._closed = true;
 		this.notifyWaiters();
-		const closePromises = this.browsers.map(async (pb) => {
+		const closePromises: Promise<void>[] = [];
+		for (const pb of this.browsers) {
 			pb.closed = true;
-
-			try {
-				await pb.browser.close();
-			} catch {
-				// already closed
-			}
-		});
+			closePromises.push(
+				(async () => {
+					try {
+						await pb.browser.close();
+					} catch {
+						// already closed
+					}
+				})(),
+			);
+		}
 		await Promise.allSettled(closePromises);
 		this.browsers = [];
 	}

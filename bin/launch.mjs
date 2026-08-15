@@ -18,7 +18,7 @@
 //   GREEDY_SEARCH_VISIBLE=1  — Show Chrome window (disables headless mode)
 //   CHROME_PATH              — Path to Chrome executable
 
-import { execSync, spawn } from "node:child_process";
+import { execFileSync, execSync, spawn } from "node:child_process";
 import {
 	existsSync,
 	mkdirSync,

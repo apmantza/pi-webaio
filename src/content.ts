@@ -206,6 +206,19 @@ export function stripDefuddleComments(content: string): string {
 	return content.replace(/\n---\n+## Comments[\s\S]*$/i, "").trimEnd();
 }
 
+/**
+ * Safe hostname extraction for log messages: new URL throws on malformed
+ * input, and hostnames here can originate from user-supplied URLs. Returns
+ * "<invalid-url>" rather than throwing (unchecked-throwing-call hardening).
+ */
+export function safeHostname(url: string): string {
+	try {
+		return new URL(url).hostname;
+	} catch {
+		return "<invalid-url>";
+	}
+}
+
 // ─── CSS / style cruft stripping (Fix 2) ────────────────────────
 // Wikipedia-style pages leak `<style>` blocks and standalone CSS rules
 // (`.mw-parser-output …{…}`, `#id{…}`) into the extracted markdown. This
@@ -687,8 +700,13 @@ export async function downloadToTemp(
 		}
 	}
 	if (!filename) {
-		const urlPath = new URL(url).pathname;
-		filename = urlPath.split("/").filter(Boolean).pop() || "download";
+		// new URL throws on malformed input; fall back to the raw URL stem.
+		try {
+			filename =
+				new URL(url).pathname.split("/").filter(Boolean).pop() || "download";
+		} catch {
+			filename = "download";
+		}
 	}
 	filename = filename.replace(/[^a-zA-Z0-9._-]/g, "_");
 
@@ -1073,10 +1091,14 @@ export async function pullPage(
 	}
 
 	if (ct.includes("text/plain") || ct.includes("text/markdown")) {
-		const title =
-			text.match(/^#\s+(.+)$/m)?.[1]?.trim() ||
-			new URL(finalUrl).pathname.split("/").pop() ||
-			finalUrl;
+		let titleFromUrl = "";
+		try {
+			titleFromUrl =
+				new URL(finalUrl).pathname.split("/").pop() || finalUrl;
+		} catch {
+			titleFromUrl = finalUrl;
+		}
+		const title = text.match(/^#\s+(.+)$/m)?.[1]?.trim() || titleFromUrl;
 		if (MARKDOWN_SIGNAL.test(text) || ct.includes("text/markdown")) {
 			return finalizePullResult(
 				{ ok: true, url: finalUrl, title, content: text },
@@ -1217,7 +1239,7 @@ export async function pullPageEnhanced(
 				if (knownStrategy) {
 					if (process.env.PI_WEBAIO_DEBUG) {
 						console.warn(
-							`[paywall] ${new URL(url).hostname}: hard ${status} from known paywall site, triggering bypass strategy chain: ${knownStrategy.steps.join(" → ")}`,
+							`[paywall] ${safeHostname(url)}: hard ${status} from known paywall site, triggering bypass strategy chain: ${knownStrategy.steps.join(" → ")}`,
 						);
 					}
 					const bypassed = await bypassUrl(url, {
@@ -1261,7 +1283,7 @@ export async function pullPageEnhanced(
 				if (paywallCheck.paywalled) {
 					if (process.env.PI_WEBAIO_DEBUG) {
 						console.warn(
-							`[paywall] ${new URL(url).hostname}: ${paywallCheck.matchedMarkers.length} markers (${Math.round(paywallCheck.confidence * 100)}% confidence, vendor=${paywallCheck.vendor ?? "?"})`,
+							`[paywall] ${safeHostname(url)}: ${paywallCheck.matchedMarkers.length} markers (${Math.round(paywallCheck.confidence * 100)}% confidence, vendor=${paywallCheck.vendor ?? "?"})`,
 						);
 					}
 					const bypassed = await bypassUrl(url, {
@@ -1295,7 +1317,7 @@ export async function pullPageEnhanced(
 					}
 					if (process.env.PI_WEBAIO_DEBUG) {
 						console.warn(
-							`[paywall] ${new URL(url).hostname}: bypass via ${bypassed?.strategy ?? "?"} ${bypassed?.paywall?.paywalled ? "still paywalled" : "did not return text"} — strategies exhausted`,
+							`[paywall] ${safeHostname(url)}: bypass via ${bypassed?.strategy ?? "?"} ${bypassed?.paywall?.paywalled ? "still paywalled" : "did not return text"} — strategies exhausted`,
 						);
 					}
 					// Bypass failed — fall through and return the

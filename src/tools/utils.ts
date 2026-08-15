@@ -77,7 +77,14 @@ export function frontmatter(
 
 // ─── Page path helpers ──────────────────────────────────────────────
 export function pageToPath(page: Page): string {
-	let p = new URL(page.url).pathname;
+	// new URL throws on malformed page URLs; fall back to a safe stem.
+	let pathname: string;
+	try {
+		pathname = new URL(page.url).pathname;
+	} catch {
+		pathname = "/";
+	}
+	let p = pathname;
 	if (p.endsWith("/")) p += "index";
 	p = p.replace(/\.html?$/, "").replace(/^\//, "");
 	if (!p.endsWith(".md")) p += ".md";

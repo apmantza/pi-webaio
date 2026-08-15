@@ -853,8 +853,14 @@ export async function bypassUrl(
 	const steps = opts.strategies ??
 		strategy?.steps ?? ["ua:googlebot", "archive", "block_js"];
 
+	let hostnameForLog = "<invalid-url>";
+	try {
+		hostnameForLog = new URL(url).hostname;
+	} catch {
+		// malformed url — keep the safe placeholder (unchecked-throwing-call)
+	}
 	opts.onProgress?.(
-		`[bypass] ${new URL(url).hostname} → strategy: ${steps.join(" → ")}`,
+		`[bypass] ${hostnameForLog} → strategy: ${steps.join(" → ")}`,
 	);
 
 	for (const step of steps) {
