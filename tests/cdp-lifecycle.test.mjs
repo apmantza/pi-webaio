@@ -276,9 +276,9 @@ test("daemon registry: live entry round-trips through write/list", async () => {
 	try {
 		_writeDaemonRegistry(targetId);
 		// Atomic write must not leave a stray .tmp file behind.
-		const leftovers = readdirSync(
-			dirname(_daemonRegistryPath(targetId)),
-		).filter((f) => f.includes(`${targetId}.json.`) && f.endsWith(".tmp"));
+		const leftovers = readdirSync(dirname(_daemonRegistryPath(targetId))).filter(
+			(f) => f.includes(`${targetId}.json.`) && f.endsWith(".tmp"),
+		);
 		assert.deepEqual(leftovers, [], "no temp registry files should remain");
 		const found = await _listDaemonSocketsFromRegistry();
 		const entry = found.find((d) => d.targetId === targetId);
@@ -432,10 +432,7 @@ test("daemon owner: _ownerPidFromEnv parses the session pid or returns null", ()
 	assert.equal(_ownerPidFromEnv({ PI_WEBAIO_SESSION_PID: "" }), null);
 	assert.equal(_ownerPidFromEnv({ PI_WEBAIO_SESSION_PID: "abc" }), null);
 	assert.equal(_ownerPidFromEnv({ PI_WEBAIO_SESSION_PID: "-5" }), null);
-	assert.equal(
-		_ownerPidFromEnv({ PI_WEBAIO_SESSION_PID: "1234" }),
-		1234,
-	);
+	assert.equal(_ownerPidFromEnv({ PI_WEBAIO_SESSION_PID: "1234" }), 1234);
 	assert.equal(_ownerPidFromEnv({ PI_WEBAIO_SESSION_PID: "0" }), null);
 });
 
@@ -584,18 +581,14 @@ test("daemon: exits within seconds when its session owner dies (#96)", async () 
 	const owner = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"]);
 	const targetId = `ownerexit-${owner.pid}-${Date.now().toString(36)}`;
 	const cdpBin = fileURLToPath(new URL("../bin/cdp.mjs", import.meta.url));
-	const daemon = spawn(
-		process.execPath,
-		[cdpBin, "_daemon", targetId],
-		{
-			env: {
-				...process.env,
-				CDP_PROFILE_DIR: profileDir,
-				PI_WEBAIO_SESSION_PID: String(owner.pid),
-			},
-			stdio: ["ignore", "pipe", "pipe"],
+	const daemon = spawn(process.execPath, [cdpBin, "_daemon", targetId], {
+		env: {
+			...process.env,
+			CDP_PROFILE_DIR: profileDir,
+			PI_WEBAIO_SESSION_PID: String(owner.pid),
 		},
-	);
+		stdio: ["ignore", "pipe", "pipe"],
+	});
 	let daemonErr = "";
 	daemon.stderr.on("data", (d) => (daemonErr += d.toString()));
 	try {

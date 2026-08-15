@@ -200,7 +200,10 @@ type BrokerState = {
 	brokerStartupGeneration: BrokerStartupGeneration | null;
 	brokerProcess: BrokerProcess | null;
 	brokerDeferredProcess: BrokerProcess | null;
-	brokerDeferredProcessExit: { processHandle: BrokerProcess; promise: Promise<void> } | null;
+	brokerDeferredProcessExit: {
+		processHandle: BrokerProcess;
+		promise: Promise<void>;
+	} | null;
 	brokerClientUsers: Map<BrokerClient, number>;
 	brokerClientUserGenerations: Map<BrokerClient, Map<number, number>>;
 	brokerGenerationUnavailable: boolean;
@@ -212,10 +215,19 @@ type BrokerState = {
 	nextBrokerGeneration: number;
 	brokerLeaseWaiters: Set<() => void>;
 	brokerKilledProcesses: WeakSet<object>;
-	clientClosePromises: Map<BrokerClient, { generation: number; promise: Promise<void> }>;
-	customCleanupPromises: Map<BrokerClient, { generation: number; promise: Promise<void> }>;
+	clientClosePromises: Map<
+		BrokerClient,
+		{ generation: number; promise: Promise<void> }
+	>;
+	customCleanupPromises: Map<
+		BrokerClient,
+		{ generation: number; promise: Promise<void> }
+	>;
 	confirmedClosedClients: Map<BrokerClient, number>;
-	scopedClosePromises: Map<BrokerClient, { generation: number; promise: Promise<void> }>;
+	scopedClosePromises: Map<
+		BrokerClient,
+		{ generation: number; promise: Promise<void> }
+	>;
 	/** Every connector attempt remains tracked until it settles and is adopted or quarantined. */
 	brokerPendingConnects: Set<BrokerConnectAttempt>;
 	brokerFencedConnects: Set<BrokerConnectAttempt>;
@@ -303,7 +315,9 @@ function brokerStateForClient(client: BrokerClient): BrokerState | undefined {
 	return brokerClientStates.get(client)?.state;
 }
 
-function brokerOwnershipForClient(client: BrokerClient): BrokerClientOwnership | undefined {
+function brokerOwnershipForClient(
+	client: BrokerClient,
+): BrokerClientOwnership | undefined {
 	return brokerClientStates.get(client);
 }
 
@@ -312,7 +326,10 @@ function notifyBrokerLeaseWaiters(state: BrokerState): void {
 	state.brokerLeaseWaiters.clear();
 }
 
-function forgetBrokerClientOwnership(state: BrokerState, client: BrokerClient): void {
+function forgetBrokerClientOwnership(
+	state: BrokerState,
+	client: BrokerClient,
+): void {
 	const ownership = brokerClientStates.get(client);
 	if (
 		ownership?.state === state &&
@@ -340,7 +357,8 @@ function finalizeSuccessfulBrokerClientTeardown(
 	const ownership = brokerClientStates.get(client);
 	if (ownership?.state !== state || ownership.generation !== generation) return;
 	if (state.brokerClient === client) state.brokerClient = null;
-	if (state.brokerPublicationPending === client) state.brokerPublicationPending = null;
+	if (state.brokerPublicationPending === client)
+		state.brokerPublicationPending = null;
 	state.confirmedClosedClients.set(client, generation);
 	state.retiredBrokerClients.delete(client);
 	state.failedBrokerClients.delete(client);
@@ -348,14 +366,26 @@ function finalizeSuccessfulBrokerClientTeardown(
 	finalizeBrokerTeardown(state);
 }
 
-function currentClientGeneration(state: BrokerState, client: BrokerClient): number | undefined {
+function currentClientGeneration(
+	state: BrokerState,
+	client: BrokerClient,
+): number | undefined {
 	const ownership = brokerClientStates.get(client);
-	return ownership?.state === state ? ownership.generation : state.brokerClientGenerations.get(client);
+	return ownership?.state === state
+		? ownership.generation
+		: state.brokerClientGenerations.get(client);
 }
 
-function expectedMatches(state: BrokerState, expected: ExpectedBrokerClient | undefined, client: BrokerClient): boolean {
+function expectedMatches(
+	state: BrokerState,
+	expected: ExpectedBrokerClient | undefined,
+	client: BrokerClient,
+): boolean {
 	if (!expected) return true;
-	return expected.client === client && currentClientGeneration(state, client) === expected.generation;
+	return (
+		expected.client === client &&
+		currentClientGeneration(state, client) === expected.generation
+	);
 }
 
 async function awaitBrokerCloseUntil(
@@ -364,7 +394,9 @@ async function awaitBrokerCloseUntil(
 ): Promise<void> {
 	const remaining = deadlineAt - Date.now();
 	if (remaining <= 0) {
-		throw Object.assign(new Error("Broker cleanup timed out"), { code: "cleanup_timeout" });
+		throw Object.assign(new Error("Broker cleanup timed out"), {
+			code: "cleanup_timeout",
+		});
 	}
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	try {
@@ -372,7 +404,12 @@ async function awaitBrokerCloseUntil(
 			promise,
 			new Promise<never>((_, reject) => {
 				timer = setTimeout(
-					() => reject(Object.assign(new Error("Broker cleanup timed out"), { code: "cleanup_timeout" })),
+					() =>
+						reject(
+							Object.assign(new Error("Broker cleanup timed out"), {
+								code: "cleanup_timeout",
+							}),
+						),
 					Math.max(deadlineAt - Date.now(), 1),
 				);
 			}),
@@ -550,8 +587,7 @@ function sanitizeBrokerError(
 // label must be removed even when the value is one character long.
 const BROKER_AUTH_VALUE_RE =
 	/\b(?:(?:authorization\s*(?:[:=]\s*)?(?:bearer|basic|token))|(?:bearer|basic))\s+[^\s,;\"'}\]]+/gi;
-const BROKER_JWT_RE =
-	/\b[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g;
+const BROKER_JWT_RE = /\b[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g;
 const BROKER_ID_WITH_VALUE_RE =
 	/\b(?:target\s*id|session\s*id|client\s*id|targetid|sessionid|clientid|target|session|client)\s*\"?\s*(?:[:=]|\s)\s*\"?[^,;\s}\"']+/gi;
 const BROKER_ID_LABEL_RE =
@@ -564,7 +600,8 @@ function sanitizeBrokerEnvelopeText(text: string, query: string): string {
 		// a query that was JSON-escaped by a newly-added envelope field.
 		safe = safe.split(query).join("[redacted-query]");
 		const escapedQuery = JSON.stringify(query);
-		if (escapedQuery) safe = safe.split(escapedQuery.slice(1, -1)).join("[redacted-query]");
+		if (escapedQuery)
+			safe = safe.split(escapedQuery.slice(1, -1)).join("[redacted-query]");
 	}
 	safe = safe
 		.replace(BROKER_AUTH_VALUE_RE, "[redacted-authorization]")
@@ -577,7 +614,12 @@ function sanitizeBrokerEnvelopeText(text: string, query: string): string {
 function safeBrokerTimings(value: unknown): BrokerSearchTimings | undefined {
 	if (!value || typeof value !== "object") return undefined;
 	const source = value as Record<string, unknown>;
-	const names = ["targetSetupMs", "navigationMs", "extractionMs", "resetMs"] as const;
+	const names = [
+		"targetSetupMs",
+		"navigationMs",
+		"extractionMs",
+		"resetMs",
+	] as const;
 	const timings = {} as BrokerSearchTimings;
 	for (const name of names) {
 		const number = source[name];
@@ -596,7 +638,10 @@ function emitBrokerAttemptEnvelope(
 	// Never replace arbitrary query text in the serialized JSON: a query such as
 	// "schema" or "requestId" must not rewrite envelope keys.
 	try {
-		debug("broker", JSON.stringify(scrubBrokerEnvelopeValue(envelope, undefined, true)));
+		debug(
+			"broker",
+			JSON.stringify(scrubBrokerEnvelopeValue(envelope, undefined, true)),
+		);
 	} catch {
 		// A diagnostic must never affect the provider result.
 	}
@@ -638,8 +683,16 @@ function notifyGlobalTeardownWaiters(): void {
 function maybeFinishGlobalTeardown(): void {
 	// Do not release the latch from an unrelated state finalizer while the
 	// coalesced global close operation is still draining its snapshot.
-	if (!brokerGlobalTeardownActive || brokerGlobalClosePromise || brokerAcquisitionReservations > 0) return;
-	if ([...brokerStates.values()].some((state) => brokerHasUnresolvedTeardown(state))) return;
+	if (
+		!brokerGlobalTeardownActive ||
+		brokerGlobalClosePromise ||
+		brokerAcquisitionReservations > 0
+	)
+		return;
+	if (
+		[...brokerStates.values()].some((state) => brokerHasUnresolvedTeardown(state))
+	)
+		return;
 	brokerGlobalTeardownActive = false;
 	notifyGlobalTeardownWaiters();
 }
@@ -675,7 +728,9 @@ async function waitForGlobalTeardownToClear(
 	}
 }
 
-async function waitForBrokerAcquisitionReservations(deadlineAt: number): Promise<void> {
+async function waitForBrokerAcquisitionReservations(
+	deadlineAt: number,
+): Promise<void> {
 	while (brokerAcquisitionReservations > 0) {
 		let waiter: (() => void) | undefined;
 		try {
@@ -721,9 +776,13 @@ async function reserveBrokerAcquisition(
 	await withBrokerLifecycle(async () => {
 		assertBrokerBudget({ deadlineAt, signal });
 		if (brokerGlobalTeardownActive)
-			throw Object.assign(new Error("Global broker teardown is still pending"), { code: "broker_process_pending" });
+			throw Object.assign(new Error("Global broker teardown is still pending"), {
+				code: "broker_process_pending",
+			});
 		if (brokerLegacyFallbackActive)
-			throw Object.assign(new Error("Legacy fallback is active"), { code: "broker_fallback_active" });
+			throw Object.assign(new Error("Legacy fallback is active"), {
+				code: "broker_fallback_active",
+			});
 		brokerAcquisitionReservations++;
 	});
 	let released = false;
@@ -731,7 +790,10 @@ async function reserveBrokerAcquisition(
 		if (released) return;
 		released = true;
 		await withBrokerLifecycle(async () => {
-			brokerAcquisitionReservations = Math.max(brokerAcquisitionReservations - 1, 0);
+			brokerAcquisitionReservations = Math.max(
+				brokerAcquisitionReservations - 1,
+				0,
+			);
 			maybeFinishGlobalTeardown();
 			notifyGlobalTeardownWaiters();
 		});
@@ -769,10 +831,15 @@ async function reserveLegacyFallback(
 	}
 }
 
-function publishBrokerClient(state: BrokerState, client: BrokerClient, forceNewGeneration = false): BrokerClientToken {
+function publishBrokerClient(
+	state: BrokerState,
+	client: BrokerClient,
+	forceNewGeneration = false,
+): BrokerClientToken {
 	let generation = state.brokerClientGenerations.get(client);
 	if (generation === undefined) {
-		if (!forceNewGeneration) generation = state.confirmedClosedClients.get(client);
+		if (!forceNewGeneration)
+			generation = state.confirmedClosedClients.get(client);
 		if (generation === undefined) generation = ++state.nextBrokerGeneration;
 		state.brokerClientGenerations.set(client, generation);
 	}
@@ -781,12 +848,26 @@ function publishBrokerClient(state: BrokerState, client: BrokerClient, forceNewG
 	return token;
 }
 
-function retainBrokerClient(state: BrokerState, client: BrokerClient): BrokerClientToken {
-	const token = publishBrokerClient(state, client, state.confirmedClosedClients.has(client));
-	const byGeneration = state.brokerClientUserGenerations.get(client) || new Map<number, number>();
-	byGeneration.set(token.generation, (byGeneration.get(token.generation) ?? 0) + 1);
+function retainBrokerClient(
+	state: BrokerState,
+	client: BrokerClient,
+): BrokerClientToken {
+	const token = publishBrokerClient(
+		state,
+		client,
+		state.confirmedClosedClients.has(client),
+	);
+	const byGeneration =
+		state.brokerClientUserGenerations.get(client) || new Map<number, number>();
+	byGeneration.set(
+		token.generation,
+		(byGeneration.get(token.generation) ?? 0) + 1,
+	);
 	state.brokerClientUserGenerations.set(client, byGeneration);
-	state.brokerClientUsers.set(client, (state.brokerClientUsers.get(client) ?? 0) + 1);
+	state.brokerClientUsers.set(
+		client,
+		(state.brokerClientUsers.get(client) ?? 0) + 1,
+	);
 	return token;
 }
 
@@ -796,12 +877,20 @@ function releaseBrokerClient(token: BrokerClientToken): number {
 	const byGeneration = state.brokerClientUserGenerations.get(token.client);
 	const generationCount = byGeneration?.get(token.generation) ?? 0;
 	// A stale request must never release a lease belonging to a reused object.
-	if (ownership?.state !== state || ownership.generation !== token.generation || generationCount === 0)
+	if (
+		ownership?.state !== state ||
+		ownership.generation !== token.generation ||
+		generationCount === 0
+	)
 		return state.brokerClientUsers.get(token.client) ?? 0;
 	if (generationCount === 1) byGeneration?.delete(token.generation);
 	else byGeneration?.set(token.generation, generationCount - 1);
-	if (!byGeneration?.size) state.brokerClientUserGenerations.delete(token.client);
-	const remaining = Math.max((state.brokerClientUsers.get(token.client) ?? 1) - 1, 0);
+	if (!byGeneration?.size)
+		state.brokerClientUserGenerations.delete(token.client);
+	const remaining = Math.max(
+		(state.brokerClientUsers.get(token.client) ?? 1) - 1,
+		0,
+	);
 	if (remaining === 0) state.brokerClientUsers.delete(token.client);
 	else state.brokerClientUsers.set(token.client, remaining);
 	notifyBrokerLeaseWaiters(state);
@@ -822,8 +911,7 @@ async function awaitWithinBudget<T>(
 		throw Object.assign(new Error("Request deadline expired"), {
 			code: "connect_timeout",
 		});
-	const promise =
-		typeof operation === "function" ? operation() : operation;
+	const promise = typeof operation === "function" ? operation() : operation;
 	if (options.deadlineAt === undefined && !options.signal) return promise;
 	return new Promise<T>((resolve, reject) => {
 		let settled = false;
@@ -908,13 +996,20 @@ function hasActiveBrokerUsers(state: BrokerState): boolean {
 }
 
 function brokerHasUnresolvedTeardown(state: BrokerState): boolean {
-	return hasActiveBrokerUsers(state) || Boolean(state.brokerClient) ||
-		Boolean(state.brokerProcess) || Boolean(state.brokerDeferredProcess) ||
-		Boolean(state.brokerStartupGeneration) || Boolean(state.brokerPublicationPending) ||
-		state.retiredBrokerClients.size > 0 || state.failedBrokerClients.size > 0 ||
-		state.clientClosePromises.size > 0 || state.customCleanupPromises.size > 0 ||
+	return (
+		hasActiveBrokerUsers(state) ||
+		Boolean(state.brokerClient) ||
+		Boolean(state.brokerProcess) ||
+		Boolean(state.brokerDeferredProcess) ||
+		Boolean(state.brokerStartupGeneration) ||
+		Boolean(state.brokerPublicationPending) ||
+		state.retiredBrokerClients.size > 0 ||
+		state.failedBrokerClients.size > 0 ||
+		state.clientClosePromises.size > 0 ||
+		state.customCleanupPromises.size > 0 ||
 		state.brokerPendingConnects.size > 0 ||
-		state.brokerFencedConnects.size > 0;
+		state.brokerFencedConnects.size > 0
+	);
 }
 
 function brokerHasGlobalFallbackBlocker(state: BrokerState): boolean {
@@ -923,7 +1018,8 @@ function brokerHasGlobalFallbackBlocker(state: BrokerState): boolean {
 	// while any profile still owns a lease or has work that can publish, close,
 	// or release a broker resource. An idle, healthy client alone is not a
 	// teardown blocker; it is deliberately left available for broker reuse.
-	return state.brokerTeardownPending ||
+	return (
+		state.brokerTeardownPending ||
 		hasActiveBrokerUsers(state) ||
 		Boolean(state.brokerProcess) ||
 		Boolean(state.brokerDeferredProcess) ||
@@ -935,7 +1031,8 @@ function brokerHasGlobalFallbackBlocker(state: BrokerState): boolean {
 		state.customCleanupPromises.size > 0 ||
 		state.brokerPendingConnects.size > 0 ||
 		state.brokerFencedConnects.size > 0 ||
-		(state.brokerClient !== null && state.brokerGenerationUnavailable);
+		(state.brokerClient !== null && state.brokerGenerationUnavailable)
+	);
 }
 
 function brokerIsQuiescentForLegacy(_state?: BrokerState): boolean {
@@ -973,7 +1070,10 @@ function finalizeBrokerTeardown(state: BrokerState): void {
 	maybeFinishGlobalTeardown();
 }
 
-function forgetDeferredProcess(state: BrokerState, processHandle: BrokerProcess): void {
+function forgetDeferredProcess(
+	state: BrokerState,
+	processHandle: BrokerProcess,
+): void {
 	if (state.brokerDeferredProcess !== processHandle) return;
 	state.brokerDeferredProcess = null;
 	state.brokerDeferredProcessExit = null;
@@ -982,7 +1082,10 @@ function forgetDeferredProcess(state: BrokerState, processHandle: BrokerProcess)
 }
 
 /** Retain a child handle until its exit event, even after a forced kill. */
-function retainDeferredProcess(state: BrokerState, processHandle: BrokerProcess): void {
+function retainDeferredProcess(
+	state: BrokerState,
+	processHandle: BrokerProcess,
+): void {
 	if (processHasExited(processHandle)) {
 		forgetDeferredProcess(state, processHandle);
 		return;
@@ -990,7 +1093,11 @@ function retainDeferredProcess(state: BrokerState, processHandle: BrokerProcess)
 	if (state.brokerDeferredProcess === processHandle) return;
 	// There must never be two generations in flight for one profile. Different
 	// profiles have independent children and are intentionally not blocked here.
-	if (state.brokerDeferredProcess && state.brokerDeferredProcess !== processHandle) return;
+	if (
+		state.brokerDeferredProcess &&
+		state.brokerDeferredProcess !== processHandle
+	)
+		return;
 	state.brokerDeferredProcess = processHandle;
 	state.brokerTeardownPending = true;
 	const promise = new Promise<void>((resolve) => {
@@ -1006,7 +1113,10 @@ function retainDeferredProcess(state: BrokerState, processHandle: BrokerProcess)
 	state.brokerDeferredProcessExit = { processHandle, promise };
 }
 
-async function waitForDeferredProcess(state: BrokerState, deadlineAt: number): Promise<void> {
+async function waitForDeferredProcess(
+	state: BrokerState,
+	deadlineAt: number,
+): Promise<void> {
 	const pending = state.brokerDeferredProcessExit;
 	if (!pending) return;
 	const remaining = Math.max(deadlineAt - Date.now(), 1);
@@ -1040,19 +1150,28 @@ function detachBrokerResources(
 	const resources: BrokerResources = {
 		state,
 		client: state.brokerClient,
-		clientGeneration: state.brokerClient ? currentClientGeneration(state, state.brokerClient) : undefined,
+		clientGeneration: state.brokerClient
+			? currentClientGeneration(state, state.brokerClient)
+			: undefined,
 		processHandle: state.brokerProcess ?? state.brokerDeferredProcess,
 	};
 	state.brokerClient = null;
 	state.brokerProcess = null;
-	if (state.brokerPublicationPending === resources.client) state.brokerPublicationPending = null;
+	if (state.brokerPublicationPending === resources.client)
+		state.brokerPublicationPending = null;
 	state.brokerGenerationUnavailable = true;
-	state.brokerTeardownPending = Boolean(resources.processHandle || resources.client);
-	if (resources.processHandle) retainDeferredProcess(state, resources.processHandle);
+	state.brokerTeardownPending = Boolean(
+		resources.processHandle || resources.client,
+	);
+	if (resources.processHandle)
+		retainDeferredProcess(state, resources.processHandle);
 	return resources;
 }
 
-function terminateBrokerProcess(state: BrokerState, processHandle: BrokerProcess): void {
+function terminateBrokerProcess(
+	state: BrokerState,
+	processHandle: BrokerProcess,
+): void {
 	if (processHasExited(processHandle)) return;
 	retainDeferredProcess(state, processHandle);
 	try {
@@ -1060,7 +1179,11 @@ function terminateBrokerProcess(state: BrokerState, processHandle: BrokerProcess
 	} catch {
 		// The kill below is still attempted when stdin is already closed.
 	}
-	if (processHasExited(processHandle) || state.brokerKilledProcesses.has(processHandle)) return;
+	if (
+		processHasExited(processHandle) ||
+		state.brokerKilledProcesses.has(processHandle)
+	)
+		return;
 	state.brokerKilledProcesses.add(processHandle);
 	try {
 		processHandle.kill();
@@ -1077,14 +1200,24 @@ async function teardownBrokerResources(
 	let clientClosed = !resources.client;
 	try {
 		if (resources.client) {
-			const generation = resources.clientGeneration ?? currentClientGeneration(resources.state, resources.client);
-			if (generation === undefined) throw new Error("Broker client generation is unavailable");
-			await closeBrokerClientOnce(resources.state, resources.client, generation, deadlineAt);
+			const generation =
+				resources.clientGeneration ??
+				currentClientGeneration(resources.state, resources.client);
+			if (generation === undefined)
+				throw new Error("Broker client generation is unavailable");
+			await closeBrokerClientOnce(
+				resources.state,
+				resources.client,
+				generation,
+				deadlineAt,
+			);
 			clientClosed = true;
 		}
 	} catch (error) {
-		const customStillPending = resources.client &&
-			resources.state.customCleanupPromises.get(resources.client)?.generation === resources.clientGeneration;
+		const customStillPending =
+			resources.client &&
+			resources.state.customCleanupPromises.get(resources.client)?.generation ===
+				resources.clientGeneration;
 		// A timed-out custom hook still owns the close operation. Do not invoke
 		// client.close() again, and let the persistent custom promise keep the
 		// generation/global fence active until it settles.
@@ -1135,7 +1268,8 @@ async function teardownBrokerResources(
 			});
 		}
 	}
-	if (resources.client && clientClosed) forgetBrokerClientOwnership(resources.state, resources.client);
+	if (resources.client && clientClosed)
+		forgetBrokerClientOwnership(resources.state, resources.client);
 	else if (resources.client) {
 		resources.state.failedBrokerClients.add(resources.client);
 		resources.state.retiredBrokerClients.add(resources.client);
@@ -1158,10 +1292,10 @@ async function runBoundedCleanup(
 				timer = setTimeout(
 					() =>
 						reject(
-						Object.assign(new Error("Broker cleanup timed out"), {
-							code: "cleanup_timeout",
-						}),
-					),
+							Object.assign(new Error("Broker cleanup timed out"), {
+								code: "cleanup_timeout",
+							}),
+						),
 					BROKER_CLEANUP_TIMEOUT_MS,
 				);
 			}),
@@ -1186,15 +1320,25 @@ async function handleBrokerProcessEvent(
 		return;
 	}
 	retainDeferredProcess(state, ownedProcess);
-	if (state.brokerClient && (state.brokerClientUsers.get(state.brokerClient) ?? 0) > 0) {
+	if (
+		state.brokerClient &&
+		(state.brokerClientUsers.get(state.brokerClient) ?? 0) > 0
+	) {
 		state.retiredBrokerClients.add(state.brokerClient);
 		state.brokerTeardownPending = true;
 		return;
 	}
 	const resources = detachBrokerResources(state);
 	if (resources) {
-		try { await teardownBrokerResources(resources); }
-		catch (error) { debug("broker", "process-event cleanup failed", sanitizeBrokerError(error, "")); }
+		try {
+			await teardownBrokerResources(resources);
+		} catch (error) {
+			debug(
+				"broker",
+				"process-event cleanup failed",
+				sanitizeBrokerError(error, ""),
+			);
+		}
 	}
 }
 
@@ -1209,7 +1353,15 @@ export async function notifyGoogleBrokerProcessEventForTests(
 	await withBrokerLifecycle(async () => {
 		const state = brokerStateForClient(client);
 		if (!state) {
-			try { await Promise.resolve(client.close()); } catch (error) { debug("broker", "unknown client close failed", sanitizeBrokerError(error, "")); }
+			try {
+				await Promise.resolve(client.close());
+			} catch (error) {
+				debug(
+					"broker",
+					"unknown client close failed",
+					sanitizeBrokerError(error, ""),
+				);
+			}
 			return;
 		}
 		state.brokerGenerationUnavailable = true;
@@ -1231,7 +1383,10 @@ function brokerStartupCancellationError(): Error & { code: string } {
 	});
 }
 
-function cancelBrokerStartupGeneration(state: BrokerState, generation: BrokerStartupGeneration): void {
+function cancelBrokerStartupGeneration(
+	state: BrokerState,
+	generation: BrokerStartupGeneration,
+): void {
 	if (generation.cancelled) return;
 	generation.cancelled = true;
 	generation.controller.abort();
@@ -1289,17 +1444,22 @@ async function ensureGoogleBroker(
 	await waitForLegacyFallbackToClear(deadlineAt, signal);
 	await withBrokerLifecycle(async () => {
 		if (brokerGlobalTeardownActive)
-			throw Object.assign(new Error("Global broker teardown is still pending"), { code: "broker_process_pending" });
+			throw Object.assign(new Error("Global broker teardown is still pending"), {
+				code: "broker_process_pending",
+			});
 		if (brokerLegacyFallbackActive)
-			throw Object.assign(new Error("Legacy fallback is active"), { code: "broker_fallback_active" });
-		if (brokerHasUnresolvedTeardown(state) && (
-			state.brokerTeardownPending ||
-			state.retiredBrokerClients.size > 0 ||
-			state.failedBrokerClients.size > 0 ||
-			state.clientClosePromises.size > 0 ||
-			state.customCleanupPromises.size > 0 ||
-			state.brokerFencedConnects.size > 0
-		))
+			throw Object.assign(new Error("Legacy fallback is active"), {
+				code: "broker_fallback_active",
+			});
+		if (
+			brokerHasUnresolvedTeardown(state) &&
+			(state.brokerTeardownPending ||
+				state.retiredBrokerClients.size > 0 ||
+				state.failedBrokerClients.size > 0 ||
+				state.clientClosePromises.size > 0 ||
+				state.customCleanupPromises.size > 0 ||
+				state.brokerFencedConnects.size > 0)
+		)
 			throw Object.assign(new Error("Broker teardown is still pending"), {
 				code: "broker_process_pending",
 			});
@@ -1320,11 +1480,18 @@ async function ensureGoogleBroker(
 						processHandle: null,
 					});
 				} catch (error) {
-					debug("broker", "disconnected client cleanup failed", sanitizeBrokerError(error, ""));
-					throw Object.assign(new Error("Disconnected broker client teardown is still pending"), {
-						code: "broker_process_pending",
-						cause: error,
-					});
+					debug(
+						"broker",
+						"disconnected client cleanup failed",
+						sanitizeBrokerError(error, ""),
+					);
+					throw Object.assign(
+						new Error("Disconnected broker client teardown is still pending"),
+						{
+							code: "broker_process_pending",
+							cause: error,
+						},
+					);
 				}
 			} else {
 				state.retiredBrokerClients.add(disconnected);
@@ -1354,7 +1521,12 @@ async function ensureGoogleBroker(
 			});
 	}
 	if (state.brokerStartupGeneration)
-		return waitForBrokerStartup(state, state.brokerStartupGeneration, deadlineAt, signal);
+		return waitForBrokerStartup(
+			state,
+			state.brokerStartupGeneration,
+			deadlineAt,
+			signal,
+		);
 
 	const startupDeadlineAt = Math.max(
 		deadlineAt,
@@ -1402,7 +1574,9 @@ async function ensureGoogleBroker(
 							const token = publishBrokerClient(state, connected);
 							state.retiredBrokerClients.add(connected);
 							await closeBrokerClientOnce(state, connected, token.generation);
-						} catch { /* stale connector remains quarantined */ }
+						} catch {
+							/* stale connector remains quarantined */
+						}
 						throw Object.assign(new Error("Broker generation unavailable"), {
 							code: "connection_closed",
 						});
@@ -1419,13 +1593,19 @@ async function ensureGoogleBroker(
 								state.brokerPublicationPending !== connected ||
 								state.brokerClient !== connected ||
 								(state.brokerClientUsers.get(connected) ?? 0) > 0
-							) return;
+							)
+								return;
 							state.brokerPublicationPending = null;
 							const resources = detachBrokerResources(state, connected);
 							if (!resources) return;
-							try { await teardownBrokerResources(resources); }
-							catch (error) {
-								debug("broker", "unadopted startup cleanup failed", sanitizeBrokerError(error, ""));
+							try {
+								await teardownBrokerResources(resources);
+							} catch (error) {
+								debug(
+									"broker",
+									"unadopted startup cleanup failed",
+									sanitizeBrokerError(error, ""),
+								);
 							}
 						}).catch(() => undefined);
 					}, 0);
@@ -1433,7 +1613,8 @@ async function ensureGoogleBroker(
 				} catch (error) {
 					lastError = error;
 				}
-				if (generation.cancelled || !brokerEnabled()) throw brokerStartupCancellationError();
+				if (generation.cancelled || !brokerEnabled())
+					throw brokerStartupCancellationError();
 				if (state.brokerDeferredProcess) {
 					await waitForDeferredProcess(state, startupDeadlineAt);
 					if (state.brokerDeferredProcess)
@@ -1450,27 +1631,50 @@ async function ensureGoogleBroker(
 						throw brokerStartupCancellationError();
 					state.brokerProcess = processFactory(
 						process.execPath,
-						[brokerBin, "--profile", profileDir, "--connect-cdp", "--cdp-port", "9222", "--parent-stdin"],
+						[
+							brokerBin,
+							"--profile",
+							profileDir,
+							"--connect-cdp",
+							"--cdp-port",
+							"9222",
+							"--parent-stdin",
+						],
 						{ stdio: ["pipe", "ignore", "ignore"] },
 					);
 					generation.processHandle = state.brokerProcess;
 					state.brokerGenerationUnavailable = false;
 					const ownedProcess = state.brokerProcess;
 					let childCreated = false;
-					ownedProcess.once("spawn", () => { childCreated = true; });
+					ownedProcess.once("spawn", () => {
+						childCreated = true;
+					});
 					const processEvent = (kind: "error" | "close" | "exit") => {
-						void withBrokerLifecycle(() => handleBrokerProcessEvent(state, ownedProcess, childCreated || kind === "exit")).catch(() => undefined);
+						void withBrokerLifecycle(() =>
+							handleBrokerProcessEvent(
+								state,
+								ownedProcess,
+								childCreated || kind === "exit",
+							),
+						).catch(() => undefined);
 					};
 					ownedProcess.once("error", () => processEvent("error"));
 					ownedProcess.once("close", () => processEvent("close"));
 					ownedProcess.once("exit", () => processEvent("exit"));
 				}
 				await new Promise<void>((resolve) => {
-					const timer = setTimeout(resolve, Math.min(40, Math.max(startupDeadlineAt - Date.now(), 1)));
-					generation.controller.signal.addEventListener("abort", () => {
-						clearTimeout(timer);
-						resolve();
-					}, { once: true });
+					const timer = setTimeout(
+						resolve,
+						Math.min(40, Math.max(startupDeadlineAt - Date.now(), 1)),
+					);
+					generation.controller.signal.addEventListener(
+						"abort",
+						() => {
+							clearTimeout(timer);
+							resolve();
+						},
+						{ once: true },
+					);
 				});
 				if (generation.cancelled || !brokerEnabled())
 					throw brokerStartupCancellationError();
@@ -1485,7 +1689,11 @@ async function ensureGoogleBroker(
 				state.brokerStartupGeneration = null;
 				state.brokerClientPromise = null;
 			}
-			if (lastError && generation.processHandle && state.brokerProcess === generation.processHandle) {
+			if (
+				lastError &&
+				generation.processHandle &&
+				state.brokerProcess === generation.processHandle
+			) {
 				state.brokerProcess = null;
 				state.brokerGenerationUnavailable = true;
 				terminateBrokerProcess(state, generation.processHandle);
@@ -1508,7 +1716,12 @@ async function releaseBrokerLease(token: BrokerClientToken): Promise<void> {
 			const deferredProcess = state.brokerDeferredProcess;
 			if (state.brokerClient === token.client) state.brokerClient = null;
 			try {
-				await teardownBrokerResources({ state, client: token.client, clientGeneration: token.generation, processHandle: deferredProcess });
+				await teardownBrokerResources({
+					state,
+					client: token.client,
+					clientGeneration: token.generation,
+					processHandle: deferredProcess,
+				});
 			} catch (error) {
 				debug("broker", "deferred cleanup failed", sanitizeBrokerError(error, ""));
 			}
@@ -1517,12 +1730,16 @@ async function releaseBrokerLease(token: BrokerClientToken): Promise<void> {
 			remaining === 0 &&
 			state.brokerTeardownPending &&
 			state.brokerGenerationUnavailable &&
-		state.brokerClient === token.client &&
-		currentClientGeneration(state, token.client) === token.generation
+			state.brokerClient === token.client &&
+			currentClientGeneration(state, token.client) === token.generation
 		) {
 			const resources = detachBrokerResources(state, token.client);
-			if (resources) try { await teardownBrokerResources(resources); }
-			catch (error) { debug("broker", "deferred cleanup failed", sanitizeBrokerError(error, "")); }
+			if (resources)
+				try {
+					await teardownBrokerResources(resources);
+				} catch (error) {
+					debug("broker", "deferred cleanup failed", sanitizeBrokerError(error, ""));
+				}
 		}
 	});
 }
@@ -1574,7 +1791,10 @@ function prepareBrokerCloseState(
 			state.brokerGenerationUnavailable = true;
 		}
 	}
-	if (state.brokerProcess && (!expected || (current !== null && expectedMatches(state, expected, current)))) {
+	if (
+		state.brokerProcess &&
+		(!expected || (current !== null && expectedMatches(state, expected, current)))
+	) {
 		retainDeferredProcess(state, state.brokerProcess);
 		state.brokerProcess = null;
 		state.brokerTeardownPending = true;
@@ -1631,19 +1851,34 @@ async function drainBrokerState(
 				processHandle: null,
 			});
 		}
-		if (state.brokerDeferredProcess && (!expected || current !== null && expectedMatches(state, expected, current)) && !detached.some((resource) => resource.processHandle)) {
-			detached.push({ state, client: null, processHandle: state.brokerDeferredProcess });
+		if (
+			state.brokerDeferredProcess &&
+			(!expected ||
+				(current !== null && expectedMatches(state, expected, current))) &&
+			!detached.some((resource) => resource.processHandle)
+		) {
+			detached.push({
+				state,
+				client: null,
+				processHandle: state.brokerDeferredProcess,
+			});
 		}
 		return detached;
 	});
-	const outcomes = await Promise.allSettled(resources.map((resource) => teardownBrokerResources(resource, deadlineAt)));
-	const errors = outcomes.flatMap((outcome) => outcome.status === "rejected" ? [outcome.reason] : []);
+	const outcomes = await Promise.allSettled(
+		resources.map((resource) => teardownBrokerResources(resource, deadlineAt)),
+	);
+	const errors = outcomes.flatMap((outcome) =>
+		outcome.status === "rejected" ? [outcome.reason] : [],
+	);
 	if (state.brokerDeferredProcess) {
 		try {
 			await waitForDeferredProcess(state, deadlineAt);
 			for (let index = errors.length - 1; index >= 0; index--)
 				if (errorCode(errors[index]) === "cleanup_timeout") errors.splice(index, 1);
-		} catch (error) { errors.push(error); }
+		} catch (error) {
+			errors.push(error);
+		}
 	}
 	if (errors.length > 0) throw errors[0];
 	finalizeBrokerTeardown(state);
@@ -1654,7 +1889,8 @@ export function closeGoogleBroker(
 	options: { deadlineAt?: number } = {},
 ): Promise<void> {
 	const isUnqualified = expectedClient === undefined;
-	const deadlineAt = options.deadlineAt ?? Date.now() + BROKER_CLEANUP_TIMEOUT_MS;
+	const deadlineAt =
+		options.deadlineAt ?? Date.now() + BROKER_CLEANUP_TIMEOUT_MS;
 	const awaitCloseForCaller = (promise: Promise<void>): Promise<void> => {
 		const waiter = awaitBrokerCloseUntil(promise, deadlineAt).catch((error) => {
 			// A global close waiting on a live lease/reservation historically reports
@@ -1667,7 +1903,9 @@ export function closeGoogleBroker(
 				(brokerAcquisitionReservations > 0 ||
 					[...brokerStates.values()].some((state) => hasActiveBrokerUsers(state)))
 			)
-				throw Object.assign(new Error("Broker cleanup timed out"), { code: "connect_timeout" });
+				throw Object.assign(new Error("Broker cleanup timed out"), {
+					code: "connect_timeout",
+				});
 			throw error;
 		});
 		waiter.catch(() => undefined);
@@ -1675,15 +1913,23 @@ export function closeGoogleBroker(
 	};
 	if (isUnqualified && brokerGlobalClosePromise)
 		return awaitCloseForCaller(brokerGlobalClosePromise);
-	const ownership = expectedClient ? brokerOwnershipForClient(expectedClient) : undefined;
-	const expected = ownership && expectedClient
-		? { client: expectedClient, generation: ownership.generation }
+	const ownership = expectedClient
+		? brokerOwnershipForClient(expectedClient)
 		: undefined;
-	const states = expectedClient ? (ownership ? [ownership.state] : []) : [...brokerStates.values()];
+	const expected =
+		ownership && expectedClient
+			? { client: expectedClient, generation: ownership.generation }
+			: undefined;
+	const states = expectedClient
+		? ownership
+			? [ownership.state]
+			: []
+		: [...brokerStates.values()];
 	const sharedState = states.length === 1 ? states[0] : undefined;
 	if (sharedState && expected) {
 		const existing = sharedState.scopedClosePromises.get(expected.client);
-		if (existing?.generation === expected.generation) return awaitCloseForCaller(existing.promise);
+		if (existing?.generation === expected.generation)
+			return awaitCloseForCaller(existing.promise);
 	} else if (sharedState?.closePromise) {
 		return awaitCloseForCaller(sharedState.closePromise);
 	}
@@ -1705,8 +1951,11 @@ export function closeGoogleBroker(
 		await withBrokerLifecycle(async () => {
 			for (const state of states) prepareBrokerCloseState(state, expected);
 		});
-		if (isUnqualified) await waitForBrokerAcquisitionReservations(cleanupDeadlineAt);
-		const outcomes = await Promise.allSettled(states.map((state) => drainBrokerState(state, expected, cleanupDeadlineAt)));
+		if (isUnqualified)
+			await waitForBrokerAcquisitionReservations(cleanupDeadlineAt);
+		const outcomes = await Promise.allSettled(
+			states.map((state) => drainBrokerState(state, expected, cleanupDeadlineAt)),
+		);
 		const firstError = outcomes.find((outcome) => outcome.status === "rejected");
 		if (firstError?.status === "rejected") throw firstError.reason;
 	})();
@@ -2098,8 +2347,7 @@ async function runLegacyGoogleSearch(
 
 	if (result.code !== 0) {
 		throw new Error(
-			result.stderr.trim() ||
-				`google-search.mjs exited with code ${result.code}`,
+			result.stderr.trim() || `google-search.mjs exited with code ${result.code}`,
 		);
 	}
 
@@ -2151,10 +2399,18 @@ export async function googleSearchWithDependencies(
 			// A disabled broker may only fall back once every active lease and child
 			// process has reached a confirmed terminal state. A kill request or a
 			// cleanup timeout is not a safe point for legacy search concurrency.
-			debug("broker", "runtime-disable cleanup failed", sanitizeBrokerError(error, query));
+			debug(
+				"broker",
+				"runtime-disable cleanup failed",
+				sanitizeBrokerError(error, query),
+			);
 			throw error;
 		}
-		const releaseFallback = await reserveLegacyFallback(undefined, deadlineAt, options.signal);
+		const releaseFallback = await reserveLegacyFallback(
+			undefined,
+			deadlineAt,
+			options.signal,
+		);
 		if (!releaseFallback)
 			throw Object.assign(new Error("Broker resources are still active"), {
 				code: "broker_process_pending",
@@ -2200,12 +2456,19 @@ export async function googleSearchWithDependencies(
 		candidate: BrokerClient,
 		trackedAttempt?: BrokerConnectAttempt,
 	): Promise<void> => {
-		if (connectAttemptAdopted || connectAttemptCloseStarted || trackedAttempt?.adopted || trackedAttempt?.closeStarted)
+		if (
+			connectAttemptAdopted ||
+			connectAttemptCloseStarted ||
+			trackedAttempt?.adopted ||
+			trackedAttempt?.closeStarted
+		)
 			return;
-		const ownerState = brokerStateForClient(candidate) ?? trackedAttempt?.state ?? brokerState;
+		const ownerState =
+			brokerStateForClient(candidate) ?? trackedAttempt?.state ?? brokerState;
 		if (
 			(ownerState.brokerClientUsers.get(candidate) ?? 0) > 0 ||
-			(ownerState.brokerClient === candidate && !ownerState.brokerGenerationUnavailable)
+			(ownerState.brokerClient === candidate &&
+				!ownerState.brokerGenerationUnavailable)
 		) {
 			connectAttemptAdopted = true;
 			if (trackedAttempt) {
@@ -2223,12 +2486,14 @@ export async function googleSearchWithDependencies(
 		ownerState.brokerTeardownPending = true;
 		try {
 			if (cleanup === defaultCleanup) {
-				await runBoundedCleanup(() => teardownBrokerResources({
-					state: ownerState,
-					client: candidate,
-					clientGeneration: token.generation,
-					processHandle: null,
-				}));
+				await runBoundedCleanup(() =>
+					teardownBrokerResources({
+						state: ownerState,
+						client: candidate,
+						clientGeneration: token.generation,
+						processHandle: null,
+					}),
+				);
 			} else {
 				const customCleanupPromise = startTrackedCustomCleanup(
 					ownerState,
@@ -2250,11 +2515,13 @@ export async function googleSearchWithDependencies(
 			if (trackedAttempt && inFlightClose) {
 				// Keep the stale generation fenced until the underlying close settles,
 				// even though this bounded observer has already returned.
-				inFlightClose.finally(() => {
-					ownerState.brokerPendingConnects.delete(trackedAttempt);
-					ownerState.brokerFencedConnects.delete(trackedAttempt);
-					finalizeBrokerTeardown(ownerState);
-				}).catch(() => undefined);
+				inFlightClose
+					.finally(() => {
+						ownerState.brokerPendingConnects.delete(trackedAttempt);
+						ownerState.brokerFencedConnects.delete(trackedAttempt);
+						finalizeBrokerTeardown(ownerState);
+					})
+					.catch(() => undefined);
 			} else if (trackedAttempt) {
 				ownerState.brokerPendingConnects.delete(trackedAttempt);
 				ownerState.brokerFencedConnects.delete(trackedAttempt);
@@ -2304,7 +2571,10 @@ export async function googleSearchWithDependencies(
 					setTimeout(() => {
 						void withBrokerLifecycle(async () => {
 							if (tracked.fenced && !tracked.adopted && tracked.candidate) {
-								const closePromise = closeUnadoptedConnectClient(tracked.candidate, tracked);
+								const closePromise = closeUnadoptedConnectClient(
+									tracked.candidate,
+									tracked,
+								);
 								closePromise.catch(() => undefined);
 							}
 						}).catch(() => undefined);
@@ -2324,8 +2594,12 @@ export async function googleSearchWithDependencies(
 		return promise;
 	};
 	const fenceConnectAttempt = () => {
-		if (!connectAttempt || connectAttempt.adopted ||
-			(connectAttempt.settled && !connectAttempt.candidate)) return;
+		if (
+			!connectAttempt ||
+			connectAttempt.adopted ||
+			(connectAttempt.settled && !connectAttempt.candidate)
+		)
+			return;
 		connectAttempt.fenced = true;
 		// This is deliberately synchronous: abort/deadline must publish the fence
 		// before releasing the acquisition reservation or allowing fallback.
@@ -2337,7 +2611,9 @@ export async function googleSearchWithDependencies(
 		let attempt: Promise<BrokerClient>;
 		try {
 			assertBrokerBudget({ deadlineAt, signal: options.signal });
-			attempt = Promise.resolve(connect({ profileDir, deadlineAt, signal: options.signal }));
+			attempt = Promise.resolve(
+				connect({ profileDir, deadlineAt, signal: options.signal }),
+			);
 		} catch (error) {
 			attempt = Promise.reject(error);
 		}
@@ -2395,7 +2671,10 @@ export async function googleSearchWithDependencies(
 		);
 
 	try {
-		releaseBrokerAcquisition = await reserveBrokerAcquisition(deadlineAt, options.signal);
+		releaseBrokerAcquisition = await reserveBrokerAcquisition(
+			deadlineAt,
+			options.signal,
+		);
 		await awaitWithinBudget(
 			() =>
 				ensure(options.headless, {
@@ -2410,17 +2689,22 @@ export async function googleSearchWithDependencies(
 		// generation to connect. Only the short publication/lease step is queued.
 		await withBrokerLifecycle(async () => {
 			if (brokerGlobalTeardownActive)
-				throw Object.assign(new Error("Global broker teardown is still pending"), { code: "broker_process_pending" });
+				throw Object.assign(new Error("Global broker teardown is still pending"), {
+					code: "broker_process_pending",
+				});
 			if (brokerLegacyFallbackActive)
-				throw Object.assign(new Error("Legacy fallback is active"), { code: "broker_fallback_active" });
-			if (brokerHasUnresolvedTeardown(brokerState) && (
-				brokerState.brokerTeardownPending ||
-				brokerState.retiredBrokerClients.size > 0 ||
-				brokerState.failedBrokerClients.size > 0 ||
-				brokerState.clientClosePromises.size > 0 ||
-				brokerState.customCleanupPromises.size > 0 ||
-				brokerState.brokerFencedConnects.size > 0
-			))
+				throw Object.assign(new Error("Legacy fallback is active"), {
+					code: "broker_fallback_active",
+				});
+			if (
+				brokerHasUnresolvedTeardown(brokerState) &&
+				(brokerState.brokerTeardownPending ||
+					brokerState.retiredBrokerClients.size > 0 ||
+					brokerState.failedBrokerClients.size > 0 ||
+					brokerState.clientClosePromises.size > 0 ||
+					brokerState.customCleanupPromises.size > 0 ||
+					brokerState.brokerFencedConnects.size > 0)
+			)
 				throw Object.assign(new Error("Broker teardown is still pending"), {
 					code: "broker_process_pending",
 				});
@@ -2435,18 +2719,26 @@ export async function googleSearchWithDependencies(
 		await withBrokerLifecycle(async () => {
 			assertBrokerBudget({ deadlineAt, signal: options.signal });
 			if (brokerGlobalTeardownActive)
-				throw Object.assign(new Error("Global broker teardown is still pending"), { code: "broker_process_pending" });
+				throw Object.assign(new Error("Global broker teardown is still pending"), {
+					code: "broker_process_pending",
+				});
 			if (!brokerEnabled()) {
 				const token = publishBrokerClient(brokerState, connectedClient);
 				brokerState.retiredBrokerClients.add(connectedClient);
 				await closeBrokerClientOnce(brokerState, connectedClient, token.generation);
 				throw brokerStartupCancellationError();
 			}
-			if (!usesManagedBroker && brokerState.brokerClient && brokerState.brokerClient !== connectedClient && brokerState.brokerClient.connected === false) {
+			if (
+				!usesManagedBroker &&
+				brokerState.brokerClient &&
+				brokerState.brokerClient !== connectedClient &&
+				brokerState.brokerClient.connected === false
+			) {
 				const disconnected = brokerState.brokerClient;
 				brokerState.brokerClient = null;
 				const generation = currentClientGeneration(brokerState, disconnected);
-				if (generation !== undefined) await closeBrokerClientOnce(brokerState, disconnected, generation);
+				if (generation !== undefined)
+					await closeBrokerClientOnce(brokerState, disconnected, generation);
 			}
 			if (
 				brokerState.brokerGenerationUnavailable &&
@@ -2457,7 +2749,11 @@ export async function googleSearchWithDependencies(
 				throw Object.assign(new Error("Broker generation unavailable"), {
 					code: "connection_closed",
 				});
-			if (!usesManagedBroker && brokerState.brokerClient && brokerState.brokerClient !== connectedClient)
+			if (
+				!usesManagedBroker &&
+				brokerState.brokerClient &&
+				brokerState.brokerClient !== connectedClient
+			)
 				await retireSupersededBrokerClient(brokerState, brokerState.brokerClient);
 			retainedToken = retainBrokerClient(brokerState, connectedClient);
 			if (!usesManagedBroker) brokerState.brokerClient = connectedClient;
@@ -2509,11 +2805,7 @@ export async function googleSearchWithDependencies(
 				brokerState.brokerFencedConnects.add(connectAttempt);
 			let cleanupResources: BrokerResources | null = null;
 			let cleanupOwnerToken: BrokerClientToken | undefined;
-			if (
-				!retainedClient &&
-				connectAttemptCandidate &&
-				!connectAttemptAdopted
-			) {
+			if (!retainedClient && connectAttemptCandidate && !connectAttemptAdopted) {
 				try {
 					await closeUnadoptedConnectClient(connectAttemptCandidate, connectAttempt);
 					cleanupOutcome = "succeeded";
@@ -2528,7 +2820,11 @@ export async function googleSearchWithDependencies(
 				const ownerToken = retainedToken ?? {
 					state: brokerStateForClient(client) ?? brokerState,
 					client,
-					generation: currentClientGeneration(brokerStateForClient(client) ?? brokerState, client) ?? 0,
+					generation:
+						currentClientGeneration(
+							brokerStateForClient(client) ?? brokerState,
+							client,
+						) ?? 0,
 				};
 				cleanupOwnerToken = ownerToken;
 				const ownerState = ownerToken.state;
@@ -2543,12 +2839,17 @@ export async function googleSearchWithDependencies(
 				ownerState.retiredBrokerClients.add(client);
 				// Quarantine before invoking an arbitrary cleanup hook. A timed-out
 				// hook must not leave a client eligible for a later acquisition.
-				if (ownerState.brokerClient === client) cleanupResources = detachBrokerResources(ownerState, client);
+				if (ownerState.brokerClient === client)
+					cleanupResources = detachBrokerResources(ownerState, client);
 				else if (ownerState.retiredBrokerClients.delete(client)) {
 					const deferredProcess = ownerState.brokerDeferredProcess;
 					ownerState.brokerDeferredProcess = null;
-					cleanupResources = { state: ownerState, client, processHandle: deferredProcess };
-			}
+					cleanupResources = {
+						state: ownerState,
+						client,
+						processHandle: deferredProcess,
+					};
+				}
 			}
 			if (!client) {
 				// A connector can still resolve after this request has fenced. The
@@ -2569,8 +2870,11 @@ export async function googleSearchWithDependencies(
 			try {
 				let customCleanupPromise: Promise<void> | undefined;
 				if (cleanup !== defaultCleanup && client) {
-					const ownerState = cleanupOwnerToken?.state ?? brokerStateForClient(client) ?? brokerState;
-					const generation = cleanupOwnerToken?.generation ?? currentClientGeneration(ownerState, client);
+					const ownerState =
+						cleanupOwnerToken?.state ?? brokerStateForClient(client) ?? brokerState;
+					const generation =
+						cleanupOwnerToken?.generation ??
+						currentClientGeneration(ownerState, client);
 					if (generation !== undefined) {
 						customCleanupPromise = startTrackedCustomCleanup(
 							ownerState,
@@ -2583,7 +2887,7 @@ export async function googleSearchWithDependencies(
 				await runBoundedCleanup(() =>
 					cleanup === defaultCleanup && cleanupResources
 						? teardownBrokerResources(cleanupResources)
-						: customCleanupPromise ?? cleanup(client),
+						: (customCleanupPromise ?? cleanup(client)),
 				);
 				cleanupOutcome = "succeeded";
 			} catch (cleanupFailure) {
@@ -2623,8 +2927,8 @@ export async function googleSearchWithDependencies(
 					: aborted
 						? "aborted"
 						: expired
-						? "deadline"
-						: "no_budget",
+							? "deadline"
+							: "no_budget",
 			);
 			throw error;
 		}
@@ -2645,11 +2949,7 @@ export async function googleSearchWithDependencies(
 			emitFailure(
 				error,
 				"skipped",
-				cleanupAborted
-					? "aborted"
-					: cleanupExpired
-						? "deadline"
-						: "cleanup_failed",
+				cleanupAborted ? "aborted" : cleanupExpired ? "deadline" : "cleanup_failed",
 			);
 			if (releaseBrokerAcquisition) {
 				await releaseBrokerAcquisition();
@@ -2673,7 +2973,10 @@ export async function googleSearchWithDependencies(
 		// ordinary broker failure. Never turn that state into a legacy request:
 		// doing so could overlap a connector that is still able to publish or a
 		// cleanup that has not yet reached a terminal state.
-		if (errorCode(error) === "broker_process_pending" || errorCode(error) === "broker_fallback_active") {
+		if (
+			errorCode(error) === "broker_process_pending" ||
+			errorCode(error) === "broker_fallback_active"
+		) {
 			emitFailure(error, "skipped", "shared_active");
 			throw error;
 		}
@@ -2689,7 +2992,11 @@ export async function googleSearchWithDependencies(
 			);
 			throw error;
 		}
-		const releaseFallback = await reserveLegacyFallback(brokerState, deadlineAt, options.signal);
+		const releaseFallback = await reserveLegacyFallback(
+			brokerState,
+			deadlineAt,
+			options.signal,
+		);
 		if (!releaseFallback) {
 			emitFailure(error, "skipped", "shared_active");
 			throw error;
@@ -2697,11 +3004,12 @@ export async function googleSearchWithDependencies(
 
 		try {
 			const legacyResult = await runLegacyWithFallbackBarrier(
-				() => legacySearch(query, {
-					...options,
-					timeoutMs: Math.max(deadlineAt - Date.now(), 1),
-					deadlineAt,
-				}),
+				() =>
+					legacySearch(query, {
+						...options,
+						timeoutMs: Math.max(deadlineAt - Date.now(), 1),
+						deadlineAt,
+					}),
 				deadlineAt,
 				options.signal,
 				releaseFallback,
@@ -2709,17 +3017,10 @@ export async function googleSearchWithDependencies(
 			emitFailure(error, "succeeded", "broker_failure");
 			return legacyResult;
 		} catch (legacyError) {
-			const legacyAborted = isBrokerCancellation(
-				legacyError,
-				options.signal,
-			);
+			const legacyAborted = isBrokerCancellation(legacyError, options.signal);
 			const legacyExpired = Date.now() >= deadlineAt;
 			if (legacyAborted || legacyExpired) {
-				emitFailure(
-					error,
-					"skipped",
-					legacyAborted ? "aborted" : "deadline",
-				);
+				emitFailure(error, "skipped", legacyAborted ? "aborted" : "deadline");
 			} else {
 				emitFailure(error, "failed", "broker_failure");
 			}

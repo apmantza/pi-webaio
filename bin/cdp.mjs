@@ -398,9 +398,7 @@ class CDP {
 						try {
 							// Observe the return value so an async handler rejecting
 							// after an await cannot become an unhandled rejection.
-							void Promise.resolve(handler(msg.params || {}, msg)).catch(
-								() => {},
-							);
+							void Promise.resolve(handler(msg.params || {}, msg)).catch(() => {});
 						} catch {
 							// Handler errors must not break the message loop.
 						}
@@ -743,9 +741,7 @@ async function evalStr(cdp, sid, expression) {
 		_mainCtx.delete(sid);
 		contextId = await captureMainContext(cdp, sid);
 		if (contextId == null) {
-			throw new Error(
-				"Failed to re-capture execution context after navigation",
-			);
+			throw new Error("Failed to re-capture execution context after navigation");
 		}
 		_mainCtx.set(sid, contextId);
 		return _evalWith(contextId);
@@ -1196,14 +1192,10 @@ async function getOrStartTabDaemon(targetId) {
 		unlinkSync(sp);
 	} catch {}
 
-	const child = spawn(
-		process.execPath,
-		[process.argv[1], "_daemon", targetId],
-		{
-			detached: true,
-			stdio: "ignore",
-		},
-	);
+	const child = spawn(process.execPath, [process.argv[1], "_daemon", targetId], {
+		detached: true,
+		stdio: "ignore",
+	});
 	child.unref();
 
 	for (let i = 0; i < DAEMON_CONNECT_RETRIES; i++) {
