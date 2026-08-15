@@ -257,9 +257,7 @@ export function parseBingResults(html: string): SearchResult[] {
 			const u = new URL(rawUrl, "https://www.bing.com");
 			if (u.pathname.startsWith("/ck/a") && u.searchParams.has("u")) {
 				const encoded = u.searchParams.get("u")!;
-				const normalized = encoded.startsWith("a1")
-					? encoded.slice(2)
-					: encoded;
+				const normalized = encoded.startsWith("a1") ? encoded.slice(2) : encoded;
 				const decoded = Buffer.from(normalized, "base64").toString("utf8");
 				url = /^https?:/i.test(decoded) ? decoded : undefined;
 			} else {
@@ -270,7 +268,8 @@ export function parseBingResults(html: string): SearchResult[] {
 		}
 
 		if (!url || !/^https?:/i.test(url)) continue;
-		if (!checkSearchFilters(url, extractDomain(url) ?? "", ["bing.com"])) continue;
+		if (!checkSearchFilters(url, extractDomain(url) ?? "", ["bing.com"]))
+			continue;
 
 		const snippet = el.querySelector(".b_caption p")?.textContent?.trim() || "";
 		results.push({ title, url, snippet, domain: extractDomain(url) });
@@ -290,8 +289,7 @@ export function parseMojeekResults(html: string): SearchResult[] {
 	// Snippet is consistently `p.s` across all implementations.
 	for (const el of document.querySelectorAll("ul.results-standard li")) {
 		const a =
-			el.querySelector("h2 a.title, h2 a.ob, h2 a[class*='title'], h2 a") ||
-			null;
+			el.querySelector("h2 a.title, h2 a.ob, h2 a[class*='title'], h2 a") || null;
 		if (!a) continue;
 		const rawUrl = a.getAttribute("href") || "";
 		const title = a.textContent?.trim() || "";
@@ -306,8 +304,7 @@ export function parseMojeekResults(html: string): SearchResult[] {
 		}
 		if (!url || !/^https?:/i.test(url)) continue;
 		const hostname = extractDomain(url);
-		if (!hostname || !checkSearchFilters(url, hostname, ["mojeek.com"]))
-			continue;
+		if (!hostname || !checkSearchFilters(url, hostname, ["mojeek.com"])) continue;
 
 		const snippet = el.querySelector("p.s")?.textContent?.trim() || "";
 		results.push({ title, url, snippet, domain: hostname });
@@ -362,9 +359,7 @@ export function parseBraveResults(html: string): SearchResult[] {
 
 		const titleMatch = block.match(/search-snippet-title[^>]*>([^<]+)<\/div>/);
 		const title =
-			titleMatch?.[1]?.trim() ||
-			block.match(/title="([^"]+)"/)?.[1]?.trim() ||
-			"";
+			titleMatch?.[1]?.trim() || block.match(/title="([^"]+)"/)?.[1]?.trim() || "";
 
 		const gsMatch = block.match(
 			/generic-snippet[^>]*>[\s\S]*?content[^>]*>([\s\S]*?)<\/div>/,
@@ -739,11 +734,7 @@ export function applyDomainDiversityCap<T extends { result: SearchResult }>(
 	const counts = new Map<string, number>();
 	for (const entry of scored) {
 		const domain = stripWww(
-			(
-				entry.result.domain ||
-				extractDomain(entry.result.url) ||
-				""
-			).toLowerCase(),
+			(entry.result.domain || extractDomain(entry.result.url) || "").toLowerCase(),
 		);
 		const seen = counts.get(domain) || 0;
 		if (seen < cap) {
@@ -904,8 +895,7 @@ export function engineStatusNotes(engineStatus: EngineStatusMap): string[] {
 	const notes: string[] = [];
 	for (const id of ENGINE_IDS) {
 		const entry = engineStatus[id];
-		if (!entry || entry.status === "ok" || entry.status === "disabled")
-			continue;
+		if (!entry || entry.status === "ok" || entry.status === "disabled") continue;
 		// A deadline cutoff carries the measured latency so the note reads
 		// `_(Bing: timed out after 4.5s)_` rather than a bare "timed out" (P3).
 		const reason =
@@ -945,11 +935,7 @@ export function renderSearchResults(
 			if (compact) {
 				const sourceType =
 					r.sourceType ??
-					classifySourceType(
-						r.domain || extractDomain(r.url) || "",
-						r.title,
-						r.url,
-					);
+					classifySourceType(r.domain || extractDomain(r.url) || "", r.title, r.url);
 				return `${i + 1}. **${r.title}** — ${r.url} [${sourceType}]`;
 			}
 			const domainTag = r.domain ? ` *(${r.domain})*` : "";
@@ -1005,8 +991,7 @@ export async function searchWeb(
 
 	const commonHeaders = {
 		Accept: "text/html",
-		"User-Agent":
-			"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+		"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
 	};
 
 	const enginesBase = [
@@ -1041,10 +1026,7 @@ export async function searchWeb(
 
 	const promises = engines.map((engine) => {
 		if (!isEngineAvailable(engine.id)) {
-			debug(
-				"search",
-				`${engine.id} skipped: cooled down after recent failures`,
-			);
+			debug("search", `${engine.id} skipped: cooled down after recent failures`);
 			return Promise.resolve({
 				id: engine.id,
 				res: null,

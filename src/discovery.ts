@@ -222,29 +222,29 @@ export async function crawl(
 // ─── Discover (main entry point) ───────────────────────────────────
 
 export async function discover(
-baseUrl: string,
-max: number,
-opts?: FetchOpts,
+	baseUrl: string,
+	max: number,
+	opts?: FetchOpts,
 ): Promise<string[]> {
-const r = await smartFetch(baseUrl, opts);
-if (!r || r.status >= 400)
-throw new Error(`HTTP ${r?.status ?? "unknown"}: ${baseUrl}`);
+	const r = await smartFetch(baseUrl, opts);
+	if (!r || r.status >= 400)
+		throw new Error(`HTTP ${r?.status ?? "unknown"}: ${baseUrl}`);
 
-// new URL throws on malformed input; a malformed response URL must not
-// crash discovery — fall back to the base URL's own components.
-let actual: URL;
-let original: URL;
-try {
-actual = new URL(r.url);
-} catch {
-actual = new URL(baseUrl);
-}
-try {
-original = new URL(baseUrl);
-} catch {
-throw new Error(`Invalid base URL: ${baseUrl}`);
-}
-const html = r.text;
+	// new URL throws on malformed input; a malformed response URL must not
+	// crash discovery — fall back to the base URL's own components.
+	let actual: URL;
+	let original: URL;
+	try {
+		actual = new URL(r.url);
+	} catch {
+		actual = new URL(baseUrl);
+	}
+	try {
+		original = new URL(baseUrl);
+	} catch {
+		throw new Error(`Invalid base URL: ${baseUrl}`);
+	}
+	const html = r.text;
 
 	const hosts = new Set([original.hostname, actual.hostname]);
 	const scope = getScopePath(actual.pathname);
@@ -258,11 +258,7 @@ const html = r.text;
 	for (const o of origins) {
 		strategies.push(sitemapFromRobots(o));
 		for (const bp of basePaths) {
-			for (const name of [
-				"sitemap.xml",
-				"sitemap_index.xml",
-				"sitemap-0.xml",
-			]) {
+			for (const name of ["sitemap.xml", "sitemap_index.xml", "sitemap-0.xml"]) {
 				strategies.push(fetchSitemap(`${o}${bp}${name}`));
 			}
 		}

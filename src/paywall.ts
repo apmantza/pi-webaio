@@ -725,12 +725,7 @@ export async function fetchWithBypass(
 				const pooled = await browserPool.acquirePage();
 				browser = pooled.page.context().browser();
 				try {
-					return await runBypassPage(
-						pooled.page,
-						url,
-						blockPatterns,
-						domOverride,
-					);
+					return await runBypassPage(pooled.page, url, blockPatterns, domOverride);
 				} finally {
 					pooled.release();
 				}
@@ -890,11 +885,7 @@ export async function bypassUrl(
 				break;
 			case "ua:custom":
 				if (strategy?.useragentCustom) {
-					result = await tryCustomUAFetch(
-						url,
-						strategy.useragentCustom,
-						stepOpts,
-					);
+					result = await tryCustomUAFetch(url, strategy.useragentCustom, stepOpts);
 				}
 				break;
 			case "referer:google":
@@ -902,11 +893,7 @@ export async function bypassUrl(
 				break;
 			case "block_js":
 				if (!opts.skipBrowser) {
-					result = await tryBlockJSFetch(
-						url,
-						strategy ?? GENERIC_STRATEGY,
-						opts,
-					);
+					result = await tryBlockJSFetch(url, strategy ?? GENERIC_STRATEGY, opts);
 				}
 				break;
 			case "archive":
@@ -951,8 +938,7 @@ async function tryCustomUAFetch(
 			redirect: "follow",
 			headers: {
 				"User-Agent": ua,
-				Accept:
-					"text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+				Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 				"Accept-Language": "en-US,en;q=0.9",
 			},
 			browser: (opts.browser ?? "chrome_145") as any,

@@ -293,10 +293,7 @@ export class BrowserCdpTransport extends EventEmitter {
 	send(method, params = {}, { sessionId, signal, deadlineAt } = {}) {
 		if (!this.connected || !this.socket)
 			return Promise.reject(
-				new CdpTransportError(
-					"cdp_disconnected",
-					"CDP browser is disconnected",
-				),
+				new CdpTransportError("cdp_disconnected", "CDP browser is disconnected"),
 			);
 		if (typeof method !== "string" || !method)
 			return Promise.reject(
@@ -310,8 +307,7 @@ export class BrowserCdpTransport extends EventEmitter {
 		}
 		if (signal?.aborted) return Promise.reject(signalError());
 		const id = this.nextId++;
-		const normalizedSessionId =
-			typeof sessionId === "string" ? sessionId : null;
+		const normalizedSessionId = typeof sessionId === "string" ? sessionId : null;
 		const pending = {
 			id,
 			generation: this.generation,
@@ -328,10 +324,7 @@ export class BrowserCdpTransport extends EventEmitter {
 			pending.reject = reject;
 		});
 		pending.abort = () => this.settle(pending, signalError());
-		pending.timer = setTimeout(
-			pending.abort,
-			Math.max(deadline - Date.now(), 1),
-		);
+		pending.timer = setTimeout(pending.abort, Math.max(deadline - Date.now(), 1));
 		if (signal) signal.addEventListener("abort", pending.abort, { once: true });
 		this.pending.set(id, pending);
 		try {
@@ -346,10 +339,7 @@ export class BrowserCdpTransport extends EventEmitter {
 		} catch (error) {
 			this.settle(
 				pending,
-				new CdpTransportError(
-					"cdp_disconnected",
-					String(error?.message || error),
-				),
+				new CdpTransportError("cdp_disconnected", String(error?.message || error)),
 			);
 		}
 		return promise;
@@ -377,8 +367,7 @@ export class BrowserCdpTransport extends EventEmitter {
 			"CDP browser WebSocket disconnected",
 			{ generation: this.generation },
 		);
-		for (const pending of [...this.pending.values()])
-			this.settle(pending, error);
+		for (const pending of [...this.pending.values()]) this.settle(pending, error);
 		this.emit("close", error);
 	}
 

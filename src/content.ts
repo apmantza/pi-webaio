@@ -351,9 +351,7 @@ export function isLikelyJSRendered(html: string): boolean {
 		const { document } = parseHTML(html);
 		const body = document.querySelector("body");
 		if (!body) return false;
-		body
-			.querySelectorAll("script, style")
-			.forEach((el: Element) => el.remove());
+		body.querySelectorAll("script, style").forEach((el: Element) => el.remove());
 		const textContent = (body.textContent || "").replace(/\s+/g, " ").trim();
 		const scriptCount = document.querySelectorAll("script").length;
 		return textContent.length < 500 && scriptCount > 3;
@@ -374,8 +372,7 @@ export function extractReadability(
 		const article = reader.parse();
 		if (!article || (article.textContent?.length ?? 0) < 200) return null;
 		return {
-			title:
-				article.title || extractHeadingTitle(article.textContent || "") || "",
+			title: article.title || extractHeadingTitle(article.textContent || "") || "",
 			content: article.textContent || "",
 		};
 	} catch {
@@ -468,9 +465,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 export function isJsonContentType(ct: string): boolean {
 	const norm = ct.split(";")[0]?.trim().toLowerCase() ?? "";
 	return (
-		norm === "application/json" ||
-		norm === "text/json" ||
-		norm.endsWith("+json")
+		norm === "application/json" || norm === "text/json" || norm.endsWith("+json")
 	);
 }
 
@@ -762,12 +757,7 @@ export async function runHtmlPipeline(
 	// the HTML we already downloaded. The Jina proxy reader re-fetches the
 	// same page server-side, so it is a *fallback* for genuinely JS-heavy
 	// pages that yield too few words locally — not the first step.
-	const local = await runLocalExtraction(
-		cleaned,
-		hookedText,
-		finalUrl,
-		rawHtml,
-	);
+	const local = await runLocalExtraction(cleaned, hookedText, finalUrl, rawHtml);
 
 	let chosen = local;
 	const localWords = wordCount(local.content || "");
@@ -932,12 +922,7 @@ export async function pullPage(
 		if (url.toLowerCase().endsWith(".pdf")) {
 			const pdf = await extractPDF(binPeek.buffer, url);
 			if (pdf) return finalizePullResult(pdf, redirectNotice);
-			const dl = await downloadToTemp(
-				binPeek.buffer,
-				"application/pdf",
-				"",
-				url,
-			);
+			const dl = await downloadToTemp(binPeek.buffer, "application/pdf", "", url);
 			return finalizePullResult(dl, redirectNotice);
 		}
 
@@ -1084,17 +1069,13 @@ export async function pullPage(
 	}
 
 	if (isJsonContentType(ct) || isLikelyJsonBody(text)) {
-		return finalizePullResult(
-			formatJsonContent(text, finalUrl),
-			redirectNotice,
-		);
+		return finalizePullResult(formatJsonContent(text, finalUrl), redirectNotice);
 	}
 
 	if (ct.includes("text/plain") || ct.includes("text/markdown")) {
 		let titleFromUrl = "";
 		try {
-			titleFromUrl =
-				new URL(finalUrl).pathname.split("/").pop() || finalUrl;
+			titleFromUrl = new URL(finalUrl).pathname.split("/").pop() || finalUrl;
 		} catch {
 			titleFromUrl = finalUrl;
 		}
@@ -1233,9 +1214,7 @@ export async function pullPageEnhanced(
 		if (opts?.bypass && !result.ok && result.errorInfo?.statusCode) {
 			const status = result.errorInfo.statusCode;
 			if (status === 403 || status === 401) {
-				const knownStrategy = isKnownPaywallSite(url)
-					? findStrategy(url)
-					: null;
+				const knownStrategy = isKnownPaywallSite(url) ? findStrategy(url) : null;
 				if (knownStrategy) {
 					if (process.env.PI_WEBAIO_DEBUG) {
 						console.warn(

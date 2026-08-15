@@ -255,11 +255,9 @@ function getPortPid(port) {
 		// hostile port value cannot reach a shell (CWE-78). The port is
 		// already validated as a plain integer above.
 		try {
-			const lsofOut = execFileSync(
-				"lsof",
-				["-i", `:${port}`, "-t"],
-				{ encoding: "utf8" },
-			).trim();
+			const lsofOut = execFileSync("lsof", ["-i", `:${port}`, "-t"], {
+				encoding: "utf8",
+			}).trim();
 			if (lsofOut) return Number.parseInt(lsofOut.split("\n")[0], 10) || null;
 		} catch {
 			// lsof absent or failed — fall through to ss.
