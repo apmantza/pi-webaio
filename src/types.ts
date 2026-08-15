@@ -73,23 +73,12 @@ export interface Page {
 	markdown: string;
 }
 
-export interface FetchErrorInfo {
-	message: string;
-	code?:
-		| "invalid_url"
-		| "http_error"
-		| "timeout"
-		| "network_error"
-		| "no_content"
-		| "blocked"
-		| "processing_error"
-		| "download_error"
-		| "too_many_redirects"
-		| "unknown";
-	phase?: "validation" | "connecting" | "waiting" | "loading" | "processing";
-	retryable?: boolean;
-	statusCode?: number;
-}
+// FetchErrorInfo is defined in tools/fetch-error.ts (error-specific) and
+// re-exported here for consumers that use the legacy payload shape directly.
+// Re-exporting (rather than defining) keeps the dependency edge one-way
+// (types.ts -> fetch-error.ts), breaking the circular import (madge).
+import type { FetchErrorInfo } from "./tools/fetch-error.ts";
+export type { FetchErrorInfo } from "./tools/fetch-error.ts";
 
 export interface PullResult {
 	ok: boolean;

@@ -10,7 +10,41 @@
 // Update cadence: BPC publishes updates weekly. The strategies are
 // stable across most news groups; vendor relationships rarely change.
 
-import type { PaywallStrategy } from "./paywall.ts";
+// ─── Strategy types ────────────────────────────────────────────────
+// Defined here (not in paywall.ts) so paywall-sites.ts has no import edge
+// to paywall.ts: paywall.ts imports these from paywall-sites.ts instead,
+// breaking the circular dependency (madge).
+
+/** Which bypass strategy to try next. */
+export type BypassStrategyType =
+	| "ua:googlebot" // Spoof Googlebot UA — most common, ~85 sites
+	| "ua:bingbot" // Spoof bingbot UA
+	| "ua:facebookbot" // Spoof facebookexternalhit UA
+	| "ua:custom" // Custom UA string per-site
+	| "referer:google" // Google search referer header
+	| "block_js" // Playwright with paywall JS blocked — ~425 sites
+	| "archive" // Fetch from archive.org / archive.is — ~274 sites
+	| "cookies" // Strip tracking cookies — ~138 sites
+	| "archive_first" // Try archive before primary (cached versions)
+	| "auto"; // Pick the cheapest strategy at runtime
+
+/** A per-site bypass strategy: ordered steps plus optional tweaks. */
+export interface PaywallStrategy {
+	/** Ordered list of strategies to attempt. */
+	steps: BypassStrategyType[];
+	/** Patterns Playwright should abort (e.g. ["piano.io", "*.tinypass.com"]). */
+	blockScripts?: string[];
+	/** DOM CSS to apply after page load (hide paywall divs, set overflow). */
+	domOverride?: boolean;
+	/** Custom UA string (only for "ua:custom"). */
+	useragentCustom?: string;
+	/** Whether to allow cookies (false = send Cookie: header empty). */
+	allowCookies?: boolean;
+	/** Cookies to drop by name (tracking cookies). */
+	dropCookies?: string[];
+	/** Path → custom strategy override (e.g. subdomain rules). */
+	overrides?: Record<string, Partial<PaywallStrategy>>;
+}
 
 // ─── Helper constructors ───────────────────────────────────────────
 

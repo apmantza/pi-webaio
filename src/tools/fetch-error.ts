@@ -13,7 +13,6 @@
 //   packages/core/src/format.ts  (smart-fetch)
 //   packages/core/src/tool.ts    (smart-fetch)
 
-import type { FetchErrorInfo, FetchOpts } from "../types.ts";
 import { redactSecrets } from "../redact.ts";
 
 // ─── Codes (26) ───────────────────────────────────────────────────
@@ -55,6 +54,32 @@ export type FetchErrorCode =
 	| "no_content"
 	| "unknown";
 
+// ─── Legacy payload (backwards compatible with the old FetchErrorInfo) ──
+//
+// Defined here (not in types.ts) so fetch-error.ts has no import edge to
+// types.ts: types.ts re-exports this type for consumers that still use
+// FetchErrorInfo directly. This breaks the types.ts <-> fetch-error.ts
+// circular dependency (madge).
+
+/** The legacy error-info payload carried by PullResult.errorInfo. */
+export interface FetchErrorInfo {
+	message: string;
+	code?:
+		| "invalid_url"
+		| "http_error"
+		| "timeout"
+		| "network_error"
+		| "no_content"
+		| "blocked"
+		| "processing_error"
+		| "download_error"
+		| "too_many_redirects"
+		| "unknown";
+	phase?: "validation" | "connecting" | "waiting" | "loading" | "processing";
+	retryable?: boolean;
+	statusCode?: number;
+}
+
 // ─── Phases (10) ──────────────────────────────────────────────────
 
 /** A timeline stage in the fetch pipeline. */
@@ -94,7 +119,7 @@ export interface FetchErrorContext {
 	/** 1-based attempt number (1 = first try) */
 	attempt?: number;
 	/** Scrape mode that was used */
-	mode?: FetchOpts["mode"];
+	mode?: "fast" | "fingerprint" | "browser" | "auto";
 	/** Original underlying error (Error instance, string, etc.) */
 	cause?: unknown;
 }

@@ -21,37 +21,17 @@ import {
 	DEFAULT_TIMEOUT_MS,
 } from "./fetch.ts";
 import { PAYWALL_SITES, PAYWALL_GROUPS } from "./paywall-sites.ts";
+import type {
+	BypassStrategyType,
+	PaywallStrategy,
+} from "./paywall-sites.ts";
 
 // ─── Types ─────────────────────────────────────────────────────────
-
-export type BypassStrategyType =
-	| "ua:googlebot" // Spoof Googlebot UA — most common, ~85 sites
-	| "ua:bingbot" // Spoof bingbot UA
-	| "ua:facebookbot" // Spoof facebookexternalhit UA
-	| "ua:custom" // Custom UA string per-site
-	| "referer:google" // Google search referer header
-	| "block_js" // Playwright with paywall JS blocked — ~425 sites
-	| "archive" // Fetch from archive.org / archive.is — ~274 sites
-	| "cookies" // Strip tracking cookies — ~138 sites
-	| "archive_first" // Try archive before primary (cached versions)
-	| "auto"; // Pick the cheapest strategy at runtime
-
-export interface PaywallStrategy {
-	/** Ordered list of strategies to attempt. */
-	steps: BypassStrategyType[];
-	/** Patterns Playwright should abort (e.g. ["piano.io", "*.tinypass.com"]). */
-	blockScripts?: string[];
-	/** DOM CSS to apply after page load (hide paywall divs, set overflow). */
-	domOverride?: boolean;
-	/** Custom UA string (only for "ua:custom"). */
-	useragentCustom?: string;
-	/** Whether to allow cookies (false = send Cookie: header empty). */
-	allowCookies?: boolean;
-	/** Cookies to drop by name (tracking cookies). */
-	dropCookies?: string[];
-	/** Path → custom strategy override (e.g. subdomain rules). */
-	overrides?: Record<string, Partial<PaywallStrategy>>;
-}
+// BypassStrategyType and PaywallStrategy now live in paywall-sites.ts
+// (the strategy catalog) and are re-exported here for callers that import
+// them from paywall.ts. Keeping them in the catalog file breaks the
+// circular dependency (madge).
+export type { BypassStrategyType, PaywallStrategy } from "./paywall-sites.ts";
 
 export interface PaywallDetection {
 	/** Did the content look paywalled? */
