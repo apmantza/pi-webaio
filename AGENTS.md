@@ -17,7 +17,7 @@ Every implementation change must receive a separate adversarial review before it
 ```
 pi-webaio/
 ├── index.ts                  ← Main extension entry point. Registers 8 pi tools.
-├── pi-entry.mjs              ← pi.extensions entry. Prefers compiled dist/index.js, falls back to index.ts for git installs.
+├── pi-entry.mjs              ← pi.extensions entry. Prefers compiled dist/index.js (built by prepare on npm AND git installs), falls back to index.ts for unbuilt source checkouts.
 ├── src/
 │   ├── google-ai.ts          ← TypeScript wrapper — spawns CDP child processes
 │   ├── search.ts             ← HTTP search (DDG, Brave, Yahoo, Bing) + engine health, caching, dedup, source-type ranking, goggles
@@ -260,9 +260,9 @@ pi-webaio/
 
 ### Build & Distribution
 
-- **Precompiled `dist/`**: `tsconfig.dist.json` emits `index.ts` + `src/**/*.ts` to `dist/`. `package.json` `main` points to `./dist/index.js`; `files` ships `dist/` instead of `src/`.
-- **`pi.extensions` → `./pi-entry.mjs`** (v0.7.0): a loader that prefers the compiled `./dist/index.js` (npm installs, no transpile cost) and falls back to the TypeScript source `./index.ts` (git installs, which have no `dist/` and no devDeps). No build step is needed for git installs.
-- **`prepare` hook**: `scripts/prepare.mjs` runs on `npm install`. It locates `tsc` by resolving the always-exported `typescript/package.json` and joining `bin/tsc` (TypeScript 7's exports map no longer exposes `./bin/tsc`), then builds `dist/`. The catch is narrowed so only a genuine "typescript not installed" skips the build; any other resolution error fails loudly (v0.7.3).
+- **Precompiled `dist/`**: `tsconfig.dist.json` emits `index.ts` + `src/**/*.ts` to `dist/`. `package.json` `main` points to `./dist/index.js`; `files` ships `dist/` instead of `src/`. `dist/` is **gitignored**; `prepare` always builds it — locally via tsc when typescript is present, otherwise by fetching the pinned compiler transiently via npx (`typescript@7.0.2`). That npx fallback is what makes pi's git installs work: they run `npm install --omit=dev` (typescript absent), so without it `prepare` would silently skip and leave `main`/pi-entry pointing at a missing `dist/` (issue #100).
+- **`pi.extensions` → `./pi-entry.mjs`** (v0.7.0): a loader that prefers the compiled `./dist/index.js` (npm installs and git installs — `prepare` builds dist on both) and falls back to the TypeScript source `./index.ts` only as a safety net for unbuilt source checkouts. No build step is needed for git installs beyond the `prepare` hook.
+- **`prepare` hook**: `scripts/prepare.mjs` runs on `npm install`. It locates `tsc` by resolving the always-exported `typescript/package.json` and joining `bin/tsc` (TypeScript 7's exports map no longer exposes `./bin/tsc`), then builds `dist/`. When typescript is absent (`npm install --omit=dev`, pi's git-install path), it fetches the pinned compiler transiently via npx (`typescript@7.0.2`) and builds from source rather than skipping — so git installs get a fresh `dist/` with zero per-boot transpile (v0.7.3, #100 fix). Any other resolution error fails loudly.
 - **MCP bin**: `bin/pi-webaio-mcp.mjs` ships in `files` and is declared under `bin`.
 - **Scripts**: `build`, `build:dist`, `prepare`, `lint` (`tsc --project tsconfig.json`), `watch`, `check:lockfile`, `bench`, `diagnose:fingerprint`, `diagnose:backends`, plus `changelog:*` release helpers.
 
@@ -373,7 +373,7 @@ The bypass flag is **opt-in** — a normal `aio-webfetch(url)` still gets the re
 
 ### Extension API (pi)
 
-- Entry point: `pi-entry.mjs` → prefers `dist/index.js` (compiled from `index.ts`), falls back to `index.ts` for git installs
+- Entry point: `pi-entry.mjs` → prefers `dist/index.js` (compiled from `index.ts`; `prepare` builds it on npm and git installs via the npx compiler fallback), falls back to `index.ts` for unbuilt source checkouts
 - Package manifest: `package.json` → `pi.extensions: ["./pi-entry.mjs"]`, `main: "./dist/index.js"`
 - Uses `import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"`
 - Tools registered via `pi.registerTool()` with typebox parameter schemas

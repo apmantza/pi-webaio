@@ -12,6 +12,8 @@ All notable changes to pi-webaio will be documented in this file.
 
 ### Fixed
 
+- **Broken git installs: `main`/pi-entry pointed at a missing `dist/`** (#100) — `dist/` was gitignored and `prepare` silently skipped the build when typescript was absent (`npm install --omit=dev`, which is exactly how pi installs git packages), so git installs had no compiled entry and pi fell back to transpiling `index.ts` on every boot. `prepare` now **never skips**: when the local compiler is missing it fetches the pinned `typescript@7.0.2` transiently via npx and builds `dist/` from source — the same production-install strategy as pi-free — so git installs get a fresh compiled entry with zero build step and zero per-boot transpile. The `index.ts` fallback in `pi-entry.mjs` remains only as a safety net for unbuilt source checkouts.
+
 ## [0.8.0] - 2026-07-31
 
 ### Added

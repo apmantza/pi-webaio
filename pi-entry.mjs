@@ -1,10 +1,12 @@
 // pi extension entry.
 //
-// npm installs ship compiled dist/ (built by prepare at publish time), which
-// pi loads directly with no transpile cost. git installs have no dist/ at all:
-// pi installs packages with `npm install --omit=dev`, so typescript is absent
-// and prepare skips the build. In that case fall back to the TypeScript
-// source, which pi (or Node >= 22.18 via native type stripping) loads directly.
+// npm installs ship compiled dist/ (built by prepare at publish time).
+// git installs ALSO get dist/: pi installs packages with `npm install
+// --omit=dev` (typescript absent), so prepare fetches the pinned compiler
+// transiently via npx (typescript@7.0.2) and builds dist from source — same
+// production-install strategy as pi-free. The .ts fallback below is only a
+// safety net for unbuilt source checkouts / dev clones (Node >= 22.18
+// native type stripping).
 let mod;
 try {
 	mod = await import("./dist/index.js");

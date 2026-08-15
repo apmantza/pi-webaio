@@ -26,10 +26,11 @@ jobs:
       - name: Lockfile in sync with package.json
         run: npm run check:lockfile
 
-      # Fail on known-vulnerable PRODUCTION deps (what actually ships to users via
-      # `npm install --omit=dev`). Scoped to high/critical to avoid blocking PRs on
-      # fix-less moderate advisories; transitive moderate ones are handled by
-      # Dependabot security updates. DevDeps are excluded — they never reach users.
+      # Fail on known-vulnerable PRODUCTION deps (what actually ships to users
+      # via `npm install --omit=dev`). Scoped to high/critical to avoid blocking
+      # PRs on fix-less moderate advisories; transitive moderate ones are
+      # handled by Dependabot security updates. DevDeps are excluded — they
+      # never reach users.
       # Peer deps are excluded as well: the only peer (pi-coding-agent) is
       # host-provided, and npm overrides do NOT cascade into a peer's subtree,
       # so its transitive brace-expansion@5.0.7 advisory (GHSA-mh99-v99m-4gvg)
@@ -73,11 +74,12 @@ jobs:
         run: npm run test:all
 
   # Simulates pi's real install path: a `git:` install runs `npm install
-  # --omit=dev`, which triggers `prepare` -> `build:dist` FROM SOURCE with the
-  # dev-only @types/node ABSENT. That's the path that broke with TS2688 in
-  # pi-lens (#193) and that the tarball-based install-test never exercises —
-  # the tarball ships pre-built dist/, so it never re-runs the build under
-  # --omit=dev.
+  # --omit=dev`, which triggers `prepare`. typescript is a devDep and is
+  # omitted, so prepare fetches the pinned compiler transiently via npx
+  # (typescript@7.0.2) and builds dist/ FROM SOURCE — the path that broke
+  # with TS2688 in pi-lens (#193) and that the tarball-based install-test
+  # never exercises (the tarball ships pre-built dist/, so it never re-runs
+  # the build under --omit=dev).
   prod-install-build:
     name: Production install build (--omit=dev, from source)
     runs-on: ubuntu-latest
@@ -91,21 +93,21 @@ jobs:
         with:
           node-version: "24"
 
-      # --omit=dev omits @types/node (a devDep); typescript is a runtime dep so
-      # tsc is present. This is the exact environment pi builds dist in.
-      - name: Install without devDeps (--omit=dev)
+      # --omit=dev omits @types/node (a devDep); typescript is also a devDep,
+      # so prepare's npx fallback (typescript@7.0.2) builds dist. This is the
+      # exact environment pi builds dist in.
+      - name: Install without devDeps (--omit=dev, prepare builds dist)
         run: npm install --omit=dev --no-audit --no-fund
-
-      - name: Build dist from source under --omit=dev (the prepare path)
-        run: npm run build:dist
 
       - name: Verify dist built and the compiled entry loads
         run: |
           test -f dist/index.js || \
-            (echo "ERROR: dist/index.js not built under --omit=dev (TS2688? prepare/build:dist failed)" && exit 1)
+            (echo "ERROR: dist/index.js not built under --omit=dev" \
+              "(TS2688? prepare/build:dist failed)" && exit 1)
           node dist/index.js 2>&1 | tee /tmp/load.txt || true
           # ERR_MODULE_NOT_FOUND = a runtime dep was wrongly in devDependencies.
-          # pi-coding-agent is a host-provided peer; its absence is expected here.
+          # pi-coding-agent is a host-provided peer; its absence is expected
+          # here.
           if grep -q "ERR_MODULE_NOT_FOUND\|Cannot find module" /tmp/load.txt \
              && ! grep -q "pi-coding-agent" /tmp/load.txt; then
             echo "FAILED: missing runtime module under --omit=dev"
@@ -143,13 +145,16 @@ jobs:
         run: |
           TARBALL=$(ls pi-webaio-*.tgz)
           echo "Checking tarball: $TARBALL"
-          # The published entry is compiled JS (prepare builds dist/); pi loads it
-          # directly instead of jiti-transpiling source on every startup.
+          # The published entry is compiled JS (prepare builds dist/);
+          # pi loads it directly instead of jiti-transpiling source on
+          # every startup.
           tar -tzf "$TARBALL" | grep "package/dist/index.js" || \
-            (echo "ERROR: dist/index.js missing from tarball (prepare build failed?)" && exit 1)
-          # Guard against accidentally shipping TS source again (reintroduces the
-          # jiti transpile-on-startup cost).
-          if tar -tzf "$TARBALL" | grep -E "package/(index\.ts|src/.*\.ts)"; then
+            (echo "ERROR: dist/index.js missing from tarball" \
+              "(prepare build failed?)" && exit 1)
+          # Guard against accidentally shipping TS source again
+          # (reintroduces the jiti transpile-on-startup cost).
+          if tar -tzf "$TARBALL" | grep -E \
+            "package/(index\.ts|src/.*\.ts)"; then
             echo "ERROR: TypeScript source leaked into the tarball" && exit 1
           fi
           # Verify pi.extensions points to a real file
@@ -166,14 +171,16 @@ jobs:
           check_field() {
             local field="$1" value="$2"
             if [ ! -f "$TMPDIR/package/$value" ]; then
-              echo "ERROR: package.json '$field' points to '$value' which is missing from the tarball"
+              echo "ERROR: package.json '$field' points to '$value'" \
+                "which is missing from the tarball"
               exit 1
             fi
             echo "OK: $field -> $value"
           }
 
           export PI_WEBAIO_PKG_DIR="$TMPDIR/package"
-          MAIN=$(node -p "require(process.env.PI_WEBAIO_PKG_DIR + '/package.json').main || ''" 2>/dev/null)
+          export PKGJSON="$PI_WEBAIO_PKG_DIR/package.json"
+          MAIN=$(node -p "require(process.env.PKGJSON).main || ''" 2>/dev/null)
           [ -n "$MAIN" ] && check_field "main" "$MAIN"
 
           # Check pi.extensions entries — this is what pi actually loads.
@@ -182,10 +189,16 @@ jobs:
             const pkgDir = process.env.PI_WEBAIO_PKG_DIR;
             const pkg = require(path.join(pkgDir, 'package.json'));
             const exts = (pkg.pi && pkg.pi.extensions) || [];
-            if (exts.length === 0) { console.error('ERROR: no pi.extensions declared'); process.exit(1); }
+            if (exts.length === 0) {
+              console.error('ERROR: no pi.extensions declared');
+              process.exit(1);
+            }
             for (const e of exts) {
               if (!fs.existsSync(path.join(pkgDir, e))) {
-                console.error('ERROR: pi.extensions entry missing from tarball: ' + e); process.exit(1);
+                console.error(
+                  'ERROR: pi.extensions entry missing from tarball: ' + e,
+                );
+                process.exit(1);
               }
               console.log('OK: pi.extensions -> ' + e);
             }
@@ -203,14 +216,17 @@ jobs:
         run: |
           INSTALL_DIR=$(npm root -g)/pi-webaio
           cd "$INSTALL_DIR"
-          # Simulate how pi loads the extension: the compiled entry, loaded by node.
+          # Simulate how pi loads the extension: the compiled entry,
+          # loaded by node.
           # ERR_MODULE_NOT_FOUND = missing dep -> fail
           # Any other error = expected in CI (no pi API available) -> pass
-          # pi-coding-agent is a host-provided peer dep; its absence is expected here
+          # pi-coding-agent is a host-provided peer dep; its absence is
+          # expected here
           ENTRY=$(node -p "require('./package.json').pi.extensions[0]")
           echo "Loading entry: $ENTRY"
           node "$ENTRY" 2>&1 | tee /tmp/load-output.txt || true
-          if grep -q "ERR_MODULE_NOT_FOUND\|Cannot find module" /tmp/load-output.txt \
+          if grep -q "ERR_MODULE_NOT_FOUND\|Cannot find module" \
+             /tmp/load-output.txt \
              && ! grep -q "pi-coding-agent" /tmp/load-output.txt; then
             echo "FAILED: missing module dependency detected"
             cat /tmp/load-output.txt
