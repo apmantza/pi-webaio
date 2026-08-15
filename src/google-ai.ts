@@ -1817,7 +1817,15 @@ async function runNodeChild(
 	return new Promise((resolve, reject) => {
 		const proc = spawn(process.execPath, args, {
 			stdio: ["ignore", "pipe", "pipe"],
-			...(options.env ? { env: options.env } : {}),
+			env: {
+				...process.env,
+				// Session-owner coupling (#96): the pi host pid flows down to
+				// the cdp.mjs CLI and its detached daemon, which polls it and
+				// exits when this process dies — instead of accumulating as an
+				// orphan daemon after session exit.
+				PI_WEBAIO_SESSION_PID: String(process.pid),
+				...(options.env ?? {}),
+			},
 		});
 		const output = collectProcessOutput(proc);
 		let settled = false;

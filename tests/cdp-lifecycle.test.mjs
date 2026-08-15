@@ -22,9 +22,13 @@ import {
 	writeFileSync,
 	unlinkSync,
 	readdirSync,
+	readFileSync,
+	mkdirSync,
+	rmSync,
 	utimesSync,
 } from "node:fs";
 import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import net from "node:net";
 import { platform, tmpdir } from "node:os";
 import { test } from "node:test";
@@ -35,6 +39,7 @@ const {
 	CDP,
 	sockPath,
 	_isPidAlive,
+	_ownerPidFromEnv,
 	_daemonRegistryPath,
 	_writeDaemonRegistry,
 	_removeDaemonRegistry,
@@ -415,5 +420,222 @@ test("daemon registry: alive pid with unreachable socket is skipped but kept", a
 		);
 	} finally {
 		_removeDaemonRegistry(targetId);
+	}
+});
+
+// ---------------------------------------------------------------------------
+// P2 — session-owner coupling (#96)
+// ---------------------------------------------------------------------------
+
+test("daemon owner: _ownerPidFromEnv parses the session pid or returns null", () => {
+	assert.equal(_ownerPidFromEnv({}), null);
+	assert.equal(_ownerPidFromEnv({ PI_WEBAIO_SESSION_PID: "" }), null);
+	assert.equal(_ownerPidFromEnv({ PI_WEBAIO_SESSION_PID: "abc" }), null);
+	assert.equal(_ownerPidFromEnv({ PI_WEBAIO_SESSION_PID: "-5" }), null);
+	assert.equal(
+		_ownerPidFromEnv({ PI_WEBAIO_SESSION_PID: "1234" }),
+		1234,
+	);
+	assert.equal(_ownerPidFromEnv({ PI_WEBAIO_SESSION_PID: "0" }), null);
+});
+
+test("daemon registry: ownerPid round-trips through write and is returned", async () => {
+	const targetId = `owntest-${process.pid}-${Date.now().toString(36)}`;
+	const sp = sockPath(targetId);
+	const connections = new Set();
+	const server = net.createServer((conn) => {
+		connections.add(conn);
+		conn.on("close", () => connections.delete(conn));
+		conn.on("error", () => {});
+	});
+	await new Promise((resolve) => server.listen(sp, resolve));
+	try {
+		const ownerPid = process.pid;
+		_writeDaemonRegistry(targetId, ownerPid);
+		const record = JSON.parse(
+			readFileSync(_daemonRegistryPath(targetId), "utf8"),
+		);
+		assert.equal(record.pid, process.pid);
+		assert.equal(record.ownerPid, ownerPid);
+		const found = await _listDaemonSocketsFromRegistry();
+		const entry = found.find((d) => d.targetId === targetId);
+		assert.ok(entry, "live daemon entry should be discoverable");
+		assert.equal(entry.socketPath, sp);
+	} finally {
+		_removeDaemonRegistry(targetId);
+		for (const conn of connections) conn.destroy();
+		await new Promise((resolve) => server.close(resolve));
+		if (platform() !== "win32") {
+			try {
+				unlinkSync(sp);
+			} catch {}
+		}
+	}
+});
+
+test("daemon registry: dead-owner entries are reaped; live-owner kept", async () => {
+	const deadPid = await obtainDeadPid();
+	const suffix = `${process.pid}-${Date.now().toString(36)}`;
+	const deadOwnerId = `deadowner-${suffix}`;
+	const liveOwnerId = `liveowner-${suffix}`;
+	const spLive = sockPath(liveOwnerId);
+	const connections = new Set();
+	const server = net.createServer((conn) => {
+		connections.add(conn);
+		conn.on("close", () => connections.delete(conn));
+		conn.on("error", () => {});
+	});
+	await new Promise((resolve) => server.listen(spLive, resolve));
+	try {
+		// Dead owner: entry must be removed on the read path.
+		writeFileSync(
+			_daemonRegistryPath(deadOwnerId),
+			JSON.stringify({
+				targetId: deadOwnerId,
+				socketPath: sockPath(deadOwnerId),
+				pid: process.pid,
+				ownerPid: deadPid,
+				startedAt: Date.now(),
+			}),
+		);
+		// Live owner (this test process): entry must survive.
+		_writeDaemonRegistry(liveOwnerId, process.pid);
+
+		const found = await _listDaemonSocketsFromRegistry();
+		assert.equal(
+			found.some((d) => d.targetId === deadOwnerId),
+			false,
+			"dead-owner entry must be filtered out",
+		);
+		assert.equal(
+			existsSync(_daemonRegistryPath(deadOwnerId)),
+			false,
+			"dead-owner entry file should be removed best-effort",
+		);
+		assert.equal(
+			found.some((d) => d.targetId === liveOwnerId),
+			true,
+			"live-owner entry must be kept",
+		);
+	} finally {
+		_removeDaemonRegistry(deadOwnerId);
+		_removeDaemonRegistry(liveOwnerId);
+		for (const conn of connections) conn.destroy();
+		await new Promise((resolve) => server.close(resolve));
+		if (platform() !== "win32") {
+			try {
+				unlinkSync(spLive);
+			} catch {}
+		}
+	}
+});
+
+test("daemon registry: entry with no ownerPid is kept (legacy format)", async () => {
+	const targetId = `legacy-${process.pid}-${Date.now().toString(36)}`;
+	const sp = sockPath(targetId);
+	const connections = new Set();
+	const server = net.createServer((conn) => {
+		connections.add(conn);
+		conn.on("close", () => connections.delete(conn));
+		conn.on("error", () => {});
+	});
+	await new Promise((resolve) => server.listen(sp, resolve));
+	try {
+		// Legacy entries predate ownerPid; the daemon still works, just with
+		// no owner-death coupling (idle TTL remains the backstop).
+		writeFileSync(
+			_daemonRegistryPath(targetId),
+			JSON.stringify({
+				targetId,
+				socketPath: sp,
+				pid: process.pid,
+				startedAt: Date.now(),
+			}),
+		);
+		const found = await _listDaemonSocketsFromRegistry();
+		assert.equal(
+			found.some((d) => d.targetId === targetId),
+			true,
+			"legacy entry with live pid must be kept",
+		);
+	} finally {
+		_removeDaemonRegistry(targetId);
+		for (const conn of connections) conn.destroy();
+		await new Promise((resolve) => server.close(resolve));
+		if (platform() !== "win32") {
+			try {
+				unlinkSync(sp);
+			} catch {}
+		}
+	}
+});
+
+test("daemon: exits within seconds when its session owner dies (#96)", async () => {
+	const chrome = await startFakeChrome();
+	const profileDir = `${tmpdir().replaceAll("\\", "/")}/cdp-owner-test-${process.pid}-${Date.now().toString(36)}`;
+	mkdirSync(profileDir, { recursive: true });
+	// Simulate the DevToolsActivePort file the daemon reads via getWsUrl().
+	writeFileSync(
+		`${profileDir}/DevToolsActivePort`,
+		`${chrome.wss.address().port}\n/devtools/browser/owner-test\n`,
+	);
+
+	// The session owner: a short-lived child that outlives daemon startup.
+	const owner = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"]);
+	const targetId = `ownerexit-${owner.pid}-${Date.now().toString(36)}`;
+	const cdpBin = fileURLToPath(new URL("../bin/cdp.mjs", import.meta.url));
+	const daemon = spawn(
+		process.execPath,
+		[cdpBin, "_daemon", targetId],
+		{
+			env: {
+				...process.env,
+				CDP_PROFILE_DIR: profileDir,
+				PI_WEBAIO_SESSION_PID: String(owner.pid),
+			},
+			stdio: ["ignore", "pipe", "pipe"],
+		},
+	);
+	let daemonErr = "";
+	daemon.stderr.on("data", (d) => (daemonErr += d.toString()));
+	try {
+		// Wait for the daemon to come up and register.
+		const deadline = Date.now() + 8000;
+		while (Date.now() < deadline && !existsSync(_daemonRegistryPath(targetId))) {
+			await sleep(100);
+		}
+		assert.ok(
+			existsSync(_daemonRegistryPath(targetId)),
+			`daemon should register; stderr: ${daemonErr.slice(0, 300)}`,
+		);
+
+		// Kill the session owner; the daemon must exit on its own within the
+		// poll interval (OWNER_POLL_INTERVAL_MS = 5s) plus margin.
+		owner.kill();
+		const exited = await new Promise((resolve) => {
+			const timer = setTimeout(() => resolve(false), 12000);
+			daemon.once("exit", (code) => {
+				clearTimeout(timer);
+				resolve(code === 0 || code === null);
+			});
+		});
+		assert.equal(
+			exited,
+			true,
+			`daemon should exit after owner death; stderr: ${daemonErr.slice(0, 300)}`,
+		);
+		assert.equal(
+			existsSync(_daemonRegistryPath(targetId)),
+			false,
+			"daemon must remove its registry entry on owner-death shutdown",
+		);
+	} finally {
+		owner.kill();
+		if (daemon.exitCode === null) daemon.kill();
+		_removeDaemonRegistry(targetId);
+		await chrome.stop();
+		try {
+			rmSync(profileDir, { recursive: true, force: true });
+		} catch {}
 	}
 });

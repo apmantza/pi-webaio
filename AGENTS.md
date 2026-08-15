@@ -102,7 +102,7 @@ pi-webaio/
 │       ├── webquery.ts       ← aio-webquery registration (offline BM25 over pulled corpus)
 │       └── webresearch.ts    ← aio-webresearch registration (single-round research bundle)
 ├── bin/
-│   ├── cdp.mjs               ← Chrome DevTools Protocol bridge
+│   ├── cdp.mjs               ← Chrome DevTools Protocol bridge (per-tab daemon with session-owner death coupling + registry, #96)
 │   ├── launch.mjs            ← Chrome process lifecycle manager
 │   └── pi-webaio-mcp.mjs     ← MCP stdio server executable (pi-webaio-mcp bin)
 ├── extractors/

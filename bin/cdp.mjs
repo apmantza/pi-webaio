@@ -31,6 +31,15 @@ const IDLE_TIMEOUT = 20 * 60 * 1000;
 const DAEMON_CONNECT_RETRIES = 20;
 const DAEMON_CONNECT_DELAY = 300;
 const MIN_TARGET_PREFIX_LEN = 8;
+// Session-owner coupling (#96): daemons are spawned detached from a
+// short-lived CLI process (its parent exits after each command), so the
+// daemon's own ppid is useless for parent-death detection. Instead the pi
+// session host passes its pid down through the extractor/CLI env; the daemon
+// polls that owner and exits within seconds of it dying, instead of
+// accumulating as an orphan. When a later session reuses the daemon, its
+// command re-parents the daemon to the new owner.
+const SESSION_PID_ENV = "PI_WEBAIO_SESSION_PID";
+const OWNER_POLL_INTERVAL_MS = 5000;
 
 const _tmpdir = tmpdir().replaceAll("\\", "/");
 const PAGES_CACHE = `${_tmpdir}/cdp-pages.json`;
@@ -110,7 +119,17 @@ function _daemonRegistryPath(targetId) {
 	return join(DAEMON_REGISTRY_DIR, `${targetId}.json`);
 }
 
-function _writeDaemonRegistry(targetId) {
+/**
+ * Parse the session-owner pid from an env (default: process.env). Returns
+ * null when unset/garbage — a daemon with no owner relies on the idle TTL
+ * backstop instead of owner polling.
+ */
+function _ownerPidFromEnv(env = process.env) {
+	const pid = Number.parseInt(env?.[SESSION_PID_ENV] ?? "", 10);
+	return Number.isInteger(pid) && pid > 0 ? pid : null;
+}
+
+function _writeDaemonRegistry(targetId, ownerPid = _ownerPidFromEnv()) {
 	try {
 		mkdirSync(DAEMON_REGISTRY_DIR, { recursive: true, mode: 0o700 });
 		// Atomic write: compose in a temp file and rename into place so a
@@ -125,6 +144,7 @@ function _writeDaemonRegistry(targetId) {
 				targetId,
 				socketPath: sockPath(targetId),
 				pid: process.pid,
+				ownerPid,
 				startedAt: Date.now(),
 			}),
 			{ mode: 0o600 },
@@ -247,6 +267,13 @@ async function _listDaemonSocketsFromRegistry() {
 		}
 		if (!_isPidAlive(record.pid)) {
 			_removeDaemonRegistryFile(path); // stale entry, best-effort removal
+			continue;
+		}
+		// #96 reaping: the daemon's session owner is gone. The daemon polls
+		// and exits on its own within seconds, but prune the registry entry
+		// now so `cdp list` does not advertise an orphaned daemon.
+		if (record.ownerPid && !_isPidAlive(record.ownerPid)) {
+			_removeDaemonRegistryFile(path);
 			continue;
 		}
 		if (!(await _probeSocket(record.socketPath))) {
@@ -967,9 +994,33 @@ async function runDaemon(targetId) {
 	}
 
 	let alive = true;
+	// Session-owner pid (#96): the daemon is spawned detached from a
+	// short-lived CLI, so process.ppid is useless. The pi host passes its
+	// pid via PI_WEBAIO_SESSION_PID; poll it and exit within seconds of
+	// owner death. Re-parented by later sessions' commands (see
+	// handleCommand), so a reused daemon tracks its most recent owner.
+	let ownerPid = _ownerPidFromEnv();
+	let ownerTimer = null;
+	function scheduleOwnerPoll() {
+		if (!ownerPid) return;
+		clearTimeout(ownerTimer);
+		ownerTimer = setTimeout(() => {
+			if (!alive) return;
+			if (!_isPidAlive(ownerPid)) {
+				process.stderr.write(
+					`Daemon: session owner ${ownerPid} exited; shutting down\n`,
+				);
+				shutdown();
+				return;
+			}
+			scheduleOwnerPoll();
+		}, OWNER_POLL_INTERVAL_MS);
+	}
+
 	function shutdown() {
 		if (!alive) return;
 		alive = false;
+		clearTimeout(ownerTimer);
 		server.close();
 		try {
 			unlinkSync(sp);
@@ -995,8 +1046,18 @@ async function runDaemon(targetId) {
 		idleTimer = setTimeout(shutdown, IDLE_TIMEOUT);
 	}
 
-	async function handleCommand({ cmd, args }) {
+	async function handleCommand({ cmd, args, ownerPid: clientOwnerPid }) {
 		resetIdle();
+		// Re-parent: the session issuing a command is the daemon's current
+		// owner. Session B reusing session A's daemon adopts B as owner, so
+		// the daemon exits when its most recent user's session dies (#96).
+		if (Number.isInteger(clientOwnerPid) && clientOwnerPid > 0) {
+			if (clientOwnerPid !== ownerPid) {
+				ownerPid = clientOwnerPid;
+				_writeDaemonRegistry(targetId, ownerPid);
+			}
+			scheduleOwnerPoll();
+		}
 		try {
 			let result;
 			switch (cmd) {
@@ -1110,6 +1171,7 @@ async function runDaemon(targetId) {
 	});
 	server.listen(sp, () => {
 		_writeDaemonRegistry(targetId);
+		scheduleOwnerPoll();
 	});
 }
 
@@ -1408,7 +1470,15 @@ async function main() {
 		process.exit(1);
 	}
 
-	const response = await sendCommand(conn, { cmd, args: cmdArgs });
+	const response = await sendCommand(conn, {
+		cmd,
+		args: cmdArgs,
+		// Session-owner coupling (#96): the CLI is a child of the extractor
+		// (which is a child of the pi host), so its env carries the host's
+		// PI_WEBAIO_SESSION_PID. Forward it so the daemon re-parents to the
+		// session actually using it and exits when that session dies.
+		ownerPid: _ownerPidFromEnv(),
+	});
 
 	if (response.ok) {
 		if (response.result) console.log(response.result);
@@ -1443,6 +1513,7 @@ export {
 	CDP,
 	sockPath,
 	_isPidAlive,
+	_ownerPidFromEnv,
 	_daemonRegistryPath,
 	_writeDaemonRegistry,
 	_removeDaemonRegistry,
