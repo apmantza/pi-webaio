@@ -625,4 +625,42 @@ test("navigation and reset failures dirty and close the target", async () => {
 	}
 });
 
+test("broker search waits past a partial mid-render snapshot before returning (#101)", async () => {
+	// Regression for the partial-result bug: extraction previously returned
+	// on the FIRST successful poll, so a mid-render snapshot of 1 result was
+	// served instead of the full set. The mock yields 1 result first, then 4;
+	// the broker must poll again and return the fuller set.
+	const setup = await setupBroker({
+		onCommand: respondToSearch({
+			evaluationResults: [
+				{ ready: false, results: [] },
+				{ ready: true, results: [{ title: "Only", url: "https://example.test/only", snippet: "Partial" }] },
+				{
+					ready: true,
+					results: [
+						{ title: "First", url: "https://example.test/first", snippet: "S1" },
+						{ title: "Second", url: "https://example.test/second", snippet: "S2" },
+						{ title: "Third", url: "https://example.test/third", snippet: "S3" },
+						{ title: "Fourth", url: "https://example.test/fourth", snippet: "S4" },
+					],
+				},
+			],
+		}),
+	});
+	try {
+		const result = await setup.client.request("search", {
+			provider: "google-search",
+			query: "pi partial",
+			maxResults: 10,
+		});
+		assert.deepEqual(
+			result.results.map((r) => r.title),
+			["First", "Second", "Third", "Fourth"],
+			"broker must wait for the fuller result set, not the 1-result snapshot",
+		);
+	} finally {
+		await teardown(setup);
+	}
+});
+
 assert.equal(CdpTransportError.prototype instanceof Error, true);

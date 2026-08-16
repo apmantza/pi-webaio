@@ -1345,6 +1345,13 @@ export class GoogleCdpBroker {
 	async extractGoogleSearchResults(request, sessionId, maxResults, signal) {
 		const deadlineAt =
 			request.deadlineAt || Date.now() + DEFAULT_SEARCH_TIMEOUT_MS;
+		// Return once we have a substantial result set. Requiring a minimum
+		// (matching the legacy extractor's `>= 3` gate) avoids returning a
+		// partial mid-render snapshot (e.g. 1 of 5 results). If the page
+		// never reaches the minimum, fall back to the last observed set at
+		// the deadline rather than throwing.
+		const minResults = Math.min(Math.max(maxResults ?? 3, 1), 3);
+		let lastResults = [];
 		while (Date.now() < deadlineAt) {
 			checkSignal(signal);
 			const evaluation = await this.cdpSend(
@@ -1376,11 +1383,15 @@ export class GoogleCdpBroker {
 						)
 						.slice(0, maxResults)
 				: [];
-			if (results.length > 0) return results;
+			if (results.length > 0) lastResults = results;
+			if (results.length >= minResults) return results;
 			if (Date.now() >= deadlineAt) break;
 			await waitForSearchPoll(signal, deadlineAt);
 		}
 		checkSignal(signal);
+		// Deadline reached: return the best set observed (even a partial one)
+		// rather than failing the whole search.
+		if (lastResults.length > 0) return lastResults;
 		throw new BrokerError(
 			"search_timeout",
 			"Google search results were not ready before the deadline",

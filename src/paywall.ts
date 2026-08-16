@@ -21,10 +21,7 @@ import {
 	DEFAULT_TIMEOUT_MS,
 } from "./fetch.ts";
 import { PAYWALL_SITES, PAYWALL_GROUPS } from "./paywall-sites.ts";
-import type {
-	BypassStrategyType,
-	PaywallStrategy,
-} from "./paywall-sites.ts";
+import type { BypassStrategyType, PaywallStrategy } from "./paywall-sites.ts";
 
 // ─── Types ─────────────────────────────────────────────────────────
 // BypassStrategyType and PaywallStrategy now live in paywall-sites.ts
