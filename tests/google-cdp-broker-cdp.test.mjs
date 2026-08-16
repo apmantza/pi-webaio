@@ -728,11 +728,7 @@ test("startup sweep closes marker-owned orphans from a prior broker generation",
 		const closed = fake.socket.sent.filter(
 			(message) => message.method === "Target.closeTarget",
 		);
-		assert.equal(
-			closed.length,
-			1,
-			"exactly one orphan target must be closed",
-		);
+		assert.equal(closed.length, 1, "exactly one orphan target must be closed");
 		assert.equal(
 			closed[0]?.params?.targetId,
 			orphanId,
@@ -780,43 +776,43 @@ test("startup sweep survives close failures and skips non-marker targets", async
 	const calls = [];
 	const fake = fakeTransport({
 		onCommand: (socket, message) => {
-		if (message.method === "Target.getTargets") {
-			calls.push(message.method);
-			socket.respond({
-				id: message.id,
-				sessionId: message.sessionId,
-				result: {
-					targetInfos: [
-						{
-							targetId: failId,
-							url: `${TARGET_MARKER_PREFIX}${failHash}:prior-nonce`,
-						},
-						{
-							targetId: keepId,
-							url: "https://example.test/unrelated",
-						},
-					],
-				},
-			});
-			return;
-		}
-		if (message.method === "Target.closeTarget") {
-			calls.push(message.method);
-			// Simulate a close failure: respond with an error.
-			setImmediate(() =>
+			if (message.method === "Target.getTargets") {
+				calls.push(message.method);
 				socket.respond({
 					id: message.id,
 					sessionId: message.sessionId,
-					error: { message: "close failed" },
-				}),
-			);
-			return;
-		}
-		socket.respond({
-			id: message.id,
-			sessionId: message.sessionId,
-			result: {},
-		});
+					result: {
+						targetInfos: [
+							{
+								targetId: failId,
+								url: `${TARGET_MARKER_PREFIX}${failHash}:prior-nonce`,
+							},
+							{
+								targetId: keepId,
+								url: "https://example.test/unrelated",
+							},
+						],
+					},
+				});
+				return;
+			}
+			if (message.method === "Target.closeTarget") {
+				calls.push(message.method);
+				// Simulate a close failure: respond with an error.
+				setImmediate(() =>
+					socket.respond({
+						id: message.id,
+						sessionId: message.sessionId,
+						error: { message: "close failed" },
+					}),
+				);
+				return;
+			}
+			socket.respond({
+				id: message.id,
+				sessionId: message.sessionId,
+				result: {},
+			});
 		},
 	});
 	const broker = new GoogleCdpBroker({

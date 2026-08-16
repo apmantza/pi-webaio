@@ -1138,9 +1138,7 @@ export class GoogleCdpBroker {
 		// hash were orphaned by a hard crash of a prior broker process.
 		this.brokerNonce = randomUUID();
 		this.brokerProfileHash = profileHash(
-			platform() === "win32"
-				? this.profileKey.toLowerCase()
-				: this.profileKey,
+			platform() === "win32" ? this.profileKey.toLowerCase() : this.profileKey,
 		);
 		this.targetMarker = targetMarkerUrl(this.brokerProfileHash, this.brokerNonce);
 		this.connections = new Set();
@@ -1564,8 +1562,7 @@ export class GoogleCdpBroker {
 				// Best-effort: a close failure must not abort the sweep.
 			}
 		}
-		if (closed > 0)
-			this.runtimeError = null; // normal recovery, not an error
+		if (closed > 0) this.runtimeError = null; // normal recovery, not an error
 		return closed;
 	}
 
