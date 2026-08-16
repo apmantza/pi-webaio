@@ -64,6 +64,33 @@ export const READABILITY_MIN_RATIO = 0.005;
  * large document? Only applied to large HTML (>10KB) where a real article
  * should dwarf the boilerplate. Exported for offline testing.
  */
+/**
+ * Pre-flight secret-scan result: builds the FetchErrorInfo + FetchError for
+ * a URL that carried a credential. Shared by the pull paths (dedup, jscpd).
+ */
+export function blockedSecretResult(
+	url: string,
+	matches: string[],
+): PullResult {
+	const info: FetchErrorInfo = {
+		message: `Request blocked: potential secret(s) detected in URL (${matches.join(", ")})`,
+		code: "blocked",
+		phase: "validation",
+		retryable: false,
+	};
+	const fetchError = createFetchError("blocked_secret", info.message, {
+		url,
+		phase: "validation",
+	});
+	return {
+		ok: false,
+		url,
+		error: formatErrorInfo(info),
+		errorInfo: info,
+		fetchError,
+	};
+}
+
 export function readabilityRatioFailed(
 	contentLength: number,
 	htmlLength: number,
@@ -897,25 +924,7 @@ export async function pullPage(
 	// the generic "Could not reach server" the inner fetch returns when it
 	// silently nulls out on a secret match.
 	const secretScan = scanForSecrets(url);
-	if (secretScan.found) {
-		const info: FetchErrorInfo = {
-			message: `Request blocked: potential secret(s) detected in URL (${secretScan.matches.join(", ")})`,
-			code: "blocked",
-			phase: "validation",
-			retryable: false,
-		};
-		const fetchError = createFetchError("blocked_secret", info.message, {
-			url,
-			phase: "validation",
-		});
-		return {
-			ok: false,
-			url,
-			error: formatErrorInfo(info),
-			errorInfo: info,
-			fetchError,
-		};
-	}
+	if (secretScan.found) return blockedSecretResult(url, secretScan.matches);
 
 	// GitHub pipeline — extractor handles github.com URLs via API/smartFetch.
 	// Try the compiled .js first (production runtime), fall back to the .ts
@@ -1144,25 +1153,7 @@ export async function pullPageEnhanced(
 	// Pre-flight secret scan — surface a clear security error before any
 	// fetch path runs (vertical extractors call smartFetch directly).
 	const secretScan = scanForSecrets(url);
-	if (secretScan.found) {
-		const info: FetchErrorInfo = {
-			message: `Request blocked: potential secret(s) detected in URL (${secretScan.matches.join(", ")})`,
-			code: "blocked",
-			phase: "validation",
-			retryable: false,
-		};
-		const fetchError = createFetchError("blocked_secret", info.message, {
-			url,
-			phase: "validation",
-		});
-		return {
-			ok: false,
-			url,
-			error: formatErrorInfo(info),
-			errorInfo: info,
-			fetchError,
-		};
-	}
+	if (secretScan.found) return blockedSecretResult(url, secretScan.matches);
 
 	const mode = opts?.mode ?? "auto";
 
