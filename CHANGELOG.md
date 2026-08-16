@@ -6,6 +6,8 @@ All notable changes to pi-webaio will be documented in this file.
 
 ### Added
 
+- **Crash-orphan target recovery for the Google CDP broker** (#95 P2 item 2) — broker-created Chrome targets now carry a unique per-broker marker URL (`data:text/plain,pi-webaio-broker:<profileHash>:<nonce>`); on restart the broker enumerates `Target.getTargets` and closes only marker-owned targets from prior crashed generations, never touching unrelated tabs or this generation's own targets. Bounded (500ms) and best-effort. 3 new fake-CDP regression tests. With startup-lock GC (P2 item 1, earlier), the broker umbrella's entire P2 scope is complete.
+
 - **Mojeek search engine** (`src/search.ts`, `src/tools/websearch.ts`) — added Mojeek as a sixth keyless engine (DDG, Brave, Yahoo, Bing, Mojeek, Google). Mojeek runs its own independent web index (not Google/Bing syndicated), so its results add genuine diversity to the cross-engine consensus scoring. New `parseMojeekResults` parser (targets `ul.results-standard > li`, title/link in `h2 a.title`, snippet in `p.s`), wired into `searchWeb`'s engine fan-out with weight 2 (matching DDG/Brave), plus full plumbing through `EngineId`/`ENGINE_IDS`/`ENGINE_DISPLAY_NAMES`/`ENGINE_WEIGHTS`, the `mojeekCount` return field, and the websearch tool's engine label/header/TUI rendering. 4 new parser tests + engine-status map coverage.
 
 ### Changed
