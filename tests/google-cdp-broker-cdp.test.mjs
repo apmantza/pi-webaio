@@ -8,7 +8,11 @@ import {
 	BrowserCdpTransport,
 	CdpTransportError,
 } from "../bin/cdp-browser-transport.mjs";
-import { GoogleCdpBroker } from "../bin/google-cdp-broker.mjs";
+import {
+	GoogleCdpBroker,
+	TARGET_MARKER_PREFIX,
+	brokerProfileHashFor,
+} from "../bin/google-cdp-broker.mjs";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -84,6 +88,13 @@ function respondToCommands(behavior = {}) {
 			result = { targetId: "private-target-1" };
 		if (result === undefined && message.method === "Target.attachToTarget")
 			result = { sessionId: "private-session-1" };
+		if (result === undefined && message.method === "Target.getTargets")
+			result = {
+				targetInfos:
+					typeof behavior.targetInfos === "function"
+						? behavior.targetInfos()
+						: (behavior.targetInfos ?? []),
+			};
 		if (
 			result === undefined &&
 			message.method === "Runtime.evaluate" &&
@@ -302,21 +313,38 @@ test("CDP broker owns target lifecycle and never exposes CDP IDs", async () => {
 		});
 		assert.equal(lease.mode, "cdp");
 		assert.equal("targetId" in lease, false);
-		assert.equal(setup.fake.socket.sent[0].method, "Target.createTarget");
-		assert.deepEqual(setup.fake.socket.sent[0].params, { url: "about:blank" });
-		assert.equal(setup.fake.socket.sent[1].method, "Target.attachToTarget");
-		assert.deepEqual(setup.fake.socket.sent[1].params, {
+		// The startup crash-orphan sweep (#95 P2 item 2) fires an initial
+		// Target.getTargets; the first createTarget follows it.
+		const createIndex = setup.fake.socket.sent.findIndex(
+			(message) => message.method === "Target.createTarget",
+		);
+		assert.ok(createIndex >= 0, "createTarget should be sent");
+		assert.equal(
+			setup.fake.socket.sent[createIndex].method,
+			"Target.createTarget",
+		);
+		assert.deepEqual(setup.fake.socket.sent[createIndex].params, {
+			url: setup.broker.targetMarker,
+		});
+		assert.equal(
+			setup.fake.socket.sent[createIndex + 1].method,
+			"Target.attachToTarget",
+		);
+		assert.deepEqual(setup.fake.socket.sent[createIndex + 1].params, {
 			targetId: "private-target-1",
 			flatten: true,
 		});
-		assert.equal(setup.fake.socket.sent[1].sessionId, undefined);
+		assert.equal(setup.fake.socket.sent[createIndex + 1].sessionId, undefined);
 		await setup.client.request("reset", {
 			leaseId: lease.leaseId,
 			generation: lease.generation,
 		});
-		assert.equal(setup.fake.socket.sent[2].method, "Page.navigate");
-		assert.deepEqual(setup.fake.socket.sent[2].params, { url: "about:blank" });
-		assert.equal(setup.fake.socket.sent[2].sessionId, "private-session-1");
+		const resetNavigate = setup.fake.socket.sent.find(
+			(message) => message.method === "Page.navigate",
+		);
+		assert.equal(resetNavigate?.method, "Page.navigate");
+		assert.deepEqual(resetNavigate?.params, { url: "about:blank" });
+		assert.equal(resetNavigate?.sessionId, "private-session-1");
 		await setup.client.request("release", {
 			leaseId: lease.leaseId,
 			generation: lease.generation,
@@ -513,7 +541,14 @@ test("search validates bounded inputs and rejects broker escape hatches", async 
 				(error) => error.code === "invalid_request",
 			);
 		}
-		assert.equal(setup.fake.socket.sent.length, 0);
+		// The startup crash-orphan sweep sends an initial Target.getTargets
+		// (#95 P2 item 2); the invalid requests themselves must not have
+		// reached CDP.
+		assert.equal(
+			setup.fake.socket.sent.filter((m) => m.method !== "Target.getTargets")
+				.length,
+			0,
+		);
 	} finally {
 		await teardown(setup);
 	}
@@ -650,6 +685,160 @@ test("broker search waits past a partial mid-render snapshot before returning (#
 		);
 	} finally {
 		await teardown(setup);
+	}
+});
+
+// ─── Crash-orphan target recovery (#95 P2 item 2) ─────────────────
+
+test("startup sweep closes marker-owned orphans from a prior broker generation", async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-webaio-orphan-test-"));
+	const orphanHash = brokerProfileHashFor(root);
+	const orphanId = "prior-gen-orphan-1";
+	const unrelatedId = "user-tab-1";
+	const otherProfileId = "other-profile-1";
+	// Simulate a prior broker that crashed: its marker URL carries the same
+	// profile hash but a DIFFERENT nonce than this instance's.
+	const priorNonce = "prior-broker-nonce";
+	const fake = fakeTransport({
+		onCommand: respondToCommands({
+			targetInfos: [
+				{
+					targetId: orphanId,
+					url: `${TARGET_MARKER_PREFIX}${orphanHash}:${priorNonce}`,
+				},
+				{
+					targetId: unrelatedId,
+					url: "https://example.test/user-page",
+				},
+				{
+					targetId: otherProfileId,
+					url: `${TARGET_MARKER_PREFIX}someotherhash:${priorNonce}`,
+				},
+			],
+		}),
+	});
+	const broker = new GoogleCdpBroker({
+		profileDir: root,
+		connectCdp: true,
+		cdpTransport: fake.transport,
+	});
+	const started = await broker.start();
+	assert.equal(started.ok, true, JSON.stringify(started));
+	try {
+		const closed = fake.socket.sent.filter(
+			(message) => message.method === "Target.closeTarget",
+		);
+		assert.equal(
+			closed.length,
+			1,
+			"exactly one orphan target must be closed",
+		);
+		assert.equal(
+			closed[0]?.params?.targetId,
+			orphanId,
+			"the prior-generation marker orphan is the one closed",
+		);
+	} finally {
+		await broker.stop();
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+test("startup sweep preserves this generation's own marker targets", async () => {
+	const ownId = "own-gen-target";
+	// A target with THIS instance's marker (same profile hash + nonce) is
+	// created by the live broker itself and must never be closed.
+	const setup = await setupBroker({
+		onCommand: respondToCommands({
+			targetInfos: [
+				{
+					targetId: ownId,
+					url: `${TARGET_MARKER_PREFIX}dummyhash:dummynonce`,
+				},
+			],
+		}),
+	});
+	try {
+		// Manually simulate this broker owning the target (post-sweep attach).
+		setup.broker.cdpTargets.set("own", {
+			targetId: "own",
+			cdpTargetId: ownId,
+		});
+		// Re-run the sweep; the target is owned by this instance -> skipped.
+		const closed = await setup.broker.recoverOrphanTargets();
+		assert.equal(closed, 0, "owned target must not be closed");
+	} finally {
+		await teardown(setup);
+	}
+});
+
+test("startup sweep survives close failures and skips non-marker targets", async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-webaio-closefail-test-"));
+	const failHash = brokerProfileHashFor(root);
+	const failId = "close-fail-target";
+	const keepId = "keep-target";
+	const calls = [];
+	const fake = fakeTransport({
+		onCommand: (socket, message) => {
+		if (message.method === "Target.getTargets") {
+			calls.push(message.method);
+			socket.respond({
+				id: message.id,
+				sessionId: message.sessionId,
+				result: {
+					targetInfos: [
+						{
+							targetId: failId,
+							url: `${TARGET_MARKER_PREFIX}${failHash}:prior-nonce`,
+						},
+						{
+							targetId: keepId,
+							url: "https://example.test/unrelated",
+						},
+					],
+				},
+			});
+			return;
+		}
+		if (message.method === "Target.closeTarget") {
+			calls.push(message.method);
+			// Simulate a close failure: respond with an error.
+			setImmediate(() =>
+				socket.respond({
+					id: message.id,
+					sessionId: message.sessionId,
+					error: { message: "close failed" },
+				}),
+			);
+			return;
+		}
+		socket.respond({
+			id: message.id,
+			sessionId: message.sessionId,
+			result: {},
+		});
+		},
+	});
+	const broker = new GoogleCdpBroker({
+		profileDir: root,
+		connectCdp: true,
+		cdpTransport: fake.transport,
+	});
+	const started = await broker.start();
+	assert.equal(started.ok, true, JSON.stringify(started));
+	try {
+		// Sweep already ran at startup; verify it attempted the close once
+		// and did not throw (best-effort), and never closed the unrelated tab.
+		assert.equal(calls.filter((c) => c === "Target.closeTarget").length, 1);
+		assert.equal(
+			calls.filter((c) => c === "Target.closeTarget").length +
+				calls.filter((c) => c === "Target.getTargets").length,
+			2,
+		);
+		assert.equal(broker.runtimeError, null);
+	} finally {
+		await broker.stop();
+		await rm(root, { recursive: true, force: true });
 	}
 });
 

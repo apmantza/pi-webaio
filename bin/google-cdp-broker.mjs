@@ -115,6 +115,49 @@ function profileHash(profileKey) {
 	return createHash("sha256").update(profileKey).digest("hex").slice(0, 24);
 }
 
+/**
+ * The marker profile hash a broker instance for `profileDir` uses for its
+ * crash-orphan marker URLs. Exported for tests to fabricate prior-generation
+ * orphan targets with the same hash but a different nonce.
+ */
+export function brokerProfileHashFor(profileDir) {
+	const profileKey = resolve(profileDir);
+	return profileHash(
+		platform() === "win32" ? profileKey.toLowerCase() : profileKey,
+	);
+}
+
+// Crash-orphan target recovery (#95 P2 item 2): broker-created Chrome
+// targets use a unique per-broker marker URL so a restarted broker can tell
+// its own targets from orphaned ones left behind by a hard crash of a prior
+// broker generation. A data: URL round-trips reliably through
+// Target.createTarget/getTargets (an about:blank fragment might not), and
+// the profile hash + per-start nonce make cross-profile and cross-generation
+// collisions impossible.
+const TARGET_MARKER_PREFIX = "data:text/plain,pi-webaio-broker:";
+export { TARGET_MARKER_PREFIX };
+
+function targetMarkerUrl(profileHashValue, nonce) {
+	return `${TARGET_MARKER_PREFIX}${profileHashValue}:${nonce}`;
+}
+
+function isBrokerMarkerUrl(url) {
+	return typeof url === "string" && url.startsWith(TARGET_MARKER_PREFIX);
+}
+
+function markerProfileHash(url) {
+	// "data:text/plain,pi-webaio-broker:<hash>:<nonce>" -> "<hash>"
+	const rest = url.slice(TARGET_MARKER_PREFIX.length);
+	const sep = rest.indexOf(":");
+	return sep === -1 ? "" : rest.slice(0, sep);
+}
+
+function markerNonce(url) {
+	const rest = url.slice(TARGET_MARKER_PREFIX.length);
+	const sep = rest.indexOf(":");
+	return sep === -1 ? "" : rest.slice(sep + 1);
+}
+
 function newCapability() {
 	return `${randomUUID()}-${randomUUID()}`;
 }
@@ -1089,6 +1132,17 @@ export class GoogleCdpBroker {
 		);
 		this.registry = options.registry || new LeaseRegistry(options);
 		this.ownerNonce = randomUUID();
+		// Crash-orphan recovery (#95 P2 item 2): this instance's marker nonce
+		// and profile hash identify which Chrome targets belong to THIS broker
+		// generation. Targets carrying a different nonce for the same profile
+		// hash were orphaned by a hard crash of a prior broker process.
+		this.brokerNonce = randomUUID();
+		this.brokerProfileHash = profileHash(
+			platform() === "win32"
+				? this.profileKey.toLowerCase()
+				: this.profileKey,
+		);
+		this.targetMarker = targetMarkerUrl(this.brokerProfileHash, this.brokerNonce);
 		this.connections = new Set();
 		this.started = false;
 		this.server = null;
@@ -1241,7 +1295,11 @@ export class GoogleCdpBroker {
 		try {
 			created = await this.cdpSend(
 				"Target.createTarget",
-				{ url: "about:blank" },
+				// Marker URL (#95 P2 item 2): the restart sweep closes only
+				// marker-owned targets from PRIOR broker generations. A fresh
+				// broker never navigates a reused marker target to about:blank
+				// before checking it is its own.
+				{ url: this.targetMarker },
 				request,
 				signal,
 			);
@@ -1458,6 +1516,59 @@ export class GoogleCdpBroker {
 				await this.closeCdpTarget(target);
 	}
 
+	// Crash-orphan target recovery (#95 P2 item 2). After a hard broker
+	// death, Chrome keeps the broker-created targets alive (plain marker
+	// URLs, no owner record). On restart, enumerate all targets and close
+	// only marker-owned orphans from PRIOR broker generations: targets whose
+	// URL is a pi-webaio-broker marker for this profile but whose nonce is
+	// NOT this instance's. Never touches unrelated tabs, targets of other
+	// profiles, or this broker's own targets. Best-effort and bounded: a
+	// failed close or an unavailable CDP connection is logged and skipped,
+	// never fatal.
+	async recoverOrphanTargets(request = undefined) {
+		if (!this.cdpTransport || !this.cdp.connected) return;
+		const deadlineAt = boundedCleanupDeadline(request);
+		let targetInfos;
+		try {
+			const result = await this.cdpTransport.send(
+				"Target.getTargets",
+				{},
+				{ deadlineAt },
+			);
+			targetInfos = result?.targetInfos;
+		} catch {
+			// Recovery is best-effort; enumeration failure must not block startup.
+			return;
+		}
+		if (!Array.isArray(targetInfos)) return;
+		let closed = 0;
+		for (const info of targetInfos) {
+			const url = info?.url;
+			if (!isBrokerMarkerUrl(url)) continue;
+			if (markerProfileHash(url) !== this.brokerProfileHash) continue;
+			if (markerNonce(url) === this.brokerNonce) continue;
+			const targetId = info?.targetId;
+			if (typeof targetId !== "string" || !targetId) continue;
+			// Do not close targets this instance already owns (paranoia: a
+			// reused generation edge case where a prior sweep attached first).
+			if ([...this.cdpTargets.values()].some((t) => t.cdpTargetId === targetId))
+				continue;
+			try {
+				await this.cdpTransport.send(
+					"Target.closeTarget",
+					{ targetId },
+					{ deadlineAt },
+				);
+				closed++;
+			} catch {
+				// Best-effort: a close failure must not abort the sweep.
+			}
+		}
+		if (closed > 0)
+			this.runtimeError = null; // normal recovery, not an error
+		return closed;
+	}
+
 	async startInternal() {
 		if (this.started) return ok(this.info());
 		let lock;
@@ -1486,6 +1597,10 @@ export class GoogleCdpBroker {
 					connected: true,
 					generation: this.registry.browserGeneration,
 				};
+				// Crash-orphan recovery (#95 P2 item 2): close marker-owned
+				// targets from prior broker generations now that CDP is up.
+				// Bounded and best-effort; must not delay startup meaningfully.
+				await this.recoverOrphanTargets();
 			}
 			if (platform() !== "win32") {
 				let exists = false;
