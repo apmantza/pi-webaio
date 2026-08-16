@@ -730,6 +730,25 @@ export function wordCount(text: string): number {
 
 // ─── HTML content pipeline (shared by normal + browser-mode paths) ─
 
+/**
+ * Follow a client-side (<meta http-equiv="refresh">) redirect if present,
+ * bounded by MAX_CLIENT_REDIRECTS. Returns the recursive pull result, or
+ * null when there is no redirect to follow (dedup, jscpd — shared by the
+ * HTML override and regular HTML paths).
+ */
+async function maybeFollowClientRedirect(
+	text: string,
+	finalUrl: string,
+	url: string,
+	opts: FetchOpts | undefined,
+	_redirectCount: number,
+): Promise<PullResult | null> {
+	if (_redirectCount >= MAX_CLIENT_REDIRECTS) return null;
+	const redirectTarget = extractClientSideRedirect(text, finalUrl);
+	if (!redirectTarget) return null;
+	return pullPage(redirectTarget, opts, _redirectCount + 1);
+}
+
 export async function runHtmlPipeline(
 	text: string,
 	finalUrl: string,
@@ -862,12 +881,14 @@ export async function pullPage(
 		const text = htmlOverride;
 		const finalUrl = url;
 
-		if (_redirectCount < MAX_CLIENT_REDIRECTS) {
-			const redirectTarget = extractClientSideRedirect(text, finalUrl);
-			if (redirectTarget) {
-				return pullPage(redirectTarget, opts, _redirectCount + 1);
-			}
-		}
+		const redirected = await maybeFollowClientRedirect(
+			text,
+			finalUrl,
+			url,
+			opts,
+			_redirectCount,
+		);
+		if (redirected) return redirected;
 
 		return runHtmlPipeline(text, finalUrl, url, opts, redirectNotice);
 	}
@@ -1099,11 +1120,15 @@ export async function pullPage(
 		);
 	}
 
-	if (_redirectCount < MAX_CLIENT_REDIRECTS && ct.includes("text/html")) {
-		const redirectTarget = extractClientSideRedirect(text, finalUrl);
-		if (redirectTarget) {
-			return pullPage(redirectTarget, opts, _redirectCount + 1);
-		}
+	if (ct.includes("text/html")) {
+		const redirected = await maybeFollowClientRedirect(
+			text,
+			finalUrl,
+			url,
+			opts,
+			_redirectCount,
+		);
+		if (redirected) return redirected;
 	}
 
 	return runHtmlPipeline(text, finalUrl, url, opts, redirectNotice);
