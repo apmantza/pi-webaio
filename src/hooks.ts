@@ -42,7 +42,11 @@ interface RegisteredHook {
 function globToRegex(pattern: string): RegExp {
 	let src = "";
 	let i = 0;
-	while (i < pattern.length) {
+	// Bound the pattern size so a pathological glob cannot build a
+	// pathological regex (opengrep ReDoS hardening); globs are config-file
+	// inputs but the guard is cheap.
+	const maxLen = 4096;
+	while (i < pattern.length && i < maxLen) {
 		if (pattern[i] === "*" && pattern[i + 1] === "*") {
 			src += ".*";
 			i += 2;

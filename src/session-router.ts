@@ -106,6 +106,10 @@ export class SessionRouter {
 	}
 
 	private matchGlob(path: string, pattern: string): boolean {
+		// Bound the pattern so a pathological route cannot build a
+		// pathological regex (opengrep ReDoS hardening); route patterns are
+		// config inputs but the guard is cheap.
+		if (pattern.length > 4096) return false;
 		const regexStr =
 			"^" +
 			pattern
