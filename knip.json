@@ -1,0 +1,19 @@
+{
+	"$schema": "https://unpkg.com/knip@5/schema.json",
+	"entry": [
+		"index.ts",
+		"pi-entry.mjs",
+		"bin/cdp.mjs",
+		"bin/launch.mjs",
+		"bin/google-cdp-broker.mjs",
+		"bin/cdp-browser-transport.mjs",
+		"bin/pi-webaio-mcp.mjs",
+		"extractors/**/*.mjs",
+		"scripts/**/*.mjs",
+		"src/mcp-server.ts",
+		"tests/**/*.mjs"
+	],
+	"project": ["src/**/*.ts", "bin/**/*.mjs", "extractors/**/*.mjs", "scripts/**/*.mjs", "tests/**/*.mjs"],
+	"ignoreBinaries": ["netstat", "ss"],
+	"ignoreExportsUsedInFile": false
+}

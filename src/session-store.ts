@@ -24,12 +24,12 @@ import type { StoredContent, SearchResult } from "./types.ts";
 
 export const BASE_TEMP = join(tmpdir(), "pi-webaio");
 export const SEARCH_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
-export const SEARCH_CACHE_FILE = join(BASE_TEMP, "search-cache.json");
-export const SEARCH_CONTEXT_TTL_MS = 5 * 60 * 1000; // 5 minutes
-export const SEARCH_CONTEXT_KEY = "__webaio_search_context__";
+const SEARCH_CACHE_FILE = join(BASE_TEMP, "search-cache.json");
+const SEARCH_CONTEXT_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const SEARCH_CONTEXT_KEY = "__webaio_search_context__";
 
 export const SESSION_CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
-export const MAX_SESSION_CACHE_ENTRIES = 100;
+const MAX_SESSION_CACHE_ENTRIES = 100;
 export const SESSION_CACHE_CLEANUP_MS = 5 * 60 * 1000; // 5 minutes
 
 export const MAX_SUMMARY_CACHE_ENTRIES = 100;
@@ -192,14 +192,14 @@ export function storeContent(
 
 // ─── Frontmatter helpers ───────────────────────────────────────────
 
-export function stripFrontmatter(raw: string): string {
+function stripFrontmatter(raw: string): string {
 	if (!raw.startsWith("---\n")) return raw;
 	const end = raw.indexOf("\n---", 4);
 	if (end === -1) return raw;
 	return raw.slice(end + 5).trimStart();
 }
 
-export function parseFrontmatterUrl(raw: string): string | null {
+function parseFrontmatterUrl(raw: string): string | null {
 	if (!raw.startsWith("---\n")) return null;
 	const end = raw.indexOf("\n---", 4);
 	if (end === -1) return null;
@@ -443,7 +443,7 @@ export function getCachedSearch(query: string): SearchResult[] | null {
 	return cached.results;
 }
 
-export async function saveSearchCacheToDisk(): Promise<void> {
+async function saveSearchCacheToDisk(): Promise<void> {
 	try {
 		const data = Object.fromEntries(searchCache.entries());
 		await mkdir(BASE_TEMP, { recursive: true });

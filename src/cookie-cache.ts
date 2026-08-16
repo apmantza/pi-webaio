@@ -37,7 +37,7 @@ interface CacheEntry {
 // ─── Constants ──────────────────────────────────────────────────────
 
 /** Cookies are only trusted for this long after a headless render. */
-export const COOKIE_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const COOKIE_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 /** LRU cap — bounds memory in long-lived processes doing many crawls. */
 export const MAX_COOKIE_CACHE_ENTRIES = 50;
 

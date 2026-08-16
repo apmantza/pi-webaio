@@ -40,7 +40,7 @@ export type GitHubMapRef =
 	  };
 
 /** A single feature URL returned from the API listing. */
-export interface FeatureLink {
+interface FeatureLink {
 	url: string;
 	title: string;
 	number?: number;

@@ -20,7 +20,7 @@ const CDP_NAV_TIMEOUT_MS = 30_000;
 /** Max wait for Reddit JS to hydrate */
 const CDP_HYDRATE_TIMEOUT_MS = 25_000;
 
-export interface RedditSearchResult {
+interface RedditSearchResult {
 	title: string;
 	url: string;
 	subreddit: string;

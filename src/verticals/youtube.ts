@@ -196,11 +196,11 @@ export async function extractYouTube(
 
 // ─── Playlist extraction (placeholder — future enhancement) ─────────
 
-export function matchesYouTubePlaylist(url: string): boolean {
+function matchesYouTubePlaylist(url: string): boolean {
 	return /youtube\.com\/(?:playlist|watch\?.*list=)/i.test(url);
 }
 
-export async function extractYouTubePlaylist(
+async function extractYouTubePlaylist(
 	url: string,
 	_fetchJson: (url: string) => Promise<unknown | null>,
 	_fetchText: (url: string) => Promise<string | null>,

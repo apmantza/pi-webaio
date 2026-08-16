@@ -164,7 +164,7 @@ export async function ghFetch<T = unknown>(path: string): Promise<T> {
  * Use as a cheap check before trying authenticated operations.
  * Unlike the old `ghAvailable()`, this checks for a token, not the `gh` binary.
  */
-export async function githubAuthenticated(): Promise<boolean> {
+async function githubAuthenticated(): Promise<boolean> {
 	const token = await getToken();
 	return token !== undefined;
 }

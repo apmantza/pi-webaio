@@ -12,7 +12,7 @@
 // ─── Types ───────────────────────────────────────────────────────────
 
 /** Fetcher mode matching the values used in the main fetch pipeline. */
-export type RouteScrapeMode = "fast" | "fingerprint" | "browser" | "auto";
+type RouteScrapeMode = "fast" | "fingerprint" | "browser" | "auto";
 
 /** A single route entry mapping URL patterns to fetcher behavior. */
 export interface Route {

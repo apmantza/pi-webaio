@@ -456,7 +456,7 @@ export interface BypassFetchResult {
  * full content to Googlebot/Bingbot/Facebook crawler to ensure
  * articles get indexed.
  */
-export async function tryBotUAFetch(
+async function tryBotUAFetch(
 	url: string,
 	strategy: BypassStrategyType,
 	opts: {
@@ -540,7 +540,7 @@ const WAYBACK_TIMEOUT_MS = 15000;
  * original (un-Wayback-toolbar-ed) version. Returns null if the URL
  * isn't archived.
  */
-export async function tryArchiveOrgFetch(
+async function tryArchiveOrgFetch(
 	url: string,
 	_opts: { proxy?: string } = {},
 ): Promise<BypassFetchResult | null> {
@@ -589,7 +589,7 @@ const ARCHIVE_PH_TIMEOUT_MS = 15000;
  * isn't archived. Useful as a fallback when Wayback doesn't have a
  * copy.
  */
-export async function tryArchivePhFetch(
+async function tryArchivePhFetch(
 	url: string,
 ): Promise<BypassFetchResult | null> {
 	const archiveUrl = `https://archive.ph/newest/${url}`;
@@ -644,7 +644,7 @@ function stripArchivePhChrome(html: string): string {
  * scripts. After page load, applies DOM override (hide paywall
  * divs, restore overflow).
  */
-export async function tryBlockJSFetch(
+async function tryBlockJSFetch(
 	url: string,
 	strategy: PaywallStrategy,
 	opts: {
@@ -676,7 +676,7 @@ export async function tryBlockJSFetch(
  * Lower-level: fetch a URL via Playwright with the given block
  * patterns and optional DOM override. Exposed for direct use.
  */
-export async function fetchWithBypass(
+async function fetchWithBypass(
 	url: string,
 	blockPatterns: string[],
 	domOverride: boolean,

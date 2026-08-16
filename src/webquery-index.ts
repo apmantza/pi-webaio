@@ -14,7 +14,7 @@ export const INDEX_VERSION = 1;
 export const INDEX_FILENAME = ".webaio-index.json";
 
 /** One indexed chunk stored in the JSON file. */
-export interface IndexedChunk {
+interface IndexedChunk {
 	/** Relative path from outDir to the source markdown file. */
 	file: string;
 	/** Original URL from YAML frontmatter. */
@@ -26,7 +26,7 @@ export interface IndexedChunk {
 }
 
 /** Full index file structure. */
-export interface WebpullIndex {
+interface WebpullIndex {
 	version: number;
 	/** ISO timestamp of the last build. */
 	builtAt: string;
@@ -192,7 +192,7 @@ export async function loadIndex(outDir: string): Promise<LoadIndexResult> {
 // ─── Querying ─────────────────────────────────────────────────────────
 
 /** One ranked hit returned by {@link queryIndex}. */
-export interface CorpusHit {
+interface CorpusHit {
 	/** BM25 relevance score (higher = more relevant). */
 	score: number;
 	/** Relative path from outDir to the source markdown file. */

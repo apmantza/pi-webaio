@@ -21,7 +21,7 @@ import { debug } from "./debug.ts";
 
 // ─── Constants ─────────────────────────────────────────────────────
 
-export const STRATEGY_MEMORY_FILE = join(BASE_TEMP, "strategy-memory.json");
+const STRATEGY_MEMORY_FILE = join(BASE_TEMP, "strategy-memory.json");
 
 /** How long a domain entry is considered fresh (7 days). */
 export const STRATEGY_MEMORY_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -30,7 +30,7 @@ export const STRATEGY_MEMORY_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 export const MAX_DOMAIN_ENTRIES = 500;
 
 /** Maximum number of engine stat entries. */
-export const MAX_ENGINE_ENTRIES = 20;
+const MAX_ENGINE_ENTRIES = 20;
 
 /** After this many successes at the remembered rung, re-probe from cheapest. */
 export const RE_PROBE_SUCCESS_COUNT = 10;
@@ -48,9 +48,9 @@ const WRITE_DEBOUNCE_MS = 500;
  */
 export type FetchStrategy = "plain" | "wreq" | "browser";
 
-export const STRATEGY_ORDER: FetchStrategy[] = ["plain", "wreq", "browser"];
+const STRATEGY_ORDER: FetchStrategy[] = ["plain", "wreq", "browser"];
 
-export interface DomainStrategyEntry {
+interface DomainStrategyEntry {
 	/** The last strategy that succeeded for this domain. */
 	lastSuccessStrategy: FetchStrategy;
 	/** Consecutive failures per strategy (reset on success for that strategy). */
@@ -63,7 +63,7 @@ export interface DomainStrategyEntry {
 	updatedAt: number;
 }
 
-export interface EngineStatEntry {
+interface EngineStatEntry {
 	/** Total successful searches. */
 	successes: number;
 	/** Total blocked/failed searches. */

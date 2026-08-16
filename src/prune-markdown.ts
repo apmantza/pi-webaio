@@ -22,7 +22,7 @@ const MIN_SECTION_CHARS = 80;
  * Split markdown into logical sections.
  * A section starts with a heading (# .. ## .. ###) or a horizontal rule (---).
  */
-export function splitSections(markdown: string): Array<{
+function splitSections(markdown: string): Array<{
 	heading: string;
 	level: number;
 	content: string;

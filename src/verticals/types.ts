@@ -8,4 +8,4 @@ export interface VerticalResult {
 	error?: string;
 }
 
-export type VerticalExtractor = (url: string) => Promise<VerticalResult | null>;
+type VerticalExtractor = (url: string) => Promise<VerticalResult | null>;

@@ -4,7 +4,7 @@
 
 import { parseHTML } from "linkedom";
 
-export interface DataIsland {
+interface DataIsland {
 	/** Source identifier: the script ID or global variable name. */
 	source: string;
 	/** Parsed data payload. */

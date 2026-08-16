@@ -91,7 +91,7 @@ export function frontmatter(
 }
 
 // ─── Page path helpers ──────────────────────────────────────────────
-export function pageToPath(page: Page): string {
+function pageToPath(page: Page): string {
 	// new URL throws on malformed page URLs; fall back to a safe stem.
 	let pathname: string;
 	try {
@@ -107,7 +107,7 @@ export function pageToPath(page: Page): string {
 }
 
 /** Normalize a URL to the same stem used by pageToPath for matching. */
-export function urlStem(url: string): string {
+function urlStem(url: string): string {
 	try {
 		const u = new URL(url);
 		let p = u.origin + u.pathname;

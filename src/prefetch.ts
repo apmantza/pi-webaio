@@ -34,7 +34,7 @@ export const DEFAULT_PREFETCH_COUNT = 3;
  *
  * @internal Exported for unit tests only.
  */
-export async function prefetchUrl(url: string): Promise<void> {
+async function prefetchUrl(url: string): Promise<void> {
 	// Skip if already fresh in session cache.
 	if (getStoredContent(url)) return;
 

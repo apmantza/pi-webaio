@@ -18,7 +18,7 @@ export interface AfterFetchCtx {
 	html: string;
 }
 
-export interface UserHookModule {
+interface UserHookModule {
 	pattern: string;
 	afterFetch?: (
 		url: string,

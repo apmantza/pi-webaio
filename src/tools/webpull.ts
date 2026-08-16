@@ -63,7 +63,7 @@ export const PULL_CONCURRENCY_CEILING = 32;
  * — the 8–12 range the perf audit (docs/perf-improvements.md, P4) measured
  * as optimal for a single host.
  */
-export const PULL_WORKERS_PER_HOST = 10;
+const PULL_WORKERS_PER_HOST = 10;
 
 /**
  * Count the distinct hostnames in a set of target URLs. Unparsable URLs

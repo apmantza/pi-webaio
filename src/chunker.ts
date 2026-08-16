@@ -26,7 +26,7 @@ export interface ChunkOptions {
 	overlapTokens?: number;
 }
 
-export const DEFAULT_MAX_TOKENS = 512;
+const DEFAULT_MAX_TOKENS = 512;
 export const DEFAULT_OVERLAP_TOKENS = 50;
 
 /**

@@ -15,7 +15,7 @@ import { existsSync } from "node:fs";
 
 // ─── Types ───────────────────────────────────────────────────────────
 
-export type QueueStatus = "queued" | "in_progress" | "completed" | "failed";
+type QueueStatus = "queued" | "in_progress" | "completed" | "failed";
 
 export interface QueueEntry {
 	url: string;
@@ -25,7 +25,7 @@ export interface QueueEntry {
 	timestamp: number;
 }
 
-export interface QueueSnapshot {
+interface QueueSnapshot {
 	entries: QueueEntry[];
 }
 

@@ -33,7 +33,7 @@ const KEEP_ATTRS = new Set([
  * This is a lossy operation for visual rendering but lossless for
  * content extraction — the text and structure remain intact.
  */
-export function stripNoiseAttributes(html: string): string {
+function stripNoiseAttributes(html: string): string {
 	// Remove attributes we don't want, keeping the ones in KEEP_ATTRS.
 	// Pattern: attrName="value" or attrName='value' or attrName=value
 	const removePattern = new RegExp(
@@ -49,7 +49,7 @@ export function stripNoiseAttributes(html: string): string {
  * Remove empty HTML elements — tags with no text content between them.
  * Runs multiple passes to catch nested empties (inner-first removal).
  */
-export function removeEmptyElements(html: string, passes = 3): string {
+function removeEmptyElements(html: string, passes = 3): string {
 	const emptyTagRe =
 		/<(div|span|p|section|article|aside|figure|figcaption|details|summary|b|i|em|strong|small|sup|sub|a|abbr|cite|code|mark|u|s)\b[^>]*>\s*<\/\1>/gi;
 

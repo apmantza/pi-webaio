@@ -140,7 +140,7 @@ export interface FetchError extends FetchErrorContext {
 	timestamp: string;
 }
 
-export type FetchErrorCategory =
+type FetchErrorCategory =
 	| "validation"
 	| "network"
 	| "server"
@@ -657,7 +657,7 @@ function formatBytes(n: number): string {
 // ─── retryableByName (for legacy callers) ─────────────────────────
 
 /** Map legacy FetchErrorInfo to whether a retry is worth trying. */
-export function isLegacyRetryable(info: FetchErrorInfo): boolean {
+function isLegacyRetryable(info: FetchErrorInfo): boolean {
 	if (info.retryable !== undefined) return info.retryable;
 	if (info.statusCode !== undefined) {
 		return RETRYABLE_STATUS.has(info.statusCode);

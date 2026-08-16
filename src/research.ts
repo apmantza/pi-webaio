@@ -46,9 +46,9 @@ export function bundleDirName(query: string, date: Date = new Date()): string {
 
 // ─── maxSources clamping ────────────────────────────────────────────────
 
-export const MIN_MAX_SOURCES = 3;
-export const MAX_MAX_SOURCES = 12;
-export const DEFAULT_MAX_SOURCES = 6;
+const MIN_MAX_SOURCES = 3;
+const MAX_MAX_SOURCES = 12;
+const DEFAULT_MAX_SOURCES = 6;
 
 export function clampMaxSources(value: unknown): number {
 	const n =
@@ -454,7 +454,7 @@ export function freshnessScore(
 	return 0.2;
 }
 
-export type SourceStanceLabel = "supporting" | "conflicting" | "neutral";
+type SourceStanceLabel = "supporting" | "conflicting" | "neutral";
 
 export interface SourceStance {
 	sourceId: string;
@@ -531,7 +531,7 @@ export function classifySourceStance(input: {
 	};
 }
 
-export type StanceVerdict =
+type StanceVerdict =
 	| "supported"
 	| "likely_supported"
 	| "contested"
@@ -918,7 +918,7 @@ export function buildStanceJson(
 
 // ─── Manifest / registry JSON builders ─────────────────────────────────
 
-export interface CitationAuditDetail {
+interface CitationAuditDetail {
 	id: string;
 	url: string;
 	statusCode?: number;

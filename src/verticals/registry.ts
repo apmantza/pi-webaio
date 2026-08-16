@@ -9,12 +9,6 @@ import {
 	loadUserExtractors,
 	type RegisteredUserExtractor,
 } from "./user-loader.ts";
-export {
-	initUserHooks,
-	getUserHooks,
-	runAfterFetchHooks,
-	runAfterExtractHooks,
-} from "../hooks.ts";
 import { matchesNpm, extractNpm } from "./npm.ts";
 import { matchesPyPI, extractPyPI } from "./pypi.ts";
 import { matchesHackerNews, extractHackerNews } from "./hackernews.ts";
@@ -37,7 +31,7 @@ import { matchesGitLab, extractGitLab } from "./gitlab.ts";
 import { matchesContext7, extractContext7 } from "./context7.ts";
 import { matchesDeepWiki, extractDeepWiki } from "./deepwiki.ts";
 
-export interface ExtractorMatch {
+interface ExtractorMatch {
 	name: string;
 	matcher: (url: string) => boolean;
 }
@@ -86,7 +80,7 @@ export function getUserExtractors(): RegisteredUserExtractor[] {
 	return [..._userExtractors];
 }
 
-export const VERTICAL_EXTRACTORS: ExtractorMatch[] = [
+const VERTICAL_EXTRACTORS: ExtractorMatch[] = [
 	{ name: "npm", matcher: matchesNpm },
 	{ name: "pypi", matcher: matchesPyPI },
 	{ name: "hackernews", matcher: matchesHackerNews },

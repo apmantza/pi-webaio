@@ -22,8 +22,8 @@ import { debug } from "./debug.ts";
 
 // ─── Engine health tracking ────────────────────────────────────────
 
-export const ENGINE_HEALTH_COOLDOWN_MS = 10 * 60 * 1000; // 10 min cooldown
-export const ENGINE_FAILURE_THRESHOLD = 2; // consecutive failures before cooldown
+const ENGINE_HEALTH_COOLDOWN_MS = 10 * 60 * 1000; // 10 min cooldown
+const ENGINE_FAILURE_THRESHOLD = 2; // consecutive failures before cooldown
 
 /**
  * Per-engine deadline (P3). `searchWeb` fans out to four HTTP engines via
@@ -40,7 +40,7 @@ export const ENGINE_DEADLINE_MS = 4500;
 
 export const sessionEngineHealth = new Map<string, EngineHealthRecord>();
 
-export function getOrCreateEngineHealth(engine: string): EngineHealthRecord {
+function getOrCreateEngineHealth(engine: string): EngineHealthRecord {
 	const existing = sessionEngineHealth.get(engine);
 	if (existing) return existing;
 
@@ -55,7 +55,7 @@ export function getOrCreateEngineHealth(engine: string): EngineHealthRecord {
 	return created;
 }
 
-export function recordEngineSuccess(engine: string, latencyMs: number): void {
+function recordEngineSuccess(engine: string, latencyMs: number): void {
 	const record = getOrCreateEngineHealth(engine);
 	record.successes += 1;
 	record.consecutiveFailures = 0;
@@ -66,7 +66,7 @@ export function recordEngineSuccess(engine: string, latencyMs: number): void {
 	record.samples += 1;
 }
 
-export function recordEngineFailure(engine: string, reason: string): void {
+function recordEngineFailure(engine: string, reason: string): void {
 	const record = getOrCreateEngineHealth(engine);
 	record.failures += 1;
 	record.consecutiveFailures += 1;
@@ -82,7 +82,7 @@ export function recordEngineFailure(engine: string, reason: string): void {
 	}
 }
 
-export function isEngineAvailable(engine: string): boolean {
+function isEngineAvailable(engine: string): boolean {
 	const record = sessionEngineHealth.get(engine);
 	if (!record?.coolDownUntil) return true;
 	if (Date.now() >= record.coolDownUntil) {
@@ -98,7 +98,7 @@ export function isProviderAvailable(provider: string): boolean {
 	return isEngineAvailable(provider);
 }
 
-export function recordProviderCooldown(
+function recordProviderCooldown(
 	provider: string,
 	reason: string,
 	ttlMs: number,
@@ -133,7 +133,7 @@ export function recordProviderNetworkFailure(
 	);
 }
 
-export function isQuotaError(status: number, body: string): boolean {
+function isQuotaError(status: number, body: string): boolean {
 	return (
 		status === 429 ||
 		status === 402 ||
@@ -196,7 +196,7 @@ export function parseDuckDuckGoResults(html: string): SearchResult[] {
 	return results;
 }
 
-export function parseYahooResults(html: string): SearchResult[] {
+function parseYahooResults(html: string): SearchResult[] {
 	const { document } = parseHTML(html);
 	const results: SearchResult[] = [];
 
@@ -241,7 +241,7 @@ export function parseYahooResults(html: string): SearchResult[] {
 	return results;
 }
 
-export function parseBingResults(html: string): SearchResult[] {
+function parseBingResults(html: string): SearchResult[] {
 	const { document } = parseHTML(html);
 	const results: SearchResult[] = [];
 
@@ -416,7 +416,7 @@ const SOCIAL_HOSTS = [
 	"x.com",
 ];
 
-export function stripWww(domain: string): string {
+function stripWww(domain: string): string {
 	return domain.replace(/^www\./, "");
 }
 
@@ -585,7 +585,7 @@ const PREFERRED_DOMAIN_RULES: PreferredDomainRule[] = [
 ];
 
 /** Boost applied to results whose domain matches an inferred preferred domain. */
-export const PREFERRED_DOMAIN_BONUS = 8;
+const PREFERRED_DOMAIN_BONUS = 8;
 
 /** Infer canonical official domains implied by keywords in the query. */
 export function inferPreferredDomains(query: string): string[] {
@@ -769,7 +769,7 @@ export function buildResultBuckets(
 // already-measured latency, P5) so callers can surface a compact note instead
 // of a silent zero.
 
-export type EngineId = "ddg" | "brave" | "yahoo" | "bing" | "reddit";
+type EngineId = "ddg" | "brave" | "yahoo" | "bing" | "reddit";
 
 /**
  * Outcome of a single engine in one search round. `http_<code>` covers any
@@ -785,7 +785,7 @@ export type EngineStatus =
 	| "disabled"
 	| `http_${number}`;
 
-export interface EngineStatusEntry {
+interface EngineStatusEntry {
 	/** Number of results this engine contributed (0 when it failed/skipped). */
 	count: number;
 	status: EngineStatus;
@@ -795,7 +795,7 @@ export interface EngineStatusEntry {
 
 export type EngineStatusMap = Record<EngineId, EngineStatusEntry>;
 
-export const ENGINE_DISPLAY_NAMES: Record<EngineId, string> = {
+const ENGINE_DISPLAY_NAMES: Record<EngineId, string> = {
 	ddg: "DDG",
 	brave: "Brave",
 	yahoo: "Yahoo",

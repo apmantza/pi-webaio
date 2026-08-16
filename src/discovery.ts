@@ -8,7 +8,7 @@ import type { FetchOpts } from "./types.ts";
 
 // ─── Constants ─────────────────────────────────────────────────────
 
-export const IGNORED =
+const IGNORED =
 	/\.(png|jpe?g|gif|svg|webp|ico|pdf|zip|tar|gz|mp[34]|woff2?|ttf|eot|css|js|json|xml|rss|atom)$/i;
 
 // A hostile <sitemapindex> can list tens of thousands of nested sitemaps;
@@ -18,7 +18,7 @@ const MAX_CHILD_SITEMAPS = 50;
 const SITEMAP_CONCURRENCY = 5;
 const MAX_SITEMAP_URLS = 5000;
 
-export const NAV_SELECTORS = [
+const NAV_SELECTORS = [
 	"nav a[href]",
 	"aside a[href]",
 	'[class*="sidebar"] a[href]',
@@ -31,7 +31,7 @@ export const NAV_SELECTORS = [
 
 // ─── Low-level helpers ─────────────────────────────────────────────
 
-export async function tryFetch(
+async function tryFetch(
 	url: string,
 	opts?: FetchOpts,
 ): Promise<{ text: string; url: string } | null> {
@@ -45,7 +45,7 @@ export function parseLocs(xml: string): string[] {
 
 // ─── Sitemap fetching (recursive, handles index sitemaps) ──────────
 
-export async function fetchSitemap(url: string, depth = 0): Promise<string[]> {
+async function fetchSitemap(url: string, depth = 0): Promise<string[]> {
 	if (depth > 3) return [];
 
 	const r = await tryFetch(url);
@@ -68,7 +68,7 @@ export async function fetchSitemap(url: string, depth = 0): Promise<string[]> {
 	return locs.slice(0, MAX_SITEMAP_URLS);
 }
 
-export async function sitemapFromRobots(origin: string): Promise<string[]> {
+async function sitemapFromRobots(origin: string): Promise<string[]> {
 	const r = await tryFetch(`${origin}/robots.txt`);
 	if (!r) return [];
 	const urls = (r.text.match(/^Sitemap:\s*([^\n]{1,2000})$/gim) ?? []).map(
@@ -86,7 +86,7 @@ export async function sitemapFromRobots(origin: string): Promise<string[]> {
 
 // ─── Navigation link extraction ────────────────────────────────────
 
-export function extractNav(base: URL, html: string): string[] {
+function extractNav(base: URL, html: string): string[] {
 	const { document } = parseHTML(html);
 	const urls = new Set<string>();
 	for (const sel of NAV_SELECTORS) {
@@ -184,7 +184,7 @@ export function filterAndDedupe(
 
 // ─── Crawl ─────────────────────────────────────────────────────────
 
-export async function crawl(
+async function crawl(
 	base: URL,
 	max: number,
 	scope: string,

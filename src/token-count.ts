@@ -61,6 +61,6 @@ export function estimateTokens(text: string): number {
  * Slightly less accurate but much faster for large texts.
  * Use estimateTokens() when accuracy matters, estimateTokensFast() when speed matters.
  */
-export function estimateTokensFast(text: string): number {
+function estimateTokensFast(text: string): number {
 	return Math.ceil(text.length / 4);
 }

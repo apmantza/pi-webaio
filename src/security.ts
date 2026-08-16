@@ -7,7 +7,7 @@ import { isIP } from "node:net";
 // ─── Local / private URL detection ─────────────────────────────────
 
 /** Blocked metadata/magic hostnames — cloud provider instance metadata endpoints. */
-export const BLOCKED_HOSTS = new Set([
+const BLOCKED_HOSTS = new Set([
 	"localhost",
 	"ip6-localhost",
 	"0.0.0.0",
@@ -718,12 +718,12 @@ export function createPinnedLookup(
 
 // ─── Secret scanning ───────────────────────────────────────────────
 
-export interface SecretMatch {
+interface SecretMatch {
 	type: string;
 	pattern: RegExp;
 }
 
-export const SECRET_PATTERNS: SecretMatch[] = [
+const SECRET_PATTERNS: SecretMatch[] = [
 	{ type: "AWS Access Key ID", pattern: /AKIA[0-9A-Z]{16}/ },
 	{
 		type: "AWS Secret Key",

@@ -16,7 +16,7 @@ import type { VerticalResult } from "./types.ts";
 
 // ─── Public contract ────────────────────────────────────────────────
 
-export interface UserExtractorModule {
+interface UserExtractorModule {
 	/** A short identifier shown in the "via <name>" attribution line. */
 	name: string;
 	/** Returns true when this extractor should handle the given URL. */
@@ -80,7 +80,7 @@ function validate(mod: unknown): UserExtractorModule | string {
  * Override by passing a dirPath or setting PI_WEBAIO_USER_VERTICALS_DIR
  * (useful for tests).
  */
-export function resolveUserVerticalsDir(override?: string): string {
+function resolveUserVerticalsDir(override?: string): string {
 	if (override) return resolve(override);
 	if (process.env.PI_WEBAIO_USER_VERTICALS_DIR) {
 		return resolve(process.env.PI_WEBAIO_USER_VERTICALS_DIR);

@@ -5,9 +5,9 @@
 // Guard against catastrophic backtracking: truncate inputs to a safe
 // length before running regex tests. All INJECTION_PATTERNS are
 // designed for short text segments (titles, snippets, page content).
-export const SAFE_REGEX_MAX_INPUT = 10000;
+const SAFE_REGEX_MAX_INPUT = 10000;
 
-export function safeRegexTest(pattern: RegExp, text: string): boolean {
+function safeRegexTest(pattern: RegExp, text: string): boolean {
 	const safe = text.slice(0, SAFE_REGEX_MAX_INPUT);
 	return pattern.test(safe);
 }
@@ -88,7 +88,7 @@ interface InjectionPattern {
 	description: string;
 }
 
-export const INJECTION_PATTERNS: InjectionPattern[] = [
+const INJECTION_PATTERNS: InjectionPattern[] = [
 	{
 		name: "instruction-override",
 		patterns: [

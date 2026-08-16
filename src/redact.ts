@@ -58,13 +58,13 @@ export function redactionPlaceholder(type: RedactionType): string {
  * checks below.  Keep the labels intact so the diagnostic remains useful,
  * while replacing the complete value.
  */
-export type BrokerEnvelopeFieldType =
+type BrokerEnvelopeFieldType =
 	| "redacted-authorization"
 	| "redacted-credential"
 	| "redacted-id";
 
 /** Normalize broker diagnostic field aliases without changing their spelling in output. */
-export function normalizeBrokerEnvelopeField(field: string): string {
+function normalizeBrokerEnvelopeField(field: string): string {
 	return field.replace(/[^A-Za-z0-9]/g, "").toLowerCase();
 }
 
@@ -126,7 +126,7 @@ const BROKER_ENVELOPE_ID_FIELDS = new Set([
 ]);
 
 /** Return the strict envelope category for a field alias, or undefined for ordinary fields. */
-export function brokerEnvelopeFieldType(
+function brokerEnvelopeFieldType(
 	field: string,
 ): BrokerEnvelopeFieldType | undefined {
 	const normalized = normalizeBrokerEnvelopeField(field);

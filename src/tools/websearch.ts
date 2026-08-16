@@ -30,7 +30,7 @@ import {
 	shouldRunReddit,
 } from "../search-orchestration.ts";
 
-export const SEARCH_DEADLINE_MS = 7000;
+const SEARCH_DEADLINE_MS = 7000;
 
 function classifyRedditStatus(status: string, count: number): EngineStatus {
 	if (count > 0 || status === "ok") return "ok";

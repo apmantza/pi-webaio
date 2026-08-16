@@ -34,7 +34,7 @@ import { createFetchError } from "./tools/fetch-error.ts";
 
 // ─── Constants ─────────────────────────────────────────────────────
 
-export const MARKDOWN_SIGNAL =
+const MARKDOWN_SIGNAL =
 	/^(#{1,6}\s|[-*]\s|\d+\.\s|```|>\s|\[[^\]]+\]\([^)]+\))/m;
 // Defuddle is CPU-bound and ~14x slower than Readability on large docs
 // (measured 2605ms vs 182ms on 625KB). It only runs when Readability
@@ -42,7 +42,7 @@ export const MARKDOWN_SIGNAL =
 // previous generous 8s.
 export const DEFUDDLE_TIMEOUT = 4000;
 export const MAX_PREVIEW_CHARS = 1800;
-export const MIN_USEFUL_CONTENT = 500;
+const MIN_USEFUL_CONTENT = 500;
 
 const MAX_CLIENT_REDIRECTS = 5;
 const MIN_ALTERNATE_FALLBACK_WORDS = 30;
@@ -68,7 +68,7 @@ export const READABILITY_MIN_RATIO = 0.005;
  * Pre-flight secret-scan result: builds the FetchErrorInfo + FetchError for
  * a URL that carried a credential. Shared by the pull paths (dedup, jscpd).
  */
-export function blockedSecretResult(
+function blockedSecretResult(
 	url: string,
 	matches: string[],
 ): PullResult {
@@ -211,7 +211,7 @@ export function preCleanHtml(html: string): string {
 	}
 }
 
-export function cleanText(value: string): string {
+function cleanText(value: string): string {
 	let s = value.replace(/\r/g, "");
 	s = s.replace(/[^\S\n]+/g, " ");
 	const lines = s.split("\n");
@@ -222,7 +222,7 @@ export function cleanText(value: string): string {
 	return s;
 }
 
-export function extractHeadingTitle(text: string): string | null {
+function extractHeadingTitle(text: string): string | null {
 	const match = text.match(/^#{1,2}\s+(.+)/m);
 	if (!match) return null;
 	const cleaned = match[1]!.replace(/\*+/g, "").trim();
@@ -238,7 +238,7 @@ export function stripDefuddleComments(content: string): string {
  * input, and hostnames here can originate from user-supplied URLs. Returns
  * "<invalid-url>" rather than throwing (unchecked-throwing-call hardening).
  */
-export function safeHostname(url: string): string {
+function safeHostname(url: string): string {
 	try {
 		return new URL(url).hostname;
 	} catch {
@@ -373,7 +373,7 @@ export function stripCssCruft(markdown: string): string {
 
 // ─── JS rendering detection ───────────────────────────────────────
 
-export function isLikelyJSRendered(html: string): boolean {
+function isLikelyJSRendered(html: string): boolean {
 	try {
 		const { document } = parseHTML(html);
 		const body = document.querySelector("body");
@@ -441,7 +441,7 @@ export function extractRSC(html: string): string | null {
 
 // ─── PDF extraction ────────────────────────────────────────────────
 
-export async function extractPDF(
+async function extractPDF(
 	buffer: Buffer,
 	url: string,
 ): Promise<PullResult | null> {
@@ -590,7 +590,7 @@ export function extractAlternateLinks(html: string, baseUrl: string): string[] {
 
 // ─── Fallback extraction ───────────────────────────────────────────
 
-export function fallbackExtract(html: string): {
+function fallbackExtract(html: string): {
 	title: string;
 	content: string;
 } {
@@ -706,7 +706,7 @@ async function tryAlternateLinks(
 
 // ─── Binary download ────────────────────────────────────────────────
 
-export async function downloadToTemp(
+async function downloadToTemp(
 	buffer: Buffer,
 	contentType: string,
 	contentDisposition: string,
@@ -929,7 +929,7 @@ async function runLocalExtraction(
 
 // ─── Pull page (full fetch + pipeline) ─────────────────────────────
 
-export async function pullPage(
+async function pullPage(
 	url: string,
 	opts?: FetchOpts,
 	_redirectCount = 0,

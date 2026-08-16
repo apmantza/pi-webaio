@@ -45,17 +45,17 @@ import { debug } from "./debug.ts";
 export const DEFAULT_BROWSER = "chrome_145";
 export const DEFAULT_OS = "windows";
 
-export const MAX_RESPONSE_BYTES = 10 * 1024 * 1024; // 10 MB — streaming cap
+const MAX_RESPONSE_BYTES = 10 * 1024 * 1024; // 10 MB — streaming cap
 /** Whole-request timeout handed to wreq (connect + headers + body). */
 export const DEFAULT_TIMEOUT_MS = 30_000;
 /** Ceiling on the streaming body read, independent of wreq's timeout. */
-export const DEFAULT_BODY_READ_MS = 60_000;
+const DEFAULT_BODY_READ_MS = 60_000;
 /** Total budget for one Playwright fallback when no caller timeout is given. */
-export const DEFAULT_PLAYWRIGHT_TIMEOUT_MS = 30_000;
+const DEFAULT_PLAYWRIGHT_TIMEOUT_MS = 30_000;
 /** Maximum time spent waiting for the initial DOM navigation. */
-export const DEFAULT_PLAYWRIGHT_NAVIGATION_TIMEOUT_MS = 15_000;
+const DEFAULT_PLAYWRIGHT_NAVIGATION_TIMEOUT_MS = 15_000;
 /** Maximum time spent waiting for a self-resolving bot challenge. */
-export const DEFAULT_PLAYWRIGHT_BOT_WAIT_TIMEOUT_MS = 15_000;
+const DEFAULT_PLAYWRIGHT_BOT_WAIT_TIMEOUT_MS = 15_000;
 const MAX_RETRIES = 2;
 const RETRY_INITIAL_DELAY_MS = 1000;
 const RETRYABLE_STATUS_CODES = new Set([429, 500, 502, 503, 504]);
@@ -232,7 +232,7 @@ export function getLatestChromeProfile(): string {
 
 // ─── Token bucket rate limiter ─────────────────────────────────────
 
-export class TokenBucket {
+class TokenBucket {
 	private tokens: number;
 	private lastRefill: number;
 	/** Simple lock to prevent concurrent acquire() corruption */
@@ -300,7 +300,7 @@ export class TokenBucket {
 
 const rateLimiters = new Map<string, TokenBucket>();
 
-export function getRateLimiter(host: string): TokenBucket {
+function getRateLimiter(host: string): TokenBucket {
 	let limiter = rateLimiters.get(host);
 	if (!limiter) {
 		limiter = new TokenBucket(10, 5);
@@ -862,7 +862,7 @@ export async function readResponseTextWithProgress(
 // initial dial is still protected by the pre-flight check + metadata floor.
 // If wreq-js ever exposes a connect or redirect hook, wire
 // createPinnedLookup(validation.pinnedIps) and per-hop fastSsrfBlock() here.
-export async function fetchWithRetry(
+async function fetchWithRetry(
 	url: string,
 	options: FetchOpts = {},
 ): Promise<any> {

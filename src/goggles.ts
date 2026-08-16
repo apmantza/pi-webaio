@@ -11,7 +11,7 @@
 
 /** A single boost/demote rule. Any of the match fields may be combined;
  * the rule fires (contributing `weight` once) if ANY field matches. */
-export interface GogglesRule {
+interface GogglesRule {
 	/** Exact-or-subdomain domain match, e.g. "arxiv.org" also matches "www.arxiv.org". */
 	domains?: string[];
 	/** Case-insensitive substrings checked against the bare hostname (e.g. "docs.", ".gov"). */
@@ -31,7 +31,7 @@ export interface GogglesProfile {
 	rules: GogglesRule[];
 }
 
-export interface GogglesMatch {
+interface GogglesMatch {
 	label: string;
 	weight: number;
 }

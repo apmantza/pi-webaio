@@ -230,7 +230,7 @@ export async function listResults(
 /**
  * Delete a stored result by ID.
  */
-export async function deleteResult(id: string): Promise<boolean> {
+async function deleteResult(id: string): Promise<boolean> {
 	const idx = await loadIndex();
 	const entry = idx.get(id);
 	if (!entry) return false;

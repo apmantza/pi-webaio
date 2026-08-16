@@ -6,7 +6,7 @@
  * not disable the standalone Reddit provider. Keep this policy explicit so
  * the two CDP providers do not accidentally drift apart.
  */
-export const REDDIT_SEARCH_POLICY = "automatic" as const;
+const REDDIT_SEARCH_POLICY = "automatic" as const;
 
 export function shouldRunReddit(
 	cdpAvailable: boolean,

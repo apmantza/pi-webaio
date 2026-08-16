@@ -23,10 +23,10 @@ export type TrustTier = "authoritative" | "credible" | "mixed" | "community";
  * can be passed straight through). Declared locally to avoid a runtime
  * import cycle with research.ts.
  */
-export type SourceReachability = "ok" | "skipped" | "dead" | "unknown";
+type SourceReachability = "ok" | "skipped" | "dead" | "unknown";
 
 /** The four evidence-quality caveat reasons this module can emit. */
-export type SourceCaveat =
+type SourceCaveat =
 	| "community-only"
 	| "low-diversity"
 	| "bot-check"
@@ -54,7 +54,7 @@ export interface SourceProfile {
 	domain?: string;
 }
 
-export interface SourceDiversity {
+interface SourceDiversity {
 	/** Count of distinct resolved domains (sources with no domain ignored). */
 	uniqueDomains: number;
 	/**

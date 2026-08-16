@@ -105,7 +105,7 @@ function countContentWords(clean: string): number {
  * marker lines so they don't pollute heading detection or word counts.
  * Leaves all real content (including fenced code) intact.
  */
-export function stripWrapper(markdown: string): string {
+function stripWrapper(markdown: string): string {
 	let s = markdown.replace(FRONTMATTER_RE, "");
 	s = s
 		.split("\n")

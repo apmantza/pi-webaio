@@ -43,7 +43,7 @@ export const SPINNER_FRAMES = [
 export const SPINNER_INTERVAL_MS = 100;
 
 /** Maximum lines shown in the collapsed preview. */
-export const COLLAPSED_PREVIEW_LINES = 7;
+const COLLAPSED_PREVIEW_LINES = 7;
 
 /** Status values used in the progress display. */
 export type FetchStatus =
@@ -191,7 +191,7 @@ export function markdownToText(md: string): string {
 }
 
 /** Valid format values accepted by aio-webfetch's `format` param. */
-export type FetchOutputFormat = "markdown" | "html" | "text" | "json" | "raw";
+type FetchOutputFormat = "markdown" | "html" | "text" | "json" | "raw";
 
 export const FETCH_OUTPUT_FORMATS: ReadonlySet<string> =
 	new Set<FetchOutputFormat>(["markdown", "html", "text", "json", "raw"]);
