@@ -411,13 +411,13 @@ export async function walkRepo(
 
 // ─── Cloning ─────────────────────────────────────────────────────────
 
-interface CloneResult {
+export interface CloneResult {
 	ok: boolean;
 	path?: string;
 	error?: string;
 }
 
-async function cloneRepo(
+export async function cloneRepo(
 	owner: string,
 	repo: string,
 	outDir: string,
@@ -467,7 +467,7 @@ async function cloneRepo(
 		});
 		return { ok: true, path: outDir };
 	} catch (err: any) {
-		return { ok: false, error: err?.message ?? "Clone failed" };
+		return { ok: false, path: outDir, error: err?.message ?? "Clone failed" };
 	}
 }
 

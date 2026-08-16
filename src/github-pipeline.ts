@@ -13,7 +13,7 @@ import {
 	ghFetchWithFallback,
 } from "./github-api.ts";
 import { BASE_TEMP } from "./session-store.ts";
-import { detectArchitectureSignals } from "./github-map.ts";
+import { cloneRepo, detectArchitectureSignals } from "./github-map.ts";
 import type { GitHubRef, PullResult } from "./types.ts";
 import { resolveBinary } from "./tools/utils.ts";
 
@@ -1252,61 +1252,6 @@ async function fetchGitHubTree(ref: GitHubRef): Promise<PullResult> {
 	};
 }
 
-async function cloneGitHubRepo(
-	owner: string,
-	repo: string,
-	outDir: string,
-): Promise<{ ok: boolean; path: string; error?: string }> {
-	try {
-		await mkdir(outDir, { recursive: true });
-
-		// Prefer gh CLI (handles auth, private repos)
-		const ghPath = resolveBinary("gh");
-		if (ghPath) {
-			await new Promise<void>((resolve, reject) => {
-				const proc = spawn(
-					ghPath,
-					["repo", "clone", `${owner}/${repo}`, outDir, "--", "--depth", "1"],
-					{
-						stdio: "pipe",
-					},
-				);
-				let stderr = "";
-				proc.stderr.on("data", (d: Buffer) => (stderr += d));
-				proc.on("close", (code: number) => {
-					if (code === 0) resolve();
-					else reject(new Error(stderr || `gh repo clone exit ${code}`));
-				});
-				proc.on("error", reject);
-			});
-			return { ok: true, path: outDir };
-		}
-
-		// Fallback: git clone. If GITHUB_TOKEN is available, inject it for private repos.
-		let cloneUrl = `https://github.com/${owner}/${repo}.git`;
-		const token = await getGithubToken();
-		if (token) {
-			cloneUrl = `https://x-access-token:${token}@github.com/${owner}/${repo}.git`;
-		}
-		const gitPath = resolveBinary("git") || "git";
-		await new Promise<void>((resolve, reject) => {
-			const proc = spawn(gitPath, ["clone", "--depth", "1", cloneUrl, outDir], {
-				stdio: "pipe",
-			});
-			let stderr = "";
-			proc.stderr.on("data", (d: Buffer) => (stderr += d));
-			proc.on("close", (code: number) => {
-				if (code === 0) resolve();
-				else reject(new Error(stderr || `git clone exited with ${code}`));
-			});
-			proc.on("error", reject);
-		});
-		return { ok: true, path: outDir };
-	} catch (err: any) {
-		return { ok: false, path: outDir, error: err?.message ?? "Clone failed" };
-	}
-}
-
 // Architecture detection (CI/TEST/MONOREPO patterns, package-manager
 // lockfiles, security signals) lives in github-map.ts as an exported pure
 // function; github-pipeline.ts reuses it here (dedup, jscpd).
@@ -1416,7 +1361,7 @@ async function fetchGitHubRepo(ref: GitHubRef): Promise<PullResult> {
 
 	// Try cloning first (much better for agent exploration)
 	const cloneDir = join(BASE_TEMP, "github", `${owner}--${repo}`);
-	const cloned = await cloneGitHubRepo(owner, repo, cloneDir);
+	const cloned = await cloneRepo(owner, repo, cloneDir);
 
 	if (cloned.ok) {
 		const treeMd = await buildRepoMarkdown(cloneDir);
