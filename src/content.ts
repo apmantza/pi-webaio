@@ -766,7 +766,6 @@ export function wordCount(text: string): number {
 async function maybeFollowClientRedirect(
 	text: string,
 	finalUrl: string,
-	url: string,
 	opts: FetchOpts | undefined,
 	_redirectCount: number,
 ): Promise<PullResult | null> {
@@ -774,6 +773,34 @@ async function maybeFollowClientRedirect(
 	const redirectTarget = extractClientSideRedirect(text, finalUrl);
 	if (!redirectTarget) return null;
 	return pullPage(redirectTarget, opts, _redirectCount + 1);
+}
+
+/**
+ * Reprocess a bypassed page through the HTML pipeline (htmlOverride path),
+ * prefixing the result with a note about the bypass strategy. Shared by the
+ * hard-paywall and marker-based bypass paths (dedup, jscpd).
+ */
+async function reprocessViaBypass(
+	url: string,
+	opts: FetchOpts | undefined,
+	_redirectCount: number,
+	bypassed: {
+		ok?: boolean;
+		text?: string;
+		strategy?: string;
+		paywall?: { paywalled?: boolean; confidence?: number };
+	} | null,
+	note: string,
+): Promise<PullResult | null> {
+	if (!bypassed?.ok || !bypassed.text || bypassed.paywall?.paywalled) return null;
+	const bypassedResult = await pullPage(url, opts, _redirectCount, bypassed.text);
+	if (!bypassedResult.ok) return null;
+	return finalizePullResult({
+		...bypassedResult,
+		content: bypassedResult.content
+			? note + "\n\n" + bypassedResult.content
+			: bypassedResult.content,
+	});
 }
 
 export async function runHtmlPipeline(
@@ -911,7 +938,6 @@ export async function pullPage(
 		const redirected = await maybeFollowClientRedirect(
 			text,
 			finalUrl,
-			url,
 			opts,
 			_redirectCount,
 		);
@@ -1133,7 +1159,6 @@ export async function pullPage(
 		const redirected = await maybeFollowClientRedirect(
 			text,
 			finalUrl,
-			url,
 			opts,
 			_redirectCount,
 		);
@@ -1248,22 +1273,14 @@ export async function pullPageEnhanced(
 							if (process.env.PI_WEBAIO_DEBUG) console.warn(msg);
 						},
 					});
-					if (bypassed?.ok && bypassed.text && !bypassed.paywall?.paywalled) {
-						const bypassedResult = await pullPage(
-							url,
-							opts,
-							_redirectCount,
-							bypassed.text,
-						);
-						if (bypassedResult.ok) {
-							return finalizePullResult({
-								...bypassedResult,
-								content: bypassedResult.content
-									? `> Hard paywall detected (HTTP ${status}) — bypassed via ${bypassed.strategy}\n\n${bypassedResult.content}`
-									: bypassedResult.content,
-							});
-						}
-					}
+					const hardReprocessed = await reprocessViaBypass(
+						url,
+						opts,
+						_redirectCount,
+						bypassed,
+						`> Hard paywall detected (HTTP ${status}) — bypassed via ${bypassed?.strategy ?? "?"}`,
+					);
+					if (hardReprocessed) return hardReprocessed;
 				}
 			}
 		}
@@ -1292,24 +1309,14 @@ export async function pullPageEnhanced(
 							if (process.env.PI_WEBAIO_DEBUG) console.warn(msg);
 						},
 					});
-					if (bypassed?.ok && bypassed.text && !bypassed.paywall?.paywalled) {
-						// Re-run the HTML pipeline with the bypassed
-						// text, but skip the network fetch (4th arg).
-						const bypassedResult = await pullPage(
-							url,
-							opts,
-							_redirectCount,
-							bypassed.text,
-						);
-						if (bypassedResult.ok) {
-							return finalizePullResult({
-								...bypassedResult,
-								content: bypassedResult.content
-									? `> Bypassed via ${bypassed.strategy} (${Math.round((1 - (bypassed.paywall?.confidence ?? 0)) * 100)}% clean)\n\n${bypassedResult.content}`
-									: bypassedResult.content,
-							});
-						}
-					}
+					const markerReprocessed = await reprocessViaBypass(
+						url,
+						opts,
+						_redirectCount,
+						bypassed,
+						`> Bypassed via ${bypassed?.strategy ?? "?"} (${Math.round((1 - (bypassed?.paywall?.confidence ?? 0)) * 100)}% clean)`,
+					);
+					if (markerReprocessed) return markerReprocessed;
 					if (process.env.PI_WEBAIO_DEBUG) {
 						console.warn(
 							`[paywall] ${safeHostname(url)}: bypass via ${bypassed?.strategy ?? "?"} ${bypassed?.paywall?.paywalled ? "still paywalled" : "did not return text"} — strategies exhausted`,
