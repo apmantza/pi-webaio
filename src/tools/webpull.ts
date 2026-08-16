@@ -8,7 +8,7 @@ import { pullPageEnhanced } from "../content.ts";
 import { discover } from "../discovery.ts";
 import { storeContent, BASE_TEMP } from "../session-store.ts";
 import { compileContextPackage } from "../context-package.ts";
-import { safeResolveInBaseTemp } from "./utils.ts";
+import { safeResolveInBaseTemp, normalizeInputUrl } from "./utils.ts";
 import { RequestQueue, hasQueueFile } from "../request-queue.ts";
 import { BrowserPool } from "../browser-pool.ts";
 import { SessionRouter, parseRoutes } from "../session-router.ts";
@@ -194,14 +194,12 @@ export function registerWebpullTool(pi: ExtensionAPI): void {
 						}),
 						mode: Type.Optional(
 							Type.String({
-								description:
-									"Fetcher mode: fast, fingerprint, browser, or auto",
+								description: "Fetcher mode: fast, fingerprint, browser, or auto",
 							}),
 						),
 						extractor: Type.Optional(
 							Type.String({
-								description:
-									"Vertical extractor name (e.g. npm, pypi, wikipedia)",
+								description: "Vertical extractor name (e.g. npm, pypi, wikipedia)",
 							}),
 						),
 						browser: Type.Optional(
@@ -236,15 +234,7 @@ export function registerWebpullTool(pi: ExtensionAPI): void {
 		}),
 
 		async execute(_toolCallId, params, signal, onUpdate) {
-			let raw = params.url;
-			if (!/^https?:\/\//i.test(raw)) raw = `https://${raw}`;
-
-			let url: URL;
-			try {
-				url = new URL(raw);
-			} catch {
-				throw new Error(`Bad URL: ${params.url}`);
-			}
+			const url = normalizeInputUrl(params.url);
 
 			const outDir = params.out
 				? safeResolveInBaseTemp(params.out)
@@ -309,9 +299,7 @@ export function registerWebpullTool(pi: ExtensionAPI): void {
 					concurrency = computePullConcurrency(
 						queue
 							.snapshot()
-							.filter(
-								(e) => e.status === "queued" || e.status === "in_progress",
-							)
+							.filter((e) => e.status === "queued" || e.status === "in_progress")
 							.map((e) => e.url),
 						cpus().length,
 					);
@@ -387,9 +375,7 @@ export function registerWebpullTool(pi: ExtensionAPI): void {
 			const pagePathToUrl = new Map<string, string>();
 			const pagePathToTitle = new Map<string, string>();
 			const totalUrls =
-				queue.stats().queued +
-				queue.stats().inProgress +
-				queue.stats().completed;
+				queue.stats().queued + queue.stats().inProgress + queue.stats().completed;
 
 			try {
 				await runPullFromQueue(queue, concurrency, async (pageUrl: string) => {
@@ -587,8 +573,7 @@ export function registerWebpullTool(pi: ExtensionAPI): void {
 					{
 						type: "text",
 						text:
-							summary +
-							(packagePath ? `\n📦 Compiled package: ${packagePath}` : ""),
+							summary + (packagePath ? `\n📦 Compiled package: ${packagePath}` : ""),
 					},
 				],
 				details: {

@@ -13,6 +13,7 @@ import {
 	ghFetchWithFallback,
 } from "./github-api.ts";
 import { BASE_TEMP } from "./session-store.ts";
+import { detectArchitectureSignals } from "./github-map.ts";
 import type { GitHubRef, PullResult } from "./types.ts";
 import { resolveBinary } from "./tools/utils.ts";
 
@@ -154,12 +155,7 @@ export async function pullGitHub(url: string): Promise<PullResult | null> {
 	// Handle api.github.com actions logs endpoint (requires auth)
 	const apiLogs = parseGitHubActionsLogsApiUrl(url);
 	if (apiLogs) {
-		return pullGitHubActionsLogs(
-			url,
-			apiLogs.owner,
-			apiLogs.repo,
-			apiLogs.runId,
-		);
+		return pullGitHubActionsLogs(url, apiLogs.owner, apiLogs.repo, apiLogs.runId);
 	}
 
 	// Try standard GitHub pipeline (tree/blob/repo)
@@ -455,9 +451,7 @@ async function pullGitHubCheckLog(
 						const file = a.path || a.blob_href?.split("/").pop() || "?";
 						const line = a.start_line || a.end_line || "?";
 						const level = a.annotation_level || "?";
-						const msg = escapeMarkdownTableCell(
-							(a.message || "").slice(0, 200),
-						);
+						const msg = escapeMarkdownTableCell((a.message || "").slice(0, 200));
 						md += `\n| \`${file}\` | ${line} | ${level} | ${msg} |`;
 					}
 					if (annotations.length > 20) {
@@ -538,11 +532,7 @@ async function pullGitHubCheckLog(
 				if (!filterSucceeded && stepIndex) {
 					const order = getStepNamesInOrder(logText);
 					const wantNum = parseInt(stepIndex, 10);
-					if (
-						Number.isFinite(wantNum) &&
-						wantNum > 0 &&
-						wantNum <= order.length
-					) {
+					if (Number.isFinite(wantNum) && wantNum > 0 && wantNum <= order.length) {
 						resolvedStepName = order[wantNum - 1] ?? null;
 						if (resolvedStepName) {
 							const section = filterLogByStepName(logText, resolvedStepName);
@@ -577,9 +567,7 @@ async function pullGitHubCheckLog(
 					await fs.mkdir(outDir, { recursive: true });
 					const safeCheckId = safePathSegment(checkId);
 					const suffix =
-						stepIndex && filterSucceeded
-							? `-step${safePathSegment(stepIndex)}`
-							: "";
+						stepIndex && filterSucceeded ? `-step${safePathSegment(stepIndex)}` : "";
 					const outFile = `${outDir}/check-${safeCheckId}${suffix}.log`;
 					await fs.writeFile(outFile, filtered, "utf8");
 					md += `\n<details>\n<summary>📋 Log saved to disk</summary>\n\n\`${outFile}\` (${filtered.length.toLocaleString()} chars)\n</details>\n`;
@@ -729,8 +717,7 @@ async function pullGitHubSecurityAlert(
 				if (Array.isArray(advisory.references) && advisory.references.length) {
 					md += `\n## References (${advisory.references.length})\n\n`;
 					for (const r of advisory.references.slice(0, 20)) {
-						const label =
-							r.url?.replace(/^https?:\/\//, "").slice(0, 80) || "?";
+						const label = r.url?.replace(/^https?:\/\//, "").slice(0, 80) || "?";
 						md += `- [${label}](${r.url})\n`;
 					}
 				}
@@ -741,8 +728,7 @@ async function pullGitHubSecurityAlert(
 				const name = dep.package?.name || pkg.name || "?";
 				const ecosystem = dep.package?.ecosystem || pkg.ecosystem || "?";
 				md += `- **Package:** \`${name}\` (\`${ecosystem}\`)\n`;
-				if (dep.manifest_path)
-					md += `- **Manifest:** \`${dep.manifest_path}\`\n`;
+				if (dep.manifest_path) md += `- **Manifest:** \`${dep.manifest_path}\`\n`;
 				if (dep.scope) md += `- **Scope:** \`${dep.scope}\`\n`;
 				if (cvss) md += `- **Vulnerable range:** \`${cvss}\`\n`;
 				if (patchedVersions)
@@ -921,14 +907,7 @@ async function pullGitHubFeature(url: string): Promise<PullResult | null> {
 					alertPath = `${baseRepoPath}/secret-scanning/alerts/${alertId}`;
 				}
 				if (alertPath) {
-					return pullGitHubSecurityAlert(
-						url,
-						owner,
-						repo,
-						sub,
-						alertId,
-						alertPath,
-					);
+					return pullGitHubSecurityAlert(url, owner, repo, sub, alertId, alertPath);
 				}
 			}
 
@@ -1044,8 +1023,7 @@ async function pullGitHubFeature(url: string): Promise<PullResult | null> {
 				if (jobs.length) {
 					md += `\n## Jobs (${jobs.length})\n\n`;
 					for (const job of jobs) {
-						const isHighlighted =
-							highlightJobId && String(job.id) === highlightJobId;
+						const isHighlighted = highlightJobId && String(job.id) === highlightJobId;
 						const jIcon =
 							job.conclusion === "success"
 								? "✅"
@@ -1058,8 +1036,7 @@ async function pullGitHubFeature(url: string): Promise<PullResult | null> {
 											: "⏳";
 						md += `### ${jIcon} ${isHighlighted ? "👉 " : ""}${job.name}\n\n`;
 						md += `- **Status:** ${job.status} / ${job.conclusion || "pending"}\n`;
-						if (job.completed_at)
-							md += `- **Completed:** ${job.completed_at}\n`;
+						if (job.completed_at) md += `- **Completed:** ${job.completed_at}\n`;
 
 						// If highlighting a specific job, fetch its log
 						if (
@@ -1079,8 +1056,7 @@ async function pullGitHubFeature(url: string): Promise<PullResult | null> {
 									// CI logs can be multi-MB; only a tail/excerpt is ever
 									// used below, so stream-read with a byte cap instead
 									// of buffering the whole log via res.text().
-									const { text: logText } =
-										await readResponseTextWithProgress(logRes);
+									const { text: logText } = await readResponseTextWithProgress(logRes);
 									// Extract lines that look like errors or the last 50 lines
 									const lines = logText.split("\n");
 									const errorLines = lines.filter((l) =>
@@ -1132,16 +1108,10 @@ async function pullGitHubFeature(url: string): Promise<PullResult | null> {
 
 		if (Array.isArray(data)) {
 			const items = data.slice(0, 20);
-			if (!items.length) {
-				md += "_(no items found)_\n";
-			} else {
+			if (items.length) {
 				for (const item of items) {
 					const title =
-						item.title ||
-						item.name ||
-						item.display_title ||
-						item.headline ||
-						"";
+						item.title || item.name || item.display_title || item.headline || "";
 					const state = item.state ? ` _${item.state}_` : "";
 					const number = item.number ? `#${item.number}` : "";
 					const link = item.html_url || "";
@@ -1150,6 +1120,8 @@ async function pullGitHubFeature(url: string): Promise<PullResult | null> {
 					const linkLabel = link ? ` — [view](${link})` : "";
 					md += `- ${number}${state} ${title}${extra}${linkLabel}\n`;
 				}
+			} else {
+				md += "_(no items found)_\n";
 			}
 		} else if (typeof data === "object" && data !== null) {
 			// Single item (e.g. single issue, single commit)
@@ -1335,121 +1307,9 @@ async function cloneGitHubRepo(
 	}
 }
 
-// ─── Architecture detection (inspired by repocrunch) ───────────────
-
-/** File-pattern signals for CI/CD platforms. */
-const CI_PATTERNS: [RegExp, string][] = [
-	[/^\.github\/workflows\//, "GitHub Actions"],
-	[/^\.gitlab-ci\.yml$/, "GitLab CI"],
-	[/^Jenkinsfile$/, "Jenkins"],
-	[/^\.circleci\//, "CircleCI"],
-	[/^\.travis\.yml$/, "Travis CI"],
-	[/^azure-pipelines\.yml$/, "Azure Pipelines"],
-	[/^bitbucket-pipelines\.yml$/, "Bitbucket Pipelines"],
-];
-
-/** File-pattern signals for test frameworks. */
-const TEST_PATTERNS: [RegExp, string][] = [
-	[/^jest\.config\./, "Jest"],
-	[/^vitest\.config\./, "Vitest"],
-	[/^playwright\.config\./, "Playwright"],
-	[/^cypress\.config\./, "Cypress"],
-	[/^(.*\/)?conftest\.py$/, "pytest"],
-	[/^pytest\.ini$/, "pytest"],
-	[/^\.mocharc\./, "Mocha"],
-	[/^karma\.conf\./, "Karma"],
-];
-
-/** File-pattern signals for monorepo tooling. */
-const MONOREPO_PATTERNS: [RegExp, string][] = [
-	[/^lerna\.json$/, "Lerna"],
-	[/^nx\.json$/, "Nx"],
-	[/^turbo\.json$/, "Turborepo"],
-	[/^pnpm-workspace\.yaml$/, "pnpm workspaces"],
-	[/^rush\.json$/, "Rush"],
-];
-
-/** Lock-file → package manager mapping. */
-const LOCKFILE_MAP: Record<string, string> = {
-	"package-lock.json": "npm",
-	"yarn.lock": "yarn",
-	"pnpm-lock.yaml": "pnpm",
-	"bun.lockb": "bun",
-	"uv.lock": "uv",
-	"poetry.lock": "poetry",
-	"Pipfile.lock": "pipenv",
-	"Cargo.lock": "cargo",
-	"Gemfile.lock": "bundler",
-};
-
-function matched(patterns: [RegExp, string][], paths: string[]): string[] {
-	const found = new Set<string>();
-	for (const p of paths) {
-		for (const [re, label] of patterns) {
-			if (re.test(p)) found.add(label);
-		}
-	}
-	return [...found];
-}
-
-/** Analyze a list of relative file paths and return an architecture summary. */
-function detectArchitectureSignals(paths: string[]): string {
-	const lines: string[] = [];
-
-	// Docker
-	if (
-		paths.some((p) =>
-			/^(Dockerfile|docker-compose\.(yml|yaml)|\.dockerignore)$/.test(p),
-		)
-	)
-		lines.push("- 🐳 **Docker:** yes");
-
-	// CI/CD
-	const ciCd = matched(CI_PATTERNS, paths);
-	if (ciCd.length) lines.push(`- 🔄 **CI/CD:** ${ciCd.join(", ")}`);
-
-	// Tests
-	const tests = matched(TEST_PATTERNS, paths);
-	const hasTestDir = paths.some(
-		(p) =>
-			p.startsWith("__tests__/") ||
-			p.startsWith("tests/") ||
-			p.startsWith("test/") ||
-			p.startsWith("spec/"),
-	);
-	if (hasTestDir && !tests.length) tests.push("(test dir present)");
-	if (tests.length) lines.push(`- 🧪 **Tests:** ${tests.join(", ")}`);
-
-	// Monorepo tooling
-	const monorepo = matched(MONOREPO_PATTERNS, paths);
-	// Also detect multiple package.json in subdirectories (classic monorepo signal)
-	const pkgJsons = paths.filter((p) => p.endsWith("/package.json"));
-	if (pkgJsons.length > 1 && !monorepo.length) monorepo.push("multi-package");
-	if (monorepo.length) lines.push(`- 📦 **Monorepo:** ${monorepo.join(", ")}`);
-
-	// Package manager (from lockfiles)
-	const pms = new Set<string>();
-	for (const [file, pm] of Object.entries(LOCKFILE_MAP)) {
-		if (paths.some((p) => p === file || p.endsWith(`/${file}`))) pms.add(pm);
-	}
-	if (pms.size) lines.push(`- 📋 **Package managers:** ${[...pms].join(", ")}`);
-
-	// Security
-	const secSignals: string[] = [];
-	if (paths.some((p) => p === "SECURITY.md")) secSignals.push("SECURITY.md");
-	if (paths.some((p) => p === ".env")) secSignals.push("⚠ .env committed");
-	if (
-		paths.some(
-			(p) => p === ".github/dependabot.yml" || p === ".github/dependabot.yaml",
-		)
-	)
-		secSignals.push("Dependabot");
-	if (secSignals.length)
-		lines.push(`- 🔒 **Security:** ${secSignals.join(", ")}`);
-
-	if (!lines.length) return "";
-	return `\n## Architecture\n\n${lines.join("\n")}\n`;
-}
+// Architecture detection (CI/TEST/MONOREPO patterns, package-manager
+// lockfiles, security signals) lives in github-map.ts as an exported pure
+// function; github-pipeline.ts reuses it here (dedup, jscpd).
 
 // Cap on how many paths a cloned working tree walk will enumerate. A repo
 // with hundreds of thousands of files (e.g. an accidental node_modules
@@ -1574,10 +1434,7 @@ async function fetchGitHubRepo(ref: GitHubRef): Promise<PullResult> {
 	// If the API also failed with 404 (or any "message" response, which
 	// GitHub uses for errors), the repo doesn't exist or is private.
 	// Return a clear error instead of an empty directory listing.
-	if (
-		!repoInfo ||
-		(typeof repoInfo === "object" && (repoInfo as any).message)
-	) {
+	if (!repoInfo || (typeof repoInfo === "object" && (repoInfo as any).message)) {
 		const errMsg =
 			(repoInfo as any)?.message ?? "Repository not found or inaccessible";
 		return {

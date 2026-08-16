@@ -52,6 +52,21 @@ export function resolveBinary(name: string): string | null {
 }
 
 // ─── Frontmatter ────────────────────────────────────────────────────
+/**
+ * Normalize a user-supplied URL (add https:// when the scheme is missing)
+ * and validate it parses. Shared by webpull/webmap/webquery-style tools
+ * (dedup, jscpd). Throws Error("Bad URL: <original>") on malformed input.
+ */
+export function normalizeInputUrl(rawInput: string): URL {
+	let raw = rawInput;
+	if (!/^https?:\/\//i.test(raw)) raw = `https://${raw}`;
+	try {
+		return new URL(raw);
+	} catch {
+		throw new Error(`Bad URL: ${rawInput}`);
+	}
+}
+
 export function frontmatter(
 	title: string,
 	url: string,

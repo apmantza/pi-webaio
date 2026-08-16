@@ -8,6 +8,7 @@ import {
 	parseGitHubMapUrl,
 } from "../github-map.ts";
 import type { FetchOpts } from "../types.ts";
+import { normalizeInputUrl } from "./utils.ts";
 
 export function registerWebmapTool(pi: ExtensionAPI): void {
 	pi.registerTool({
@@ -46,15 +47,7 @@ export function registerWebmapTool(pi: ExtensionAPI): void {
 		}),
 
 		async execute(_toolCallId, params) {
-			let raw = params.url;
-			if (!/^https?:\/\//i.test(raw)) raw = `https://${raw}`;
-
-			let url: URL;
-			try {
-				url = new URL(raw);
-			} catch {
-				throw new Error(`Bad URL: ${params.url}`);
-			}
+			const url = normalizeInputUrl(params.url);
 
 			const max = params.max ?? 100;
 			const browser = (params.browser as string) ?? getLatestChromeProfile();
@@ -114,9 +107,7 @@ export function registerWebmapTool(pi: ExtensionAPI): void {
 			const text = [
 				`🌐 Site map for ${url.href}`,
 				`\nDiscovered ${urls.length} pages via sitemaps/robots/nav/crawl.`,
-				llmsUrls.length > 0
-					? `\nFound ${llmsUrls.length} entries in llms.txt`
-					: "",
+				llmsUrls.length > 0 ? `\nFound ${llmsUrls.length} entries in llms.txt` : "",
 				"\n\nFirst 50 pages:",
 				...urls.slice(0, 50).map((u, i) => `${i + 1}. ${u}`),
 				urls.length > 50 ? `\n... and ${urls.length - 50} more` : "",

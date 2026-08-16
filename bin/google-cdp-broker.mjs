@@ -179,9 +179,7 @@ export async function claimStartupLock({
 	try {
 		await mkdir(dirname(lockPath), { recursive: true });
 	} catch (error) {
-		return fail(
-			new BrokerError("lock_failed", String(error?.message || error)),
-		);
+		return fail(new BrokerError("lock_failed", String(error?.message || error)));
 	}
 	const record = {
 		version: 2,
@@ -207,10 +205,7 @@ export async function claimStartupLock({
 			} catch (writeError) {
 				await rm(lockPath, { recursive: true, force: true }).catch(() => {});
 				return fail(
-					new BrokerError(
-						"lock_failed",
-						String(writeError?.message || writeError),
-					),
+					new BrokerError("lock_failed", String(writeError?.message || writeError)),
 				);
 			}
 			return {
@@ -317,8 +312,7 @@ export async function claimStartupLock({
 						{
 							pid: moved?.pid ?? current?.pid,
 							ownerNonce: moved?.ownerNonce ?? current?.ownerNonce,
-							socketPath:
-								moved?.socketPath || current?.socketPath || socketPath,
+							socketPath: moved?.socketPath || current?.socketPath || socketPath,
 						},
 					),
 				);
@@ -326,9 +320,7 @@ export async function claimStartupLock({
 			await rm(quarantine, { recursive: true, force: true });
 		} catch (error) {
 			if (
-				["ENOENT", "EEXIST", "ENOTEMPTY", "EPERM", "EBUSY"].includes(
-					error?.code,
-				)
+				["ENOENT", "EEXIST", "ENOTEMPTY", "EPERM", "EBUSY"].includes(error?.code)
 			) {
 				recoveryAttempts++;
 				if (recoveryAttempts <= 32) {
@@ -574,11 +566,7 @@ export class LeaseRegistry {
 			...DEFAULT_PROVIDER_CAPS,
 			...(options.providerCaps || {}),
 		};
-		this.ttlMs = asPositiveInt(
-			options.ttlMs,
-			DEFAULT_LEASE_TTL_MS,
-			10 * 60_000,
-		);
+		this.ttlMs = asPositiveInt(options.ttlMs, DEFAULT_LEASE_TTL_MS, 10 * 60_000);
 		this.orphanTtlMs = asPositiveInt(
 			options.orphanTtlMs,
 			DEFAULT_ORPHAN_TTL_MS,
@@ -735,10 +723,7 @@ export class LeaseRegistry {
 				this.removeWaiter(key, waiter);
 				this.finishWaiter(
 					waiter,
-					new BrokerError(
-						"lease_wait_timeout",
-						"The session lease remained busy",
-					),
+					new BrokerError("lease_wait_timeout", "The session lease remained busy"),
 				);
 			}, timeout);
 			waiter.timer.unref?.();
@@ -849,27 +834,16 @@ export class LeaseRegistry {
 		).length;
 	}
 
-	findLease({
-		clientId,
-		sessionId,
-		capability,
-		leaseId,
-		targetId,
-		generation,
-	}) {
+	findLease({ clientId, sessionId, capability, leaseId, targetId, generation }) {
 		this.assertClient({ clientId, sessionId, capability });
 		const lease = this.leases.get(leaseId);
-		if (!lease)
-			throw new BrokerError("lease_not_found", "Lease does not exist");
+		if (!lease) throw new BrokerError("lease_not_found", "Lease does not exist");
 		if (
 			lease.clientId !== clientId ||
 			lease.capability !== capability ||
 			lease.sessionId !== sessionId
 		)
-			throw new BrokerError(
-				"lease_owner",
-				"Lease belongs to another connection",
-			);
+			throw new BrokerError("lease_owner", "Lease belongs to another connection");
 		if (targetId !== undefined && targetId !== lease.targetId)
 			throw new BrokerError(
 				"target_mismatch",
@@ -1004,8 +978,7 @@ export class LeaseRegistry {
 
 	bumpBrowserGeneration() {
 		this.browserGeneration++;
-		for (const lease of [...this.leases.values()])
-			this.retireLease(lease, true);
+		for (const lease of [...this.leases.values()]) this.retireLease(lease, true);
 		for (const [id, target] of this.targets)
 			if (target.generation !== this.browserGeneration) this.targets.delete(id);
 		return { generation: this.browserGeneration };
@@ -1282,10 +1255,7 @@ export class GoogleCdpBroker {
 				signal,
 			);
 			if (typeof attached?.sessionId !== "string" || !attached.sessionId)
-				throw new BrokerError(
-					"cdp_protocol",
-					"CDP did not return a session ID",
-				);
+				throw new BrokerError("cdp_protocol", "CDP did not return a session ID");
 			target.cdpSessionId = attached.sessionId;
 			this.cdpTargets.set(target.targetId, target);
 		} catch (error) {
@@ -1306,13 +1276,9 @@ export class GoogleCdpBroker {
 		const target =
 			internalLease && this.registry.targets.get(internalLease.targetId);
 		if (!internalLease || !target)
-			throw new BrokerError(
-				"target_unavailable",
-				"Lease target is unavailable",
-			);
+			throw new BrokerError("target_unavailable", "Lease target is unavailable");
 		try {
-			if (target.cdpSessionId)
-				await this.resetCdpTarget(target, request, signal);
+			if (target.cdpSessionId) await this.resetCdpTarget(target, request, signal);
 			else await this.attachCdpTarget(target, request, signal);
 			checkSignal(signal);
 			return this.publicCdpLease(internalLease);
@@ -1436,13 +1402,9 @@ export class GoogleCdpBroker {
 					signal,
 				});
 				const internalLease = this.registry.leases.get(lease.leaseId);
-				target =
-					internalLease && this.registry.targets.get(internalLease.targetId);
+				target = internalLease && this.registry.targets.get(internalLease.targetId);
 				if (!internalLease || !target)
-					throw new BrokerError(
-						"target_unavailable",
-						"Lease target is unavailable",
-					);
+					throw new BrokerError("target_unavailable", "Lease target is unavailable");
 				await this.acquireCdpLease(lease, request, signal);
 				checkSignal(signal);
 			});
@@ -1514,10 +1476,7 @@ export class GoogleCdpBroker {
 		try {
 			if (this.cdp.explicit) {
 				if (!this.cdpTransport)
-					throw new BrokerError(
-						"cdp_unavailable",
-						"CDP transport is unavailable",
-					);
+					throw new BrokerError("cdp_unavailable", "CDP transport is unavailable");
 				await validateProfileCdpPort(this.profileKey, this.cdpPort);
 				this.attachCdpTransport();
 				const cdpInfo = await this.cdpTransport.connect();
@@ -1564,14 +1523,14 @@ export class GoogleCdpBroker {
 				this.server.once("listening", onListening);
 				this.server.listen(this.socketPath);
 			});
-			if (platform() !== "win32") {
+			if (platform() === "win32") {
+				// Windows named pipes have no equivalent portable mode bit; capability auth is the boundary.
+			} else {
 				try {
 					await chmod(this.socketPath, 0o600);
 				} catch {
 					/* Unix permission tightening is best effort. */
 				}
-			} else {
-				// Windows named pipes have no equivalent portable mode bit; capability auth is the boundary.
 			}
 			this.endpointOwned = true;
 			this.started = true;
@@ -1834,10 +1793,7 @@ export class GoogleCdpBroker {
 				"sessionId must match the registered identity",
 			);
 		if (request.capability !== state.capability)
-			throw new BrokerError(
-				"unauthorized",
-				"Broker-bound capability is required",
-			);
+			throw new BrokerError("unauthorized", "Broker-bound capability is required");
 		return {
 			clientId: state.clientId,
 			sessionId: state.sessionId,
@@ -1875,10 +1831,7 @@ export class GoogleCdpBroker {
 		if (op === "cancel") {
 			const requestId = asRequestId(request.requestId);
 			if (requestId === request.id)
-				throw new BrokerError(
-					"invalid_request",
-					"A request cannot cancel itself",
-				);
+				throw new BrokerError("invalid_request", "A request cannot cancel itself");
 			const pending = state.pending.get(requestId);
 			if (!pending) return ok({ cancelled: false, requestId });
 			pending.abort();
@@ -1915,10 +1868,7 @@ export class GoogleCdpBroker {
 				);
 			case "reset": {
 				if (!this.cdp.explicit)
-					throw new BrokerError(
-						"unsupported_operation",
-						"Reset requires CDP mode",
-					);
+					throw new BrokerError("unsupported_operation", "Reset requires CDP mode");
 				if (request.targetId !== undefined)
 					throw new BrokerError(
 						"invalid_request",
@@ -2033,9 +1983,7 @@ async function main() {
 			process.exitCode = result.error.code === "already_running" ? 2 : 1;
 			return;
 		}
-		process.stderr.write(
-			`Google CDP broker listening at ${broker.socketPath}\n`,
-		);
+		process.stderr.write(`Google CDP broker listening at ${broker.socketPath}\n`);
 		const shutdown = () => {
 			void broker.stop().finally(() => process.exit(0));
 		};

@@ -474,17 +474,8 @@ export async function validateUrlForSsrf(
 		}
 
 		// Quick block: .local and obvious private prefixes (fast path).
-		if (host.endsWith(".local")) {
-			return { dangerous: true, reason: "dot-local", pinnedIps: [] };
-		}
-		if (host.startsWith("192.168.") || host.startsWith("10.")) {
+		if (isPrivateHostname(host)) {
 			return { dangerous: true, reason: "private-prefix", pinnedIps: [] };
-		}
-		if (host.startsWith("172.")) {
-			const octet = Number.parseInt(host.split(".")[1] ?? "0", 10);
-			if (octet >= 16 && octet <= 31) {
-				return { dangerous: true, reason: "private-prefix", pinnedIps: [] };
-			}
 		}
 
 		// Deep check: resolve DNS ONCE and validate every IP. The same
@@ -620,19 +611,25 @@ export function fastSsrfBlock(url: string): { dangerous: boolean; reason?: strin
 		}
 		return { dangerous: ev.dangerous, reason: ev.reason };
 	}
-	if (host.endsWith(".local")) {
-		return { dangerous: true, reason: "dot-local" };
-	}
-	if (host.startsWith("192.168.") || host.startsWith("10.")) {
+	if (isPrivateHostname(host)) {
 		return { dangerous: true, reason: "private-prefix" };
 	}
+	return { dangerous: false };
+}
+
+/**
+ * Fast-path private-network hostname check shared by the SSRF validators:
+ * returns true when the hostname is obviously private (dot-local or a
+ * private IPv4 prefix), without resolving DNS (dedup, jscpd).
+ */
+function isPrivateHostname(host: string): boolean {
+	if (host.endsWith(".local")) return true;
+	if (host.startsWith("192.168.") || host.startsWith("10.")) return true;
 	if (host.startsWith("172.")) {
 		const octet = Number.parseInt(host.split(".")[1] ?? "0", 10);
-		if (octet >= 16 && octet <= 31) {
-			return { dangerous: true, reason: "private-prefix" };
-		}
+		if (octet >= 16 && octet <= 31) return true;
 	}
-	return { dangerous: false };
+	return false;
 }
 
 // ─── DNS pinning ───────────────────────────────────────────────────

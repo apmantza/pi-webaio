@@ -189,8 +189,7 @@ class Client {
 	request(op, fields = {}) {
 		const id = `cdp-${this.nextId++}`;
 		const body = { id, op, ...fields };
-		if (op !== "register" && op !== "health")
-			Object.assign(body, this.identity);
+		if (op !== "register" && op !== "health") Object.assign(body, this.identity);
 		return new Promise((resolve, reject) => {
 			this.pending.set(id, { resolve, reject });
 			this.socket.write(`${JSON.stringify(body)}\n`);
@@ -289,10 +288,7 @@ test("transport rejects pending requests once and fences cancellation, deadlines
 	await assert.rejects(deadline, (error) => error.code === "request_fenced");
 	const disconnect = fake.transport.send("Slow.command");
 	fake.socket.close();
-	await assert.rejects(
-		disconnect,
-		(error) => error.code === "cdp_disconnected",
-	);
+	await assert.rejects(disconnect, (error) => error.code === "cdp_disconnected");
 	assert.equal(fake.transport.pending.size, 0);
 	assert.equal(fake.transport.generation, 2);
 	await fake.transport.close();
@@ -379,9 +375,7 @@ test("failed attach closes the private target", async () => {
 					}),
 				);
 			if (message.method === "Target.closeTarget")
-				return setImmediate(() =>
-					socket.respond({ id: message.id, result: {} }),
-				);
+				return setImmediate(() => socket.respond({ id: message.id, result: {} }));
 		},
 	};
 	const fake = fakeTransport(behavior);
@@ -465,10 +459,7 @@ test("broker-owned search navigates canonically, extracts results, resets, and r
 				"number",
 				`timings.${key} is a number`,
 			);
-			assert.ok(
-				Number.isFinite(result.timings[key]),
-				`timings.${key} is finite`,
-			);
+			assert.ok(Number.isFinite(result.timings[key]), `timings.${key} is finite`);
 			assert.ok(result.timings[key] >= 0, `timings.${key} is non-negative`);
 		}
 		assert.equal(setup.broker.registry.snapshot().active, 0);
@@ -496,8 +487,7 @@ test("broker-owned search navigates canonically, extracts results, resets, and r
 		);
 		const resetNavigation = setup.fake.socket.sent.find(
 			(message) =>
-				message.method === "Page.navigate" &&
-				message.params?.url === "about:blank",
+				message.method === "Page.navigate" && message.params?.url === "about:blank",
 		);
 		assert.ok(resetNavigation);
 	} finally {
@@ -588,10 +578,7 @@ test("search deadline and cancellation quarantine the private target", async () 
 		await assert.rejects(search, (error) => error.code === "request_fenced");
 		assert.equal(cancelled.broker.registry.snapshot().active, 0);
 		assert.equal(cancelled.broker.registry.snapshot().targets, 0);
-		assert.equal(
-			cancelled.fake.socket.sent.at(-1).method,
-			"Target.closeTarget",
-		);
+		assert.equal(cancelled.fake.socket.sent.at(-1).method, "Target.closeTarget");
 	} finally {
 		await teardown(cancelled);
 	}
@@ -611,9 +598,7 @@ test("navigation and reset failures dirty and close the target", async () => {
 					maxResults: 1,
 				}),
 				(error) =>
-					["cdp_error", "navigation_failed", "reset_failed"].includes(
-						error.code,
-					),
+					["cdp_error", "navigation_failed", "reset_failed"].includes(error.code),
 			);
 			await sleep(5);
 			assert.equal(setup.broker.registry.snapshot().active, 0);
@@ -634,7 +619,12 @@ test("broker search waits past a partial mid-render snapshot before returning (#
 		onCommand: respondToSearch({
 			evaluationResults: [
 				{ ready: false, results: [] },
-				{ ready: true, results: [{ title: "Only", url: "https://example.test/only", snippet: "Partial" }] },
+				{
+					ready: true,
+					results: [
+						{ title: "Only", url: "https://example.test/only", snippet: "Partial" },
+					],
+				},
 				{
 					ready: true,
 					results: [

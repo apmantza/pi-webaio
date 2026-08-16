@@ -51,6 +51,34 @@ const HEADING_RE = /^[ \t]{0,3}(#{1,6})[ \t]+(.*?)[ \t]*$/;
 // A fenced-code delimiter (``` or ~~~), up to 3 leading spaces.
 const FENCE_RE = /^[ \t]{0,3}(`{3,}|~{3,})/;
 
+/**
+ * Iterate lines while tracking fenced-code-block state. Yields
+ * [line, inFence, index] for every line; code-fence open/close lines are
+ * included (callers decide whether to keep them). Shared by
+ * splitSectionsClean and detectFallbackHeadings (dedup, jscpd).
+ */
+function* linesWithFenceState(
+	lines: string[],
+): Generator<[string, boolean, number], void, void> {
+	let inFence = false;
+	let fenceChar = "";
+	for (let i = 0; i < lines.length; i++) {
+		const line = lines[i]!;
+		const fence = line.match(FENCE_RE);
+		if (fence) {
+			const ch = fence[1]![0];
+			if (!inFence) {
+				inFence = true;
+				fenceChar = ch;
+			} else if (ch === fenceChar) {
+				inFence = false;
+				fenceChar = "";
+			}
+		}
+		yield [line, inFence, i];
+	}
+}
+
 // The prompt-injection safety markers added by content.ts. They are NOT
 // content, so they are excluded from word counts and heading detection here.
 // (Callers that RETURN web-derived text re-wrap it in fresh markers.)
@@ -102,8 +130,6 @@ function splitSectionsClean(clean: string): Section[] {
 	const sections: Section[] = [];
 	const bodyLines: string[] = [];
 	let current: Section | null = null;
-	let inFence = false;
-	let fenceChar = "";
 
 	const flush = (): void => {
 		if (current) {
@@ -113,21 +139,7 @@ function splitSectionsClean(clean: string): Section[] {
 		}
 	};
 
-	for (let i = 0; i < lines.length; i++) {
-		const line = lines[i]!;
-		const fence = line.match(FENCE_RE);
-		if (fence) {
-			const ch = fence[1]![0];
-			if (!inFence) {
-				inFence = true;
-				fenceChar = ch;
-			} else if (ch === fenceChar) {
-				inFence = false;
-				fenceChar = "";
-			}
-			if (current) bodyLines.push(line);
-			continue;
-		}
+	for (const [line, inFence, i] of linesWithFenceState(lines)) {
 		if (!inFence) {
 			const hm = line.match(HEADING_RE);
 			if (hm) {
@@ -228,23 +240,8 @@ function isFallbackHeadingLine(line: string, nextNonEmpty: string): boolean {
 function detectFallbackHeadings(clean: string): OutlineHeading[] {
 	const lines = clean.split("\n");
 	const headingIdx: number[] = [];
-	let inFence = false;
-	let fenceChar = "";
 
-	for (let i = 0; i < lines.length; i++) {
-		const line = lines[i]!;
-		const fence = line.match(FENCE_RE);
-		if (fence) {
-			const ch = fence[1]![0];
-			if (!inFence) {
-				inFence = true;
-				fenceChar = ch;
-			} else if (ch === fenceChar) {
-				inFence = false;
-				fenceChar = "";
-			}
-			continue;
-		}
+	for (const [line, inFence, i] of linesWithFenceState(lines)) {
 		if (inFence) continue;
 		// Next non-empty line (a heading is always followed by its body).
 		let next = "";

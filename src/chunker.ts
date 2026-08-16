@@ -71,9 +71,17 @@ export function chunkMarkdown(
 }
 
 /** Group paragraphs into chunks not exceeding `maxTokens`. */
-function buildParagraphChunks(
-	paragraphs: string[],
+/**
+ * Shared token-budget accumulator: packs units into chunks not exceeding
+ * `maxTokens` (counting a joiner's separator tokens), flushing on budget
+ * overflow. Oversized units are split via `splitOversized` (dedup, jscpd —
+ * shared by paragraph and sentence/word packing).
+ */
+function accumulateChunks(
+	units: string[],
 	maxTokens: number,
+	joiner: string,
+	splitOversized: (unit: string, maxTokens: number) => string[],
 ): string[] {
 	const chunks: string[] = [];
 	let current: string[] = [];
@@ -81,36 +89,43 @@ function buildParagraphChunks(
 
 	const flush = () => {
 		if (current.length === 0) return;
-		chunks.push(current.join("\n\n"));
+		chunks.push(current.join(joiner));
 		current = [];
 		currentTokens = 0;
 	};
 
-	for (const paragraph of paragraphs) {
-		const paraTokens = estimateTokens(paragraph);
+	for (const unit of units) {
+		const unitTokens = estimateTokens(unit);
 
-		if (paraTokens > maxTokens) {
+		if (unitTokens > maxTokens) {
 			flush();
-			for (const piece of splitOversized(paragraph, maxTokens)) {
+			for (const piece of splitOversized(unit, maxTokens)) {
 				chunks.push(piece);
 			}
 			continue;
 		}
 
-		const separatorTokens = current.length > 0 ? estimateTokens("\n\n") : 0;
+		const sepTokens = current.length > 0 ? estimateTokens(joiner) : 0;
 		if (
 			current.length > 0 &&
-			currentTokens + separatorTokens + paraTokens > maxTokens
+			currentTokens + sepTokens + unitTokens > maxTokens
 		) {
 			flush();
 		}
 
-		current.push(paragraph);
-		currentTokens += separatorTokens + paraTokens;
+		current.push(unit);
+		currentTokens += sepTokens + unitTokens;
 	}
 
 	flush();
 	return chunks;
+}
+
+function buildParagraphChunks(
+	paragraphs: string[],
+	maxTokens: number,
+): string[] {
+	return accumulateChunks(paragraphs, maxTokens, "\n\n", splitOversized);
 }
 
 /** Split an oversized paragraph at sentence, then word, then hard char limit. */
@@ -141,43 +156,16 @@ function packUnits(
 	maxTokens: number,
 	joiner: string,
 ): string[] {
-	const chunks: string[] = [];
-	let current: string[] = [];
-	let currentTokens = 0;
-
-	const flush = () => {
-		if (current.length === 0) return;
-		chunks.push(current.join(joiner));
-		current = [];
-		currentTokens = 0;
-	};
-
-	for (const unit of units) {
-		const unitTokens = estimateTokens(unit);
-
-		if (unitTokens > maxTokens) {
-			flush();
-			const maxChars = maxTokens * 4;
-			for (let i = 0; i < unit.length; i += maxChars) {
-				chunks.push(unit.slice(i, i + maxChars));
-			}
-			continue;
+	return accumulateChunks(units, maxTokens, joiner, (unit, budget) => {
+		const maxChars = budget * 4;
+		const pieces: string[] = [];
+		for (let i = 0; i < unit.length; i += maxChars) {
+			pieces.push(unit.slice(i, i + maxChars));
 		}
-
-		const sepTokens = current.length > 0 ? estimateTokens(joiner) : 0;
-		if (
-			current.length > 0 &&
-			currentTokens + sepTokens + unitTokens > maxTokens
-		) {
-			flush();
-		}
-		current.push(unit);
-		currentTokens += sepTokens + unitTokens;
-	}
-
-	flush();
-	return chunks;
+		return pieces;
+	});
 }
+
 
 /** Prepend the tail of each previous chunk to the next, for context overlap. */
 function applyOverlap(

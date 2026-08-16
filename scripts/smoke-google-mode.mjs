@@ -7,7 +7,9 @@ const mode = process.argv[2] ?? "legacy";
 const query = process.argv.slice(3).join(" ") || "pi coding agent";
 
 process.env.PI_WEBAIO_CDP_BROKER = mode === "broker" ? "1" : "0";
-console.log(`\n=== googleSearch mode=${mode} (PI_WEBAIO_CDP_BROKER=${process.env.PI_WEBAIO_CDP_BROKER}) ===`);
+console.log(
+	`\n=== googleSearch mode=${mode} (PI_WEBAIO_CDP_BROKER=${process.env.PI_WEBAIO_CDP_BROKER}) ===`,
+);
 console.log(`query: "${query}"`);
 
 const t0 = Date.now();
