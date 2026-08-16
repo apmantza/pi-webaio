@@ -700,17 +700,13 @@ async function listFeatureItems(
 				);
 				break;
 			case "releases":
-				data = await ghFetch(
-					`/repos/${owner}/${repo}/releases?per_page=${limit}`,
-				);
+				data = await ghFetch(`/repos/${owner}/${repo}/releases?per_page=${limit}`);
 				break;
 			case "tags":
 				data = await ghFetch(`/repos/${owner}/${repo}/tags?per_page=${limit}`);
 				break;
 			case "branches":
-				data = await ghFetch(
-					`/repos/${owner}/${repo}/branches?per_page=${limit}`,
-				);
+				data = await ghFetch(`/repos/${owner}/${repo}/branches?per_page=${limit}`);
 				break;
 			case "commits": {
 				const q = branch
@@ -902,9 +898,7 @@ async function mapGitHubRepoFull(
 	//    immediate context about the repo's purpose.
 	const readmeExcerpt = await fetchReadmeExcerpt(owner, repo);
 	if (readmeExcerpt) {
-		sources["github-api:readme"] = [
-			`https://github.com/${owner}/${repo}#readme`,
-		];
+		sources["github-api:readme"] = [`https://github.com/${owner}/${repo}#readme`];
 		if (repoMeta) repoMeta._readmeExcerpt = readmeExcerpt;
 	}
 

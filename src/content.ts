@@ -792,8 +792,14 @@ async function reprocessViaBypass(
 	} | null,
 	note: string,
 ): Promise<PullResult | null> {
-	if (!bypassed?.ok || !bypassed.text || bypassed.paywall?.paywalled) return null;
-	const bypassedResult = await pullPage(url, opts, _redirectCount, bypassed.text);
+	if (!bypassed?.ok || !bypassed.text || bypassed.paywall?.paywalled)
+		return null;
+	const bypassedResult = await pullPage(
+		url,
+		opts,
+		_redirectCount,
+		bypassed.text,
+	);
 	if (!bypassedResult.ok) return null;
 	return finalizePullResult({
 		...bypassedResult,

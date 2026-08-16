@@ -74,11 +74,7 @@ export class SessionRouter {
 		const urlPath = this.extractPath(url);
 
 		// Regex pattern: starts and ends with /
-		if (
-			pattern.startsWith("/") &&
-			pattern.endsWith("/") &&
-			pattern.length > 2
-		) {
+		if (pattern.startsWith("/") && pattern.endsWith("/") && pattern.length > 2) {
 			try {
 				const regexBody = pattern.slice(1, -1);
 				const re = new RegExp(regexBody);

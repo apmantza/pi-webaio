@@ -166,7 +166,6 @@ function packUnits(
 	});
 }
 
-
 /** Prepend the tail of each previous chunk to the next, for context overlap. */
 function applyOverlap(
 	chunks: string[],

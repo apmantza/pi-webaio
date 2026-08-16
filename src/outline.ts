@@ -411,7 +411,7 @@ export function renderOutlineText(outline: Outline): string {
 	} else {
 		for (const h of headings) {
 			const indent = "  ".repeat(Math.max(0, h.level - 1));
-			const wc = h.words !== undefined ? ` (${h.words})` : "";
+			const wc = h.words === undefined ? "" : ` (${h.words})`;
 			lines.push(`${indent}- ${h.text}${wc}`);
 		}
 	}

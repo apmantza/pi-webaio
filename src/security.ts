@@ -57,12 +57,9 @@ function isPrivateIPv6(ip: string): boolean {
 			bytes[2] === 0xff &&
 			bytes[3] === 0x9b;
 		const nat64_96 = nat64Prefix && bytes.subarray(4, 12).every((b) => b === 0);
-		const nat64_48 =
-			nat64Prefix && bytes[4] === 0x00 && bytes[5] === 0x01;
+		const nat64_48 = nat64Prefix && bytes[4] === 0x00 && bytes[5] === 0x01;
 		if (nat64_96 || nat64_48) {
-			return isPrivateIPv4(
-				`${bytes[12]}.${bytes[13]}.${bytes[14]}.${bytes[15]}`,
-			);
+			return isPrivateIPv4(`${bytes[12]}.${bytes[13]}.${bytes[14]}.${bytes[15]}`);
 		}
 		// IPv4-mapped hex form ::ffff:XXYY:ZZWW (the dotted-quad form is
 		// handled by the regex above; this catches the hex spelling).
@@ -71,9 +68,7 @@ function isPrivateIPv6(ip: string): boolean {
 			bytes[10] === 0xff &&
 			bytes[11] === 0xff;
 		if (mappedHex) {
-			return isPrivateIPv4(
-				`${bytes[12]}.${bytes[13]}.${bytes[14]}.${bytes[15]}`,
-			);
+			return isPrivateIPv4(`${bytes[12]}.${bytes[13]}.${bytes[14]}.${bytes[15]}`);
 		}
 	}
 
@@ -231,7 +226,10 @@ function ipv6ToBytes(ip: string): Uint8Array | null {
 /** Convert a dotted-decimal IPv4 string to 4 bytes. */
 function ipv4ToBytes(ip: string): Uint8Array | null {
 	const parts = ip.split(".").map(Number);
-	if (parts.length !== 4 || parts.some((x) => Number.isNaN(x) || x < 0 || x > 255))
+	if (
+		parts.length !== 4 ||
+		parts.some((x) => Number.isNaN(x) || x < 0 || x > 255)
+	)
 		return null;
 	return new Uint8Array(parts as number[]);
 }
@@ -588,7 +586,10 @@ function effectivePort(u: URL): number | null {
  * limitation); the initial navigation is still fully validated by
  * {@link validateUrlForSsrf}. Fail-closed on an unparsable URL.
  */
-export function fastSsrfBlock(url: string): { dangerous: boolean; reason?: string } {
+export function fastSsrfBlock(url: string): {
+	dangerous: boolean;
+	reason?: string;
+} {
 	let u: URL;
 	try {
 		u = new URL(url);
@@ -606,7 +607,11 @@ export function fastSsrfBlock(url: string): { dangerous: boolean; reason?: strin
 	const cleanedIp = host.replace(/^\[|\]$/g, "");
 	if (isIP(cleanedIp)) {
 		const ev = evaluateIp(cleanedIp, ranges);
-		if (!ev.dangerous && isDangerousPort(effectivePort(u)) && !ev.explicitlyAllowed) {
+		if (
+			!ev.dangerous &&
+			isDangerousPort(effectivePort(u)) &&
+			!ev.explicitlyAllowed
+		) {
 			return { dangerous: true, reason: "dangerous-port" };
 		}
 		return { dangerous: ev.dangerous, reason: ev.reason };
@@ -688,9 +693,7 @@ export function createPinnedLookup(
 		}
 
 		const family = opts.family ?? 0;
-		const matches = family
-			? pins.filter((p) => p.family === family)
-			: pins;
+		const matches = family ? pins.filter((p) => p.family === family) : pins;
 
 		if (matches.length === 0) {
 			const err = new Error(
@@ -767,7 +770,8 @@ export const SECRET_PATTERNS: SecretMatch[] = [
 	// Supabase service_role / anon keys
 	{
 		type: "Supabase Service Key",
-		pattern: /eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\.[a-zA-Z0-9_-]{40,}\.[a-zA-Z0-9_-]{20,}/,
+		pattern:
+			/eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\.[a-zA-Z0-9_-]{40,}\.[a-zA-Z0-9_-]{20,}/,
 	},
 	// Vercel tokens
 	{ type: "Vercel Token", pattern: /vercel_[a-zA-Z0-9]{24,}/ },
