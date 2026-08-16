@@ -74,7 +74,7 @@ function systemSnapshot() {
 function nodeProcessCount() {
 	try {
 		return execSync(
-			"wmic process where \"name='node.exe'\" get ProcessId 2>nul | find /c /v \"\"",
+			'wmic process where "name=\'node.exe\'" get ProcessId 2>nul | find /c /v ""',
 			{ encoding: "utf8", timeout: 5000 },
 		).trim();
 	} catch {
@@ -139,7 +139,10 @@ async function runFullSearch(sampleIndex) {
 		httpResults: v.http?.results?.length ?? 0,
 		googleResults: v.google?.results?.length ?? 0,
 		redditResults: v.reddit?.results?.length ?? 0,
-		total: (v.http?.results?.length ?? 0) + (v.google?.results?.length ?? 0) + (v.reddit?.results?.length ?? 0),
+		total:
+			(v.http?.results?.length ?? 0) +
+			(v.google?.results?.length ?? 0) +
+			(v.reddit?.results?.length ?? 0),
 		ddg: http?.ddgCount ?? 0,
 		brave: http?.braveCount ?? 0,
 		yahoo: http?.yahooCount ?? 0,
@@ -167,7 +170,8 @@ const after = systemSnapshot();
 // ─── Summary ────────────────────────────────────────────────────────
 const latencies = rows.map((r) => r.elapsedMs).sort((a, b) => a - b);
 const p50 = latencies[Math.floor(latencies.length * 0.5)];
-const p95 = latencies[Math.min(latencies.length - 1, Math.floor(latencies.length * 0.95))];
+const p95 =
+	latencies[Math.min(latencies.length - 1, Math.floor(latencies.length * 0.95))];
 const avg = latencies.reduce((a, b) => a + b, 0) / latencies.length;
 const httpOk = rows.filter((r) => r.httpResults > 0).length;
 const googleOk = rows.filter((r) => r.googleResults > 0).length;
@@ -175,7 +179,9 @@ const redditOk = rows.filter((r) => r.redditResults > 0).length;
 const deadlineCut = rows.filter((r) => r.timedOut).length;
 
 console.log(`\n=== SUMMARY (${mode}, n=${samples}) ===`);
-console.log(`  total latency: p50=${p50}ms  p95=${p95}ms  avg=${Math.round(avg)}ms`);
+console.log(
+	`  total latency: p50=${p50}ms  p95=${p95}ms  avg=${Math.round(avg)}ms`,
+);
 console.log(
 	`  success: http=${httpOk}/${samples} (${Math.round((httpOk / samples) * 100)}%)  ` +
 		`google=${googleOk}/${samples} (${Math.round((googleOk / samples) * 100)}%)  ` +
