@@ -523,6 +523,68 @@ test("broker-owned search navigates canonically, extracts results, resets, and r
 	}
 });
 
+test("pagination navigates ?start=10 and merges a second SERP page end-to-end", async () => {
+	// Fake-CDP integration test for the real paginated flow (MEDIUM-3 from
+	// the adversarial review): exercises the actual Page.navigate →
+	// isGoogleSearchLocation verification → per-page extraction interplay
+	// across start=0 and start=10, not just the stub merge.
+	//
+	// Page 1 renders 3 organics (clears the minResults=3 extraction gate);
+	// Page 2 (the mock's Page.navigate sets currentLocation, and since
+	// isGoogleSearchLocation is start-agnostic the location check passes)
+	// renders 2 NEW organics, clearing its scaled-down gate of 2. maxResults
+	// 5 → the broker must navigate start=10, extract, merge (5 unique), and
+	// return with degraded unset (a full SERP, not an interrupted one).
+	const setup = await setupBroker({
+		onCommand: respondToSearch({
+			evaluationResults: [
+				{ ready: false, results: [] },
+				{
+					ready: true,
+					results: [
+						{ title: "P1A", url: "https://example.test/p1a", snippet: "S" },
+						{ title: "P1B", url: "https://example.test/p1b", snippet: "S" },
+						{ title: "P1C", url: "https://example.test/p1c", snippet: "S" },
+					],
+				},
+				{ ready: true, results: [] },
+				{
+					ready: true,
+					results: [
+						{ title: "P2A", url: "https://example.test/p2a", snippet: "S" },
+						{ title: "P2B", url: "https://example.test/p2b", snippet: "S" },
+					],
+				},
+			],
+		}),
+	});
+	try {
+		const result = await setup.client.request("search", {
+			provider: "google-search",
+			query: "pi pages",
+			maxResults: 5,
+		});
+		assert.deepEqual(
+			result.results.map((r) => r.title),
+			["P1A", "P1B", "P1C", "P2A", "P2B"],
+			"merged across ?start=0 and ?start=10, page order preserved",
+		);
+		const paginatedNavigation = setup.fake.socket.sent.find(
+			(message) =>
+				message.method === "Page.navigate" &&
+				message.params?.url?.includes("start=10"),
+		);
+		assert.ok(
+			paginatedNavigation,
+			"a page-2 navigation with ?start=10 was issued",
+		);
+		assert.equal(result.degraded, undefined, "full SERP: degraded flag unset");
+		assert.equal(setup.broker.registry.snapshot().active, 0);
+	} finally {
+		await teardown(setup);
+	}
+});
+
 test("search validates bounded inputs and rejects broker escape hatches", async () => {
 	const setup = await setupBroker({ onCommand: respondToSearch() });
 	try {

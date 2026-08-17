@@ -200,7 +200,9 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 							domain: extractDomain(r.url),
 						}));
 						googleStatus = results.length
-							? "ok"
+							? g.degraded
+								? "ok (an extra SERP page failed; results degraded to the pages collected)"
+								: "ok"
 							: "empty (Google returned 0 results)";
 						return { source: "google" as const, results };
 					} catch (err) {

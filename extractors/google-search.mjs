@@ -246,6 +246,11 @@ const GOOGLE_PAGE_WAIT_MS = 2500;
 // yields zero new organics stops the loop (SERP exhausted). Bounded:
 // respects the process-level deadline by never starting a page with less
 // than GOOGLE_PAGE_BUDGET_FLOOR_MS remaining.
+//
+// Failure semantics (parity with the broker): a page-1 failure propagates
+// (genuine total failure). A page-2+ failure — navigation error, or an
+// extraction error on an empty/blank tail page — degrades to the merged
+// set collected so far rather than discarding page-1 results.
 async function extractPaginatedResults(tab, query, maxResults) {
 	const merged = await extractResults(tab, maxResults);
 	const seen = new Set(merged.map((r) => r.url));
@@ -260,11 +265,18 @@ async function extractPaginatedResults(tab, query, maxResults) {
 		const pageUrl = `https://www.google.com/search?q=${encodeURIComponent(
 			query,
 		)}&num=${maxResults}&start=${start}`;
-		await cdp(["nav", tab, pageUrl], 15000);
-		// Give the page a bounded chance to render; a page with fewer than 3
-		// organics (last SERP page) must not stall the whole search.
-		await waitForResults(tab, GOOGLE_PAGE_WAIT_MS).catch(() => 0);
-		const pageResults = await extractResults(tab, maxResults - merged.length);
+		let pageResults;
+		try {
+			await cdp(["nav", tab, pageUrl], 15000);
+			// Give the page a bounded chance to render; a page with fewer than
+			// 3 organics (last SERP page) must not stall the whole search.
+			await waitForResults(tab, GOOGLE_PAGE_WAIT_MS).catch(() => 0);
+			pageResults = await extractResults(tab, maxResults - merged.length);
+		} catch {
+			// A page-2+ navigation/extraction error must not discard the page-1
+			// results already in hand: degrade to the merged set.
+			break;
+		}
 		let added = 0;
 		for (const result of pageResults) {
 			if (seen.has(result.url)) continue;

@@ -578,7 +578,7 @@ test("pagination merges pages with URL dedup until maxResults, then stops", asyn
 		maxResults: 20,
 		deadlineAt: Date.now() + 60_000,
 	};
-	const results = await broker.extractGoogleSearchResultsPaginated(
+	const { results } = await broker.extractGoogleSearchResultsPaginated(
 		request,
 		{ cdpSessionId: "session-1", targetId: "t1" },
 		"query",
@@ -630,7 +630,7 @@ test("pagination stops when a page yields no new organics", async () => {
 		}));
 	};
 
-	const results = await broker.extractGoogleSearchResultsPaginated(
+	const { results } = await broker.extractGoogleSearchResultsPaginated(
 		{ maxResults: 20, deadlineAt: Date.now() + 60_000 },
 		{ cdpSessionId: "s", targetId: "t" },
 		"query",
@@ -665,7 +665,7 @@ test("pagination honors the deadline floor and never starts a page it cannot fin
 		];
 	};
 	// Deadline only 1.5s out — below the 2s page floor, so no pagination.
-	const results = await broker.extractGoogleSearchResultsPaginated(
+	const { results } = await broker.extractGoogleSearchResultsPaginated(
 		{ maxResults: 20, deadlineAt: Date.now() + 1_500 },
 		{ cdpSessionId: "s", targetId: "t" },
 		"query",
@@ -698,4 +698,106 @@ test("isGoogleSearchLocation accepts paginated start offsets with constant num",
 		);
 		return;
 	}
+});
+
+test("pagination degrades to the merged set when a page-2+ navigation fails", async () => {
+	// Regression for the adversarial-review HIGH-1 finding: a page-2+
+	// navigation/verification error must NOT abort the whole search and
+	// discard the page-1 results already merged. It degrades to the merged
+	// set with `degraded: true`.
+	const broker = new GoogleCdpBroker({
+		profileDir: `pagination-degrade-nav-${Math.random().toString(36).slice(2)}`,
+	});
+	let navigations = 0;
+	broker.cdpSend = async (_method, params) => {
+		navigations++;
+		// First paginated navigation (page 2) fails hard.
+		return params?.url?.includes("start=") ? { errorText: "net::ERR_ABORTED" } : {};
+	};
+	broker.verifyCdpLocation = async () => {};
+	let pageNum = 0;
+	broker.extractGoogleSearchResults = async (
+		_request,
+		_sessionId,
+		maxResults,
+		_signal,
+		_pageDeadlineAt,
+	) => {
+		pageNum++;
+		return Array.from({ length: Math.min(6, maxResults) }, (_, i) => ({
+			title: `r${i + 1}`,
+			url: `https://example.com/${i + 1}`,
+			snippet: "s",
+		}));
+	};
+
+	const { results, degraded } = await broker.extractGoogleSearchResultsPaginated(
+		{ maxResults: 20, deadlineAt: Date.now() + 60_000 },
+		{ cdpSessionId: "s", targetId: "t" },
+		"query",
+		20,
+		undefined,
+	);
+	assert.equal(results.length, 6, "page-1 results are kept on page-2 nav failure");
+	assert.equal(degraded, true, "degraded flag set on page-2+ failure");
+	assert.equal(navigations, 1, "one failed paginated navigation attempted");
+	assert.equal(pageNum, 1, "extraction ran for page 1 only");
+});
+
+test("pagination degrades when page-2+ extraction throws (empty tail page)", async () => {
+	// Regression for the adversarial-review HIGH-2 finding: an empty/blank
+	// tail page whose extraction throws search_timeout must degrade to the
+	// merged set rather than failing the whole search.
+	const broker = new GoogleCdpBroker({
+		profileDir: `pagination-degrade-extract-${Math.random().toString(36).slice(2)}`,
+	});
+	broker.cdpSend = async () => ({});
+	broker.verifyCdpLocation = async () => {};
+	let pageNum = 0;
+	broker.extractGoogleSearchResults = async () => {
+		pageNum++;
+		if (pageNum === 1)
+			return Array.from({ length: 6 }, (_, i) => ({
+				title: `r${i + 1}`,
+				url: `https://example.com/${i + 1}`,
+				snippet: "s",
+			}));
+		throw new Error("search_timeout: results not ready");
+	};
+
+	const { results, degraded } = await broker.extractGoogleSearchResultsPaginated(
+		{ maxResults: 20, deadlineAt: Date.now() + 60_000 },
+		{ cdpSessionId: "s", targetId: "t" },
+		"query",
+		20,
+		undefined,
+	);
+	assert.equal(results.length, 6, "page-1 results kept on page-2 extraction error");
+	assert.equal(degraded, true, "degraded flag set on page-2+ extraction error");
+	assert.equal(pageNum, 2, "page 2 extraction was attempted");
+});
+
+test("page-1 extraction failure still propagates (genuine total failure)", async () => {
+	// Page 1 is the navigationMs/extractionMs baseline: a page-1 extraction
+	// failure means no results were ever observed and must still throw so
+	// the caller surfaces a proper googleStatus error.
+	const broker = new GoogleCdpBroker({
+		profileDir: `pagination-degrade-page1-${Math.random().toString(36).slice(2)}`,
+	});
+	broker.cdpSend = async () => ({});
+	broker.verifyCdpLocation = async () => {};
+	broker.extractGoogleSearchResults = async () => {
+		throw new Error("search_timeout: results not ready");
+	};
+
+	await assert.rejects(
+		broker.extractGoogleSearchResultsPaginated(
+			{ maxResults: 10, deadlineAt: Date.now() + 60_000 },
+			{ cdpSessionId: "s", targetId: "t" },
+			"query",
+			10,
+			undefined,
+		),
+		/not ready/,
+	);
 });

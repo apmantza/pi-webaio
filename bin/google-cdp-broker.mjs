@@ -1457,6 +1457,13 @@ export class GoogleCdpBroker {
 	// and each page's extraction is individually bounded so a sparse last
 	// page cannot burn the whole search. Page 1 is assumed already navigated
 	// (searchGoogle's navigationMs phase); only pages >= 2 are navigated here.
+	//
+	// Failure semantics: page-1 errors propagate (a genuine total failure —
+	// no results were ever observed). A page-2+ failure (navigation error,
+	// location-verification failure, or an empty/blank tail page whose
+	// extraction throws search_timeout) must NOT discard the results already
+	// in hand: it degrades to the merged set and sets `degraded: true` so
+	// callers can distinguish a full SERP from an interrupted one.
 	async extractGoogleSearchResultsPaginated(
 		request,
 		target,
@@ -1469,6 +1476,7 @@ export class GoogleCdpBroker {
 			request.deadlineAt || Date.now() + DEFAULT_SEARCH_TIMEOUT_MS;
 		const merged = [];
 		const seenUrls = new Set();
+		let degraded = false;
 		let start = 0;
 		while (true) {
 			checkSignal(signal);
@@ -1476,38 +1484,59 @@ export class GoogleCdpBroker {
 				break;
 			if (start > 0) {
 				const pageUrl = canonicalGoogleSearchUrl(query, maxResults, start);
-				const navigation = await this.cdpSend(
-					"Page.navigate",
-					{ url: pageUrl },
-					request,
-					signal,
-					sessionId,
-				);
-				if (navigation?.errorText)
-					throw new BrokerError(
-						"navigation_failed",
-						`Google page ${start} navigation failed: ${navigation.errorText}`,
+				try {
+					const navigation = await this.cdpSend(
+						"Page.navigate",
+						{ url: pageUrl },
+						request,
+						signal,
+						sessionId,
 					);
-				await this.verifyCdpLocation(
-					target,
-					(value) => isGoogleSearchLocation(value, pageUrl),
-					request,
-					signal,
-					`Google search page ${start / GOOGLE_PAGE_STRIDE + 1}`,
-				);
+					if (navigation?.errorText)
+						throw new BrokerError(
+							"navigation_failed",
+							`Google page ${start} navigation failed: ${navigation.errorText}`,
+						);
+					await this.verifyCdpLocation(
+						target,
+						(value) => isGoogleSearchLocation(value, pageUrl),
+						request,
+						signal,
+						`Google search page ${start / GOOGLE_PAGE_STRIDE + 1}`,
+					);
+				} catch (error) {
+					// A page-2+ navigation/verification failure must not abort the
+					// search: keep the merged results collected so far.
+					degraded = true;
+					break;
+				}
 			}
-			const pageResults = await this.extractGoogleSearchResults(
-				request,
-				sessionId,
-				maxResults - merged.length,
-				signal,
-				// Page 1 uses the full search deadline (unchanged behavior);
-				// subsequent pages are individually bounded so a sparse last
-				// SERP page cannot burn the whole search.
-				start === 0
-					? undefined
-					: Math.min(deadlineAt, Date.now() + GOOGLE_PAGE_EXTRACT_BUDGET_MS),
-			);
+			let pageResults;
+			try {
+				pageResults = await this.extractGoogleSearchResults(
+					request,
+					sessionId,
+					maxResults - merged.length,
+					signal,
+					// Page 1 uses the full search deadline (unchanged behavior);
+					// subsequent pages are individually bounded so a sparse last
+					// SERP page cannot burn the whole search.
+					start === 0
+						? undefined
+						: Math.min(
+								deadlineAt,
+								Date.now() + GOOGLE_PAGE_EXTRACT_BUDGET_MS,
+							),
+				);
+			} catch (error) {
+				// Page 1 extraction failure is a genuine total failure — propagate.
+				// A page-2+ extraction failure (typically search_timeout on a
+				// blank/empty tail page) means the SERP is exhausted or the page
+				// never rendered: degrade to the merged set rather than throwing.
+				if (start === 0) throw error;
+				degraded = true;
+				break;
+			}
 			let added = 0;
 			for (const result of pageResults) {
 				if (seenUrls.has(result.url)) continue;
@@ -1523,7 +1552,7 @@ export class GoogleCdpBroker {
 			if (Date.now() >= deadlineAt) break;
 			start += GOOGLE_PAGE_STRIDE;
 		}
-		return merged;
+		return { results: merged, degraded };
 	}
 
 	async searchGoogle(request, identity, signal) {
@@ -1591,7 +1620,7 @@ export class GoogleCdpBroker {
 					"Google search",
 				);
 			});
-			const results = await timePhase("extractionMs", () =>
+			const { results, degraded } = await timePhase("extractionMs", () =>
 				this.extractGoogleSearchResultsPaginated(
 					request,
 					target,
@@ -1606,7 +1635,7 @@ export class GoogleCdpBroker {
 				checkSignal(signal);
 				this.registry.release({ ...identity, leaseId: lease.leaseId });
 			});
-			return { query, url: canonicalUrl, results, timings };
+			return { query, url: canonicalUrl, results, degraded: degraded || undefined, timings };
 		} catch (error) {
 			if (lease && this.registry.leases.has(lease.leaseId))
 				this.registry.retireLease(lease, true);

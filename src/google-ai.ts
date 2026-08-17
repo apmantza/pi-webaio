@@ -82,6 +82,12 @@ export interface GoogleSearchOutput {
 	results: GoogleSearchResult[];
 	/** Broker search-phase timings; absent on the legacy path. */
 	timings?: BrokerSearchTimings;
+	/**
+	 * True when a page-2+ SERP page failed mid-pagination and the broker
+	 * degraded to the pages it had already collected (never set on the
+	 * legacy path, which has no such flag). Absent on a full SERP.
+	 */
+	degraded?: boolean;
 }
 
 export interface ChromeStatus {
