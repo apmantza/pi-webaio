@@ -59,6 +59,29 @@ land ~1.5s); p95 stays tight (4,555 vs 6,156 ms). Reddit success (35% in both)
 is Reddit-side rate-limiting under 20 rapid queries — identical across modes,
 so it is not a broker regression.
 
+### Cold-start (first call, Chrome killed) — Google lane only
+
+| | Legacy | Broker |
+| --- | --- | --- |
+| First googleSearch | 11,618 ms | **3,012 ms** |
+| Results | 5 | 4 |
+
+**Reading:** the broker's Chrome launch + CDP connect + search is **3.9×
+faster** on a truly cold start (3.0 vs 11.6 s) — the first search of a
+session is ~9s faster with the broker.
+
+### Multi-session concurrency (3 simultaneous searches, Google lane)
+
+| | Legacy | Broker |
+| --- | --- | --- |
+| 3 concurrent searches | 20,011 ms | **2,284 ms** |
+| Success | 1/3 (2 hit "Request deadline expired") | **3/3 (3–4 results each)** |
+
+**Reading:** legacy's concurrent searches collide — each spawns an independent
+CDP CLI against the same Chrome, and 2 of 3 hit the deadline. The broker's
+lease system serializes the shared Chrome cleanly: all 3 succeed in 2.3s.
+This is the decisive reliability win for concurrent pi sessions.
+
 ## Google lane only (smoke harness)
 
 `scripts/smoke-google-mode.mjs` (googleSearch only, not the full tool):
