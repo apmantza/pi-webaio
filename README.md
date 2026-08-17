@@ -11,7 +11,7 @@ extract, map, cache, chunk, and render web content for AI agents.
 
 pi-webaio registers eight pi tools:
 
-- `aio-websearch` — search DuckDuckGo, Brave, Yahoo, and Bing in parallel, with default Google and automatic Reddit CDP companions when Chrome is available
+- `aio-websearch` — search DuckDuckGo, Brave, Yahoo, and Bing in parallel, with default Google (via a local CDP broker) and automatic Reddit CDP companions when Chrome is available
 - `aio-webfetch` — fetch one or many URLs into markdown or structured formats, with an opt-in heading outline, query-focused answer mode, and multi-source cited answers
 - `aio-webcontent` — retrieve cached content by URL (with opt-in section-level diff)
 - `aio-webresult` — retrieve cached results by response ID
@@ -26,8 +26,18 @@ DeepWiki, and more), RAG chunking, TUI progress rendering, phase-aware errors,
 and opt-in paywall bypass support.
 
 Google Search uses the local CDP broker by default (faster cold start, tighter
-p95, 100% Google success under concurrency — see `speed.md`). Set
-`PI_WEBAIO_CDP_BROKER=0` to force the legacy extractor.
+p95, 100% Google success under concurrency — see `speed.md`). Google ignores the
+deprecated `num` param and renders ~8–10 organic results per SERP page, so the
+broker **paginates through `?start=10`, `?start=20`, …** (the same mechanism
+Google's own "Next" links use), merging and URL-deduping pages up to `max` until
+the lane is satisfied, the SERP runs out of new organics, or the lane budget is
+exhausted. The Google lane carries a hard 3-second cap measured from when its
+search starts, so it never gates the tool's 7-second overall deadline — even on
+a full multi-page pagination. If a page-2+ navigation or extraction fails, the
+lane degrades gracefully to the results it had already collected and annotates
+`googleStatus` accordingly (e.g. `ok (an extra SERP page failed…)`); a total
+fresh failure still surfaces as an error. Set `PI_WEBAIO_CDP_BROKER=0` to force
+the legacy extractor.
 The manual, live-only benchmark is `npm run bench:google-cdp -- --live
 --query "..." --samples 3`. It reports total/startup measurements; detailed CDP
 phase timings are not yet instrumented, and no speedup is inferred.

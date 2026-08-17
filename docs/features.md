@@ -213,7 +213,7 @@ The TUI error view shows the phase + category badge and the suggested retry hint
 
 ## How search ranking works
 
-When you search, pi-webaio queries four HTTP engines (DuckDuckGo, Brave, Yahoo, and Bing), Google (via headless Chrome), and Reddit (via CDP when available). Results are scored by several signals:
+When you search, pi-webaio queries four HTTP engines (DuckDuckGo, Brave, Yahoo, and Bing), Google (via the local CDP broker by default), and Reddit (via CDP when available). Google ignores the deprecated `num` param and renders ~8–10 organic results per SERP page, so the broker paginates through `?start=10`, `?start=20`, … (Google's own "Next" mechanism), merging and URL-deduping pages up to `max` until the SERP is exhausted, `max` is reached, or the lane budget is exhausted. The Google lane carries a hard 3-second cap measured from when its search starts, so it never gates the tool's 7-second overall deadline; on a multi-page pagination a page-2+ failure degrades gracefully to the collected pages and is annotated in `googleStatus` (e.g. `ok (an extra SERP page failed; results degraded to the pages collected)`); a total fresh failure still surfaces as `googleStatus: error`. Set `PI_WEBAIO_CDP_BROKER=0` to force the legacy extractor. Results are scored by several signals:
 
 - **Engine authority** — Google (5), Reddit (4), Bing (3), DDG (2), Brave (2), Yahoo (1)
 - **Cross-engine consensus** — +2 for each additional engine that agrees on the same URL
