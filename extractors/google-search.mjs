@@ -38,8 +38,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 export function jsEvalLiteral(value) {
 	return JSON.stringify(value).replace(
 		/[<>\u2028\u2029]/g,
-		(character) =>
-			`\\u${character.codePointAt(0).toString(16).padStart(4, "0")}`,
+		(character) => `\\u${character.codePointAt(0).toString(16).padStart(4, "0")}`,
 	);
 }
 
@@ -252,8 +251,9 @@ async function extractPaginatedResults(tab, query, maxResults) {
 	const seen = new Set(merged.map((r) => r.url));
 	let start = GOOGLE_PAGE_STRIDE;
 	while (merged.length < maxResults) {
-		const deadlineAt = (process.env.GREEDY_SEARCH_DEADLINE_AT &&
-			Number(process.env.GREEDY_SEARCH_DEADLINE_AT)) ||
+		const deadlineAt =
+			(process.env.GREEDY_SEARCH_DEADLINE_AT &&
+				Number(process.env.GREEDY_SEARCH_DEADLINE_AT)) ||
 			searchStartedAt + 45000;
 		// Never start a page we cannot finish within the caller's deadline.
 		if (deadlineAt - Date.now() < GOOGLE_PAGE_BUDGET_FLOOR_MS) break;
@@ -285,11 +285,7 @@ export async function waitForResults(tab, timeoutMs = 15000) {
 	const count = await waitForCondition(
 		async (probeTimeoutMs) => {
 			const found = await cdp(
-				[
-					"eval",
-					tab,
-					"document.querySelectorAll('a[href^=\"http\"] h3').length",
-				],
+				["eval", tab, "document.querySelectorAll('a[href^=\"http\"] h3').length"],
 				probeTimeoutMs,
 			).catch(() => "0");
 			lastCount = parseInt(found, 10) || 0;

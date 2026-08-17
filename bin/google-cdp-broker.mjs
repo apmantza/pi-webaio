@@ -1391,7 +1391,9 @@ export class GoogleCdpBroker {
 		pageDeadlineAt,
 	) {
 		const deadlineAt =
-			pageDeadlineAt || request.deadlineAt || Date.now() + DEFAULT_SEARCH_TIMEOUT_MS;
+			pageDeadlineAt ||
+			request.deadlineAt ||
+			Date.now() + DEFAULT_SEARCH_TIMEOUT_MS;
 		// Return once we have a substantial result set. Requiring a minimum
 		// (matching the legacy extractor's `>= 3` gate) avoids returning a
 		// partial mid-render snapshot (e.g. 1 of 5 results). If the page
