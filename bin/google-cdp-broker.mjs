@@ -393,6 +393,16 @@ const MAX_SEARCH_QUERY_BYTES = 256;
 // retaining a broker-side ceiling against unbounded browser extraction.
 export const MAX_SEARCH_RESULTS = 25;
 const DEFAULT_SEARCH_TIMEOUT_MS = 15_000;
+// Google paginates its classic SERP in strides of 10 via `?start=`. Each
+// extra page costs a navigation + extraction poll round, so a second page is
+// only attempted when at least this much search deadline remains. If less,
+// the broker returns the first page's organics (bounded, never late).
+const GOOGLE_PAGE_STRIDE = 10;
+const GOOGLE_PAGE_BUDGET_FLOOR_MS = 2_000;
+// Per-page extraction ceiling: a sparse last SERP page must not burn the
+// whole search deadline waiting for the >=3-result gate. Pages are bounded
+// individually; the overall search deadline still applies on top.
+const GOOGLE_PAGE_EXTRACT_BUDGET_MS = 3_500;
 const SEARCH_POLL_INTERVAL_MS = 150;
 const SEARCH_REQUEST_FIELDS = new Set([
 	"id",
@@ -495,7 +505,7 @@ function evaluationString(evaluation) {
 	return typeof value === "string" ? value : undefined;
 }
 
-function isGoogleSearchLocation(value, expected) {
+export function isGoogleSearchLocation(value, expected) {
 	if (typeof value !== "string") return false;
 	try {
 		const actual = new URL(value);
@@ -562,11 +572,17 @@ function validateSearchRequest(request) {
 	return { query: request.query, maxResults };
 }
 
-function canonicalGoogleSearchUrl(query, maxResults) {
+export function canonicalGoogleSearchUrl(query, maxResults, start = 0) {
 	try {
 		const url = new URL("https://www.google.com/search");
 		url.searchParams.set("q", query);
 		url.searchParams.set("num", String(maxResults));
+		// Google ignores `num` for logged-out organic SERPs (deprecated) and
+		// renders only the first page of ~8-10 organics. `start` is the only
+		// mechanism that offsets into the full result set — same one Google's
+		// own "Next" links use. Keep `num` constant across pages so the
+		// location check in verifyCdpLocation holds for every paginated URL.
+		if (start > 0) url.searchParams.set("start", String(start));
 		return url.href;
 	} catch {
 		throw new BrokerError("invalid_request", "Search URL could not be built");
@@ -1367,9 +1383,15 @@ export class GoogleCdpBroker {
 		}
 	}
 
-	async extractGoogleSearchResults(request, sessionId, maxResults, signal) {
+	async extractGoogleSearchResults(
+		request,
+		sessionId,
+		maxResults,
+		signal,
+		pageDeadlineAt,
+	) {
 		const deadlineAt =
-			request.deadlineAt || Date.now() + DEFAULT_SEARCH_TIMEOUT_MS;
+			pageDeadlineAt || request.deadlineAt || Date.now() + DEFAULT_SEARCH_TIMEOUT_MS;
 		// Return once we have a substantial result set. Requiring a minimum
 		// (matching the legacy extractor's `>= 3` gate) avoids returning a
 		// partial mid-render snapshot (e.g. 1 of 5 results). If the page
@@ -1421,6 +1443,85 @@ export class GoogleCdpBroker {
 			"search_timeout",
 			"Google search results were not ready before the deadline",
 		);
+	}
+
+	// Google ignores `num` and renders only ~8-10 organics per SERP page, so
+	// a single navigation can never satisfy maxResults > page size. This
+	// paginates through ?start=10, ?start=20, … (the same mechanism Google's
+	// own "Next" links use), merging and URL-deduping pages until maxResults
+	// is reached, the SERP runs out of new organics, or the search deadline
+	// is exhausted. Every extra page is budget-fenced: a page is only
+	// attempted when at least GOOGLE_PAGE_BUDGET_FLOOR_MS of deadline remains,
+	// and each page's extraction is individually bounded so a sparse last
+	// page cannot burn the whole search. Page 1 is assumed already navigated
+	// (searchGoogle's navigationMs phase); only pages >= 2 are navigated here.
+	async extractGoogleSearchResultsPaginated(
+		request,
+		target,
+		query,
+		maxResults,
+		signal,
+	) {
+		const sessionId = target.cdpSessionId;
+		const deadlineAt =
+			request.deadlineAt || Date.now() + DEFAULT_SEARCH_TIMEOUT_MS;
+		const merged = [];
+		const seenUrls = new Set();
+		let start = 0;
+		while (true) {
+			checkSignal(signal);
+			if (start > 0 && deadlineAt - Date.now() < GOOGLE_PAGE_BUDGET_FLOOR_MS)
+				break;
+			if (start > 0) {
+				const pageUrl = canonicalGoogleSearchUrl(query, maxResults, start);
+				const navigation = await this.cdpSend(
+					"Page.navigate",
+					{ url: pageUrl },
+					request,
+					signal,
+					sessionId,
+				);
+				if (navigation?.errorText)
+					throw new BrokerError(
+						"navigation_failed",
+						`Google page ${start} navigation failed: ${navigation.errorText}`,
+					);
+				await this.verifyCdpLocation(
+					target,
+					(value) => isGoogleSearchLocation(value, pageUrl),
+					request,
+					signal,
+					`Google search page ${start / GOOGLE_PAGE_STRIDE + 1}`,
+				);
+			}
+			const pageResults = await this.extractGoogleSearchResults(
+				request,
+				sessionId,
+				maxResults - merged.length,
+				signal,
+				// Page 1 uses the full search deadline (unchanged behavior);
+				// subsequent pages are individually bounded so a sparse last
+				// SERP page cannot burn the whole search.
+				start === 0
+					? undefined
+					: Math.min(deadlineAt, Date.now() + GOOGLE_PAGE_EXTRACT_BUDGET_MS),
+			);
+			let added = 0;
+			for (const result of pageResults) {
+				if (seenUrls.has(result.url)) continue;
+				seenUrls.add(result.url);
+				merged.push(result);
+				added++;
+				if (merged.length >= maxResults) break;
+			}
+			if (merged.length >= maxResults) break;
+			// A page that yielded zero NEW organics means the SERP is exhausted
+			// (or a duplicate/redirected page) — do not keep spinning pages.
+			if (added === 0) break;
+			if (Date.now() >= deadlineAt) break;
+			start += GOOGLE_PAGE_STRIDE;
+		}
+		return merged;
 	}
 
 	async searchGoogle(request, identity, signal) {
@@ -1489,9 +1590,10 @@ export class GoogleCdpBroker {
 				);
 			});
 			const results = await timePhase("extractionMs", () =>
-				this.extractGoogleSearchResults(
+				this.extractGoogleSearchResultsPaginated(
 					request,
-					target.cdpSessionId,
+					target,
+					query,
 					maxResults,
 					signal,
 				),

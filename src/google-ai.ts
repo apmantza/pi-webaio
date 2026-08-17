@@ -2342,6 +2342,10 @@ async function runLegacyGoogleSearch(
 				...process.env,
 				CDP_PROFILE_DIR: greedyProfileDir,
 				GREEDY_SEARCH_HEADLESS: useHeadless ? "1" : "0",
+				// Passed so the extractor's pagination loop can stop before
+				// starting a page it cannot finish within the caller's deadline
+				// (the parent also hard-kills at this deadline as a backstop).
+				GREEDY_SEARCH_DEADLINE_AT: String(deadlineAt ?? Date.now() + timeoutMs),
 			} as Record<string, string>,
 			timeoutMs,
 			deadlineAt,

@@ -232,6 +232,54 @@ async function extractResults(tab, maxResults = 10) {
 
 // ─── Wait for search results to load ───────────────────────────────
 
+// Google's classic SERP paginates in strides of 10 via ?start=. Each extra
+// page costs a navigation + wait + extraction round, so a second page is only
+// attempted when at least this much of the caller's deadline remains.
+const GOOGLE_PAGE_STRIDE = 10;
+const GOOGLE_PAGE_BUDGET_FLOOR_MS = 2000;
+// Per-page wait ceiling: a sparse last SERP page must not stall the whole
+// search waiting for the >=3-result gate inside waitForResults.
+const GOOGLE_PAGE_WAIT_MS = 2500;
+
+// Fetch page 1 (already navigated by the caller), then paginate through
+// ?start=10, ?start=20, … while more results are needed and the search
+// deadline still has room. Pages are merged with URL dedup; a page that
+// yields zero new organics stops the loop (SERP exhausted). Bounded:
+// respects the process-level deadline by never starting a page with less
+// than GOOGLE_PAGE_BUDGET_FLOOR_MS remaining.
+async function extractPaginatedResults(tab, query, maxResults) {
+	const merged = await extractResults(tab, maxResults);
+	const seen = new Set(merged.map((r) => r.url));
+	let start = GOOGLE_PAGE_STRIDE;
+	while (merged.length < maxResults) {
+		const deadlineAt = (process.env.GREEDY_SEARCH_DEADLINE_AT &&
+			Number(process.env.GREEDY_SEARCH_DEADLINE_AT)) ||
+			searchStartedAt + 45000;
+		// Never start a page we cannot finish within the caller's deadline.
+		if (deadlineAt - Date.now() < GOOGLE_PAGE_BUDGET_FLOOR_MS) break;
+		const pageUrl = `https://www.google.com/search?q=${encodeURIComponent(
+			query,
+		)}&num=${maxResults}&start=${start}`;
+		await cdp(["nav", tab, pageUrl], 15000);
+		// Give the page a bounded chance to render; a page with fewer than 3
+		// organics (last SERP page) must not stall the whole search.
+		await waitForResults(tab, GOOGLE_PAGE_WAIT_MS).catch(() => 0);
+		const pageResults = await extractResults(tab, maxResults - merged.length);
+		let added = 0;
+		for (const result of pageResults) {
+			if (seen.has(result.url)) continue;
+			seen.add(result.url);
+			merged.push(result);
+			added++;
+			if (merged.length >= maxResults) break;
+		}
+		// A page with zero NEW organics means the SERP is exhausted.
+		if (added === 0) break;
+		start += GOOGLE_PAGE_STRIDE;
+	}
+	return merged;
+}
+
 export async function waitForResults(tab, timeoutMs = 15000) {
 	let lastCount = 0;
 	const count = await waitForCondition(
@@ -355,8 +403,15 @@ async function main() {
 		const count = await waitForResults(tab, 15000);
 		markPhase("resultsLoad");
 
-		// Extract results
-		const results = await extractResults(tab, maxResults);
+		// Extract results. Google renders only ~8-10 organics per SERP page
+		// (the `num` param is deprecated and ignored), so when maxResults
+		// exceeds one page we paginate through ?start=10, ?start=20, … using
+		// the same mechanism as Google's own "Next" links, merging and
+		// URL-deduping pages until maxResults is reached, the SERP runs out
+		// of new organics, or the caller's deadline is exhausted. Each extra
+		// page is bounded (2.5s wait + extraction) so a sparse last page
+		// cannot burn the whole search.
+		const results = await extractPaginatedResults(tab, query, maxResults);
 		if (count === 0 || results.length === 0)
 			throw new Error("No search results found on page");
 		const finalUrl = await cdp(["eval", tab, "document.location.href"]).catch(

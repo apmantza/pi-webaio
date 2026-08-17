@@ -676,7 +676,12 @@ test("broker search waits past a partial mid-render snapshot before returning (#
 		const result = await setup.client.request("search", {
 			provider: "google-search",
 			query: "pi partial",
-			maxResults: 10,
+			// maxResults == the scripted page-1 set, so pagination never
+			// triggers and the test stays focused on the partial-snapshot
+			// wait (issue #101). With a larger max the broker now paginates,
+			// which would consume the mock's default "Example result"
+			// fallback and change the assertion.
+			maxResults: 4,
 		});
 		assert.deepEqual(
 			result.results.map((r) => r.title),

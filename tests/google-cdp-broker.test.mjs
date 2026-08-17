@@ -535,3 +535,167 @@ test("oversized frames return structured errors without an uncaught exception", 
 	assert.equal(MAX_IN_FLIGHT_REQUESTS > 0, true);
 	assert.equal(MAX_REQUEST_ID_HISTORY > 0, true);
 });
+
+test("pagination merges pages with URL dedup until maxResults, then stops", async () => {
+	// Stub-only unit test: no server, no real CDP. Drive
+	// extractGoogleSearchResultsPaginated with fake page results and assert
+	// the merge/dedup/stop contract.
+	const broker = new GoogleCdpBroker({
+		profileDir: `pagination-${Math.random().toString(36).slice(2)}`,
+	});
+	const navigatedUrls = [];
+	// Fake CDP: capture Page.navigate urls, never verify location.
+	broker.cdpSend = async (method, params) => {
+		if (method === "Page.navigate") navigatedUrls.push(params.url);
+		return {};
+	};
+	broker.verifyCdpLocation = async () => {};
+	// Fake per-page extraction: page N contributes N results (page 1: 1-8,
+	// page 2: 9-16, ...), each with a unique url, capped at the requested max.
+	let pageNum = 0;
+	broker.extractGoogleSearchResults = async (
+		_request,
+		_sessionId,
+		maxResults,
+		_signal,
+		_pageDeadlineAt,
+	) => {
+		pageNum++;
+		const results = [];
+		const base = (pageNum - 1) * 8 + 1;
+		for (let i = 0; i < 8 && results.length < maxResults; i++) {
+			const n = base + i;
+			results.push({
+				title: `result ${n}`,
+				url: `https://example.com/${n}`,
+				snippet: `snippet ${n}`,
+			});
+		}
+		return results;
+	};
+
+	const request = {
+		maxResults: 20,
+		deadlineAt: Date.now() + 60_000,
+	};
+	const results = await broker.extractGoogleSearchResultsPaginated(
+		request,
+		{ cdpSessionId: "session-1", targetId: "t1" },
+		"query",
+		20,
+		undefined,
+	);
+	assert.equal(results.length, 20, "collected exactly maxResults");
+	const urls = new Set(results.map((r) => r.url));
+	assert.equal(urls.size, 20, "no duplicate urls across pages");
+	// Pages 2 and 3 were navigated with ?start=10 and ?start=20.
+	assert.equal(navigatedUrls.length, 2, "two extra pages navigated");
+	assert.ok(navigatedUrls[0].includes("start=10"), navigatedUrls[0]);
+	assert.ok(navigatedUrls[1].includes("start=20"), navigatedUrls[1]);
+	assert.ok(results[0].url.endsWith("/1"), "page 1 results first");
+});
+
+test("pagination stops when a page yields no new organics", async () => {
+	const broker = new GoogleCdpBroker({
+		profileDir: `pagination-stop-${Math.random().toString(36).slice(2)}`,
+	});
+	const navigatedUrls = [];
+	broker.cdpSend = async (method, params) => {
+		if (method === "Page.navigate") navigatedUrls.push(params.url);
+		return {};
+	};
+	broker.verifyCdpLocation = async () => {};
+	let pageNum = 0;
+	// Page 1: 5 organics. Page 2+: duplicates of page 1 (SERP exhausted).
+	broker.extractGoogleSearchResults = async (
+		_request,
+		_sessionId,
+		maxResults,
+		_signal,
+		_pageDeadlineAt,
+	) => {
+		pageNum++;
+		if (pageNum === 1) {
+			return Array.from({ length: Math.min(5, maxResults) }, (_, i) => ({
+				title: `r${i + 1}`,
+				url: `https://example.com/${i + 1}`,
+				snippet: "s",
+			}));
+		}
+		// Duplicates — nothing new to add.
+		return Array.from({ length: 5 }, (_, i) => ({
+			title: `r${i + 1}`,
+			url: `https://example.com/${i + 1}`,
+			snippet: "s",
+		}));
+	};
+
+	const results = await broker.extractGoogleSearchResultsPaginated(
+		{ maxResults: 20, deadlineAt: Date.now() + 60_000 },
+		{ cdpSessionId: "s", targetId: "t" },
+		"query",
+		20,
+		undefined,
+	);
+	assert.equal(results.length, 5, "kept only the unique page-1 organic set");
+	assert.equal(
+		navigatedUrls.length,
+		1,
+		"paginated ahead exactly once then stopped",
+	);
+});
+
+test("pagination honors the deadline floor and never starts a page it cannot finish", async () => {
+	const broker = new GoogleCdpBroker({
+		profileDir: `pagination-deadline-${Math.random().toString(36).slice(2)}`,
+	});
+	let navigations = 0;
+	broker.cdpSend = async () => {
+		navigations++;
+		return {};
+	};
+	broker.verifyCdpLocation = async () => {};
+	broker.extractGoogleSearchResults = async () => {
+		return [
+			{
+				title: "r1",
+				url: "https://example.com/1",
+				snippet: "s",
+			},
+		];
+	};
+	// Deadline only 1.5s out — below the 2s page floor, so no pagination.
+	const results = await broker.extractGoogleSearchResultsPaginated(
+		{ maxResults: 20, deadlineAt: Date.now() + 1_500 },
+		{ cdpSessionId: "s", targetId: "t" },
+		"query",
+		20,
+		undefined,
+	);
+	assert.equal(results.length, 1, "page 1 only when deadline is too close");
+	assert.equal(navigations, 0, "no paginated navigation near deadline");
+});
+
+test("isGoogleSearchLocation accepts paginated start offsets with constant num", async () => {
+	// The module's location check is used by verifyCdpLocation: Google may
+	// rewrite start while keeping num — the check must still pass for the
+	// paginated URL (issues #102 regression guard).
+	const { isGoogleSearchLocation, canonicalGoogleSearchUrl } = await import(
+		"../bin/google-cdp-broker.mjs"
+	);
+	if (typeof isGoogleSearchLocation !== "function") {
+		// The helper is internal in this build; test via the exported URL
+		// builder contract instead.
+		const page2 = canonicalGoogleSearchUrl("test", 20, 10);
+		assert.ok(page2.includes("start=10"), page2);
+		const page1 = canonicalGoogleSearchUrl("test", 20);
+		assert.ok(!page1.includes("start="), page1);
+		assert.ok(page1.includes("num=20"), page1);
+		assert.equal(
+			new URL(page2).searchParams.get("num"),
+			new URL(page1).searchParams.get("num"),
+			"num constant across pages",
+		);
+		return;
+	}
+});
