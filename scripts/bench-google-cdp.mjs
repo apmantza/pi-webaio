@@ -214,7 +214,8 @@ async function measure(
 	const { googleSearch, ensureChrome } = googleAi;
 	const previous = process.env.PI_WEBAIO_CDP_BROKER;
 	if (useBroker) process.env.PI_WEBAIO_CDP_BROKER = "1";
-	else delete process.env.PI_WEBAIO_CDP_BROKER;
+	// Broker is the default post-flip; explicitly opt out for legacy mode.
+	else process.env.PI_WEBAIO_CDP_BROKER = "0";
 	try {
 		for (let index = 0; index < sampleCount; index++) {
 			if (options.cold) {
