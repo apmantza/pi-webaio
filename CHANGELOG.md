@@ -4,6 +4,10 @@ All notable changes to pi-webaio will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- **Google CDP broker is now the default search path** — the broker (faster cold start ~3s vs ~11.6s, tighter p95, 100% Google success under concurrency vs 80% legacy, clean multi-session serialization) is used unless `PI_WEBAIO_CDP_BROKER=0` opts out to the legacy extractor. The fenced legacy fallback remains: on broker failure with budget remaining, the search falls through to legacy with a diagnostic envelope. Benchmark evidence in `speed.md`; all lifecycle prerequisites (#95 P2 lock-GC + crash-orphan recovery, #96 daemon owner-death) are closed.
+
 ### Added
 
 - **Crash-orphan target recovery for the Google CDP broker** (#95 P2 item 2) — broker-created Chrome targets now carry a unique per-broker marker URL (`data:text/plain,pi-webaio-broker:<profileHash>:<nonce>`); on restart the broker enumerates `Target.getTargets` and closes only marker-owned targets from prior crashed generations, never touching unrelated tabs or this generation's own targets. Bounded (500ms) and best-effort. 3 new fake-CDP regression tests. With startup-lock GC (P2 item 1, earlier), the broker umbrella's entire P2 scope is complete.

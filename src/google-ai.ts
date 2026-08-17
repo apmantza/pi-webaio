@@ -501,7 +501,10 @@ const BROKER_STARTUP_TIMEOUT_MS = 30_000;
 const BROKER_MIN_FALLBACK_BUDGET_MS = 1_000;
 
 function brokerEnabled(): boolean {
-	return process.env.PI_WEBAIO_CDP_BROKER === "1";
+	// The Google CDP broker is the default search path (faster cold start,
+	// tighter p95, 100% Google success under concurrency — see speed.md).
+	// Opt out to the legacy CDP path with PI_WEBAIO_CDP_BROKER=0.
+	return process.env.PI_WEBAIO_CDP_BROKER !== "0";
 }
 
 export function isBrokerInfrastructureError(error: unknown): boolean {

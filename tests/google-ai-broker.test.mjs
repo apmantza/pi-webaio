@@ -139,13 +139,13 @@ function parseEnvelope(captured) {
 	return JSON.parse(match[1]);
 }
 
-test("Google broker branch is opt-in and legacy remains the default", async () => {
+test("Google broker branch is the default and legacy is the opt-out", async () => {
 	delete process.env.PI_WEBAIO_CDP_BROKER;
 	let legacyCalls = 0;
 	let brokerCalls = 0;
 	try {
 		const result = await googleSearchWithDependencies(
-			"legacy",
+			"broker-default",
 			{},
 			{
 				legacySearch: async (query) => {
@@ -154,13 +154,39 @@ test("Google broker branch is opt-in and legacy remains the default", async () =
 				},
 				connectBroker: async () => {
 					brokerCalls++;
+					return { search: async (query) => output(query), close: () => {} };
+				},
+			},
+		);
+		assert.equal(result.query, "broker-default");
+		assert.equal(brokerCalls, 1, "broker is the default path");
+		assert.equal(legacyCalls, 0);
+	} finally {
+		restoreFlag();
+	}
+
+	// Explicit opt-out: PI_WEBAIO_CDP_BROKER=0 forces the legacy path.
+	process.env.PI_WEBAIO_CDP_BROKER = "0";
+	let legacyCalls2 = 0;
+	let brokerCalls2 = 0;
+	try {
+		const result = await googleSearchWithDependencies(
+			"legacy-optout",
+			{},
+			{
+				legacySearch: async (query) => {
+					legacyCalls2++;
+					return output(query);
+				},
+				connectBroker: async () => {
+					brokerCalls2++;
 					throw new Error("must not connect");
 				},
 			},
 		);
-		assert.equal(result.query, "legacy");
-		assert.equal(legacyCalls, 1);
-		assert.equal(brokerCalls, 0);
+		assert.equal(result.query, "legacy-optout");
+		assert.equal(legacyCalls2, 1);
+		assert.equal(brokerCalls2, 0);
 	} finally {
 		restoreFlag();
 	}
@@ -238,7 +264,7 @@ test("broker branch passes search timings through additively", async () => {
 		assert.equal("timings" in withoutTimings, false);
 
 		// The legacy path never carries timings.
-		delete process.env.PI_WEBAIO_CDP_BROKER;
+		process.env.PI_WEBAIO_CDP_BROKER = "0";
 		const legacy = await googleSearchWithDependencies(
 			"legacy-shape",
 			{},
@@ -979,7 +1005,7 @@ test("runtime broker disable closes existing resources before legacy", async () 
 			ensureChrome: async () => ({ running: true, ready: true }),
 			connectBroker: async () => ({ search: async (query) => output(query), close: () => { closeCalls++; } }),
 		});
-		delete process.env.PI_WEBAIO_CDP_BROKER;
+		process.env.PI_WEBAIO_CDP_BROKER = "0";
 		assert.equal((await googleSearchWithDependencies("legacy-after-toggle", {}, {
 			legacySearch: async (query) => output(query),
 		})).query, "legacy-after-toggle");
@@ -1004,7 +1030,7 @@ test("runtime broker disable quarantines delayed startup without replacement or 
 	);
 	try {
 		const child = await factory.waitForChild();
-		delete process.env.PI_WEBAIO_CDP_BROKER;
+		process.env.PI_WEBAIO_CDP_BROKER = "0";
 		let legacyCalls = 0;
 		await assert.rejects(
 			googleSearchWithDependencies("legacy after disable", { timeoutMs: 80 }, {
@@ -1050,7 +1076,7 @@ test("runtime disable never runs legacy while an active lease and late child rem
 		const child = await factory.waitForChild();
 		while (factory.searchCalls() === 0)
 			await new Promise((resolve) => setTimeout(resolve, 1));
-		delete process.env.PI_WEBAIO_CDP_BROKER;
+		process.env.PI_WEBAIO_CDP_BROKER = "0";
 		await assert.rejects(
 			googleSearchWithDependencies("legacy during active", { timeoutMs: 50 }, {
 				legacySearch: async (query) => {
