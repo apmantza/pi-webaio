@@ -100,7 +100,7 @@ function makeBrokerProcessFactory({
 			});
 		});
 		server.once("error", rejectReady);
-		if ((failFirstSpawn && calls === 1)){
+		if (failFirstSpawn && calls === 1) {
 			resolveReady();
 			setTimeout(
 				() =>
@@ -110,8 +110,7 @@ function makeBrokerProcessFactory({
 					),
 				0,
 			);
-		} else 
-			server.listen(path, () => resolveReady());
+		} else server.listen(path, () => resolveReady());
 		child.ready = ready;
 		child.exitNow = () => {
 			if (child.exitCode !== null) return;
@@ -420,10 +419,7 @@ test("successful broker attempts emit a diagnostic envelope without result-shape
 			envelope.requestId,
 			/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
 		);
-		assert.equal(
-			captured.includes(`"requestId":"${envelope.requestId}"`),
-			true,
-		);
+		assert.equal(captured.includes(`"requestId":"${envelope.requestId}"`), true);
 		assert.equal(typeof envelope.queryHash, "string");
 		assert.match(envelope.queryHash, /^[0-9a-f]{64}$/);
 		assert.deepEqual(
@@ -2742,8 +2738,7 @@ test("cdpAvailable / aiSummaryAvailable gate on file presence", () => {
 	// Fixture tree: a fake package root we can shape per fixture without
 	// touching the real install on disk.
 	const root = mkdtempSync(join(tmpdir(), "webaio-cdpavail-"));
-	const write = (rel) =>
-		writeFileSync(join(root, ...rel), "x", { flag: "a" });
+	const write = (rel) => writeFileSync(join(root, ...rel), "x", { flag: "a" });
 
 	// LEGACY_FILES = the 7 files the legacy gate always required.
 	const LEGACY_FILES = [
