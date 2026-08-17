@@ -31,6 +31,12 @@ import {
 } from "../search-orchestration.ts";
 
 const SEARCH_DEADLINE_MS = 7000;
+// Hard upper bound for the Google lane itself (measured from when the lane's
+// search actually starts, after chromeReady). The broker's pagination
+// budget-fencing (2s page floor, per-page 3.5s cap) fits inside this window:
+// a hot broker returns ~1s for max 15, and even a slow sparse tail page can
+// never burn more than this. The overall tool deadline stays 7s.
+const GOOGLE_LANE_MAX_MS = 3000;
 
 function classifyRedditStatus(status: string, count: number): EngineStatus {
 	if (count > 0 || status === "ok") return "ok";
@@ -181,11 +187,18 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 				googlePromise = (async () => {
 					try {
 						await chromeReady;
+						// Cap the lane at GOOGLE_LANE_MAX_MS measured from when the
+						// search actually starts (after chromeReady), never exceeding
+						// the overall tool deadline.
+						const googleDeadlineAt = Math.min(
+							searchDeadlineAt,
+							Date.now() + GOOGLE_LANE_MAX_MS,
+						);
 						const g = await googleSearch(query, {
-							timeoutMs: SEARCH_DEADLINE_MS,
+							timeoutMs: Math.min(SEARCH_DEADLINE_MS, GOOGLE_LANE_MAX_MS),
 							maxResults: max,
 							signal,
-							deadlineAt: searchDeadlineAt,
+							deadlineAt: googleDeadlineAt,
 						});
 						const results = g.results.map((r) => ({
 							title: r.title,
