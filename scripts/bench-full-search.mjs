@@ -19,7 +19,12 @@ import { collectProviderResults } from "../src/search-orchestration.ts";
 
 const mode = process.argv[2] ?? "legacy";
 const samples = Number.parseInt(process.argv[3] ?? "10", 10);
-const baseQuery = process.argv.slice(4).join(" ") || "pi coding agent";
+// Optional spacing (ms) between samples. Real aio-websearch calls are spaced
+// by user thinking time; zero-spacing bursts trigger engine rate-limiting
+// (Brave 429, reddit cooldown) and the 10-min search cache, which distorts
+// the numbers. Pass e.g. 4000 to simulate steady-state usage.
+const spacingMs = Number.parseInt(process.argv[4] ?? "0", 10);
+const baseQuery = process.argv.slice(5).join(" ") || "pi coding agent";
 // Rotate distinct queries so consecutive samples don't hit the 10-min
 // search cache (which would attribute cached results to DDG and measure
 // cache hits instead of fresh searches). Mirrors real usage where each
@@ -164,6 +169,9 @@ for (let i = 0; i < samples; i++) {
 			`total=${row.total} ddg=${row.ddg} brave=${row.brave} yahoo=${row.yahoo} bing=${row.bing} ` +
 			`google=${row.googleStatus} reddit=${row.redditStatus}${row.timedOut ? " [deadline-cut]" : ""}`,
 	);
+	if (spacingMs > 0 && i < samples - 1) {
+		await new Promise((resolve) => setTimeout(resolve, spacingMs));
+	}
 }
 const after = systemSnapshot();
 
