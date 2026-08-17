@@ -131,9 +131,9 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 			if (!useGoogle) googleStatus = "disabled (google: false)";
 			else if (!cdpAvailableGA())
 				googleStatus = "unavailable (Chrome CDP not present)";
-			else if (!isProviderAvailable("google"))
+			else if (isProviderAvailable("google")) googleStatus = "pending";
+			else
 				googleStatus = "unavailable (provider cooled down after recent failures)";
-			else googleStatus = "pending";
 			const chromeReady =
 				googleEnabled || redditEnabled
 					? ensureChrome(undefined, {
@@ -143,9 +143,9 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 					: null;
 			let redditStatus: string;
 			if (!cdpAvailableGA()) redditStatus = "unavailable (Chrome CDP not present)";
-			else if (!isProviderAvailable("reddit"))
+			else if (isProviderAvailable("reddit")) redditStatus = "pending";
+			else
 				redditStatus = "unavailable (provider cooled down after recent failures)";
-			else redditStatus = "pending";
 			const engineNames = ["DDG", "Brave", "Yahoo", "Bing"];
 			if (useGoogle) engineNames.push("Google");
 			if (redditEnabled) engineNames.push("Reddit");
