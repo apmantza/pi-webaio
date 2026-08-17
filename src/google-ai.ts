@@ -3106,15 +3106,26 @@ export async function summarizeUrl(
 
 /**
  * Check if the CDP infrastructure is available (files exist).
+ *
+ * The Google CDP broker is the default search path (post-#97), but it falls
+ * back to the legacy extractor when the broker is unavailable; the summary
+ * and Reddit lanes use the same Chrome/CDP infrastructure. So availability
+ * means EITHER the broker files OR the legacy extractor files are present —
+ * a partial install still gets a working Google lane via the fallback.
  */
 export function cdpAvailable(): boolean {
-	return (
+	const legacyPresent =
 		existsSync(resolvePath("bin", "cdp.mjs")) &&
 		existsSync(resolvePath("bin", "launch.mjs")) &&
 		existsSync(resolvePath("extractors", "google-ai.mjs")) &&
 		existsSync(resolvePath("extractors", "google-search.mjs")) &&
 		existsSync(resolvePath("extractors", "common.mjs")) &&
 		existsSync(resolvePath("extractors", "consent.mjs")) &&
-		existsSync(resolvePath("extractors", "selectors.mjs"))
+		existsSync(resolvePath("extractors", "selectors.mjs"));
+	if (legacyPresent) return true;
+	// Broker-only installs: the broker needs its binary + client module.
+	return (
+		existsSync(resolvePath("bin", "google-cdp-broker.mjs")) &&
+		existsSync(resolvePath("extractors", "google-cdp-broker-client.mjs"))
 	);
 }
