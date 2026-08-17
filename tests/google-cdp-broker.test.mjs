@@ -712,7 +712,9 @@ test("pagination degrades to the merged set when a page-2+ navigation fails", as
 	broker.cdpSend = async (_method, params) => {
 		navigations++;
 		// First paginated navigation (page 2) fails hard.
-		return params?.url?.includes("start=") ? { errorText: "net::ERR_ABORTED" } : {};
+		return params?.url?.includes("start=")
+			? { errorText: "net::ERR_ABORTED" }
+			: {};
 	};
 	broker.verifyCdpLocation = async () => {};
 	let pageNum = 0;
@@ -738,7 +740,11 @@ test("pagination degrades to the merged set when a page-2+ navigation fails", as
 		20,
 		undefined,
 	);
-	assert.equal(results.length, 6, "page-1 results are kept on page-2 nav failure");
+	assert.equal(
+		results.length,
+		6,
+		"page-1 results are kept on page-2 nav failure",
+	);
 	assert.equal(degraded, true, "degraded flag set on page-2+ failure");
 	assert.equal(navigations, 1, "one failed paginated navigation attempted");
 	assert.equal(pageNum, 1, "extraction ran for page 1 only");
@@ -772,7 +778,11 @@ test("pagination degrades when page-2+ extraction throws (empty tail page)", asy
 		20,
 		undefined,
 	);
-	assert.equal(results.length, 6, "page-1 results kept on page-2 extraction error");
+	assert.equal(
+		results.length,
+		6,
+		"page-1 results kept on page-2 extraction error",
+	);
 	assert.equal(degraded, true, "degraded flag set on page-2+ extraction error");
 	assert.equal(pageNum, 2, "page 2 extraction was attempted");
 });

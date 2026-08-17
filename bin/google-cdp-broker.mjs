@@ -1523,10 +1523,7 @@ export class GoogleCdpBroker {
 					// SERP page cannot burn the whole search.
 					start === 0
 						? undefined
-						: Math.min(
-								deadlineAt,
-								Date.now() + GOOGLE_PAGE_EXTRACT_BUDGET_MS,
-							),
+						: Math.min(deadlineAt, Date.now() + GOOGLE_PAGE_EXTRACT_BUDGET_MS),
 				);
 			} catch (error) {
 				// Page 1 extraction failure is a genuine total failure — propagate.
@@ -1635,7 +1632,13 @@ export class GoogleCdpBroker {
 				checkSignal(signal);
 				this.registry.release({ ...identity, leaseId: lease.leaseId });
 			});
-			return { query, url: canonicalUrl, results, degraded: degraded || undefined, timings };
+			return {
+				query,
+				url: canonicalUrl,
+				results,
+				degraded: degraded || undefined,
+				timings,
+			};
 		} catch (error) {
 			if (lease && this.registry.leases.has(lease.leaseId))
 				this.registry.retireLease(lease, true);

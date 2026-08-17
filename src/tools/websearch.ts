@@ -85,13 +85,10 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 				}),
 			),
 			goggles: Type.Optional(
-				Type.Union(
-					[Type.String(), Type.Record(Type.String(), Type.Unknown())],
-					{
-						description:
-							"Optional rerank profile applied additively on top of the normal ranking. Pass a built-in preset name ('docs-first', 'research', 'news-balanced'), a path to a JSON file of custom rules, an inline JSON string, or a rules object ({ rules: [{ domains?, domainMarkers?, urlMarkers?, titleTerms?, weight }] }). Omit for unchanged default ranking.",
-					},
-				),
+				Type.Union([Type.String(), Type.Record(Type.String(), Type.Unknown())], {
+					description:
+						"Optional rerank profile applied additively on top of the normal ranking. Pass a built-in preset name ('docs-first', 'research', 'news-balanced'), a path to a JSON file of custom rules, an inline JSON string, or a rules object ({ rules: [{ domains?, domainMarkers?, urlMarkers?, titleTerms?, weight }] }). Omit for unchanged default ranking.",
+				}),
 			),
 		}),
 
@@ -129,8 +126,7 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 			else if (!cdpAvailableGA())
 				googleStatus = "unavailable (Chrome CDP not present)";
 			else if (!isProviderAvailable("google"))
-				googleStatus =
-					"unavailable (provider cooled down after recent failures)";
+				googleStatus = "unavailable (provider cooled down after recent failures)";
 			else googleStatus = "pending";
 			const chromeReady =
 				googleEnabled || redditEnabled
@@ -140,11 +136,9 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 						}).catch(() => null)
 					: null;
 			let redditStatus: string;
-			if (!cdpAvailableGA())
-				redditStatus = "unavailable (Chrome CDP not present)";
+			if (!cdpAvailableGA()) redditStatus = "unavailable (Chrome CDP not present)";
 			else if (!isProviderAvailable("reddit"))
-				redditStatus =
-					"unavailable (provider cooled down after recent failures)";
+				redditStatus = "unavailable (provider cooled down after recent failures)";
 			else redditStatus = "pending";
 			const engineNames = ["DDG", "Brave", "Yahoo", "Bing"];
 			if (useGoogle) engineNames.push("Google");
@@ -407,14 +401,11 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 				// Append the measured latency for ok engines so a slow engine that
 				// dominated the 7s cap is visible (P5).
 				const latencyMs = engineStatus?.[id]?.latencyMs ?? 0;
-				const latency =
-					latencyMs > 0 ? ` (${formatEngineLatency(latencyMs)})` : "";
+				const latency = latencyMs > 0 ? ` (${formatEngineLatency(latencyMs)})` : "";
 				engineLabel.push(`${httpEngineNames[id]}:${count}${latency}`);
 			}
-			if (googleResults.length)
-				engineLabel.push(`Google:${googleResults.length}`);
-			if (redditResults.length)
-				engineLabel.push(`Reddit:${redditResults.length}`);
+			if (googleResults.length) engineLabel.push(`Google:${googleResults.length}`);
+			if (redditResults.length) engineLabel.push(`Reddit:${redditResults.length}`);
 			if (!engineLabel.length) engineLabel.push("HTTP");
 
 			// Trigger speculative prefetch of top-N result URLs in the background.
