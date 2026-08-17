@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import net from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import { brokerPaths } from "../bin/google-cdp-broker.mjs";
 import {
+	aiSummaryAvailable,
+	cdpAvailable,
 	closeGoogleBroker,
 	googleSearchWithDependencies,
 	isBrokerInfrastructureError,
@@ -95,9 +100,7 @@ function makeBrokerProcessFactory({
 			});
 		});
 		server.once("error", rejectReady);
-		if (!(failFirstSpawn && calls === 1))
-			server.listen(path, () => resolveReady());
-		else {
+		if ((failFirstSpawn && calls === 1)){
 			resolveReady();
 			setTimeout(
 				() =>
@@ -107,7 +110,8 @@ function makeBrokerProcessFactory({
 					),
 				0,
 			);
-		}
+		} else 
+			server.listen(path, () => resolveReady());
 		child.ready = ready;
 		child.exitNow = () => {
 			if (child.exitCode !== null) return;
@@ -173,7 +177,13 @@ test("Google broker branch is the default and legacy is the opt-out", async () =
 				},
 				connectBroker: async () => {
 					brokerCalls++;
-					return { search: async (query) => output(query), close: () => {} };
+					// The client is intentionally RETAINED across searches (warm
+					// reuse is the broker's whole point); close() fires only on
+					// teardown/disable, asserted in the runtime-disable tests.
+					return {
+						search: async (query) => output(query),
+						close: () => {},
+					};
 				},
 			},
 		);
@@ -411,7 +421,7 @@ test("successful broker attempts emit a diagnostic envelope without result-shape
 			/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
 		);
 		assert.equal(
-			captured.includes(`\"requestId\":\"${envelope.requestId}\"`),
+			captured.includes(`"requestId":"${envelope.requestId}"`),
 			true,
 		);
 		assert.equal(typeof envelope.queryHash, "string");
@@ -2725,5 +2735,71 @@ test("async client close is rejection-safe, exactly once per attempt, and fences
 		process.off("unhandledRejection", onUnhandled);
 		await closeGoogleBroker().catch(() => {});
 		restoreFlag();
+	}
+});
+
+test("cdpAvailable / aiSummaryAvailable gate on file presence", () => {
+	// Fixture tree: a fake package root we can shape per fixture without
+	// touching the real install on disk.
+	const root = mkdtempSync(join(tmpdir(), "webaio-cdpavail-"));
+	const write = (rel) =>
+		writeFileSync(join(root, ...rel), "x", { flag: "a" });
+
+	// LEGACY_FILES = the 7 files the legacy gate always required.
+	const LEGACY_FILES = [
+		["bin", "cdp.mjs"],
+		["bin", "launch.mjs"],
+		["extractors", "google-ai.mjs"],
+		["extractors", "google-search.mjs"],
+		["extractors", "common.mjs"],
+		["extractors", "consent.mjs"],
+		["extractors", "selectors.mjs"],
+	];
+	const BROKER_FILES = [
+		["bin", "google-cdp-broker.mjs"],
+		["extractors", "google-cdp-broker-client.mjs"],
+	];
+
+	try {
+		// Empty root: nothing present → both lanes unavailable.
+		assert.equal(cdpAvailable(root), false, "neither path present");
+		assert.equal(aiSummaryAvailable(root), false);
+
+		// Full legacy install only.
+		for (const [dir, file] of LEGACY_FILES) {
+			mkdirSync(join(root, dir), { recursive: true });
+			write([dir, file]);
+		}
+		assert.equal(cdpAvailable(root), true, "legacy-present");
+		assert.equal(aiSummaryAvailable(root), true);
+
+		// Broker-only install: broker files but NO legacy google-ai.mjs.
+		// cdpAvailable must be true (broker path works), but the AI-summary
+		// lane must be false (it needs the legacy extractor specifically).
+		const brokerRoot = mkdtempSync(join(tmpdir(), "webaio-cdpavail-b-"));
+		try {
+			for (const [dir, file] of BROKER_FILES) {
+				mkdirSync(join(brokerRoot, dir), { recursive: true });
+				writeFileSync(join(brokerRoot, dir, file), "x");
+			}
+			// Sanity: no legacy files were created in this fixture.
+			assert.equal(cdpAvailable(brokerRoot), true, "broker-only cdp");
+			assert.equal(
+				aiSummaryAvailable(brokerRoot),
+				false,
+				"broker-only cannot AI-summarize (needs legacy google-ai.mjs)",
+			);
+		} finally {
+			rmSync(brokerRoot, { recursive: true, force: true });
+		}
+
+		// Top-level fallback: legacy files absent but broker dir absent too.
+		assert.equal(
+			cdpAvailable(join(root, "nope")),
+			false,
+			"missing dir is unavailable",
+		);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
 	}
 });

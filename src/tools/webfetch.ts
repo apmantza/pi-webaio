@@ -12,6 +12,7 @@ import {
 } from "../chunker.ts";
 import { DEFAULT_OS, getLatestChromeProfile, smartFetch } from "../fetch.ts";
 import {
+	aiSummaryAvailable,
 	cdpAvailable as cdpAvailableGA,
 	ensureChrome,
 	summarizeUrl,
@@ -378,9 +379,7 @@ function describeJsonPayload(payload: unknown): string[] {
 	for (const key of keys.slice(0, 6)) {
 		const value = obj[key];
 		if (Array.isArray(value)) {
-			lines.push(
-				`- ${key}: ${value.length} item${value.length === 1 ? "" : "s"}`,
-			);
+			lines.push(`- ${key}: ${value.length} item${value.length === 1 ? "" : "s"}`);
 		} else if (value && typeof value === "object") {
 			const nestedKeys = Object.keys(value as Record<string, unknown>);
 			lines.push(
@@ -602,9 +601,7 @@ export function buildFrugalPreview(
 		const top = selectFrugalSection(sections);
 		if (top && top.body) {
 			const excerpt =
-				top.body.length > maxChars
-					? `${top.body.slice(0, maxChars)}…`
-					: top.body;
+				top.body.length > maxChars ? `${top.body.slice(0, maxChars)}…` : top.body;
 			sectionBlock = `\n\n## ${top.text}\n\n${excerpt}`;
 		}
 	}
@@ -918,9 +915,7 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 					}
 					details.spinnerTick = (details.spinnerTick ?? 0) + 1;
 					onUpdate({
-						content: [
-							{ type: "text", text: `Fetching ${details.url ?? "URL"}…` },
-						],
+						content: [{ type: "text", text: `Fetching ${details.url ?? "URL"}…` }],
 						details: { ...details },
 					});
 				}, SPINNER_INTERVAL_MS);
@@ -943,13 +938,9 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 				details.succeeded = details.items.filter(
 					(it) => it.status === "done",
 				).length;
-				details.failed = details.items.filter(
-					(it) => it.status === "error",
-				).length;
+				details.failed = details.items.filter((it) => it.status === "error").length;
 				onUpdate?.({
-					content: [
-						{ type: "text", text: `Fetching ${details.url ?? "URL"}…` },
-					],
+					content: [{ type: "text", text: `Fetching ${details.url ?? "URL"}…` }],
 					details: { ...details },
 				});
 			}
@@ -1119,11 +1110,7 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 									url: raw,
 									phase: "validation",
 								});
-								markItemError(
-									idx,
-									buildUserFacingFetchErrorSummary(fe),
-									startedAt,
-								);
+								markItemError(idx, buildUserFacingFetchErrorSummary(fe), startedAt);
 								return {
 									ok: false,
 									error: fe.message,
@@ -1137,8 +1124,7 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 								outFile = safeResolveInBaseTemp(params.out);
 							} else {
 								const name =
-									url.pathname.replace(/^\//, "").replace(/\//g, "-") ||
-									"index";
+									url.pathname.replace(/^\//, "").replace(/\//g, "-") || "index";
 								outFile = join(BASE_TEMP, url.hostname, `${name}.md`);
 							}
 
@@ -1149,9 +1135,7 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 							const startIndex = params.start_index as number | undefined;
 							const maxLength = params.max_length as number | undefined;
 							const bypass = params.bypass === true;
-							const bypassStrategies = params.bypassStrategies as
-								| string[]
-								| undefined;
+							const bypassStrategies = params.bypassStrategies as string[] | undefined;
 							const diffMode = params.diff === true;
 
 							// ── HTTP revalidation (issue #46) ─────────────────────────
@@ -1217,9 +1201,7 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 
 							// ── Diff mode early-exit on 304 (issue #45 + #46 synergy) ──
 							if (notModifiedResult && diffMode) {
-								const cachedDate = new Date(
-									notModifiedResult.cachedAt,
-								).toISOString();
+								const cachedDate = new Date(notModifiedResult.cachedAt).toISOString();
 								const diffText = `Unchanged since ${cachedDate}, 0 changes (304 Not Modified — server confirmed content identical).`;
 								updateItem(idx, {
 									status: "done",
@@ -1244,8 +1226,7 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 									savedToDisk: false,
 									diffResult: diffText,
 									outline: extractOutline(notModifiedResult.content).headings,
-									wordCount: extractOutline(notModifiedResult.content)
-										.totalWords,
+									wordCount: extractOutline(notModifiedResult.content).totalWords,
 								};
 							}
 
@@ -1273,8 +1254,7 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 									format: "markdown",
 									savedToDisk: false,
 									outline: extractOutline(notModifiedResult.content).headings,
-									wordCount: extractOutline(notModifiedResult.content)
-										.totalWords,
+									wordCount: extractOutline(notModifiedResult.content).totalWords,
 								};
 							}
 
@@ -1336,8 +1316,7 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 							if (!result.ok) {
 								const shouldRetryBrowser =
 									mode !== "browser" &&
-									(result.errorInfo?.retryable ||
-										result.errorInfo?.code === "blocked");
+									(result.errorInfo?.retryable || result.errorInfo?.code === "blocked");
 								if (shouldRetryBrowser) {
 									updateItem(idx, { status: "loading", progress: 0.65 });
 									try {
@@ -1389,8 +1368,7 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 
 							if (interactive && result.rawHtml) {
 								const interactables = extractInteractables(result.rawHtml);
-								const actionsSection =
-									formatInteractablesSection(interactables);
+								const actionsSection = formatInteractablesSection(interactables);
 								if (actionsSection) {
 									contentBody = actionsSection + "\n" + contentBody;
 								}
@@ -1401,9 +1379,7 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 							if (startIndex !== undefined || maxLength !== undefined) {
 								const si = startIndex ?? 0;
 								const ml =
-									maxLength !== undefined && maxLength > 0
-										? maxLength
-										: totalChars - si;
+									maxLength !== undefined && maxLength > 0 ? maxLength : totalChars - si;
 								const end = Math.min(si + ml, totalChars);
 								if (si < totalChars) {
 									contentBody = contentBody.slice(si, end);
@@ -1451,19 +1427,13 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 								outPath = resolve(outFile);
 								await mkdir(dirname(outPath), { recursive: true });
 								await writeFile(outPath, formatted.body, "utf8");
-								storeContent(
-									result.url!,
-									result.title,
-									formatted.body,
-									undefined,
-									{
-										author: result.author,
-										published: result.published,
-										site: result.site,
-										language: result.language,
-										wordCount: result.wordCount,
-									},
-								);
+								storeContent(result.url!, result.title, formatted.body, undefined, {
+									author: result.author,
+									published: result.published,
+									site: result.site,
+									language: result.language,
+									wordCount: result.wordCount,
+								});
 								// Drain HTTP validators captured by pullPage's internal
 								// smartFetch call via the side channel in http-validators.ts
 								// and persist them with the session-cache entry (issue #46).
@@ -1474,19 +1444,13 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 							} else if (formatted.format === "markdown") {
 								// Non-disk markdown (e.g. when savedToDisk is false but format
 								// is still markdown): store in session cache for diff baseline.
-								storeContent(
-									result.url!,
-									result.title,
-									formatted.body,
-									undefined,
-									{
-										author: result.author,
-										published: result.published,
-										site: result.site,
-										language: result.language,
-										wordCount: result.wordCount,
-									},
-								);
+								storeContent(result.url!, result.title, formatted.body, undefined, {
+									author: result.author,
+									published: result.published,
+									site: result.site,
+									language: result.language,
+									wordCount: result.wordCount,
+								});
 								const capturedNonDisk = drainCapturedValidators(result.url!);
 								if (capturedNonDisk) {
 									attachValidators(result.url!, capturedNonDisk);
@@ -1631,9 +1595,7 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 							});
 						markItemError(0, summary, singleStartedAt);
 						const fe = (r as any).fetchError as FetchError | undefined;
-						const fetchErrForAgent = (r as any).fetchError as
-							| FetchError
-							| undefined;
+						const fetchErrForAgent = (r as any).fetchError as FetchError | undefined;
 						const tags = fetchErrForAgent
 							? `phase=${fetchErrForAgent.phase} code=${fetchErrForAgent.code} ` +
 								`category=${fetchErrForAgent.category} ` +
@@ -1683,8 +1645,7 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 					// Resolved output format + opt-in outline mode (UX1). Defined
 					// early so the AI-summary step can be skipped in outline mode.
 					const itemFormat = (r as any).format ?? "markdown";
-					const outlineMode =
-						params.outline === true && itemFormat === "markdown";
+					const outlineMode = params.outline === true && itemFormat === "markdown";
 
 					let summary: string | null = null;
 					let summarized = false;
@@ -1734,7 +1695,7 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 						!outlineMode &&
 						!skipSummary &&
 						!isShort &&
-						cdpAvailableGA()
+						aiSummaryAvailable()
 					) {
 						const cacheKey = summaryCacheKey(
 							r.url as string,
@@ -1828,11 +1789,9 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 								"\n---\n",
 								displayContent,
 								chunkFmt.body
-									? [
-											"\n\n---\n",
-											`## Chunks (${chunks!.length})\n`,
-											chunkFmt.body,
-										].join("\n")
+									? ["\n\n---\n", `## Chunks (${chunks!.length})\n`, chunkFmt.body].join(
+											"\n",
+										)
 									: "",
 								chunkingErrors.length > 0
 									? `\n\n[WARN] Chunking failed: ${chunkingErrors.join("; ")}`
@@ -2018,9 +1977,7 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 					!!multiAnswerQuery &&
 					!multiAnswerPrune &&
 					okResults.length > 0 &&
-					okResults.every(
-						(r) => ((r as any).format ?? "markdown") === "markdown",
-					);
+					okResults.every((r) => ((r as any).format ?? "markdown") === "markdown");
 				if (multiAnswerActive) {
 					const sources = okResults
 						.filter((r) => r.url && (r as any).body)
@@ -2062,12 +2019,7 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 							content: [
 								{
 									type: "text",
-									text:
-										header +
-										notice +
-										"\n\n" +
-										displayContent +
-										localKnowledgeNote,
+									text: header + notice + "\n\n" + displayContent + localKnowledgeNote,
 								},
 							],
 							details: {
@@ -2131,11 +2083,7 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 					for (const r of okResults) {
 						const itemFormat = (r as any).format ?? "markdown";
 						if (itemFormat === "markdown" && r.url) {
-							const c = maybeChunkMarkdown(
-								(r as any).body,
-								params,
-								chunkingErrors,
-							);
+							const c = maybeChunkMarkdown((r as any).body, params, chunkingErrors);
 							if (c) chunksByUrl.set(r.url, c);
 						}
 					}
@@ -2163,11 +2111,9 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 								"",
 								"Errors:",
 								...errResults.map((r) => {
-									const code =
-										(r as any).fetchError?.code ?? (r as any).errorInfo?.code; // phase-aware (e.g. blocked_ssrf) over legacy errorInfo.code
+									const code = (r as any).fetchError?.code ?? (r as any).errorInfo?.code; // phase-aware (e.g. blocked_ssrf) over legacy errorInfo.code
 									const sc =
-										(r as any).fetchError?.statusCode ??
-										(r as any).errorInfo?.statusCode;
+										(r as any).fetchError?.statusCode ?? (r as any).errorInfo?.statusCode;
 									const tag = [code, sc ? `HTTP ${sc}` : null]
 										.filter(Boolean)
 										.join(", ");
@@ -2192,9 +2138,7 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 						: [],
 				];
 				return {
-					content: [
-						{ type: "text", text: lines.join("\n") + localKnowledgeNote },
-					],
+					content: [{ type: "text", text: lines.join("\n") + localKnowledgeNote }],
 					details: {
 						results,
 						...(localKnowledge ? { localKnowledge } : {}),

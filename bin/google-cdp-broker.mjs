@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 
-// Opt-in F22 prototype. This broker owns only a narrow lease protocol; it does
-// not replace the existing Google extractor and does not launch Chrome.
+// Google CDP broker — the default Google search lane (post-#97). It owns a
+// narrow lease protocol over a shared Chrome/CDP connection, serializing
+// concurrent searches. The production wrapper (src/google-ai.ts) passes
+// --connect-cdp --cdp-port 9222 --parent-stdin; it does not launch Chrome
+// itself (the wrapper's launch.mjs owns that) and exits on parent death.
 
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -2079,7 +2082,7 @@ function parseCli(args) {
 	return { ...paths, ...options };
 }
 
-const USAGE = `google-cdp-broker (F22 prototype, registry-only by default)\n\nUsage: node bin/google-cdp-broker.mjs [--profile DIR] [--connect-cdp] [--cdp-port PORT] [--parent-stdin]\n\nThe broker does not launch Chrome. --connect-cdp only probes an existing\ndedicated Chrome; no production Google path uses this prototype.\n`;
+const USAGE = `google-cdp-broker (default Google search lane)\n\nUsage: node bin/google-cdp-broker.mjs [--profile DIR] [--connect-cdp] [--cdp-port PORT] [--parent-stdin]\n\nThe broker does not launch Chrome; --connect-cdp probes an existing dedicated\nChrome. The production wrapper passes --parent-stdin so the broker exits when\nthe parent dies.\n`;
 
 async function main() {
 	try {

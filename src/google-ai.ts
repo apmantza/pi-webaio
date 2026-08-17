@@ -503,7 +503,9 @@ const BROKER_MIN_FALLBACK_BUDGET_MS = 1_000;
 function brokerEnabled(): boolean {
 	// The Google CDP broker is the default search path (faster cold start,
 	// tighter p95, 100% Google success under concurrency — see speed.md).
-	// Opt out to the legacy CDP path with PI_WEBAIO_CDP_BROKER=0.
+	// Opt out to the legacy CDP path with PI_WEBAIO_CDP_BROKER=0. Any other
+	// value (including unset or empty) keeps the broker default — only the
+	// literal "0" disables it.
 	return process.env.PI_WEBAIO_CDP_BROKER !== "0";
 }
 
@@ -3105,6 +3107,18 @@ export async function summarizeUrl(
 // ─── CDP Availability Check ──────────────────────────────────────────
 
 /**
+ * Check whether the AI-summary lane is actually runnable: it needs the
+ * legacy `extractors/google-ai.mjs` extractor (unlike the search lanes,
+ * which fall back to the broker). The summary gate must not use the coarse
+ * `cdpAvailable()` — a broker-only install has no google-ai.mjs and would
+ * silently degrade to a deterministic summary with no notice.
+ * `rootDir` is injectable for tests.
+ */
+export function aiSummaryAvailable(rootDir = PACKAGE_ROOT): boolean {
+	return existsSync(join(rootDir, "extractors", "google-ai.mjs"));
+}
+
+/**
  * Check if the CDP infrastructure is available (files exist).
  *
  * The Google CDP broker is the default search path (post-#97), but it falls
@@ -3112,20 +3126,22 @@ export async function summarizeUrl(
  * and Reddit lanes use the same Chrome/CDP infrastructure. So availability
  * means EITHER the broker files OR the legacy extractor files are present —
  * a partial install still gets a working Google lane via the fallback.
+ * `rootDir` is injectable for tests (defaults to the package root).
  */
-export function cdpAvailable(): boolean {
+export function cdpAvailable(rootDir = PACKAGE_ROOT): boolean {
+	const rp = (...segments: string[]): string => join(rootDir, ...segments);
 	const legacyPresent =
-		existsSync(resolvePath("bin", "cdp.mjs")) &&
-		existsSync(resolvePath("bin", "launch.mjs")) &&
-		existsSync(resolvePath("extractors", "google-ai.mjs")) &&
-		existsSync(resolvePath("extractors", "google-search.mjs")) &&
-		existsSync(resolvePath("extractors", "common.mjs")) &&
-		existsSync(resolvePath("extractors", "consent.mjs")) &&
-		existsSync(resolvePath("extractors", "selectors.mjs"));
+		existsSync(rp("bin", "cdp.mjs")) &&
+		existsSync(rp("bin", "launch.mjs")) &&
+		existsSync(rp("extractors", "google-ai.mjs")) &&
+		existsSync(rp("extractors", "google-search.mjs")) &&
+		existsSync(rp("extractors", "common.mjs")) &&
+		existsSync(rp("extractors", "consent.mjs")) &&
+		existsSync(rp("extractors", "selectors.mjs"));
 	if (legacyPresent) return true;
 	// Broker-only installs: the broker needs its binary + client module.
 	return (
-		existsSync(resolvePath("bin", "google-cdp-broker.mjs")) &&
-		existsSync(resolvePath("extractors", "google-cdp-broker-client.mjs"))
+		existsSync(rp("bin", "google-cdp-broker.mjs")) &&
+		existsSync(rp("extractors", "google-cdp-broker-client.mjs"))
 	);
 }
