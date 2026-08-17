@@ -589,10 +589,10 @@ function sanitizeBrokerError(
 // diagnostic boundary, so every credential-shaped value and every broker ID
 // label must be removed even when the value is one character long.
 const BROKER_AUTH_VALUE_RE =
-	/\b(?:(?:authorization\s*(?:[:=]\s*)?(?:bearer|basic|token))|(?:bearer|basic))\s+[^\s,;\"'}\]]+/gi;
+	/\b(?:(?:authorization\s*(?:[:=]\s*)?(?:bearer|basic|token))|(?:bearer|basic))\s+[^\s,;"'}\]]+/gi;
 const BROKER_JWT_RE = /\b[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g;
 const BROKER_ID_WITH_VALUE_RE =
-	/\b(?:target\s*id|session\s*id|client\s*id|targetid|sessionid|clientid|target|session|client)\s*\"?\s*(?:[:=]|\s)\s*\"?[^,;\s}\"']+/gi;
+	/\b(?:target\s*id|session\s*id|client\s*id|targetid|sessionid|clientid|target|session|client)\s*"?\s*(?:[:=]|\s)\s*"?[^,;\s}"']+/gi;
 const BROKER_ID_LABEL_RE =
 	/\b(?:target\s*id|session\s*id|client\s*id|targetid|sessionid|clientid)\b/gi;
 

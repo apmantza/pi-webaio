@@ -24,7 +24,13 @@ const output = (query) => ({
 	results: [],
 });
 
-function makeBrokerProcessFactory({ registerDelayMs = 0, searchDelayMs = 0, exitAfterKillMs = 0, failFirstSearch = false, failFirstSpawn = false } = {}) {
+function makeBrokerProcessFactory({
+	registerDelayMs = 0,
+	searchDelayMs = 0,
+	exitAfterKillMs = 0,
+	failFirstSearch = false,
+	failFirstSpawn = false,
+} = {}) {
 	// Never reuse the production/default endpoint: a previous fake server may
 	// still be draining when the next test starts. The readiness promise also
 	// makes tests wait for listen(2), rather than racing EADDRINUSE/ECONNREFUSED.
@@ -63,7 +69,9 @@ function makeBrokerProcessFactory({ registerDelayMs = 0, searchDelayMs = 0, exit
 					if (!line.trim()) continue;
 					const request = JSON.parse(line);
 					const respond = (result, error) =>
-						socket.write(`${JSON.stringify({ id: request.id, ...(error ? { ok: false, error } : { ok: true, result }) })}\n`);
+						socket.write(
+							`${JSON.stringify({ id: request.id, ...(error ? { ok: false, error } : { ok: true, result }) })}\n`,
+						);
 					if (request.op === "register") {
 						registerCalls++;
 						setTimeout(
@@ -75,7 +83,10 @@ function makeBrokerProcessFactory({ registerDelayMs = 0, searchDelayMs = 0, exit
 						respond({});
 					} else if (request.op === "search" && failFirstSearch && calls === 1) {
 						searchCalls++;
-						respond(undefined, { code: "connection_closed", message: "fake child failure" });
+						respond(undefined, {
+							code: "connection_closed",
+							message: "fake child failure",
+						});
 					} else if (request.op === "search") {
 						searchCalls++;
 						setTimeout(() => respond(output(request.query)), searchDelayMs);
@@ -84,10 +95,18 @@ function makeBrokerProcessFactory({ registerDelayMs = 0, searchDelayMs = 0, exit
 			});
 		});
 		server.once("error", rejectReady);
-		if (!(failFirstSpawn && calls === 1)) server.listen(path, () => resolveReady());
+		if (!(failFirstSpawn && calls === 1))
+			server.listen(path, () => resolveReady());
 		else {
 			resolveReady();
-			setTimeout(() => child.emit("error", Object.assign(new Error("spawn failed"), { code: "ENOENT" })), 0);
+			setTimeout(
+				() =>
+					child.emit(
+						"error",
+						Object.assign(new Error("spawn failed"), { code: "ENOENT" }),
+					),
+				0,
+			);
 		}
 		child.ready = ready;
 		child.exitNow = () => {
@@ -333,26 +352,26 @@ test("navigation and extraction failures fall back through a fresh legacy path",
 	try {
 		for (const code of ["navigation_failed", "extraction_failed"]) {
 			const result = await googleSearchWithDependencies(
-			`${code}-query`,
-			{ timeoutMs: 2000 },
-			{
-				ensureChrome: async () => ({ running: true, ready: true }),
-				connectBroker: async () => ({
-					search: async () => {
-						throw Object.assign(new Error(`${code} with broker target`), {
-							code,
-						});
+				`${code}-query`,
+				{ timeoutMs: 2000 },
+				{
+					ensureChrome: async () => ({ running: true, ready: true }),
+					connectBroker: async () => ({
+						search: async () => {
+							throw Object.assign(new Error(`${code} with broker target`), {
+								code,
+							});
+						},
+						close() {
+							closeCalls++;
+						},
+					}),
+					legacySearch: async (query) => {
+						legacyCalls++;
+						return output(query);
 					},
-					close() {
-						closeCalls++;
-					},
-				}),
-				legacySearch: async (query) => {
-					legacyCalls++;
-					return output(query);
+					cleanupBroker: async (client) => client?.close(),
 				},
-				cleanupBroker: async (client) => client?.close(),
-			},
 			);
 			assert.equal(result.query, `${code}-query`);
 		}
@@ -387,11 +406,22 @@ test("successful broker attempts emit a diagnostic envelope without result-shape
 		assert.equal(envelope.outcome, "success");
 		assert.equal(envelope.fallbackOutcome, "not_attempted");
 		assert.equal(envelope.queryLength, "private broker query".length);
-		assert.match(envelope.requestId, /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
-		assert.equal(captured.includes(`\"requestId\":\"${envelope.requestId}\"`), true);
+		assert.match(
+			envelope.requestId,
+			/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+		);
+		assert.equal(
+			captured.includes(`\"requestId\":\"${envelope.requestId}\"`),
+			true,
+		);
 		assert.equal(typeof envelope.queryHash, "string");
 		assert.match(envelope.queryHash, /^[0-9a-f]{64}$/);
-		assert.deepEqual(Object.keys(envelope).filter((key) => key === "schema" || key === "requestId" || key === "queryHash"), ["schema", "requestId", "queryHash"]);
+		assert.deepEqual(
+			Object.keys(envelope).filter(
+				(key) => key === "schema" || key === "requestId" || key === "queryHash",
+			),
+			["schema", "requestId", "queryHash"],
+		);
 		assert.equal(captured.includes("private broker query"), false);
 	} finally {
 		restoreFlag();
@@ -401,15 +431,24 @@ test("successful broker attempts emit a diagnostic envelope without result-shape
 test("broker envelope preserves its schema for adversarial query text", async () => {
 	process.env.PI_WEBAIO_CDP_BROKER = "1";
 	try {
-		for (const query of ["q", "schema", "requestId", "quote \\\" } ,\\n { \\\"schema\\\":\\\"bad\\\" }"]) {
+		for (const query of [
+			"q",
+			"schema",
+			"requestId",
+			'quote \\" } ,\\n { \\"schema\\":\\"bad\\" }',
+		]) {
 			const { captured } = await captureBrokerDiagnostic(() =>
-				googleSearchWithDependencies(query, { timeoutMs: 2000 }, {
-					ensureChrome: async () => ({ running: true, ready: true }),
-					connectBroker: async () => ({
-						search: async (value) => output(value),
-						close() {},
-					}),
-				}),
+				googleSearchWithDependencies(
+					query,
+					{ timeoutMs: 2000 },
+					{
+						ensureChrome: async () => ({ running: true, ready: true }),
+						connectBroker: async () => ({
+							search: async (value) => output(value),
+							close() {},
+						}),
+					},
+				),
 			);
 			const envelope = parseEnvelope(captured);
 			assert.equal(envelope.schema, "pi-webaio.broker-attempt");
@@ -466,7 +505,9 @@ test("late connector resolution is closed after caller abort", async () => {
 	let resolveConnect;
 	let closeCalls = 0;
 	try {
-		const pendingConnect = new Promise((resolve) => { resolveConnect = resolve; });
+		const pendingConnect = new Promise((resolve) => {
+			resolveConnect = resolve;
+		});
 		const request = googleSearchWithDependencies(
 			"late connector",
 			{ timeoutMs: 2000, signal: controller.signal },
@@ -481,7 +522,9 @@ test("late connector resolution is closed after caller abort", async () => {
 		await assert.rejects(request, (error) => error.code === "request_fenced");
 		const lateClient = {
 			search: async () => output("unused"),
-			close: () => { closeCalls++; },
+			close: () => {
+				closeCalls++;
+			},
 		};
 		resolveConnect(lateClient);
 		const closeDeadline = Date.now() + 500;
@@ -500,8 +543,12 @@ test("two cancelled waiters close one late connector exactly once", async () => 
 	let resolveConnect;
 	let connectStarted;
 	let closeCalls = 0;
-	const connectStartedPromise = new Promise((resolve) => { connectStarted = resolve; });
-	const pendingConnect = new Promise((resolve) => { resolveConnect = resolve; });
+	const connectStartedPromise = new Promise((resolve) => {
+		connectStarted = resolve;
+	});
+	const pendingConnect = new Promise((resolve) => {
+		resolveConnect = resolve;
+	});
 	const dependencies = {
 		ensureChrome: async () => ({ running: true, ready: true }),
 		connectBroker: async () => {
@@ -510,16 +557,30 @@ test("two cancelled waiters close one late connector exactly once", async () => 
 		},
 	};
 	try {
-		const first = googleSearchWithDependencies("late-one", { timeoutMs: 500, signal: firstController.signal }, dependencies);
-		const second = googleSearchWithDependencies("late-two", { timeoutMs: 500, signal: secondController.signal }, dependencies);
+		const first = googleSearchWithDependencies(
+			"late-one",
+			{ timeoutMs: 500, signal: firstController.signal },
+			dependencies,
+		);
+		const second = googleSearchWithDependencies(
+			"late-two",
+			{ timeoutMs: 500, signal: secondController.signal },
+			dependencies,
+		);
 		await connectStartedPromise;
 		firstController.abort();
 		secondController.abort();
 		await assert.rejects(first, (error) => error.code === "request_fenced");
 		await assert.rejects(second, (error) => error.code === "request_fenced");
-		resolveConnect({ search: async () => output("unused"), close: () => { closeCalls++; } });
+		resolveConnect({
+			search: async () => output("unused"),
+			close: () => {
+				closeCalls++;
+			},
+		});
 		const deadline = Date.now() + 500;
-		while (closeCalls === 0 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5));
+		while (closeCalls === 0 && Date.now() < deadline)
+			await new Promise((resolve) => setTimeout(resolve, 5));
 		assert.equal(closeCalls, 1);
 	} finally {
 		restoreFlag();
@@ -533,17 +594,25 @@ test("an old late client is not closed after a newer generation adopts it", asyn
 	let releaseNewSearch;
 	let markNewSearchStarted;
 	let closeCalls = 0;
-	const newSearchStarted = new Promise((resolve) => { markNewSearchStarted = resolve; });
-	const newSearchGate = new Promise((resolve) => { releaseNewSearch = resolve; });
+	const newSearchStarted = new Promise((resolve) => {
+		markNewSearchStarted = resolve;
+	});
+	const newSearchGate = new Promise((resolve) => {
+		releaseNewSearch = resolve;
+	});
 	const oldClient = {
 		search: async (query) => {
 			markNewSearchStarted();
 			await newSearchGate;
 			return output(query);
 		},
-		close: () => { closeCalls++; },
+		close: () => {
+			closeCalls++;
+		},
 	};
-	const oldAttempt = new Promise((resolve) => { resolveOld = resolve; });
+	const oldAttempt = new Promise((resolve) => {
+		resolveOld = resolve;
+	});
 	try {
 		const newer = googleSearchWithDependencies(
 			"new generation",
@@ -608,10 +677,7 @@ test("explicit abort skips fallback and fences a late broker rejection", async (
 			},
 		);
 		setTimeout(() => controller.abort(), 5);
-		await assert.rejects(
-			pending,
-			(error) => error.code === "request_fenced",
-		);
+		await assert.rejects(pending, (error) => error.code === "request_fenced");
 		await new Promise((resolve) => setTimeout(resolve, 50));
 		assert.equal(legacyCalls, 0);
 		assert.equal(unhandled, 0);
@@ -673,7 +739,8 @@ test("broker diagnostic redacts complete auth credentials and JWTs at the envelo
 	process.env.PI_WEBAIO_CDP_BROKER = "1";
 	const bearer = "Bearer full-bearer-credential-987654321";
 	const basic = "Basic dXNlcjpmdWxsLWJhc2ljLXNlY3JldA==";
-	const jwt = "eyJhbGciOiJIUzI1NiJ9.full-jwt-payload-987654321.signature-987654321";
+	const jwt =
+		"eyJhbGciOiJIUzI1NiJ9.full-jwt-payload-987654321.signature-987654321";
 	try {
 		const { captured } = await captureBrokerDiagnostic(() =>
 			googleSearchWithDependencies(
@@ -727,20 +794,28 @@ test("the final envelope boundary redacts short credentials and spaced broker ID
 	];
 	try {
 		const { captured } = await captureBrokerDiagnostic(() =>
-			googleSearchWithDependencies(query, { timeoutMs: 2000 }, {
-				ensureChrome: async () => ({ running: true, ready: true }),
-				connectBroker: async () => ({
-					search: async () => {
-						throw Object.assign(new Error(
-							`Authorization: Bearer b; Authorization: Basic x; token=a.b.c; Target ID: target-short; Session ID = session-short; Client ID client-short; api_key=ak; cookies: ck; client_secret cs; cdpTargetId=ct; cdpSessionId: csid; leaseId lid; requestId=rid`,
-						), { code: "connection_closed" });
-					},
-					close() {},
-				}),
-				legacySearch: async (value) => output(value),
-			}),
+			googleSearchWithDependencies(
+				query,
+				{ timeoutMs: 2000 },
+				{
+					ensureChrome: async () => ({ running: true, ready: true }),
+					connectBroker: async () => ({
+						search: async () => {
+							throw Object.assign(
+								new Error(
+									`Authorization: Bearer b; Authorization: Basic x; token=a.b.c; Target ID: target-short; Session ID = session-short; Client ID client-short; api_key=ak; cookies: ck; client_secret cs; cdpTargetId=ct; cdpSessionId: csid; leaseId lid; requestId=rid`,
+								),
+								{ code: "connection_closed" },
+							);
+						},
+						close() {},
+					}),
+					legacySearch: async (value) => output(value),
+				},
+			),
 		);
-		for (const value of [query, ...values]) assert.equal(captured.includes(value), false, value);
+		for (const value of [query, ...values])
+			assert.equal(captured.includes(value), false, value);
 		assert.match(captured, /redacted-authorization/);
 		assert.match(captured, /redacted-id/);
 	} finally {
@@ -757,21 +832,28 @@ test("emitted envelopes fail closed for malformed quoted fields and preserve top
 	try {
 		for (const [label, message] of cases) {
 			const { captured } = await captureBrokerDiagnostic(() =>
-				googleSearchWithDependencies(`malformed ${label}`, { timeoutMs: 2_000 }, {
-					ensureChrome: async () => ({ running: true, ready: true }),
-					brokerProfileDir: `malformed-envelope-${randomUUID()}`,
-					connectBroker: async () => ({
-						search: async () => {
-							throw Object.assign(new Error(message), { code: "connection_closed" });
-						},
-						close() {},
-					}),
-					legacySearch: async (query) => output(query),
-				}),
+				googleSearchWithDependencies(
+					`malformed ${label}`,
+					{ timeoutMs: 2_000 },
+					{
+						ensureChrome: async () => ({ running: true, ready: true }),
+						brokerProfileDir: `malformed-envelope-${randomUUID()}`,
+						connectBroker: async () => ({
+							search: async () => {
+								throw Object.assign(new Error(message), { code: "connection_closed" });
+							},
+							close() {},
+						}),
+						legacySearch: async (query) => output(query),
+					},
+				),
 			);
 			const envelope = parseEnvelope(captured);
 			assert.equal(envelope.schema, "pi-webaio.broker-attempt");
-			assert.match(envelope.requestId, /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+			assert.match(
+				envelope.requestId,
+				/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+			);
 			assert.equal(captured.includes("envelope-raw"), false);
 		}
 	} finally {
@@ -896,29 +978,43 @@ test("cleanup timeout is bounded and blocks the next broker acquisition", async 
 	process.env.PI_WEBAIO_CDP_BROKER = "1";
 	let connectCalls = 0;
 	let releaseCleanup;
-	const cleanupGate = new Promise((resolve) => { releaseCleanup = resolve; });
+	const cleanupGate = new Promise((resolve) => {
+		releaseCleanup = resolve;
+	});
 	try {
 		await assert.rejects(
-			googleSearchWithDependencies("cleanup-timeout", { timeoutMs: 2000 }, {
-				ensureChrome: async () => ({ running: true, ready: true }),
-				connectBroker: async () => ({
-					search: async () => { throw Object.assign(new Error("broker failed"), { code: "connection_closed" }); },
-					close() {},
-				}),
-				cleanupBroker: async () => cleanupGate,
-				legacySearch: async () => output("wrong"),
-			}),
+			googleSearchWithDependencies(
+				"cleanup-timeout",
+				{ timeoutMs: 2000 },
+				{
+					ensureChrome: async () => ({ running: true, ready: true }),
+					connectBroker: async () => ({
+						search: async () => {
+							throw Object.assign(new Error("broker failed"), {
+								code: "connection_closed",
+							});
+						},
+						close() {},
+					}),
+					cleanupBroker: async () => cleanupGate,
+					legacySearch: async () => output("wrong"),
+				},
+			),
 			(error) => error.code === "connection_closed",
 		);
 		const started = Date.now();
 		await assert.rejects(
-			googleSearchWithDependencies("after-cleanup-timeout", { timeoutMs: 2000 }, {
-				ensureChrome: async () => ({ running: true, ready: true }),
-				connectBroker: async () => {
-					connectCalls++;
-					return { search: async (query) => output(query), close() {} };
+			googleSearchWithDependencies(
+				"after-cleanup-timeout",
+				{ timeoutMs: 2000 },
+				{
+					ensureChrome: async () => ({ running: true, ready: true }),
+					connectBroker: async () => {
+						connectCalls++;
+						return { search: async (query) => output(query), close() {} };
+					},
 				},
-			}),
+			),
 			(error) => error.code === "broker_process_pending",
 		);
 		assert.equal(connectCalls, 0);
@@ -962,7 +1058,9 @@ test("disconnected broker clients are retired before replacement", async () => {
 	let connectCalls = 0;
 	let oldCloseCalls = 0;
 	let releaseOldClose;
-	const oldCloseGate = new Promise((resolve) => { releaseOldClose = resolve; });
+	const oldCloseGate = new Promise((resolve) => {
+		releaseOldClose = resolve;
+	});
 	const oldClient = {
 		connected: false,
 		search: async (query) => output(query),
@@ -971,21 +1069,38 @@ test("disconnected broker clients are retired before replacement", async () => {
 			await oldCloseGate;
 		},
 	};
-	const replacement = { connected: true, search: async (query) => output(query), close() {} };
+	const replacement = {
+		connected: true,
+		search: async (query) => output(query),
+		close() {},
+	};
 	try {
-		await googleSearchWithDependencies("disconnected", { timeoutMs: 2_000 }, {
-			ensureChrome: async () => ({ running: true, ready: true }),
-			connectBroker: async () => connectCalls++ === 0 ? oldClient : replacement,
-		});
-		const replacementRequest = googleSearchWithDependencies("replacement", { timeoutMs: 2_000 }, {
-			ensureChrome: async () => ({ running: true, ready: true }),
-			connectBroker: async () => replacement,
-		});
-		while (oldCloseCalls === 0) await new Promise((resolve) => setTimeout(resolve, 1));
-		const overlappingRequest = googleSearchWithDependencies("overlap", { timeoutMs: 2_000 }, {
-			ensureChrome: async () => ({ running: true, ready: true }),
-			connectBroker: async () => replacement,
-		});
+		await googleSearchWithDependencies(
+			"disconnected",
+			{ timeoutMs: 2_000 },
+			{
+				ensureChrome: async () => ({ running: true, ready: true }),
+				connectBroker: async () => (connectCalls++ === 0 ? oldClient : replacement),
+			},
+		);
+		const replacementRequest = googleSearchWithDependencies(
+			"replacement",
+			{ timeoutMs: 2_000 },
+			{
+				ensureChrome: async () => ({ running: true, ready: true }),
+				connectBroker: async () => replacement,
+			},
+		);
+		while (oldCloseCalls === 0)
+			await new Promise((resolve) => setTimeout(resolve, 1));
+		const overlappingRequest = googleSearchWithDependencies(
+			"overlap",
+			{ timeoutMs: 2_000 },
+			{
+				ensureChrome: async () => ({ running: true, ready: true }),
+				connectBroker: async () => replacement,
+			},
+		);
 		releaseOldClose();
 		assert.equal((await replacementRequest).query, "replacement");
 		assert.equal((await overlappingRequest).query, "overlap");
@@ -1001,14 +1116,32 @@ test("runtime broker disable closes existing resources before legacy", async () 
 	process.env.PI_WEBAIO_CDP_BROKER = "1";
 	let closeCalls = 0;
 	try {
-		await googleSearchWithDependencies("broker-resource", { timeoutMs: 2_000 }, {
-			ensureChrome: async () => ({ running: true, ready: true }),
-			connectBroker: async () => ({ search: async (query) => output(query), close: () => { closeCalls++; } }),
-		});
+		await googleSearchWithDependencies(
+			"broker-resource",
+			{ timeoutMs: 2_000 },
+			{
+				ensureChrome: async () => ({ running: true, ready: true }),
+				connectBroker: async () => ({
+					search: async (query) => output(query),
+					close: () => {
+						closeCalls++;
+					},
+				}),
+			},
+		);
 		process.env.PI_WEBAIO_CDP_BROKER = "0";
-		assert.equal((await googleSearchWithDependencies("legacy-after-toggle", {}, {
-			legacySearch: async (query) => output(query),
-		})).query, "legacy-after-toggle");
+		assert.equal(
+			(
+				await googleSearchWithDependencies(
+					"legacy-after-toggle",
+					{},
+					{
+						legacySearch: async (query) => output(query),
+					},
+				)
+			).query,
+			"legacy-after-toggle",
+		);
 		assert.equal(closeCalls, 1);
 	} finally {
 		restoreFlag();
@@ -1019,27 +1152,39 @@ test("runtime broker disable closes existing resources before legacy", async () 
 test("runtime broker disable quarantines delayed startup without replacement or publication", async () => {
 	process.env.PI_WEBAIO_CDP_BROKER = "1";
 	const factory = makeBrokerProcessFactory({ registerDelayMs: 100 });
-	const brokerRequest = googleSearchWithDependencies("delayed disable", { timeoutMs: 2_000 }, {
-		ensureChrome: async () => ({ running: true, ready: true }),
-		brokerProcessFactory: factory,
-		brokerProfileDir: factory.profileDir(),
-	});
+	const brokerRequest = googleSearchWithDependencies(
+		"delayed disable",
+		{ timeoutMs: 2_000 },
+		{
+			ensureChrome: async () => ({ running: true, ready: true }),
+			brokerProcessFactory: factory,
+			brokerProfileDir: factory.profileDir(),
+		},
+	);
 	const brokerRequestOutcome = brokerRequest.then(
 		() => null,
-		error => error,
+		(error) => error,
 	);
 	try {
 		const child = await factory.waitForChild();
 		process.env.PI_WEBAIO_CDP_BROKER = "0";
 		let legacyCalls = 0;
 		await assert.rejects(
-			googleSearchWithDependencies("legacy after disable", { timeoutMs: 80 }, {
-				legacySearch: async (query) => {
-					legacyCalls++;
-					return output(query);
+			googleSearchWithDependencies(
+				"legacy after disable",
+				{ timeoutMs: 80 },
+				{
+					legacySearch: async (query) => {
+						legacyCalls++;
+						return output(query);
+					},
 				},
-			}),
-			(error) => error.code === "broker_process_pending" || error.code === "cleanup_timeout" || error.code === "connect_timeout" || error.code === "request_fenced",
+			),
+			(error) =>
+				error.code === "broker_process_pending" ||
+				error.code === "cleanup_timeout" ||
+				error.code === "connect_timeout" ||
+				error.code === "request_fenced",
 		);
 		assert.equal(legacyCalls, 0);
 		const brokerError = await brokerRequestOutcome;
@@ -1051,9 +1196,15 @@ test("runtime broker disable quarantines delayed startup without replacement or 
 		assert.equal(child.killCalls, 1);
 		child.exitNow();
 		assert.equal(
-			(await googleSearchWithDependencies("legacy after exit", {}, {
-				legacySearch: async (query) => output(query),
-			})).query,
+			(
+				await googleSearchWithDependencies(
+					"legacy after exit",
+					{},
+					{
+						legacySearch: async (query) => output(query),
+					},
+				)
+			).query,
 			"legacy after exit",
 		);
 	} finally {
@@ -1065,26 +1216,40 @@ test("runtime broker disable quarantines delayed startup without replacement or 
 
 test("runtime disable never runs legacy while an active lease and late child remain", async () => {
 	process.env.PI_WEBAIO_CDP_BROKER = "1";
-	const factory = makeBrokerProcessFactory({ searchDelayMs: 150, exitAfterKillMs: 40 });
+	const factory = makeBrokerProcessFactory({
+		searchDelayMs: 150,
+		exitAfterKillMs: 40,
+	});
 	let legacyCalls = 0;
 	try {
-		const brokerRequest = googleSearchWithDependencies("active disable", { timeoutMs: 1_000 }, {
-			ensureChrome: async () => ({ running: true, ready: true }),
-			brokerProcessFactory: factory,
-			brokerProfileDir: factory.profileDir(),
-		});
+		const brokerRequest = googleSearchWithDependencies(
+			"active disable",
+			{ timeoutMs: 1_000 },
+			{
+				ensureChrome: async () => ({ running: true, ready: true }),
+				brokerProcessFactory: factory,
+				brokerProfileDir: factory.profileDir(),
+			},
+		);
 		const child = await factory.waitForChild();
 		while (factory.searchCalls() === 0)
 			await new Promise((resolve) => setTimeout(resolve, 1));
 		process.env.PI_WEBAIO_CDP_BROKER = "0";
 		await assert.rejects(
-			googleSearchWithDependencies("legacy during active", { timeoutMs: 50 }, {
-				legacySearch: async (query) => {
-					legacyCalls++;
-					return output(query);
+			googleSearchWithDependencies(
+				"legacy during active",
+				{ timeoutMs: 50 },
+				{
+					legacySearch: async (query) => {
+						legacyCalls++;
+						return output(query);
+					},
 				},
-			}),
-			(error) => error.code === "connect_timeout" || error.code === "broker_process_pending" || error.code === "request_fenced",
+			),
+			(error) =>
+				error.code === "connect_timeout" ||
+				error.code === "broker_process_pending" ||
+				error.code === "request_fenced",
 		);
 		assert.equal(legacyCalls, 0);
 		assert.equal((await brokerRequest).query, "active disable");
@@ -1102,20 +1267,43 @@ test("client-only teardown finalizes the fence before replacement release", asyn
 	process.env.PI_WEBAIO_CDP_BROKER = "1";
 	let oldCloseCalls = 0;
 	let replacementCloseCalls = 0;
-	const oldClient = { search: async (query) => output(query), close: () => { oldCloseCalls++; } };
-	const replacement = { search: async (query) => output(query), close: () => { replacementCloseCalls++; } };
+	const oldClient = {
+		search: async (query) => output(query),
+		close: () => {
+			oldCloseCalls++;
+		},
+	};
+	const replacement = {
+		search: async (query) => output(query),
+		close: () => {
+			replacementCloseCalls++;
+		},
+	};
 	let connectCalls = 0;
 	try {
-		await googleSearchWithDependencies("client-only teardown", { timeoutMs: 2_000 }, {
-			ensureChrome: async () => ({ running: true, ready: true }),
-			connectBroker: async () => connectCalls++ === 0 ? oldClient : replacement,
-		});
+		await googleSearchWithDependencies(
+			"client-only teardown",
+			{ timeoutMs: 2_000 },
+			{
+				ensureChrome: async () => ({ running: true, ready: true }),
+				connectBroker: async () => (connectCalls++ === 0 ? oldClient : replacement),
+			},
+		);
 		await closeGoogleBroker(oldClient);
 		assert.equal(oldCloseCalls, 1);
-		assert.equal((await googleSearchWithDependencies("replacement remains", { timeoutMs: 2_000 }, {
-			ensureChrome: async () => ({ running: true, ready: true }),
-			connectBroker: async () => replacement,
-		})).query, "replacement remains");
+		assert.equal(
+			(
+				await googleSearchWithDependencies(
+					"replacement remains",
+					{ timeoutMs: 2_000 },
+					{
+						ensureChrome: async () => ({ running: true, ready: true }),
+						connectBroker: async () => replacement,
+					},
+				)
+			).query,
+			"replacement remains",
+		);
 		assert.equal(replacementCloseCalls, 0);
 	} finally {
 		await closeGoogleBroker();
@@ -1127,8 +1315,12 @@ test("superseded injected generations retire old and new clients exactly once", 
 	process.env.PI_WEBAIO_CDP_BROKER = "1";
 	let releaseOld;
 	let oldStarted;
-	const oldGate = new Promise((resolve) => { releaseOld = resolve; });
-	const oldSearchStarted = new Promise((resolve) => { oldStarted = resolve; });
+	const oldGate = new Promise((resolve) => {
+		releaseOld = resolve;
+	});
+	const oldSearchStarted = new Promise((resolve) => {
+		oldStarted = resolve;
+	});
 	let oldCloseCalls = 0;
 	let newCloseCalls = 0;
 	const oldClient = {
@@ -1137,23 +1329,40 @@ test("superseded injected generations retire old and new clients exactly once", 
 			await oldGate;
 			return output(query);
 		},
-		close: () => { oldCloseCalls++; },
+		close: () => {
+			oldCloseCalls++;
+		},
 	};
 	const newClient = {
 		search: async (query) => output(query),
-		close: () => { newCloseCalls++; },
+		close: () => {
+			newCloseCalls++;
+		},
 	};
 	let connectCalls = 0;
 	try {
-		const oldRequest = googleSearchWithDependencies("old generation", { timeoutMs: 2_000 }, {
-			ensureChrome: async () => ({ running: true, ready: true }),
-			connectBroker: async () => connectCalls++ === 0 ? oldClient : newClient,
-		});
+		const oldRequest = googleSearchWithDependencies(
+			"old generation",
+			{ timeoutMs: 2_000 },
+			{
+				ensureChrome: async () => ({ running: true, ready: true }),
+				connectBroker: async () => (connectCalls++ === 0 ? oldClient : newClient),
+			},
+		);
 		await oldSearchStarted;
-		assert.equal((await googleSearchWithDependencies("new generation", { timeoutMs: 2_000 }, {
-			ensureChrome: async () => ({ running: true, ready: true }),
-			connectBroker: async () => newClient,
-		})).query, "new generation");
+		assert.equal(
+			(
+				await googleSearchWithDependencies(
+					"new generation",
+					{ timeoutMs: 2_000 },
+					{
+						ensureChrome: async () => ({ running: true, ready: true }),
+						connectBroker: async () => newClient,
+					},
+				)
+			).query,
+			"new generation",
+		);
 		assert.equal(oldCloseCalls, 0);
 		releaseOld();
 		assert.equal((await oldRequest).query, "old generation");
@@ -1233,14 +1442,26 @@ test("concurrent broker users are not closed by one failed fallback", async () =
 test("close coalescing keeps expected-client and unqualified races distinct", async () => {
 	process.env.PI_WEBAIO_CDP_BROKER = "1";
 	let releaseClose;
-	const closeGate = new Promise((resolve) => { releaseClose = resolve; });
+	const closeGate = new Promise((resolve) => {
+		releaseClose = resolve;
+	});
 	let closeCalls = 0;
-	const client = { search: async (query) => output(query), close: () => { closeCalls++; return closeGate; } };
+	const client = {
+		search: async (query) => output(query),
+		close: () => {
+			closeCalls++;
+			return closeGate;
+		},
+	};
 	try {
-		await googleSearchWithDependencies("close-race", { timeoutMs: 2_000 }, {
-			ensureChrome: async () => ({ running: true, ready: true }),
-			connectBroker: async () => client,
-		});
+		await googleSearchWithDependencies(
+			"close-race",
+			{ timeoutMs: 2_000 },
+			{
+				ensureChrome: async () => ({ running: true, ready: true }),
+				connectBroker: async () => client,
+			},
+		);
 		const expected = closeGoogleBroker(client);
 		const unqualified = closeGoogleBroker();
 		assert.notEqual(expected, unqualified);
@@ -1257,32 +1478,47 @@ test("a process-event fence defers shared-client teardown until the last user re
 	process.env.PI_WEBAIO_CDP_BROKER = "1";
 	let searchStarts = 0;
 	let releaseSecond;
-	const secondMayFinish = new Promise((resolve) => { releaseSecond = resolve; });
+	const secondMayFinish = new Promise((resolve) => {
+		releaseSecond = resolve;
+	});
 	let closeCalls = 0;
 	const sharedClient = {
 		search: async (query) => {
 			searchStarts++;
 			if (query === "first") {
-				while (searchStarts < 2) await new Promise((resolve) => setTimeout(resolve, 1));
+				while (searchStarts < 2)
+					await new Promise((resolve) => setTimeout(resolve, 1));
 				await notifyGoogleBrokerProcessEventForTests(sharedClient);
-				throw Object.assign(new Error("process exited"), { code: "connection_closed" });
+				throw Object.assign(new Error("process exited"), {
+					code: "connection_closed",
+				});
 			}
 			await secondMayFinish;
 			return output(query);
 		},
-		close: () => { closeCalls++; },
+		close: () => {
+			closeCalls++;
+		},
 	};
 	try {
-		const first = googleSearchWithDependencies("first", { timeoutMs: 2000 }, {
-			ensureChrome: async () => ({ running: true, ready: true }),
-			connectBroker: async () => sharedClient,
-			legacySearch: async (query) => output(`legacy-${query}`),
-		});
-		const second = googleSearchWithDependencies("second", { timeoutMs: 2000 }, {
-			ensureChrome: async () => ({ running: true, ready: true }),
-			connectBroker: async () => sharedClient,
-			legacySearch: async (query) => output(`legacy-${query}`),
-		});
+		const first = googleSearchWithDependencies(
+			"first",
+			{ timeoutMs: 2000 },
+			{
+				ensureChrome: async () => ({ running: true, ready: true }),
+				connectBroker: async () => sharedClient,
+				legacySearch: async (query) => output(`legacy-${query}`),
+			},
+		);
+		const second = googleSearchWithDependencies(
+			"second",
+			{ timeoutMs: 2000 },
+			{
+				ensureChrome: async () => ({ running: true, ready: true }),
+				connectBroker: async () => sharedClient,
+				legacySearch: async (query) => output(`legacy-${query}`),
+			},
+		);
 		await assert.rejects(first, (error) => error.code === "connection_closed");
 		assert.equal(closeCalls, 0);
 		releaseSecond();
@@ -1300,16 +1536,24 @@ test("concurrent profiles do not share broker process or client state", async ()
 	const secondFactory = makeBrokerProcessFactory({ registerDelayMs: 10 });
 	try {
 		const [first, second] = await Promise.all([
-			googleSearchWithDependencies("profile-a", { timeoutMs: 2_000 }, {
-				ensureChrome: async () => ({ running: true, ready: true }),
-				brokerProcessFactory: firstFactory,
-				brokerProfileDir: firstFactory.profileDir(),
-			}),
-			googleSearchWithDependencies("profile-b", { timeoutMs: 2_000 }, {
-				ensureChrome: async () => ({ running: true, ready: true }),
-				brokerProcessFactory: secondFactory,
-				brokerProfileDir: secondFactory.profileDir(),
-			}),
+			googleSearchWithDependencies(
+				"profile-a",
+				{ timeoutMs: 2_000 },
+				{
+					ensureChrome: async () => ({ running: true, ready: true }),
+					brokerProcessFactory: firstFactory,
+					brokerProfileDir: firstFactory.profileDir(),
+				},
+			),
+			googleSearchWithDependencies(
+				"profile-b",
+				{ timeoutMs: 2_000 },
+				{
+					ensureChrome: async () => ({ running: true, ready: true }),
+					brokerProcessFactory: secondFactory,
+					brokerProfileDir: secondFactory.profileDir(),
+				},
+			),
 		]);
 		assert.equal(first.query, "profile-a");
 		assert.equal(second.query, "profile-b");
@@ -1411,11 +1655,15 @@ test("spawn error without a child is terminal without permanently fencing replac
 	process.env.PI_WEBAIO_CDP_BROKER = "1";
 	const factory = makeBrokerProcessFactory({ failFirstSpawn: true });
 	try {
-		const result = await googleSearchWithDependencies("after-spawn-error", { timeoutMs: 2_000 }, {
-			ensureChrome: async () => ({ running: true, ready: true }),
-			brokerProcessFactory: factory,
-			brokerProfileDir: factory.profileDir(),
-		});
+		const result = await googleSearchWithDependencies(
+			"after-spawn-error",
+			{ timeoutMs: 2_000 },
+			{
+				ensureChrome: async () => ({ running: true, ready: true }),
+				brokerProcessFactory: factory,
+				brokerProfileDir: factory.profileDir(),
+			},
+		);
 		assert.equal(result.query, "after-spawn-error");
 		assert.ok(factory.calls() >= 2);
 	} finally {
@@ -1460,21 +1708,24 @@ test("actual ensure/child cleanup fences replacement until child exit", async ()
 					brokerProfileDir: factory.profileDir(),
 				},
 			),
-			(error) => error.code === "connect_timeout" || error.code === "broker_process_pending",
+			(error) =>
+				error.code === "connect_timeout" || error.code === "broker_process_pending",
 		);
 		assert.equal(factory.calls(), 1);
 
 		factory.children[0].exitNow();
 		assert.equal(
-			(await googleSearchWithDependencies(
-				"replacement after exit",
-				{ timeoutMs: 2_000 },
-				{
-					ensureChrome: async () => ({ running: true, ready: true }),
-					brokerProcessFactory: factory,
-					brokerProfileDir: factory.profileDir(),
-				},
-			)).query,
+			(
+				await googleSearchWithDependencies(
+					"replacement after exit",
+					{ timeoutMs: 2_000 },
+					{
+						ensureChrome: async () => ({ running: true, ready: true }),
+						brokerProcessFactory: factory,
+						brokerProfileDir: factory.profileDir(),
+					},
+				)
+			).query,
 			"replacement after exit",
 		);
 		assert.equal(factory.calls(), 2);
@@ -1486,10 +1737,7 @@ test("actual ensure/child cleanup fences replacement until child exit", async ()
 });
 
 test("broker infrastructure classification is narrow", () => {
-	assert.equal(
-		isBrokerInfrastructureError({ code: "connection_closed" }),
-		true,
-	);
+	assert.equal(isBrokerInfrastructureError({ code: "connection_closed" }), true);
 	assert.equal(
 		isBrokerInfrastructureError({ code: "navigation_failed" }),
 		false,
@@ -1518,29 +1766,50 @@ test("a throwing client close quarantines the generation before replacement", as
 		search: async (query) => output(query),
 		close: () => {
 			closeAttempts++;
-			if (closeAttempts === 1) throw Object.assign(new Error("close failed"), { code: "close_failed" });
+			if (closeAttempts === 1)
+				throw Object.assign(new Error("close failed"), { code: "close_failed" });
 		},
 	};
 	const replacement = { search: async (query) => output(query), close() {} };
 	try {
-		await googleSearchWithDependencies("close throw", { timeoutMs: 2_000 }, {
-			ensureChrome: async () => ({ running: true, ready: true }),
-			connectBroker: async () => connectCalls++ === 0 ? oldClient : replacement,
-		});
-		await assert.rejects(closeGoogleBroker(oldClient), (error) => error.code === "close_failed");
-		await assert.rejects(
-			googleSearchWithDependencies("blocked replacement", { timeoutMs: 200 }, {
+		await googleSearchWithDependencies(
+			"close throw",
+			{ timeoutMs: 2_000 },
+			{
 				ensureChrome: async () => ({ running: true, ready: true }),
-				connectBroker: async () => replacement,
-			}),
+				connectBroker: async () => (connectCalls++ === 0 ? oldClient : replacement),
+			},
+		);
+		await assert.rejects(
+			closeGoogleBroker(oldClient),
+			(error) => error.code === "close_failed",
+		);
+		await assert.rejects(
+			googleSearchWithDependencies(
+				"blocked replacement",
+				{ timeoutMs: 200 },
+				{
+					ensureChrome: async () => ({ running: true, ready: true }),
+					connectBroker: async () => replacement,
+				},
+			),
 			(error) => error.code === "broker_process_pending",
 		);
 		assert.equal(connectCalls, 1);
 		await closeGoogleBroker(oldClient);
-		assert.equal((await googleSearchWithDependencies("replacement after retry", { timeoutMs: 2_000 }, {
-			ensureChrome: async () => ({ running: true, ready: true }),
-			connectBroker: async () => replacement,
-		})).query, "replacement after retry");
+		assert.equal(
+			(
+				await googleSearchWithDependencies(
+					"replacement after retry",
+					{ timeoutMs: 2_000 },
+					{
+						ensureChrome: async () => ({ running: true, ready: true }),
+						connectBroker: async () => replacement,
+					},
+				)
+			).query,
+			"replacement after retry",
+		);
 	} finally {
 		await closeGoogleBroker().catch(() => {});
 		restoreFlag();
@@ -1551,16 +1820,45 @@ test("scoped close coalescing is identity and generation keyed", async () => {
 	process.env.PI_WEBAIO_CDP_BROKER = "1";
 	let oldCloseCalls = 0;
 	let newCloseCalls = 0;
-	const oldClient = { search: async (query) => output(query), close: () => { oldCloseCalls++; } };
-	const newClient = { search: async (query) => output(query), close: () => { newCloseCalls++; } };
+	const oldClient = {
+		search: async (query) => output(query),
+		close: () => {
+			oldCloseCalls++;
+		},
+	};
+	const newClient = {
+		search: async (query) => output(query),
+		close: () => {
+			newCloseCalls++;
+		},
+	};
 	const oldProfile = `coalesce-old-${randomUUID()}`;
 	const newProfile = `coalesce-new-${randomUUID()}`;
 	try {
 		await Promise.all([
-			googleSearchWithDependencies("old", { timeoutMs: 2_000 }, { ensureChrome: async () => ({ running: true, ready: true }), brokerProfileDir: oldProfile, connectBroker: async () => oldClient }),
-			googleSearchWithDependencies("new", { timeoutMs: 2_000 }, { ensureChrome: async () => ({ running: true, ready: true }), brokerProfileDir: newProfile, connectBroker: async () => newClient }),
+			googleSearchWithDependencies(
+				"old",
+				{ timeoutMs: 2_000 },
+				{
+					ensureChrome: async () => ({ running: true, ready: true }),
+					brokerProfileDir: oldProfile,
+					connectBroker: async () => oldClient,
+				},
+			),
+			googleSearchWithDependencies(
+				"new",
+				{ timeoutMs: 2_000 },
+				{
+					ensureChrome: async () => ({ running: true, ready: true }),
+					brokerProfileDir: newProfile,
+					connectBroker: async () => newClient,
+				},
+			),
 		]);
-		await Promise.all([closeGoogleBroker(oldClient), closeGoogleBroker(newClient)]);
+		await Promise.all([
+			closeGoogleBroker(oldClient),
+			closeGoogleBroker(newClient),
+		]);
 		assert.equal(oldCloseCalls, 1);
 		assert.equal(newCloseCalls, 1);
 	} finally {
@@ -1578,27 +1876,42 @@ test("unqualified teardown attempts every profile after one close failure", asyn
 		close: () => {
 			failedCloseCalls++;
 			if (failedCloseCalls === 1)
-				throw Object.assign(new Error("profile close failed"), { code: "close_failed" });
+				throw Object.assign(new Error("profile close failed"), {
+					code: "close_failed",
+				});
 		},
 	};
 	const healthyClient = {
 		search: async (query) => output(query),
-		close: () => { healthyCloseCalls++; },
+		close: () => {
+			healthyCloseCalls++;
+		},
 	};
 	try {
 		await Promise.all([
-			googleSearchWithDependencies("failed profile", { timeoutMs: 2_000 }, {
-				ensureChrome: async () => ({ running: true, ready: true }),
-				brokerProfileDir: `teardown-failed-${randomUUID()}`,
-				connectBroker: async () => failedClient,
-			}),
-			googleSearchWithDependencies("healthy profile", { timeoutMs: 2_000 }, {
-				ensureChrome: async () => ({ running: true, ready: true }),
-				brokerProfileDir: `teardown-healthy-${randomUUID()}`,
-				connectBroker: async () => healthyClient,
-			}),
+			googleSearchWithDependencies(
+				"failed profile",
+				{ timeoutMs: 2_000 },
+				{
+					ensureChrome: async () => ({ running: true, ready: true }),
+					brokerProfileDir: `teardown-failed-${randomUUID()}`,
+					connectBroker: async () => failedClient,
+				},
+			),
+			googleSearchWithDependencies(
+				"healthy profile",
+				{ timeoutMs: 2_000 },
+				{
+					ensureChrome: async () => ({ running: true, ready: true }),
+					brokerProfileDir: `teardown-healthy-${randomUUID()}`,
+					connectBroker: async () => healthyClient,
+				},
+			),
 		]);
-		await assert.rejects(closeGoogleBroker(), (error) => error.code === "close_failed");
+		await assert.rejects(
+			closeGoogleBroker(),
+			(error) => error.code === "close_failed",
+		);
 		assert.equal(failedCloseCalls, 1);
 		assert.equal(healthyCloseCalls, 1);
 	} finally {
@@ -1610,7 +1923,9 @@ test("unqualified teardown attempts every profile after one close failure", asyn
 test("lease waiter timeout removes its resolver", async () => {
 	process.env.PI_WEBAIO_CDP_BROKER = "1";
 	let release;
-	const gate = new Promise((resolve) => { release = resolve; });
+	const gate = new Promise((resolve) => {
+		release = resolve;
+	});
 	const client = {
 		search: async (query) => {
 			if (query === "held") await gate;
@@ -1619,11 +1934,19 @@ test("lease waiter timeout removes its resolver", async () => {
 		close() {},
 	};
 	try {
-		const held = googleSearchWithDependencies("held", { timeoutMs: 2_000 }, { ensureChrome: async () => ({ running: true, ready: true }), connectBroker: async () => client });
+		const held = googleSearchWithDependencies(
+			"held",
+			{ timeoutMs: 2_000 },
+			{
+				ensureChrome: async () => ({ running: true, ready: true }),
+				connectBroker: async () => client,
+			},
+		);
 		await new Promise((resolve) => setTimeout(resolve, 10));
 		await assert.rejects(
 			closeGoogleBroker(undefined, { deadlineAt: Date.now() + 30 }),
-			(error) => error.code === "lease_wait_timeout" || error.code === "connect_timeout",
+			(error) =>
+				error.code === "lease_wait_timeout" || error.code === "connect_timeout",
 		);
 		release();
 		await held;
@@ -1643,41 +1966,57 @@ test("successful custom cleanup finalizes a late connector owner before the next
 	let connectStarted;
 	let cleanupCalls = 0;
 	let closeCalls = 0;
-	const connectStartedPromise = new Promise((resolve) => { connectStarted = resolve; });
-	const pendingConnect = new Promise((resolve) => { resolveConnect = resolve; });
+	const connectStartedPromise = new Promise((resolve) => {
+		connectStarted = resolve;
+	});
+	const pendingConnect = new Promise((resolve) => {
+		resolveConnect = resolve;
+	});
 	const lateClient = {
 		search: async () => output("unused"),
-		close: () => { closeCalls++; },
+		close: () => {
+			closeCalls++;
+		},
 	};
 	const replacement = {
 		search: async (query) => output(query),
 		close() {},
 	};
 	try {
-		const request = googleSearchWithDependencies("late custom", { timeoutMs: 2_000, signal: controller.signal }, {
-			ensureChrome: async () => ({ running: true, ready: true }),
-			brokerProfileDir: profile,
-			connectBroker: async () => {
-				connectStarted();
-				return pendingConnect;
+		const request = googleSearchWithDependencies(
+			"late custom",
+			{ timeoutMs: 2_000, signal: controller.signal },
+			{
+				ensureChrome: async () => ({ running: true, ready: true }),
+				brokerProfileDir: profile,
+				connectBroker: async () => {
+					connectStarted();
+					return pendingConnect;
+				},
+				cleanupBroker: async (client) => {
+					cleanupCalls++;
+					await new Promise((resolve) => setTimeout(resolve, 20));
+					client?.close();
+				},
 			},
-			cleanupBroker: async (client) => {
-				cleanupCalls++;
-				await new Promise((resolve) => setTimeout(resolve, 20));
-				client?.close();
-			},
-		});
+		);
 		await connectStartedPromise;
 		controller.abort();
 		await assert.rejects(request, (error) => error.code === "request_fenced");
 		resolveConnect(lateClient);
-		while (cleanupCalls === 0) await new Promise((resolve) => setTimeout(resolve, 1));
-		while (closeCalls === 0) await new Promise((resolve) => setTimeout(resolve, 1));
-		const result = await googleSearchWithDependencies("after late custom", { timeoutMs: 2_000 }, {
-			ensureChrome: async () => ({ running: true, ready: true }),
-			brokerProfileDir: profile,
-			connectBroker: async () => replacement,
-		});
+		while (cleanupCalls === 0)
+			await new Promise((resolve) => setTimeout(resolve, 1));
+		while (closeCalls === 0)
+			await new Promise((resolve) => setTimeout(resolve, 1));
+		const result = await googleSearchWithDependencies(
+			"after late custom",
+			{ timeoutMs: 2_000 },
+			{
+				ensureChrome: async () => ({ running: true, ready: true }),
+				brokerProfileDir: profile,
+				connectBroker: async () => replacement,
+			},
+		);
 		assert.equal(result.query, "after late custom");
 	} finally {
 		await closeGoogleBroker().catch(() => {});
@@ -1695,38 +2034,67 @@ test("unqualified teardown fences a pending connector before waiting for reserva
 	let resolveConnect;
 	let lateCloseCalls = 0;
 	let replacementConnects = 0;
-	const started = new Promise((resolve) => { connectStarted = resolve; });
-	const pending = new Promise((resolve) => { resolveConnect = resolve; });
+	const started = new Promise((resolve) => {
+		connectStarted = resolve;
+	});
+	const pending = new Promise((resolve) => {
+		resolveConnect = resolve;
+	});
 	const lateClient = {
 		search: async () => output("must-not-publish"),
-		close: () => { lateCloseCalls++; },
+		close: () => {
+			lateCloseCalls++;
+		},
 	};
 	const replacement = { search: async (query) => output(query), close() {} };
 	try {
-		const pendingRequest = googleSearchWithDependencies("pending global connector", { timeoutMs: 2_000 }, {
-			ensureChrome: async () => ({ running: true, ready: true }),
-			brokerProfileDir: profileA,
-			connectBroker: async () => {
-				connectStarted();
-				return pending;
+		const pendingRequest = googleSearchWithDependencies(
+			"pending global connector",
+			{ timeoutMs: 2_000 },
+			{
+				ensureChrome: async () => ({ running: true, ready: true }),
+				brokerProfileDir: profileA,
+				connectBroker: async () => {
+					connectStarted();
+					return pending;
+				},
 			},
-		});
+		);
 		await started;
-		const teardown = closeGoogleBroker(undefined, { deadlineAt: Date.now() + 35 });
-		await assert.rejects(teardown, (error) => error.code === "cleanup_timeout" || error.code === "connect_timeout");
+		const teardown = closeGoogleBroker(undefined, {
+			deadlineAt: Date.now() + 35,
+		});
+		await assert.rejects(
+			teardown,
+			(error) =>
+				error.code === "cleanup_timeout" || error.code === "connect_timeout",
+		);
 		resolveConnect(lateClient);
-		await assert.rejects(pendingRequest, (error) => error.code === "broker_process_pending");
-		while (lateCloseCalls === 0) await new Promise((resolve) => setTimeout(resolve, 1));
+		await assert.rejects(
+			pendingRequest,
+			(error) => error.code === "broker_process_pending",
+		);
+		while (lateCloseCalls === 0)
+			await new Promise((resolve) => setTimeout(resolve, 1));
 		await closeGoogleBroker(undefined, { deadlineAt: Date.now() + 1_000 });
 		assert.equal(lateCloseCalls, 1);
-		assert.equal((await googleSearchWithDependencies("next profile after global cleanup", { timeoutMs: 2_000 }, {
-			ensureChrome: async () => ({ running: true, ready: true }),
-			brokerProfileDir: profileB,
-			connectBroker: async () => {
-				replacementConnects++;
-				return replacement;
-			},
-		})).query, "next profile after global cleanup");
+		assert.equal(
+			(
+				await googleSearchWithDependencies(
+					"next profile after global cleanup",
+					{ timeoutMs: 2_000 },
+					{
+						ensureChrome: async () => ({ running: true, ready: true }),
+						brokerProfileDir: profileB,
+						connectBroker: async () => {
+							replacementConnects++;
+							return replacement;
+						},
+					},
+				)
+			).query,
+			"next profile after global cleanup",
+		);
 		assert.equal(replacementConnects, 1);
 	} finally {
 		resolveConnect?.(lateClient);
@@ -1738,7 +2106,9 @@ test("unqualified teardown fences a pending connector before waiting for reserva
 test("unqualified teardown fences every profile until unresolved close settles", async () => {
 	process.env.PI_WEBAIO_CDP_BROKER = "1";
 	let releaseClose;
-	const closeGate = new Promise((resolve) => { releaseClose = resolve; });
+	const closeGate = new Promise((resolve) => {
+		releaseClose = resolve;
+	});
 	let closeCalls = 0;
 	let replacementConnects = 0;
 	const profileA = `global-teardown-a-${randomUUID()}`;
@@ -1752,36 +2122,55 @@ test("unqualified teardown fences every profile until unresolved close settles",
 	};
 	const replacement = { search: async (query) => output(query), close() {} };
 	try {
-		await googleSearchWithDependencies("global teardown owner", { timeoutMs: 2_000 }, {
-			ensureChrome: async () => ({ running: true, ready: true }),
-			brokerProfileDir: profileA,
-			connectBroker: async () => oldClient,
+		await googleSearchWithDependencies(
+			"global teardown owner",
+			{ timeoutMs: 2_000 },
+			{
+				ensureChrome: async () => ({ running: true, ready: true }),
+				brokerProfileDir: profileA,
+				connectBroker: async () => oldClient,
+			},
+		);
+		const teardown = closeGoogleBroker(undefined, {
+			deadlineAt: Date.now() + 35,
 		});
-		const teardown = closeGoogleBroker(undefined, { deadlineAt: Date.now() + 35 });
 		await assert.rejects(teardown, (error) => error.code === "cleanup_timeout");
 		await assert.rejects(
-			googleSearchWithDependencies("must wait for global teardown", { timeoutMs: 100 }, {
-				ensureChrome: async () => ({ running: true, ready: true }),
-				brokerProfileDir: profileB,
-				connectBroker: async () => {
-					replacementConnects++;
-					return replacement;
+			googleSearchWithDependencies(
+				"must wait for global teardown",
+				{ timeoutMs: 100 },
+				{
+					ensureChrome: async () => ({ running: true, ready: true }),
+					brokerProfileDir: profileB,
+					connectBroker: async () => {
+						replacementConnects++;
+						return replacement;
+					},
 				},
-			}),
+			),
 			(error) => error.code === "connect_timeout",
 		);
 		assert.equal(replacementConnects, 0);
 		assert.equal(closeCalls, 1);
 		releaseClose();
 		await new Promise((resolve) => setTimeout(resolve, 10));
-		assert.equal((await googleSearchWithDependencies("after global teardown", { timeoutMs: 2_000 }, {
-			ensureChrome: async () => ({ running: true, ready: true }),
-			brokerProfileDir: profileB,
-			connectBroker: async () => {
-				replacementConnects++;
-				return replacement;
-			},
-		})).query, "after global teardown");
+		assert.equal(
+			(
+				await googleSearchWithDependencies(
+					"after global teardown",
+					{ timeoutMs: 2_000 },
+					{
+						ensureChrome: async () => ({ running: true, ready: true }),
+						brokerProfileDir: profileB,
+						connectBroker: async () => {
+							replacementConnects++;
+							return replacement;
+						},
+					},
+				)
+			).query,
+			"after global teardown",
+		);
 		assert.equal(replacementConnects, 1);
 	} finally {
 		releaseClose?.();
@@ -1798,31 +2187,45 @@ test("timed-out custom late cleanup is reused and fences replacement", async () 
 	let connectStarted;
 	let cleanupStarted;
 	let releaseCleanup;
-	const connectStartedPromise = new Promise((resolve) => { connectStarted = resolve; });
-	const cleanupStartedPromise = new Promise((resolve) => { cleanupStarted = resolve; });
-	const cleanupGate = new Promise((resolve) => { releaseCleanup = resolve; });
-	const pendingConnect = new Promise((resolve) => { resolveConnect = resolve; });
+	const connectStartedPromise = new Promise((resolve) => {
+		connectStarted = resolve;
+	});
+	const cleanupStartedPromise = new Promise((resolve) => {
+		cleanupStarted = resolve;
+	});
+	const cleanupGate = new Promise((resolve) => {
+		releaseCleanup = resolve;
+	});
+	const pendingConnect = new Promise((resolve) => {
+		resolveConnect = resolve;
+	});
 	let closeCalls = 0;
 	let replacementConnects = 0;
 	const lateClient = {
 		search: async () => output("unused"),
-		close: () => { closeCalls++; },
+		close: () => {
+			closeCalls++;
+		},
 	};
 	const replacement = { search: async (query) => output(query), close() {} };
 	try {
-		const request = googleSearchWithDependencies("custom timeout", { timeoutMs: 2_000, signal: controller.signal }, {
-			ensureChrome: async () => ({ running: true, ready: true }),
-			brokerProfileDir: profile,
-			connectBroker: async () => {
-				connectStarted();
-				return pendingConnect;
+		const request = googleSearchWithDependencies(
+			"custom timeout",
+			{ timeoutMs: 2_000, signal: controller.signal },
+			{
+				ensureChrome: async () => ({ running: true, ready: true }),
+				brokerProfileDir: profile,
+				connectBroker: async () => {
+					connectStarted();
+					return pendingConnect;
+				},
+				cleanupBroker: async (client) => {
+					cleanupStarted();
+					await cleanupGate;
+					client?.close();
+				},
 			},
-			cleanupBroker: async (client) => {
-				cleanupStarted();
-				await cleanupGate;
-				client?.close();
-			},
-		});
+		);
 		await connectStartedPromise;
 		controller.abort();
 		await assert.rejects(request, (error) => error.code === "request_fenced");
@@ -1830,28 +2233,42 @@ test("timed-out custom late cleanup is reused and fences replacement", async () 
 		await cleanupStartedPromise;
 		await new Promise((resolve) => setTimeout(resolve, 270));
 		await assert.rejects(
-			googleSearchWithDependencies("replacement during custom timeout", { timeoutMs: 120 }, {
-				ensureChrome: async () => ({ running: true, ready: true }),
-				brokerProfileDir: profile,
-				connectBroker: async () => {
-					replacementConnects++;
-					return replacement;
+			googleSearchWithDependencies(
+				"replacement during custom timeout",
+				{ timeoutMs: 120 },
+				{
+					ensureChrome: async () => ({ running: true, ready: true }),
+					brokerProfileDir: profile,
+					connectBroker: async () => {
+						replacementConnects++;
+						return replacement;
+					},
 				},
-			}),
+			),
 			(error) => error.code === "broker_process_pending",
 		);
 		assert.equal(replacementConnects, 0);
 		assert.equal(closeCalls, 0);
 		releaseCleanup();
-		while (closeCalls === 0) await new Promise((resolve) => setTimeout(resolve, 1));
-		assert.equal((await googleSearchWithDependencies("replacement after custom timeout", { timeoutMs: 2_000 }, {
-			ensureChrome: async () => ({ running: true, ready: true }),
-			brokerProfileDir: profile,
-			connectBroker: async () => {
-				replacementConnects++;
-				return replacement;
-			},
-		})).query, "replacement after custom timeout");
+		while (closeCalls === 0)
+			await new Promise((resolve) => setTimeout(resolve, 1));
+		assert.equal(
+			(
+				await googleSearchWithDependencies(
+					"replacement after custom timeout",
+					{ timeoutMs: 2_000 },
+					{
+						ensureChrome: async () => ({ running: true, ready: true }),
+						brokerProfileDir: profile,
+						connectBroker: async () => {
+							replacementConnects++;
+							return replacement;
+						},
+					},
+				)
+			).query,
+			"replacement after custom timeout",
+		);
 		assert.equal(replacementConnects, 1);
 		assert.equal(closeCalls, 1);
 	} finally {
@@ -1867,8 +2284,12 @@ test("legacy fallback is globally fenced by an active lease in another profile",
 	const failingProfile = `failing-profile-${randomUUID()}`;
 	let releaseActive;
 	let activeStarted;
-	const activeGate = new Promise((resolve) => { releaseActive = resolve; });
-	const activeSearchStarted = new Promise((resolve) => { activeStarted = resolve; });
+	const activeGate = new Promise((resolve) => {
+		releaseActive = resolve;
+	});
+	const activeSearchStarted = new Promise((resolve) => {
+		activeStarted = resolve;
+	});
 	let legacyCalls = 0;
 	const activeClient = {
 		search: async (query) => {
@@ -1880,27 +2301,37 @@ test("legacy fallback is globally fenced by an active lease in another profile",
 	};
 	const failingClient = {
 		search: async () => {
-			throw Object.assign(new Error("profile broker failed"), { code: "connection_closed" });
+			throw Object.assign(new Error("profile broker failed"), {
+				code: "connection_closed",
+			});
 		},
 		close() {},
 	};
 	try {
-		const active = googleSearchWithDependencies("active profile lease", { timeoutMs: 2_000 }, {
-			ensureChrome: async () => ({ running: true, ready: true }),
-			brokerProfileDir: activeProfile,
-			connectBroker: async () => activeClient,
-		});
+		const active = googleSearchWithDependencies(
+			"active profile lease",
+			{ timeoutMs: 2_000 },
+			{
+				ensureChrome: async () => ({ running: true, ready: true }),
+				brokerProfileDir: activeProfile,
+				connectBroker: async () => activeClient,
+			},
+		);
 		await activeSearchStarted;
 		await assert.rejects(
-			googleSearchWithDependencies("cross-profile fallback", { timeoutMs: 2_000 }, {
-				ensureChrome: async () => ({ running: true, ready: true }),
-				brokerProfileDir: failingProfile,
-				connectBroker: async () => failingClient,
-				legacySearch: async (query) => {
-					legacyCalls++;
-					return output(query);
+			googleSearchWithDependencies(
+				"cross-profile fallback",
+				{ timeoutMs: 2_000 },
+				{
+					ensureChrome: async () => ({ running: true, ready: true }),
+					brokerProfileDir: failingProfile,
+					connectBroker: async () => failingClient,
+					legacySearch: async (query) => {
+						legacyCalls++;
+						return output(query);
+					},
 				},
-			}),
+			),
 			(error) => error.code === "connection_closed",
 		);
 		assert.equal(legacyCalls, 0);
@@ -1917,36 +2348,52 @@ test("legacy fallback barrier serializes synthetic broker overlap", async () => 
 	process.env.PI_WEBAIO_CDP_BROKER = "1";
 	let releaseLegacy;
 	let legacyStarted;
-	const legacyGate = new Promise((resolve) => { releaseLegacy = resolve; });
-	const legacyStartedPromise = new Promise((resolve) => { legacyStarted = resolve; });
+	const legacyGate = new Promise((resolve) => {
+		releaseLegacy = resolve;
+	});
+	const legacyStartedPromise = new Promise((resolve) => {
+		legacyStarted = resolve;
+	});
 	let legacyCalls = 0;
 	let brokerConnectCalls = 0;
 	const failingClient = {
-		search: async () => { throw Object.assign(new Error("synthetic broker failure"), { code: "connection_closed" }); },
+		search: async () => {
+			throw Object.assign(new Error("synthetic broker failure"), {
+				code: "connection_closed",
+			});
+		},
 		close() {},
 	};
 	const replacement = { search: async (query) => output(query), close() {} };
 	try {
-		const fallback = googleSearchWithDependencies("barrier fallback", { timeoutMs: 2_000 }, {
-			ensureChrome: async () => ({ running: true, ready: true }),
-			brokerProfileDir: `barrier-failing-${randomUUID()}`,
-			connectBroker: async () => failingClient,
-			legacySearch: async (query) => {
-				legacyCalls++;
-				legacyStarted();
-				await legacyGate;
-				return output(query);
+		const fallback = googleSearchWithDependencies(
+			"barrier fallback",
+			{ timeoutMs: 2_000 },
+			{
+				ensureChrome: async () => ({ running: true, ready: true }),
+				brokerProfileDir: `barrier-failing-${randomUUID()}`,
+				connectBroker: async () => failingClient,
+				legacySearch: async (query) => {
+					legacyCalls++;
+					legacyStarted();
+					await legacyGate;
+					return output(query);
+				},
 			},
-		});
+		);
 		await legacyStartedPromise;
-		const brokerRequest = googleSearchWithDependencies("barrier broker", { timeoutMs: 2_000 }, {
-			ensureChrome: async () => ({ running: true, ready: true }),
-			brokerProfileDir: `barrier-replacement-${randomUUID()}`,
-			connectBroker: async () => {
-				brokerConnectCalls++;
-				return replacement;
+		const brokerRequest = googleSearchWithDependencies(
+			"barrier broker",
+			{ timeoutMs: 2_000 },
+			{
+				ensureChrome: async () => ({ running: true, ready: true }),
+				brokerProfileDir: `barrier-replacement-${randomUUID()}`,
+				connectBroker: async () => {
+					brokerConnectCalls++;
+					return replacement;
+				},
 			},
-		});
+		);
 		await new Promise((resolve) => setTimeout(resolve, 20));
 		assert.equal(brokerConnectCalls, 0);
 		releaseLegacy();
@@ -1965,41 +2412,68 @@ test("coalesced close callers keep independent absolute deadlines in either orde
 	process.env.PI_WEBAIO_CDP_BROKER = "1";
 	let releaseLong;
 	let longCloseCalls = 0;
-	const longGate = new Promise((resolve) => { releaseLong = resolve; });
+	const longGate = new Promise((resolve) => {
+		releaseLong = resolve;
+	});
 	const longClient = {
 		search: async (query) => output(query),
-		close: () => { longCloseCalls++; return longGate; },
+		close: () => {
+			longCloseCalls++;
+			return longGate;
+		},
 	};
 	let releaseReverse;
 	let reverseCloseCalls = 0;
-	const reverseGate = new Promise((resolve) => { releaseReverse = resolve; });
+	const reverseGate = new Promise((resolve) => {
+		releaseReverse = resolve;
+	});
 	const reverseClient = {
 		search: async (query) => output(query),
-		close: () => { reverseCloseCalls++; return reverseGate; },
+		close: () => {
+			reverseCloseCalls++;
+			return reverseGate;
+		},
 	};
 	try {
-		await googleSearchWithDependencies("deadline long first", { timeoutMs: 2_000 }, {
-			ensureChrome: async () => ({ running: true, ready: true }),
-			brokerProfileDir: `close-deadline-long-${randomUUID()}`,
-			connectBroker: async () => longClient,
-		});
+		await googleSearchWithDependencies(
+			"deadline long first",
+			{ timeoutMs: 2_000 },
+			{
+				ensureChrome: async () => ({ running: true, ready: true }),
+				brokerProfileDir: `close-deadline-long-${randomUUID()}`,
+				connectBroker: async () => longClient,
+			},
+		);
 		const long = closeGoogleBroker(longClient, { deadlineAt: Date.now() + 500 });
-		while (longCloseCalls === 0) await new Promise((resolve) => setTimeout(resolve, 1));
+		while (longCloseCalls === 0)
+			await new Promise((resolve) => setTimeout(resolve, 1));
 		const shortStarted = Date.now();
-		await assert.rejects(closeGoogleBroker(longClient, { deadlineAt: Date.now() + 30 }), (error) => error.code === "cleanup_timeout");
+		await assert.rejects(
+			closeGoogleBroker(longClient, { deadlineAt: Date.now() + 30 }),
+			(error) => error.code === "cleanup_timeout",
+		);
 		assert.ok(Date.now() - shortStarted < 200);
 		releaseLong();
 		await long;
 		assert.equal(longCloseCalls, 1);
 
-		await googleSearchWithDependencies("deadline short first", { timeoutMs: 2_000 }, {
-			ensureChrome: async () => ({ running: true, ready: true }),
-			brokerProfileDir: `close-deadline-short-${randomUUID()}`,
-			connectBroker: async () => reverseClient,
+		await googleSearchWithDependencies(
+			"deadline short first",
+			{ timeoutMs: 2_000 },
+			{
+				ensureChrome: async () => ({ running: true, ready: true }),
+				brokerProfileDir: `close-deadline-short-${randomUUID()}`,
+				connectBroker: async () => reverseClient,
+			},
+		);
+		const short = closeGoogleBroker(reverseClient, {
+			deadlineAt: Date.now() + 30,
 		});
-		const short = closeGoogleBroker(reverseClient, { deadlineAt: Date.now() + 30 });
-		while (reverseCloseCalls === 0) await new Promise((resolve) => setTimeout(resolve, 1));
-		const laterLong = closeGoogleBroker(reverseClient, { deadlineAt: Date.now() + 500 });
+		while (reverseCloseCalls === 0)
+			await new Promise((resolve) => setTimeout(resolve, 1));
+		const laterLong = closeGoogleBroker(reverseClient, {
+			deadlineAt: Date.now() + 500,
+		});
 		await assert.rejects(short, (error) => error.code === "cleanup_timeout");
 		releaseReverse();
 		await laterLong;
@@ -2015,16 +2489,28 @@ test("coalesced close callers keep independent absolute deadlines in either orde
 test("never-resolving client close is bounded, tracked, and never duplicated", async () => {
 	process.env.PI_WEBAIO_CDP_BROKER = "1";
 	let releaseClose;
-	const closeGate = new Promise((resolve) => { releaseClose = resolve; });
+	const closeGate = new Promise((resolve) => {
+		releaseClose = resolve;
+	});
 	let closeCalls = 0;
 	let replacementConnects = 0;
-	const oldClient = { search: async (query) => output(query), close: () => { closeCalls++; return closeGate; } };
+	const oldClient = {
+		search: async (query) => output(query),
+		close: () => {
+			closeCalls++;
+			return closeGate;
+		},
+	};
 	const replacement = { search: async (query) => output(query), close() {} };
 	try {
-		await googleSearchWithDependencies("never-close", { timeoutMs: 2_000 }, {
-			ensureChrome: async () => ({ running: true, ready: true }),
-			connectBroker: async () => oldClient,
-		});
+		await googleSearchWithDependencies(
+			"never-close",
+			{ timeoutMs: 2_000 },
+			{
+				ensureChrome: async () => ({ running: true, ready: true }),
+				connectBroker: async () => oldClient,
+			},
+		);
 		const started = Date.now();
 		await assert.rejects(
 			closeGoogleBroker(oldClient, { deadlineAt: Date.now() + 35 }),
@@ -2033,10 +2519,17 @@ test("never-resolving client close is bounded, tracked, and never duplicated", a
 		assert.ok(Date.now() - started < 250);
 		assert.equal(closeCalls, 1);
 		await assert.rejects(
-			googleSearchWithDependencies("replacement-before-close", { timeoutMs: 120 }, {
-				ensureChrome: async () => ({ running: true, ready: true }),
-				connectBroker: async () => { replacementConnects++; return replacement; },
-			}),
+			googleSearchWithDependencies(
+				"replacement-before-close",
+				{ timeoutMs: 120 },
+				{
+					ensureChrome: async () => ({ running: true, ready: true }),
+					connectBroker: async () => {
+						replacementConnects++;
+						return replacement;
+					},
+				},
+			),
 			(error) => error.code === "broker_process_pending",
 		);
 		assert.equal(replacementConnects, 0);
@@ -2045,10 +2538,19 @@ test("never-resolving client close is bounded, tracked, and never duplicated", a
 		assert.equal(closeCalls, 1);
 		await closeGoogleBroker(oldClient);
 		assert.equal(closeCalls, 1);
-		assert.equal((await googleSearchWithDependencies("replacement-after-close", { timeoutMs: 2_000 }, {
-			ensureChrome: async () => ({ running: true, ready: true }),
-			connectBroker: async () => replacement,
-		})).query, "replacement-after-close");
+		assert.equal(
+			(
+				await googleSearchWithDependencies(
+					"replacement-after-close",
+					{ timeoutMs: 2_000 },
+					{
+						ensureChrome: async () => ({ running: true, ready: true }),
+						connectBroker: async () => replacement,
+					},
+				)
+			).query,
+			"replacement-after-close",
+		);
 	} finally {
 		releaseClose?.();
 		await closeGoogleBroker().catch(() => {});
@@ -2063,10 +2565,18 @@ test("late stale generation close fences same-profile replacement until settled"
 	let connectStarted;
 	let releaseClose;
 	let closeStarted;
-	const connectStartedPromise = new Promise((resolve) => { connectStarted = resolve; });
-	const closeStartedPromise = new Promise((resolve) => { closeStarted = resolve; });
-	const closeGate = new Promise((resolve) => { releaseClose = resolve; });
-	const pendingConnect = new Promise((resolve) => { resolveConnect = resolve; });
+	const connectStartedPromise = new Promise((resolve) => {
+		connectStarted = resolve;
+	});
+	const closeStartedPromise = new Promise((resolve) => {
+		closeStarted = resolve;
+	});
+	const closeGate = new Promise((resolve) => {
+		releaseClose = resolve;
+	});
+	const pendingConnect = new Promise((resolve) => {
+		resolveConnect = resolve;
+	});
 	const profile = `stale-generation-${randomUUID()}`;
 	let closeCalls = 0;
 	const staleClient = {
@@ -2080,35 +2590,61 @@ test("late stale generation close fences same-profile replacement until settled"
 	const replacement = { search: async (query) => output(query), close() {} };
 	let replacementConnects = 0;
 	try {
-		const staleRequest = googleSearchWithDependencies("stale startup", { timeoutMs: 2_000, signal: controller.signal }, {
-			ensureChrome: async () => ({ running: true, ready: true }),
-			brokerProfileDir: profile,
-			connectBroker: async () => {
-				connectStarted();
-				return pendingConnect;
+		const staleRequest = googleSearchWithDependencies(
+			"stale startup",
+			{ timeoutMs: 2_000, signal: controller.signal },
+			{
+				ensureChrome: async () => ({ running: true, ready: true }),
+				brokerProfileDir: profile,
+				connectBroker: async () => {
+					connectStarted();
+					return pendingConnect;
+				},
 			},
-		});
+		);
 		await connectStartedPromise;
 		controller.abort();
-		await assert.rejects(staleRequest, (error) => error.code === "request_fenced");
+		await assert.rejects(
+			staleRequest,
+			(error) => error.code === "request_fenced",
+		);
 		resolveConnect(staleClient);
 		await closeStartedPromise;
 		await assert.rejects(
-			googleSearchWithDependencies("replacement-during-close", { timeoutMs: 120 }, {
-				ensureChrome: async () => ({ running: true, ready: true }),
-				brokerProfileDir: profile,
-				connectBroker: async () => { replacementConnects++; return replacement; },
-			}),
+			googleSearchWithDependencies(
+				"replacement-during-close",
+				{ timeoutMs: 120 },
+				{
+					ensureChrome: async () => ({ running: true, ready: true }),
+					brokerProfileDir: profile,
+					connectBroker: async () => {
+						replacementConnects++;
+						return replacement;
+					},
+				},
+			),
 			(error) => error.code === "broker_process_pending",
 		);
 		assert.equal(replacementConnects, 0);
 		releaseClose();
 		await new Promise((resolve) => setTimeout(resolve, 0));
-		assert.equal((await googleSearchWithDependencies("replacement-after-close", { timeoutMs: 2_000 }, {
-			ensureChrome: async () => ({ running: true, ready: true }),
-			brokerProfileDir: profile,
-			connectBroker: async () => { replacementConnects++; return replacement; },
-		})).query, "replacement-after-close");
+		assert.equal(
+			(
+				await googleSearchWithDependencies(
+					"replacement-after-close",
+					{ timeoutMs: 2_000 },
+					{
+						ensureChrome: async () => ({ running: true, ready: true }),
+						brokerProfileDir: profile,
+						connectBroker: async () => {
+							replacementConnects++;
+							return replacement;
+						},
+					},
+				)
+			).query,
+			"replacement-after-close",
+		);
 		assert.equal(closeCalls, 1);
 		assert.equal(replacementConnects, 1);
 	} finally {
@@ -2123,41 +2659,66 @@ test("async client close is rejection-safe, exactly once per attempt, and fences
 	let closeAttempts = 0;
 	let unhandled = 0;
 	let connectCalls = 0;
-	const onUnhandled = () => { unhandled++; };
+	const onUnhandled = () => {
+		unhandled++;
+	};
 	const oldClient = {
 		search: async (query) => output(query),
 		close: async () => {
 			closeAttempts++;
 			await new Promise((resolve) => setTimeout(resolve, 15));
-			if (closeAttempts === 1) throw Object.assign(new Error("async close failed"), { code: "close_failed" });
+			if (closeAttempts === 1)
+				throw Object.assign(new Error("async close failed"), {
+					code: "close_failed",
+				});
 		},
 	};
 	const replacement = { search: async (query) => output(query), close() {} };
 	process.on("unhandledRejection", onUnhandled);
 	try {
-		await googleSearchWithDependencies("async close", { timeoutMs: 2_000 }, {
-			ensureChrome: async () => ({ running: true, ready: true }),
-			connectBroker: async () => oldClient,
-		});
-		await assert.rejects(closeGoogleBroker(oldClient), (error) => error.code === "close_failed");
+		await googleSearchWithDependencies(
+			"async close",
+			{ timeoutMs: 2_000 },
+			{
+				ensureChrome: async () => ({ running: true, ready: true }),
+				connectBroker: async () => oldClient,
+			},
+		);
+		await assert.rejects(
+			closeGoogleBroker(oldClient),
+			(error) => error.code === "close_failed",
+		);
 		assert.equal(closeAttempts, 1);
 		await assert.rejects(
-			googleSearchWithDependencies("fenced after async close", { timeoutMs: 500 }, {
-				ensureChrome: async () => ({ running: true, ready: true }),
-				connectBroker: async () => {
-					connectCalls++;
-					return replacement;
+			googleSearchWithDependencies(
+				"fenced after async close",
+				{ timeoutMs: 500 },
+				{
+					ensureChrome: async () => ({ running: true, ready: true }),
+					connectBroker: async () => {
+						connectCalls++;
+						return replacement;
+					},
 				},
-			}),
+			),
 			(error) => error.code === "broker_process_pending",
 		);
 		assert.equal(connectCalls, 0);
 		await closeGoogleBroker(oldClient);
 		assert.equal(closeAttempts, 2);
-		assert.equal((await googleSearchWithDependencies("replacement after async close", { timeoutMs: 2_000 }, {
-			ensureChrome: async () => ({ running: true, ready: true }),
-			connectBroker: async () => replacement,
-		})).query, "replacement after async close");
+		assert.equal(
+			(
+				await googleSearchWithDependencies(
+					"replacement after async close",
+					{ timeoutMs: 2_000 },
+					{
+						ensureChrome: async () => ({ running: true, ready: true }),
+						connectBroker: async () => replacement,
+					},
+				)
+			).query,
+			"replacement after async close",
+		);
 		await new Promise((resolve) => setTimeout(resolve, 30));
 		assert.equal(unhandled, 0);
 	} finally {

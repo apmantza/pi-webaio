@@ -283,8 +283,7 @@ function printReport(results) {
 			`${label}: n=${summary.count} completed=${summary.completed} p50=${summary.p50Ms?.toFixed(1) ?? "n/a"}ms p95=${summary.p95Ms?.toFixed(1) ?? "n/a"}ms`,
 		);
 		const hasBrokerTimings = rows.some(
-			(row) =>
-				row.targetSetupMs !== null || row.navigationExtractionMs !== null,
+			(row) => row.targetSetupMs !== null || row.navigationExtractionMs !== null,
 		);
 		const brokerPhases = hasBrokerTimings
 			? "target-setup=derived(broker timings) navigation/extraction=derived(broker timings) reset=derived(broker timings)"
