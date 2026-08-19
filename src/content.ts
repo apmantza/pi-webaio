@@ -42,7 +42,6 @@ const MARKDOWN_SIGNAL =
 // previous generous 8s.
 export const DEFUDDLE_TIMEOUT = 4000;
 export const MAX_PREVIEW_CHARS = 1800;
-const MIN_USEFUL_CONTENT = 500;
 
 const MAX_CLIENT_REDIRECTS = 5;
 const MIN_ALTERNATE_FALLBACK_WORDS = 30;
@@ -68,10 +67,7 @@ export const READABILITY_MIN_RATIO = 0.005;
  * Pre-flight secret-scan result: builds the FetchErrorInfo + FetchError for
  * a URL that carried a credential. Shared by the pull paths (dedup, jscpd).
  */
-function blockedSecretResult(
-	url: string,
-	matches: string[],
-): PullResult {
+function blockedSecretResult(url: string, matches: string[]): PullResult {
 	const info: FetchErrorInfo = {
 		message: `Request blocked: potential secret(s) detected in URL (${matches.join(", ")})`,
 		code: "blocked",
@@ -369,22 +365,6 @@ export function stripCssCruft(markdown: string): string {
 	}
 
 	return out.join("\n");
-}
-
-// ─── JS rendering detection ───────────────────────────────────────
-
-function isLikelyJSRendered(html: string): boolean {
-	try {
-		const { document } = parseHTML(html);
-		const body = document.querySelector("body");
-		if (!body) return false;
-		body.querySelectorAll("script, style").forEach((el: Element) => el.remove());
-		const textContent = (body.textContent || "").replace(/\s+/g, " ").trim();
-		const scriptCount = document.querySelectorAll("script").length;
-		return textContent.length < 500 && scriptCount > 3;
-	} catch {
-		return false;
-	}
 }
 
 // ─── Readability extraction ────────────────────────────────────────

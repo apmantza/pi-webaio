@@ -74,9 +74,7 @@ function parseGitLabUrl(url: string): GitLabRef | null {
 		if (/\.(png|jpg|jpeg|gif|svg|pdf|zip|tar|gz)$/i.test(project)) return null;
 
 		// Reject extra paths that aren't GitLab actions (e.g. /issues, /merge_requests)
-		const remaining = url.slice(
-			`https://${host}/${namespace}/${project}`.length,
-		);
+		const remaining = url.slice(`https://${host}/${namespace}/${project}`.length);
 		if (remaining && remaining !== "/" && !remaining.startsWith("/-/")) {
 			return null;
 		}
@@ -127,7 +125,6 @@ export async function extractGitLab(
 	} catch {
 		return null;
 	}
-	return null;
 }
 
 async function fetchGitLabBlob(

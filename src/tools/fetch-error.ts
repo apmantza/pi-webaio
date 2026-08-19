@@ -450,11 +450,11 @@ function prefixFor(err: FetchError): string {
 			return `The server didn't return any content.`;
 		case "unknown":
 			return `An unexpected error occurred.`;
+		default:
+			// Fallback for any future code added to the union without a case:
+			// short-circuit the raw message so it still fits on one line.
+			return m.length < 120 ? m : `${m.slice(0, 117)}…`;
 	}
-
-	// Fallback: short-circuit the raw message so it still fits.
-	if (m.length < 120) return m;
-	return `${m.slice(0, 117)}…`;
 }
 
 function formatStatusTail(err: FetchError): string {
@@ -652,15 +652,4 @@ function formatBytes(n: number): string {
 	if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
 	if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
 	return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
-}
-
-// ─── retryableByName (for legacy callers) ─────────────────────────
-
-/** Map legacy FetchErrorInfo to whether a retry is worth trying. */
-function isLegacyRetryable(info: FetchErrorInfo): boolean {
-	if (info.retryable !== undefined) return info.retryable;
-	if (info.statusCode !== undefined) {
-		return RETRYABLE_STATUS.has(info.statusCode);
-	}
-	return false;
 }

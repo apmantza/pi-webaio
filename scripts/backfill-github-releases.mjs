@@ -27,6 +27,7 @@ import {
 	summarizeSection,
 	normalizeVersion,
 } from "./lib/changelog.mjs";
+import { parseArgsOrExit } from "./lib/cli.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CHANGELOG_PATH = join(__dirname, "..", "CHANGELOG.md");
@@ -52,9 +53,7 @@ function parseArgs(argv) {
 		} else if (a === "--only") {
 			const value = argv[++i];
 			if (!value) throw new Error("--only requires a comma-separated list.");
-			args.only = new Set(
-				value.split(",").map((s) => normalizeVersion(s.trim())),
-			);
+			args.only = new Set(value.split(",").map((s) => normalizeVersion(s.trim())));
 		}
 	}
 	return args;
@@ -83,13 +82,7 @@ function listReleases(repo) {
 }
 
 function main() {
-	let args;
-	try {
-		args = parseArgs(process.argv.slice(2));
-	} catch (err) {
-		logError(String(err.message || err));
-		process.exit(2);
-	}
+	const args = parseArgsOrExit(parseArgs, process.argv.slice(2));
 	const changelog = readFileSync(CHANGELOG_PATH, "utf8");
 
 	let tags;

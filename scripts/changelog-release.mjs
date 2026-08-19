@@ -15,6 +15,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { promoteUnreleased, unreleasedHasEntries } from "./lib/changelog.mjs";
+import { parseArgsOrExit } from "./lib/cli.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CHANGELOG_PATH = join(__dirname, "..", "CHANGELOG.md");
@@ -55,13 +56,7 @@ function readPackageVersion() {
 }
 
 function main() {
-	let args;
-	try {
-		args = parseArgs(process.argv.slice(2));
-	} catch (err) {
-		logError(String(err.message || err));
-		process.exit(2);
-	}
+	const args = parseArgsOrExit(parseArgs, process.argv.slice(2));
 	const text = readFileSync(CHANGELOG_PATH, "utf8");
 
 	if (args.check) {

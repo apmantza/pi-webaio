@@ -77,6 +77,11 @@ export class SessionRouter {
 		if (pattern.startsWith("/") && pattern.endsWith("/") && pattern.length > 2) {
 			try {
 				const regexBody = pattern.slice(1, -1);
+				// Bound the body so a pathological route cannot build a
+				// pathological regex (opengrep ReDoS hardening); route patterns
+				// are config inputs but the guard is cheap and mirrors the glob
+				// path's 4096 cap in matchGlob below.
+				if (regexBody.length > 4096) return false;
 				const re = new RegExp(regexBody);
 				return re.test(urlPath);
 			} catch {

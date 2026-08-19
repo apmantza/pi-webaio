@@ -48,17 +48,6 @@ export interface PaywallStrategy {
 
 // ─── Helper constructors ───────────────────────────────────────────
 
-/** UA-spoofed fetch (cheapest, no JS). */
-const ua = (bot: "googlebot" | "bingbot" | "facebookbot"): PaywallStrategy => ({
-	steps: [
-		bot === "googlebot"
-			? "ua:googlebot"
-			: bot === "bingbot"
-				? "ua:bingbot"
-				: "ua:facebookbot",
-	],
-});
-
 /** Block paywall JS in Playwright (most reliable for Piano/Tinypass). */
 const blockJs = (vendors: string[]): PaywallStrategy => ({
 	steps: ["block_js", "archive"],

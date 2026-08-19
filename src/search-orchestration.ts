@@ -1,12 +1,9 @@
 // ─── Search provider orchestration helpers ─────────────────────────
-
-/**
- * Reddit remains an automatic companion to aio-websearch whenever the shared
- * CDP instance is available. `google: false` only disables Google; it does
- * not disable the standalone Reddit provider. Keep this policy explicit so
- * the two CDP providers do not accidentally drift apart.
- */
-const REDDIT_SEARCH_POLICY = "automatic" as const;
+//
+// Reddit remains an automatic companion to aio-websearch whenever the shared
+// CDP instance is available. `google: false` only disables Google; it does
+// not disable the standalone Reddit provider. Keep this policy explicit so
+// the two CDP providers do not accidentally drift apart.
 
 export function shouldRunReddit(
 	cdpAvailable: boolean,

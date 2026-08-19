@@ -12,7 +12,12 @@ import { readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { VerticalResult } from "./types.ts";
+import type {
+	VerticalFetchHtml,
+	VerticalFetchJson,
+	VerticalFetchText,
+	VerticalResult,
+} from "./types.ts";
 
 // ─── Public contract ────────────────────────────────────────────────
 
@@ -27,9 +32,9 @@ interface UserExtractorModule {
 	 */
 	extract: (
 		url: string,
-		fetchJson: (url: string) => Promise<unknown | null>,
-		fetchText: (url: string) => Promise<string | null>,
-		fetchHtml: (url: string) => Promise<string | null>,
+		fetchJson: VerticalFetchJson,
+		fetchText: VerticalFetchText,
+		fetchHtml: VerticalFetchHtml,
 	) => Promise<VerticalResult | null>;
 }
 

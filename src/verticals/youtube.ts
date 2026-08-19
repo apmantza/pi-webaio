@@ -15,7 +15,6 @@ import {
 const VIDEO_ID_REGEX =
 	/(?:youtube\.com\/(?:watch\?.*v=|shorts\/|embed\/)|youtu\.be\/)([A-Za-z0-9_-]{11})/;
 const BARE_ID_REGEX = /^[A-Za-z0-9_-]{11}$/;
-const PLAYLIST_REGEX = /list=([A-Za-z0-9_-]+)/;
 
 /**
  * Extract a YouTube video ID from various URL formats.
@@ -24,14 +23,6 @@ function extractVideoId(url: string): string | null {
 	const s = url.trim();
 	if (BARE_ID_REGEX.test(s)) return s;
 	const m = s.match(VIDEO_ID_REGEX);
-	return m ? m[1]! : null;
-}
-
-/**
- * Extract a playlist ID from a URL.
- */
-function extractPlaylistId(url: string): string | null {
-	const m = url.match(PLAYLIST_REGEX);
 	return m ? m[1]! : null;
 }
 
@@ -191,28 +182,5 @@ export async function extractYouTube(
 		url,
 		title: vd.title,
 		content: md,
-	};
-}
-
-// ─── Playlist extraction (placeholder — future enhancement) ─────────
-
-function matchesYouTubePlaylist(url: string): boolean {
-	return /youtube\.com\/(?:playlist|watch\?.*list=)/i.test(url);
-}
-
-async function extractYouTubePlaylist(
-	url: string,
-	_fetchJson: (url: string) => Promise<unknown | null>,
-	_fetchText: (url: string) => Promise<string | null>,
-	_fetchHtml: (url: string) => Promise<string | null>,
-): Promise<VerticalResult | null> {
-	const playlistId = extractPlaylistId(url);
-	if (!playlistId) return null;
-
-	return {
-		ok: false,
-		url,
-		error: `YouTube playlist support is not yet available. Please fetch individual video URLs from playlist https://www.youtube.com/playlist?list=${playlistId}.`,
-		content: "",
 	};
 }

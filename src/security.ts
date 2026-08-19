@@ -164,7 +164,7 @@ export function isCloudMetadataIp(ip: string): boolean {
 
 // ─── SSRF allow-list (CIDR ranges) ─────────────────────────────────
 
-export interface ParsedCidr {
+interface ParsedCidr {
 	bytes: Uint8Array; // network address, always 16 bytes (IPv6 or IPv4-mapped)
 	prefixLen: number; // 0–128
 }
@@ -402,7 +402,7 @@ function evaluateIp(
 }
 
 /** A DNS resolver returning every resolved address for a host. */
-export type DnsResolver = (
+type DnsResolver = (
 	host: string,
 ) => Promise<Array<{ address: string; family: number }>>;
 
@@ -412,7 +412,7 @@ const defaultDnsResolver: DnsResolver = async (host) => {
 	return records.map((r) => ({ address: r.address, family: r.family }));
 };
 
-export interface SsrfValidation {
+interface SsrfValidation {
 	/** True when the URL must be blocked. */
 	dangerous: boolean;
 	/** Machine-readable reason when dangerous (e.g. "cloud-metadata"). */

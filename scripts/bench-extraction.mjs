@@ -15,6 +15,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseArgsOrExit } from "./lib/cli.mjs";
 import { pullPageEnhanced } from "../src/content.ts";
 import { estimateTokens } from "../src/token-count.ts";
 
@@ -88,8 +89,7 @@ function printHelp() {
  */
 export function validateCorpusEntry(entry) {
 	if (!entry || typeof entry !== "object") return "entry must be an object";
-	if (typeof entry.url !== "string" || !entry.url)
-		return "missing or empty url";
+	if (typeof entry.url !== "string" || !entry.url) return "missing or empty url";
 	try {
 		new URL(entry.url);
 	} catch {
@@ -474,14 +474,9 @@ async function main() {
 	function ms(n) {
 		return n >= 1000 ? `${(n / 1000).toFixed(1)}s` : `${n}ms`;
 	}
-	let args;
-	try {
-		args = parseArgs(process.argv.slice(2));
-	} catch (err) {
-		process.stderr.write(`${String(err.message || err)}\n`);
-		printHelp();
-		process.exit(2);
-	}
+	const args = parseArgsOrExit(parseArgs, process.argv.slice(2), {
+		printHelp,
+	});
 
 	// Load corpus
 	let corpus;
@@ -550,8 +545,7 @@ async function main() {
 	}
 
 	if (args.updateBaseline) {
-		const baselinePath =
-			args.baseline ?? join(__dirname, "bench-baseline.json");
+		const baselinePath = args.baseline ?? join(__dirname, "bench-baseline.json");
 		await writeFile(
 			baselinePath,
 			JSON.stringify(results, null, 2) + "\n",

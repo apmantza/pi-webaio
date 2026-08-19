@@ -3,7 +3,12 @@
 // User-defined extractors (loaded from ~/.pi/agent/webaio/verticals/*.mjs)
 // are consulted BEFORE built-ins so users can override built-in behavior.
 
-import type { VerticalResult } from "./types.ts";
+import type {
+	VerticalFetchHtml,
+	VerticalFetchJson,
+	VerticalFetchText,
+	VerticalResult,
+} from "./types.ts";
 import { debug } from "../debug.ts";
 import {
 	loadUserExtractors,
@@ -136,9 +141,9 @@ export function findVerticalExtractor(url: string): string | null {
  */
 export async function runVerticalExtractor(
 	url: string,
-	fetchJson: (url: string) => Promise<unknown | null>,
-	fetchText: (url: string) => Promise<string | null>,
-	fetchHtml: (url: string) => Promise<string | null>,
+	fetchJson: VerticalFetchJson,
+	fetchText: VerticalFetchText,
+	fetchHtml: VerticalFetchHtml,
 ): Promise<VerticalResult | null> {
 	// User extractors take priority — checked before any built-in
 	for (const u of _userExtractors) {

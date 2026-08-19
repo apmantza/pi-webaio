@@ -12,6 +12,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { parseArgsOrExit } from "./lib/cli.mjs";
 import {
 	DEFAULT_OS,
 	applyStealth,
@@ -102,9 +103,7 @@ async function runTls(outDir) {
 	await writeJson(join(outDir, "tls.summary.json"), summary);
 	await writeJson(join(outDir, "tls.raw.json"), payload);
 	process.stdout.write(`[tls] ${summary.userAgent ?? "unknown UA"}\n`);
-	process.stdout.write(
-		`[tls] ja3=${summary.ja3Hash ?? summary.ja3 ?? "n/a"}\n`,
-	);
+	process.stdout.write(`[tls] ja3=${summary.ja3Hash ?? summary.ja3 ?? "n/a"}\n`);
 	process.stdout.write(`[tls] ja4=${summary.ja4 ?? "n/a"}\n`);
 }
 
@@ -174,14 +173,9 @@ async function runBrowserTarget(name, url, outDir, opts) {
 }
 
 async function main() {
-	let args;
-	try {
-		args = parseArgs(process.argv.slice(2));
-	} catch (err) {
-		process.stderr.write(`${String(err.message || err)}\n`);
-		printHelp();
-		process.exit(2);
-	}
+	const args = parseArgsOrExit(parseArgs, process.argv.slice(2), {
+		printHelp,
+	});
 
 	await mkdir(args.out, { recursive: true });
 	process.stdout.write(`Writing diagnostics to ${args.out}\n`);

@@ -233,6 +233,7 @@ jobs:
         shell: bash
         run: |
           TARBALL=$(ls pi-webaio-*.tgz)
+          # pi-lens-ignore: zizmor:adhoc-packages
           npm install -g "$TARBALL"
 
       - name: Verify extension entry loads (catches missing node_modules deps)

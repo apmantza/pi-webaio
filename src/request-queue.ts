@@ -25,10 +25,6 @@ export interface QueueEntry {
 	timestamp: number;
 }
 
-interface QueueSnapshot {
-	entries: QueueEntry[];
-}
-
 // ─── Constants ───────────────────────────────────────────────────────
 
 const QUEUE_FILENAME = ".pullqueue.jsonl";

@@ -160,16 +160,6 @@ export async function ghFetch<T = unknown>(path: string): Promise<T> {
 }
 
 /**
- * Check whether we have GitHub API access (auth token available).
- * Use as a cheap check before trying authenticated operations.
- * Unlike the old `ghAvailable()`, this checks for a token, not the `gh` binary.
- */
-async function githubAuthenticated(): Promise<boolean> {
-	const token = await getToken();
-	return token !== undefined;
-}
-
-/**
  * Resolve the GitHub auth token (env var → gh auth token → none).
  * Cached after first call. Exported for cloneGitHubRepo to inject into clone URLs.
  */
@@ -244,9 +234,7 @@ function execGh(
 			clearTimeout(timer);
 			if (code === 0) resolve(stdout);
 			else
-				reject(
-					new Error(`gh ${args[0]} exited ${code}: ${stderr.slice(0, 500)}`),
-				);
+				reject(new Error(`gh ${args[0]} exited ${code}: ${stderr.slice(0, 500)}`));
 		});
 		if (opts.stdin) {
 			proc.stdin.write(opts.stdin);

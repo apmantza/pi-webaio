@@ -226,20 +226,3 @@ export async function listResults(
 	results.sort((a, b) => b.createdAt - a.createdAt);
 	return results;
 }
-
-/**
- * Delete a stored result by ID.
- */
-async function deleteResult(id: string): Promise<boolean> {
-	const idx = await loadIndex();
-	const entry = idx.get(id);
-	if (!entry) return false;
-	idx.delete(id);
-	try {
-		await unlink(entry.blobPath);
-	} catch {
-		/* ignore */
-	}
-	await saveIndex();
-	return true;
-}
