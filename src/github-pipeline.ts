@@ -1,21 +1,14 @@
-import { spawn } from "node:child_process";
-import { mkdir, readFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
 	DEFAULT_TIMEOUT_MS,
 	readResponseTextWithProgress,
 	smartFetch,
 } from "./fetch.ts";
-import {
-	ghFetch,
-	getGithubToken,
-	ghRunLogs,
-	ghFetchWithFallback,
-} from "./github-api.ts";
+import { ghFetch, ghRunLogs, ghFetchWithFallback } from "./github-api.ts";
 import { BASE_TEMP } from "./session-store.ts";
 import { cloneRepo, detectArchitectureSignals } from "./github-map.ts";
 import type { GitHubRef, PullResult } from "./types.ts";
-import { resolveBinary } from "./tools/utils.ts";
 
 /** Sanitize a value for safe use as a filesystem path segment (B6/H1 hardening). */
 function safePathSegment(value: unknown): string {

@@ -76,7 +76,7 @@ let _hooks: RegisteredHook[] = [];
 
 // ─── Validation ──────────────────────────────────────────────────────
 
-function validate(mod: unknown, filePath: string): UserHookModule | string {
+function validate(mod: unknown): UserHookModule | string {
 	if (!mod || typeof mod !== "object") {
 		return "export is not an object";
 	}
@@ -149,7 +149,7 @@ export async function initUserHooks(dirPath?: string): Promise<void> {
 			(rawMod as Record<string, unknown>).hook ??
 			rawMod;
 
-		const result = validate(candidate, filePath);
+		const result = validate(candidate);
 		if (typeof result === "string") {
 			console.error(`[pi-webaio] Skipping hook ${filePath}: ${result}`);
 			continue;
