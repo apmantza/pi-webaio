@@ -3,6 +3,7 @@
 
 import { lookup as dnsLookup } from "node:dns/promises";
 import { isIP } from "node:net";
+import { createFetchError, type FetchError } from "./tools/fetch-error.ts";
 
 // ─── Local / private URL detection ─────────────────────────────────
 
@@ -528,6 +529,64 @@ export async function validateUrlForSsrf(
  */
 export async function isDangerousUrl(url: string): Promise<boolean> {
 	return (await validateUrlForSsrf(url)).dangerous;
+}
+
+// ─── SSRF verdict → FetchError (truthful surfacing) ────────────────
+//
+// The guard is fail-closed BY DESIGN: anything it cannot positively
+// validate is treated as dangerous. But the *diagnosis* must be honest.
+// A host that simply has no DNS records is a DNS problem, not a security
+// hazard — telling the agent the request "targeted a private/internal
+// address" (the generic blocked_ssrf summary) when the verdict was really
+// a resolution failure is actively misleading: the address isn't private,
+// and the correct remediation (fix/check the hostname) is completely
+// different from an SSRF block.
+//
+// So DNS-class verdicts (``dns-error`` / ``dns-empty``) surface as
+// `dns_error` — the same code the natural fetch path produces when the
+// fetcher itself fails to resolve — while genuine SSRF hazards stay
+// `blocked_ssrf` with the machine reason embedded in the message.
+const SSRF_DNS_REASONS = new Set(["dns-error", "dns-empty"]);
+
+/** Map an SSRF-guard verdict to the phase-aware FetchError a caller should throw. */
+export function ssrfVerdictToFetchError(
+	url: string,
+	verdict: SsrfValidation,
+): FetchError {
+	const reason = verdict.reason ?? "unparseable";
+	if (SSRF_DNS_REASONS.has(reason)) {
+		// DNS resolution failure / empty answer set: honest DNS error. Phase
+		// `connecting` + category `network` match the natural dns_error path
+		// (classifyError → ENOTFOUND/getaddrinfo/DNS). Retryable stays at the
+		// code default (dns_error is retryable) so transient resolver
+		// hiccups keep their usual retry semantics; a host with genuinely no
+		// records simply won't come back, same as a normal fetch.
+		return createFetchError(
+			"dns_error",
+			`[SECURITY] SSRF pre-check: ${safeHostname(url)} has no resolvable DNS records (${reason}) — nothing to validate or connect to.`, // eslint-disable-line max-len
+			{ url, phase: "connecting" },
+		);
+	}
+	// Genuine SSRF hazard: keep the recognizer-compatible prefix (fetch-error.ts
+	// classifyError keys on "blocked request to private/internal url") and add
+	// the machine reason for diagnostics.
+	return createFetchError(
+		"blocked_ssrf",
+		`[SECURITY] Blocked request to private/internal URL: ${url}${
+			reason && reason !== "unparseable" ? ` (reason: ${reason})` : ""
+		}`, // eslint-disable-line max-len
+		{ url, phase: "validation" },
+		{ retryable: false },
+	);
+}
+
+/** Best-effort hostname for error messages; falls back to the raw URL. */
+function safeHostname(url: string): string {
+	try {
+		return new URL(url).hostname;
+	} catch {
+		return url;
+	}
 }
 
 // ─── Dangerous service ports ────────────────────────────────────────

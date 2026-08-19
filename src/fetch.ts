@@ -18,12 +18,11 @@ import { BrowserPool } from "./browser-pool.ts";
 import {
 	createPinnedLookup,
 	fastSsrfBlock,
-	isDangerousUrl,
 	scanForSecrets,
+	ssrfVerdictToFetchError,
 	validateUrlForSsrf,
 } from "./security.ts";
 import type { FetchOpts } from "./types.ts";
-import { createFetchError } from "./tools/fetch-error.ts";
 import {
 	getStartingStrategy,
 	recordDomainSuccess,
@@ -129,8 +128,7 @@ export function summarizeBotBlockLadder(attempts: BotBlockAttempt[]): string {
 	if (attempts.length === 0) return "no fallback attempts recorded";
 	return attempts
 		.map((a) => {
-			const outcome =
-				a.status != null ? String(a.status) : (a.error ?? "blocked");
+			const outcome = a.status != null ? String(a.status) : (a.error ?? "blocked");
 			return `${a.profile}=${outcome}`;
 		})
 		.join(", ");
@@ -280,9 +278,7 @@ class TokenBucket {
 			this.refill();
 			if (this.tokens < 1) {
 				const deficit = 1 - this.tokens;
-				const wait = Math.ceil(
-					(deficit / this.refillRate) * this.refillIntervalMs,
-				);
+				const wait = Math.ceil((deficit / this.refillRate) * this.refillIntervalMs);
 				await new Promise((r) => setTimeout(r, wait));
 				this.refill();
 			}
@@ -488,12 +484,7 @@ export async function fetchWithPlaywright(
 	// via --host-resolver-rules. Fail-closed: any guard error => throw.
 	const ssrf = await validateUrlForSsrf(url);
 	if (ssrf.dangerous) {
-		throw createFetchError(
-			"blocked_ssrf",
-			`[SECURITY] Blocked request to private/internal URL: ${url}`,
-			{ url, phase: "validation" },
-			{ retryable: false },
-		);
+		throw ssrfVerdictToFetchError(url, ssrf);
 	}
 	let pinnedHost = "";
 	try {
@@ -867,16 +858,14 @@ async function fetchWithRetry(
 	options: FetchOpts = {},
 ): Promise<any> {
 	// SSRF check — block local/private URLs. Throw a phase-aware FetchError
-	// (code=blocked_ssrf, phase=validation) so the block surfaces precisely
-	// instead of degrading to the generic unknown/downloading fallback when
-	// the worker classifies the thrown error.
-	if (await isDangerousUrl(url)) {
-		throw createFetchError(
-			"blocked_ssrf",
-			`[SECURITY] Blocked request to private/internal URL: ${url}`,
-			{ url, phase: "validation" },
-			{ retryable: false },
-		);
+	// (code=blocked_ssrf, phase=validation for genuine hazards; code=dns_error
+	// when the guard failed closed on an unresolvable host — a DNS problem,
+	// not an SSRF block) so the block surfaces precisely instead of degrading
+	// to the generic unknown/downloading fallback when the worker classifies
+	// the thrown error.
+	const ssrf = await validateUrlForSsrf(url);
+	if (ssrf.dangerous) {
+		throw ssrfVerdictToFetchError(url, ssrf);
 	}
 
 	let lastError: Error | null = null;
@@ -1369,10 +1358,7 @@ export async function smartFetch(
 		// `bypass: true` or a different profile would help. Keep returning null
 		// (control flow unchanged) — the caller still produces the bot-block error.
 		const ladderSummary = summarizeBotBlockLadder(ladderAttempts);
-		debug(
-			"fetch",
-			`bot-block ladder exhausted for ${domain}: ${ladderSummary}`,
-		);
+		debug("fetch", `bot-block ladder exhausted for ${domain}: ${ladderSummary}`);
 		console.error(
 			`[pi-webaio] bot-block ladder exhausted for ${domain}: ${ladderSummary}`,
 		);

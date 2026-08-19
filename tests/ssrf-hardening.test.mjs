@@ -25,6 +25,7 @@ import {
 	createPinnedLookup,
 	parseAllowRanges,
 	setSsrfAllowRangesForTest,
+	ssrfVerdictToFetchError,
 } from "../src/security.ts";
 import { buildHostResolverRules } from "../src/fetch.ts";
 
@@ -77,8 +78,14 @@ test("isCloudMetadataIp: other link-local IP is not metadata (floor is specific)
 test("metadata floor: 169.254.169.254 literal blocked even when 169.254.0.0/16 is allowed", async () => {
 	setSsrfAllowRangesForTest(parseAllowRanges("169.254.0.0/16"));
 	try {
-		const r = await validateUrlForSsrf("http://169.254.169.254/latest/meta-data/");
-		assert.equal(r.dangerous, true, "metadata IP must be blocked despite allow-list");
+		const r = await validateUrlForSsrf(
+			"http://169.254.169.254/latest/meta-data/",
+		);
+		assert.equal(
+			r.dangerous,
+			true,
+			"metadata IP must be blocked despite allow-list",
+		);
 		assert.deepEqual(r.pinnedIps, []);
 	} finally {
 		setSsrfAllowRangesForTest(null);
@@ -180,7 +187,11 @@ test("pinning: re-resolve to an internal IP is blocked (TOCTOU closed at validat
 		resolverReturning(["93.184.216.34", "127.0.0.1"]),
 	);
 	assert.equal(r.dangerous, true, "any internal address poisons the answer set");
-	assert.deepEqual(r.pinnedIps, [], "no pins are ever produced for a dangerous URL");
+	assert.deepEqual(
+		r.pinnedIps,
+		[],
+		"no pins are ever produced for a dangerous URL",
+	);
 });
 
 test("pinning: a resolver returning only an internal IP yields no usable pin", async () => {
@@ -255,7 +266,10 @@ test("createPinnedLookup: never hands out a metadata IP even if one is pinned", 
 
 test("fail-closed: DNS resolution error => dangerous", async () => {
 	setSsrfAllowRangesForTest([]);
-	const r = await validateUrlForSsrf("http://nxdomain.example.com/", throwingResolver);
+	const r = await validateUrlForSsrf(
+		"http://nxdomain.example.com/",
+		throwingResolver,
+	);
 	assert.equal(r.dangerous, true);
 	assert.equal(r.reason, "dns-error");
 	assert.deepEqual(r.pinnedIps, []);
@@ -263,14 +277,20 @@ test("fail-closed: DNS resolution error => dangerous", async () => {
 
 test("fail-closed: empty DNS answer set => dangerous", async () => {
 	setSsrfAllowRangesForTest([]);
-	const r = await validateUrlForSsrf("http://empty.example.com/", resolverReturning([]));
+	const r = await validateUrlForSsrf(
+		"http://empty.example.com/",
+		resolverReturning([]),
+	);
 	assert.equal(r.dangerous, true);
 	assert.equal(r.reason, "dns-empty");
 });
 
 test("fail-closed: resolver returning non-array => dangerous", async () => {
 	setSsrfAllowRangesForTest([]);
-	const r = await validateUrlForSsrf("http://weird.example.com/", async () => null);
+	const r = await validateUrlForSsrf(
+		"http://weird.example.com/",
+		async () => null,
+	);
 	assert.equal(r.dangerous, true);
 });
 
@@ -282,20 +302,83 @@ test("fail-closed: unparseable URL => dangerous", async () => {
 });
 
 test("fail-closed: isDangerousUrl wrapper denies on DNS error", async () => {
-	// The boolean wrapper (used by fetchWithRetry) must inherit fail-closed.
+	// The boolean wrapper (used by content.ts local-knowledge pre-check)
+	// must inherit fail-closed.
 	setSsrfAllowRangesForTest([]);
 	assert.equal(await isDangerousUrl("http://127.0.0.1/"), true);
+});
+
+// ─── Truthful surfacing: SSRF verdict → FetchError ──────────────────
+// The guard is fail-closed, but the DIAGNOSIS must be honest: a host with
+// no DNS records is a DNS problem, not an SSRF block (regression: zcode.dev
+// surfaced as "targeted a private/internal address" when the apex simply
+// had no address records).
+
+test("verdict→error: dns-error surfaces as dns_error, NOT blocked_ssrf", () => {
+	const err = ssrfVerdictToFetchError("https://zcode.dev/", {
+		dangerous: true,
+		reason: "dns-error",
+		pinnedIps: [],
+	});
+	assert.equal(err.code, "dns_error");
+	assert.equal(err.phase, "connecting");
+	assert.equal(err.category, "network");
+	assert.match(err.message, /no resolvable DNS records/i);
+	assert.match(err.message, /zcode\.dev/);
+});
+
+test("verdict→error: dns-empty surfaces as dns_error, NOT blocked_ssrf", () => {
+	const err = ssrfVerdictToFetchError("https://empty.example/", {
+		dangerous: true,
+		reason: "dns-empty",
+		pinnedIps: [],
+	});
+	assert.equal(err.code, "dns_error");
+	assert.equal(err.phase, "connecting");
+	assert.equal(err.category, "network");
+});
+
+test("verdict→error: private-range stays blocked_ssrf with reason + recognizer prefix", () => {
+	const err = ssrfVerdictToFetchError("https://10.0.0.5/", {
+		dangerous: true,
+		reason: "private-range",
+		pinnedIps: [],
+	});
+	assert.equal(err.code, "blocked_ssrf");
+	assert.equal(err.phase, "validation");
+	assert.equal(err.category, "validation");
+	assert.equal(err.retryable, false);
+	// classifyError keys on this prefix — keep it intact for genuine blocks.
+	assert.match(err.message, /blocked request to private\/internal url/i);
+	assert.match(err.message, /reason: private-range/);
+});
+
+test("verdict→error: metadata stays blocked_ssrf", () => {
+	const err = ssrfVerdictToFetchError(
+		"http://169.254.169.254/latest/meta-data/",
+		{ dangerous: true, reason: "cloud-metadata", pinnedIps: [] },
+	);
+	assert.equal(err.code, "blocked_ssrf");
+	assert.equal(err.phase, "validation");
 });
 
 // ─── buildHostResolverRules (Playwright pin wiring) ─────────────────
 
 test("buildHostResolverRules: maps hostname to the first validated IP", () => {
-	const args = buildHostResolverRules("example.com", ["93.184.216.34", "1.2.3.4"]);
-	assert.deepEqual(args, ["--host-resolver-rules=MAP example.com 93.184.216.34"]);
+	const args = buildHostResolverRules("example.com", [
+		"93.184.216.34",
+		"1.2.3.4",
+	]);
+	assert.deepEqual(args, [
+		"--host-resolver-rules=MAP example.com 93.184.216.34",
+	]);
 });
 
 test("buildHostResolverRules: no rule for an IP-literal host", () => {
-	assert.deepEqual(buildHostResolverRules("93.184.216.34", ["93.184.216.34"]), []);
+	assert.deepEqual(
+		buildHostResolverRules("93.184.216.34", ["93.184.216.34"]),
+		[],
+	);
 });
 
 test("buildHostResolverRules: no rule when there are no validated pins", () => {
