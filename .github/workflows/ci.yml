@@ -14,9 +14,15 @@ jobs:
       contents: read
 
     steps:
-      - uses: actions/checkout@v7
+      # yamllint disable-line rule:line-length
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # Never persist the GITHUB_TOKEN into .git/config — otherwise any
+          # artifact/workspace upload could exfiltrate it (zizmor:artipacked).
+          persist-credentials: false
 
-      - uses: actions/setup-node@v7
+      # yamllint disable-line rule:line-length
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "24"
 
@@ -48,9 +54,15 @@ jobs:
       contents: read
 
     steps:
-      - uses: actions/checkout@v7
+      # yamllint disable-line rule:line-length
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # Never persist the GITHUB_TOKEN into .git/config — otherwise any
+          # artifact/workspace upload could exfiltrate it (zizmor:artipacked).
+          persist-credentials: false
 
-      - uses: actions/setup-node@v7
+      # yamllint disable-line rule:line-length
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "24"
 
@@ -87,9 +99,15 @@ jobs:
       contents: read
 
     steps:
-      - uses: actions/checkout@v7
+      # yamllint disable-line rule:line-length
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # Never persist the GITHUB_TOKEN into .git/config — otherwise any
+          # artifact/workspace upload could exfiltrate it (zizmor:artipacked).
+          persist-credentials: false
 
-      - uses: actions/setup-node@v7
+      # yamllint disable-line rule:line-length
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "24"
 
@@ -128,9 +146,15 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
 
     steps:
-      - uses: actions/checkout@v7
+      # yamllint disable-line rule:line-length
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # Never persist the GITHUB_TOKEN into .git/config — otherwise any
+          # artifact/workspace upload could exfiltrate it (zizmor:artipacked).
+          persist-credentials: false
 
-      - uses: actions/setup-node@v7
+      # yamllint disable-line rule:line-length
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "24"
 

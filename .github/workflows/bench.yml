@@ -29,9 +29,13 @@ jobs:
       contents: read
 
     steps:
-      - uses: actions/checkout@v7
+      # yamllint disable-line rule:line-length
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-node@v7
+      # yamllint disable-line rule:line-length
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "24"
 
@@ -41,21 +45,31 @@ jobs:
       - name: Build
         run: npm run build
 
+      # Run-shell-injection safety (opengrep/zizmor): workflow_dispatch
+      # inputs are attacker-controllable — never interpolate ${{ github.* }}
+      # directly into a run: script, where it is parsed as shell code. The
+      # values are passed via env: instead and referenced as "$VAR", so bash
+      # never re-parses them as operators or command substitutions — and the
+      # ARGS array keeps them quoted (no word-splitting or globbing).
       - name: Run benchmark
+        env:
+          FILTER: ${{ github.event.inputs.filter }}
+          CONCURRENCY: ${{ github.event.inputs.concurrency || '2' }}
+          TIMEOUT: ${{ github.event.inputs.timeout || '30000' }}
         run: |
-          FILTER="${{ github.event.inputs.filter }}"
-          CONCURRENCY="${{ github.event.inputs.concurrency || '2' }}"
-          TIMEOUT="${{ github.event.inputs.timeout || '30000' }}"
-          ARGS="--concurrency $CONCURRENCY --timeout $TIMEOUT"
-          if [ -n "$FILTER" ]; then
-            ARGS="$ARGS --filter $FILTER"
+          ARGS=(--concurrency "${CONCURRENCY}" --timeout "${TIMEOUT}")
+          if [ -n "${FILTER}" ]; then
+            ARGS+=(--filter "${FILTER}")
           fi
-          node --experimental-strip-types scripts/bench-extraction.mjs $ARGS --json > bench-results.json
+          node --experimental-strip-types scripts/bench-extraction.mjs \
+            "${ARGS[@]}" --json > bench-results.json
           # Also print human-readable scorecard
-          node --experimental-strip-types scripts/bench-extraction.mjs $ARGS || true
+          node --experimental-strip-types scripts/bench-extraction.mjs \
+            "${ARGS[@]}" || true
 
       - name: Upload scorecard artifact
-        uses: actions/upload-artifact@v7
+        # yamllint disable-line rule:line-length
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: bench-scorecard-${{ github.run_number }}
           path: bench-results.json

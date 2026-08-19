@@ -10,6 +10,11 @@ updates:
       interval: "weekly"
       day: "monday"
     open-pull-requests-limit: 10
+    cooldown:
+      # Wait 7 days before proposing newly-published package versions —
+      # new releases are the highest-risk supply-chain window (fresh
+      # versions can be malicious or unstable).
+      default-days: 7
     groups:
       # Batch minor/patch production deps into one PR to reduce noise.
       npm-minor-patch:
@@ -23,6 +28,8 @@ updates:
       interval: "weekly"
       day: "monday"
     open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
     labels:
       - "dependencies"
       - "ci"
