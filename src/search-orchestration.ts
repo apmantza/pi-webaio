@@ -12,6 +12,15 @@ export function shouldRunReddit(
 	return cdpAvailable && providerAvailable;
 }
 
+/** Google is opt-in via the request flag; unlike Reddit, it is never implicit. */
+export function shouldRunGoogle(
+	useGoogle: boolean,
+	cdpAvailable: boolean,
+	providerAvailable: boolean,
+): boolean {
+	return useGoogle && cdpAvailable && providerAvailable;
+}
+
 export interface ProviderDeadlineResult<K extends string, V> {
 	/** Values observed before the deadline. Late values are deliberately absent. */
 	values: Partial<Record<K, V>>;

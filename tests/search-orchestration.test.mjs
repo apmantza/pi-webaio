@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
 	collectProviderResults,
+	shouldRunGoogle,
 	shouldRunReddit,
 } from "../src/search-orchestration.ts";
 
@@ -55,4 +56,11 @@ test("shouldRunReddit requires both CDP and provider availability", () => {
 	assert.equal(shouldRunReddit(true, true), true);
 	assert.equal(shouldRunReddit(false, true), false);
 	assert.equal(shouldRunReddit(true, false), false);
+});
+
+test("shouldRunGoogle requires the flag, CDP, and provider availability", () => {
+	assert.equal(shouldRunGoogle(true, true, true), true);
+	assert.equal(shouldRunGoogle(false, true, true), false);
+	assert.equal(shouldRunGoogle(true, false, true), false);
+	assert.equal(shouldRunGoogle(true, true, false), false);
 });

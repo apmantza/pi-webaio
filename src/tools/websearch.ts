@@ -27,6 +27,7 @@ import type { SearchResult } from "../types.ts";
 import { triggerPrefetch, DEFAULT_PREFETCH_COUNT } from "../prefetch.ts";
 import {
 	collectProviderResults,
+	shouldRunGoogle,
 	shouldRunReddit,
 } from "../search-orchestration.ts";
 
@@ -38,6 +39,16 @@ const SEARCH_DEADLINE_MS = 7000;
 // never burn more than this. The overall tool deadline stays 7s.
 const GOOGLE_LANE_MAX_MS = 3000;
 
+type WebsearchDependencies = {
+	loadGoggles?: typeof loadGoggles;
+	searchWeb?: typeof searchWeb;
+	ensureChrome?: typeof ensureChrome;
+	googleSearch?: typeof googleSearch;
+	searchReddit?: typeof searchReddit;
+	cdpAvailable?: typeof cdpAvailableGA;
+	providerAvailable?: typeof isProviderAvailable;
+};
+
 function classifyRedditStatus(status: string, count: number): EngineStatus {
 	if (count > 0 || status === "ok") return "ok";
 	if (status.startsWith("timeout")) return "timeout";
@@ -46,7 +57,19 @@ function classifyRedditStatus(status: string, count: number): EngineStatus {
 	return "empty";
 }
 
-export function registerWebsearchTool(pi: ExtensionAPI): void {
+export function registerWebsearchTool(
+	pi: ExtensionAPI,
+	dependencies: WebsearchDependencies = {},
+): void {
+	const loadGogglesImpl = dependencies.loadGoggles ?? loadGoggles;
+	const searchWebImpl = dependencies.searchWeb ?? searchWeb;
+	const ensureChromeImpl = dependencies.ensureChrome ?? ensureChrome;
+	const googleSearchImpl = dependencies.googleSearch ?? googleSearch;
+	const searchRedditImpl = dependencies.searchReddit ?? searchReddit;
+	const cdpAvailableImpl = dependencies.cdpAvailable ?? cdpAvailableGA;
+	const providerAvailableImpl =
+		dependencies.providerAvailable ?? isProviderAvailable;
+
 	pi.registerTool({
 		...TOOL_METADATA["aio-websearch"],
 		async execute(_toolCallId, params, signal, onUpdate) {
@@ -57,7 +80,7 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 			const compact = params.compact === true;
 			const startedAt = Date.now();
 			const searchDeadlineAt = startedAt + SEARCH_DEADLINE_MS;
-			const goggles = await loadGoggles(params.goggles as GogglesInput);
+			const goggles = await loadGogglesImpl(params.goggles as GogglesInput);
 
 			// Resolve prefetch count: false/undefined → 0, true → default, number → clamp ≥ 0.
 			const prefetchParam = params.prefetch;
@@ -71,30 +94,34 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 			// Chrome cold-start can take up to 30s; fire it in parallel, but never
 			// let startup or a CDP provider extend the documented response deadline.
 			const redditEnabled = shouldRunReddit(
-				cdpAvailableGA(),
-				isProviderAvailable("reddit"),
+				cdpAvailableImpl(),
+				providerAvailableImpl("reddit"),
 			);
 			// Track why Google produced no results so a silent zero is surfaced
 			// instead of looking like Google was never attempted (B4).
-			const googleEnabled =
-				useGoogle && cdpAvailableGA() && isProviderAvailable("google");
+			const googleEnabled = shouldRunGoogle(
+				useGoogle,
+				cdpAvailableImpl(),
+				providerAvailableImpl("google"),
+			);
 			let googleStatus: string;
 			if (!useGoogle) googleStatus = "disabled (google: false)";
-			else if (!cdpAvailableGA())
+			else if (!cdpAvailableImpl())
 				googleStatus = "unavailable (Chrome CDP not present)";
-			else if (isProviderAvailable("google")) googleStatus = "pending";
+			else if (providerAvailableImpl("google")) googleStatus = "pending";
 			else
 				googleStatus = "unavailable (provider cooled down after recent failures)";
 			const chromeReady =
 				googleEnabled || redditEnabled
-					? ensureChrome(undefined, {
+					? ensureChromeImpl(undefined, {
 							deadlineAt: searchDeadlineAt,
 							signal,
 						}).catch(() => null)
 					: null;
 			let redditStatus: string;
-			if (!cdpAvailableGA()) redditStatus = "unavailable (Chrome CDP not present)";
-			else if (isProviderAvailable("reddit")) redditStatus = "pending";
+			if (!cdpAvailableImpl())
+				redditStatus = "unavailable (Chrome CDP not present)";
+			else if (providerAvailableImpl("reddit")) redditStatus = "pending";
 			else
 				redditStatus = "unavailable (provider cooled down after recent failures)";
 			const engineNames = ["DDG", "Brave", "Yahoo", "Bing"];
@@ -109,7 +136,7 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 				],
 			});
 
-			const httpPromise = searchWeb(query, goggles).then(
+			const httpPromise = searchWebImpl(query, goggles).then(
 				(r) => ({
 					source: "http" as const,
 					results: r.results.slice(0, max),
@@ -134,7 +161,7 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 				source: "google";
 				results: SearchResult[];
 			}>;
-			if (chromeReady) {
+			if (googleEnabled) {
 				googlePromise = (async () => {
 					try {
 						await chromeReady;
@@ -145,7 +172,7 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 							searchDeadlineAt,
 							Date.now() + GOOGLE_LANE_MAX_MS,
 						);
-						const g = await googleSearch(query, {
+						const g = await googleSearchImpl(query, {
 							timeoutMs: Math.min(SEARCH_DEADLINE_MS, GOOGLE_LANE_MAX_MS),
 							maxResults: max,
 							signal,
@@ -165,7 +192,14 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 						return { source: "google" as const, results };
 					} catch (err) {
 						recordProviderNetworkFailure("google", String(err));
-						googleStatus = `error (${String(err).slice(0, 120)})`;
+						const errorCode =
+							err && typeof err === "object" && "code" in err
+								? (err as { code?: unknown }).code
+								: undefined;
+						googleStatus =
+							errorCode === "deadline_expired"
+								? `timeout (search deadline ${SEARCH_DEADLINE_MS}ms)`
+								: `error (${String(err).slice(0, 120)})`;
 						return { source: "google" as const, results: [] };
 					}
 				})();
@@ -187,7 +221,7 @@ export function registerWebsearchTool(pi: ExtensionAPI): void {
 				redditPromise = (async () => {
 					try {
 						await chromeReady;
-						const r = await searchReddit(query);
+						const r = await searchRedditImpl(query);
 						if (!r) {
 							redditStatus = "unavailable (CDP search returned null)";
 							return {

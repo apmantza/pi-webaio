@@ -276,9 +276,7 @@ export class GoogleCdpBrokerClient {
 	receive(chunk) {
 		if (this.closed) return;
 		this.buffer += chunk.toString("utf8");
-		if (
-			Buffer.byteLength(this.buffer, "utf8") > BROKER_CLIENT_MAX_FRAME_BYTES
-		) {
+		if (Buffer.byteLength(this.buffer, "utf8") > BROKER_CLIENT_MAX_FRAME_BYTES) {
 			this.failPending("frame_too_large");
 			this.close();
 			return;
@@ -346,7 +344,7 @@ export class GoogleCdpBrokerClient {
 		const socket = this.socket;
 		return new Promise((resolve, reject) => {
 			let pending;
-			const abort = () => {
+			const fence = (error) => {
 				if (this.pending.get(id) !== pending) return;
 				this.pending.delete(id);
 				clearTimeout(pending.timer);
@@ -367,9 +365,17 @@ export class GoogleCdpBrokerClient {
 							}),
 						);
 				} catch {}
-				reject(fencedError());
+				reject(error);
 			};
-			const timer = setTimeout(abort, Math.max(deadline - Date.now(), 1));
+			const abort = () => fence(fencedError());
+			const deadlineAbort = () =>
+				fence(
+					new GoogleCdpBrokerClientError(
+						"deadline_expired",
+						"Broker request deadline has expired",
+					),
+				);
+			const timer = setTimeout(deadlineAbort, Math.max(deadline - Date.now(), 1));
 			pending = { resolve, reject, timer, signal, abort };
 			this.pending.set(id, pending);
 			try {

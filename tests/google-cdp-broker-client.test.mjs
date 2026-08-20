@@ -8,6 +8,8 @@ import {
 } from "../extractors/google-cdp-broker-client.mjs";
 
 function startFakeBroker({ delaySearchMs = 0 } = {}) {
+	let searchDelayMs = delaySearchMs;
+	const cancelRequests = [];
 	const server = net.createServer((socket) => {
 		let buffer = "";
 		socket.on("error", () => {});
@@ -32,6 +34,7 @@ function startFakeBroker({ delaySearchMs = 0 } = {}) {
 						})}\n`,
 					);
 				} else if (request.op === "cancel") {
+					cancelRequests.push(request);
 					socket.write(
 						`${JSON.stringify({
 							id: request.id,
@@ -48,8 +51,7 @@ function startFakeBroker({ delaySearchMs = 0 } = {}) {
 								ok: false,
 								error: {
 									code: "unsupported_provider",
-									message:
-										"Search is only available for provider google-search",
+									message: "Search is only available for provider google-search",
 								},
 							})}\n`,
 						);
@@ -68,7 +70,7 @@ function startFakeBroker({ delaySearchMs = 0 } = {}) {
 									},
 								})}\n`,
 							);
-					}, delaySearchMs);
+					}, searchDelayMs);
 				}
 			}
 		});
@@ -78,6 +80,10 @@ function startFakeBroker({ delaySearchMs = 0 } = {}) {
 			resolve({
 				server,
 				path: String(server.address().port),
+				cancelRequests,
+				setSearchDelayMs: (value) => {
+					searchDelayMs = value;
+				},
 			}),
 		),
 	);
@@ -127,6 +133,38 @@ test("client fences an aborted request and sends broker cancellation", async () 
 				error instanceof GoogleCdpBrokerClientError &&
 				error.code === "request_fenced",
 		);
+	} finally {
+		client.close();
+		await new Promise((resolve) => fake.server.close(resolve));
+	}
+});
+
+test("client reports request deadline expiry separately from caller cancellation", async () => {
+	const fake = await startFakeBroker({ delaySearchMs: 600 });
+	const client = new GoogleCdpBrokerClient({
+		socketPath: fake.path,
+		connectImpl: (path) =>
+			net.createConnection({ port: Number(path), host: "127.0.0.1" }),
+	});
+	try {
+		await assert.rejects(
+			client.search("deadline-me", { deadlineAt: Date.now() + 300 }),
+			(error) =>
+				error instanceof GoogleCdpBrokerClientError &&
+				error.code === "deadline_expired",
+		);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		assert.equal(fake.cancelRequests.length, 1);
+		assert.match(fake.cancelRequests[0].requestId, /^client-/);
+
+		// Let the original response arrive after the fence. It must be ignored,
+		// and the same client must still accept a later request.
+		await new Promise((resolve) => setTimeout(resolve, 350));
+		fake.setSearchDelayMs(0);
+		const followUp = await client.search("after-deadline", {
+			deadlineAt: Date.now() + 1000,
+		});
+		assert.equal(followUp.query, "after-deadline");
 	} finally {
 		client.close();
 		await new Promise((resolve) => fake.server.close(resolve));
