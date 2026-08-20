@@ -904,6 +904,111 @@ test("caller abort fences fallback with a skipped envelope outcome", async () =>
 	}
 });
 
+test("server-side broker request fences use the legacy fallback when the caller is still active", async () => {
+	process.env.PI_WEBAIO_CDP_BROKER = "1";
+	try {
+		const { value, captured } = await captureBrokerDiagnostic(() =>
+			googleSearchWithDependencies(
+				"server-side fence",
+				{ timeoutMs: 2_000 },
+				{
+					ensureChrome: async () => ({ running: true, ready: true }),
+					connectBroker: async () => ({
+						search: async () => {
+							throw Object.assign(new Error("Broker request was cancelled"), {
+								code: "request_fenced",
+							});
+						},
+						close() {},
+					}),
+					legacySearch: async (query) => output(query),
+				},
+			),
+		);
+		assert.equal(value.query, "server-side fence");
+		const envelope = parseEnvelope(captured);
+		assert.equal(envelope.fallbackOutcome, "succeeded");
+		assert.equal(envelope.fallbackReason, "broker_failure");
+	} finally {
+		restoreFlag();
+	}
+});
+
+test("a server-side fence does not tear down a shared broker used by another request", async () => {
+	process.env.PI_WEBAIO_CDP_BROKER = "1";
+	let markFirstStarted;
+	let rejectFirst;
+	let markSecondStarted;
+	let releaseSecond;
+	let closeCalls = 0;
+	const firstStarted = new Promise((resolve) => {
+		markFirstStarted = resolve;
+	});
+	const secondStarted = new Promise((resolve) => {
+		markSecondStarted = resolve;
+	});
+	const sharedClient = {
+		search: async (query) => {
+			if (query === "fenced request") {
+				markFirstStarted();
+				return new Promise((_, reject) => {
+					rejectFirst = reject;
+				});
+			}
+			markSecondStarted();
+			return new Promise((resolve) => {
+				releaseSecond = () => resolve(output(query));
+			});
+		},
+		close() {
+			closeCalls++;
+		},
+	};
+	const profile = `shared-fence-${randomUUID()}`;
+	try {
+		const dependencies = {
+			ensureChrome: async () => ({ running: true, ready: true }),
+			brokerProfileDir: profile,
+			connectBroker: async () => sharedClient,
+		};
+		const first = googleSearchWithDependencies(
+			"fenced request",
+			{},
+			dependencies,
+		);
+		await firstStarted;
+		const second = googleSearchWithDependencies(
+			"surviving request",
+			{},
+			dependencies,
+		);
+		await secondStarted;
+		rejectFirst(
+			Object.assign(new Error("Broker request was cancelled"), {
+				code: "request_fenced",
+			}),
+		);
+		await assert.rejects(first, (error) => error.code === "request_fenced");
+		assert.equal(
+			closeCalls,
+			0,
+			"the active request still owns the shared client",
+		);
+		releaseSecond();
+		assert.equal((await second).query, "surviving request");
+		assert.equal(
+			closeCalls,
+			0,
+			"normal lease release keeps the warm broker alive",
+		);
+	} finally {
+		releaseSecond?.();
+		await closeGoogleBroker().catch(() => {});
+		restoreFlag();
+	}
+	assert.equal(closeCalls, 1, "explicit teardown closes the shared client once");
+});
+
 test("legacy failure is surfaced after broker failure and is diagnosed", async () => {
 	process.env.PI_WEBAIO_CDP_BROKER = "1";
 	try {

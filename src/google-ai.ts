@@ -45,6 +45,10 @@ function resolvePackageRoot(): string {
 }
 
 const PACKAGE_ROOT = resolvePackageRoot();
+// Internal-only brand for the startup fence. Do not encode this distinction in
+// a string property: broker/transport errors are external data and may carry
+// arbitrary fields.
+const BROKER_STARTUP_CANCELLED = Symbol("brokerStartupCancelled");
 
 function resolvePath(...segments: string[]): string {
 	return join(PACKAGE_ROOT, ...segments);
@@ -545,8 +549,14 @@ export function brokerFallbackHasTime(deadlineAt: number | undefined): boolean {
 }
 
 function errorCode(error: unknown): string | undefined {
-	const code = (error as { code?: unknown })?.code;
-	return typeof code === "string" && code.length > 0 ? code : undefined;
+	try {
+		const code = (error as { code?: unknown })?.code;
+		return typeof code === "string" && code.length > 0 ? code : undefined;
+	} catch {
+		// Error-like values can cross an injected/transport boundary. A hostile
+		// getter must not replace the original failure with a diagnostics error.
+		return undefined;
+	}
 }
 
 function brokerPhaseForError(
@@ -659,7 +669,22 @@ function emitBrokerAttemptEnvelope(
 }
 
 function isBrokerCancellation(error: unknown, signal?: AbortSignal): boolean {
-	return signal?.aborted === true || errorCode(error) === "request_fenced";
+	// A request_fenced error is only an expected cancellation when the caller's
+	// signal is actually aborted. The broker can also emit request_fenced after
+	// cancelling an operation server-side (for example during a disconnect or
+	// target teardown); treating that infrastructure failure as caller intent
+	// silently disables the legacy fallback.
+	if (signal?.aborted === true) return true;
+	if (errorCode(error) !== "request_fenced") return false;
+	try {
+		return (
+			(error as { [BROKER_STARTUP_CANCELLED]?: unknown } | null)?.[
+				BROKER_STARTUP_CANCELLED
+			] === true
+		);
+	} catch {
+		return false;
+	}
 }
 
 function assertBrokerBudget(options: {
@@ -1389,9 +1414,13 @@ export async function notifyGoogleBrokerProcessEventForTests(
 	});
 }
 
-function brokerStartupCancellationError(): Error & { code: string } {
+function brokerStartupCancellationError(): Error & {
+	code: string;
+	[BROKER_STARTUP_CANCELLED]: true;
+} {
 	return Object.assign(new Error("Broker startup was cancelled"), {
 		code: "request_fenced",
+		[BROKER_STARTUP_CANCELLED]: true as const,
 	});
 }
 
