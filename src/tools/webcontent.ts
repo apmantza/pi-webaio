@@ -1,4 +1,4 @@
-import { Type } from "typebox";
+import { TOOL_METADATA } from "./lazy.ts";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { getStoredContent } from "../session-store.ts";
 import { applyTokenBudget } from "../prune-markdown.ts";
@@ -7,40 +7,7 @@ import { shortHash, hashesEqual } from "../content-hash.ts";
 
 export function registerWebcontentTool(pi: ExtensionAPI): void {
 	pi.registerTool({
-		name: "aio-webcontent",
-		label: "Web Content",
-		description:
-			"Retrieve previously fetched content from session storage by URL. Content is stored automatically after every successful aio-webfetch or aio-webpull.",
-		promptSnippet: "Get stored content from a previous fetch",
-		promptGuidelines: [
-			"Use aio-webcontent when you need the full content of a previously fetched URL without re-downloading.",
-			"Pass diff: true to see a section-level diff of the URL's current cached content against its previous version.",
-		],
-		parameters: Type.Object({
-			url: Type.String({
-				description: "URL of previously fetched content",
-			}),
-			budgetTokens: Type.Optional(
-				Type.Number({
-					description:
-						"Hard token budget for the content returned to the agent. When set, the output is guaranteed to fit within this many tokens — heading structure is preserved, lowest-value sections are dropped first, and a footer notes how many sections were omitted. Min 100.",
-					minimum: 100,
-				}),
-			),
-			query: Type.Optional(
-				Type.String({
-					description:
-						"Relevance query for budget-aware pruning. When set alongside budgetTokens, sections are scored by BM25 relevance so the most relevant sections are kept.",
-				}),
-			),
-			diff: Type.Optional(
-				Type.Boolean({
-					description:
-						"When true, return a section-level diff of the URL's current cached content against its previously stored version (reusing the aio-webfetch diff engine) instead of the full content. Requires the URL to have been fetched at least twice. Default: false.",
-				}),
-			),
-		}),
-
+		...TOOL_METADATA["aio-webcontent"],
 		async execute(_toolCallId: string, params: any): Promise<any> {
 			const stored = getStoredContent(params.url);
 			if (!stored) {

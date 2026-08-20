@@ -1,4 +1,4 @@
-import { Type } from "typebox";
+import { TOOL_METADATA } from "./lazy.ts";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { smartFetch, getLatestChromeProfile, DEFAULT_OS } from "../fetch.ts";
 import { discover } from "../discovery.ts";
@@ -12,40 +12,7 @@ import { normalizeInputUrl } from "./utils.ts";
 
 export function registerWebmapTool(pi: ExtensionAPI): void {
 	pi.registerTool({
-		name: "aio-webmap",
-		label: "Web Map",
-		description:
-			"Discovery-only tool — finds pages via robots.txt, sitemaps, navigation links, llms.txt, and crawling without fetching content. Returns structured URLs grouped by source. GitHub repo URLs return a full file tree + architecture signals + feature URLs (issues, PRs, releases, tags).",
-		promptSnippet: "Discover pages on a website without fetching content",
-		promptGuidelines: [
-			"Use aio-webmap to discover all pages on a site before a full pull.",
-			"GitHub repo URLs return a file tree, architecture signals, and feature URLs (issues, PRs, releases, tags).",
-			"Returns URLs grouped by discovery source: repo-clone, github-api, github-api:<feature>, sitemaps, robots.txt, navigation, llms.txt, crawl.",
-			"Use aio-webpull to actually fetch and convert the discovered pages.",
-		],
-		parameters: Type.Object({
-			url: Type.String({
-				description:
-					"URL to discover pages for (e.g. https://docs.example.com or https://github.com/owner/repo)",
-			}),
-			max: Type.Optional(
-				Type.Number({
-					description: "Max URLs to discover (default: 100)",
-					default: 100,
-				}),
-			),
-			browser: Type.Optional(
-				Type.String({
-					description: `Browser profile for TLS fingerprinting. Default: "${getLatestChromeProfile()}"`,
-				}),
-			),
-			os: Type.Optional(
-				Type.String({
-					description: `OS profile for fingerprinting. Default: "${DEFAULT_OS}"`,
-				}),
-			),
-		}),
-
+		...TOOL_METADATA["aio-webmap"],
 		async execute(_toolCallId, params) {
 			const url = normalizeInputUrl(params.url);
 

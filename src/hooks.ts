@@ -90,6 +90,7 @@ function validate(mod: unknown): UserHookModule | string {
 	if (m.afterExtract !== undefined && typeof m.afterExtract !== "function") {
 		return '"afterExtract" must be a function if present';
 	}
+	// SAFETY: The checks above validate every required field and callback before this cast.
 	return m as unknown as UserHookModule;
 }
 

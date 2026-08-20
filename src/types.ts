@@ -56,6 +56,7 @@ function ensurePdfDomPolyfills(): void {
 
 export async function loadPdfParseCtor(): Promise<PdfParseCtor> {
 	ensurePdfDomPolyfills();
+	// SAFETY: pdf-parse's documented exports are normalized to the local PdfParseCtor interface below.
 	const mod = (await import("pdf-parse")) as unknown as {
 		PDFParse?: PdfParseCtor;
 		default?: PdfParseCtor;

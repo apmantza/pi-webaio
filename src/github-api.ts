@@ -263,6 +263,7 @@ export async function ghApiCall<T = unknown>(
 	if (opts.raw) {
 		// Don't parse JSON; return raw stdout
 		const out = await execGh(args);
+		// SAFETY: The raw-output branch intentionally returns caller-selected bytes as T.
 		return out as unknown as T;
 	}
 	// `--jq .` returns parsed JSON on success
@@ -272,6 +273,7 @@ export async function ghApiCall<T = unknown>(
 		return JSON.parse(out) as T;
 	} catch {
 		// Fall back to raw return (gh may have errored to stdout)
+		// SAFETY: The generic API intentionally preserves non-JSON gh output for its caller.
 		return out as unknown as T;
 	}
 }

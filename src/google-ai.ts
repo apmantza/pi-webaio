@@ -988,6 +988,7 @@ async function loadBrokerModule(): Promise<BrokerModule> {
 	const moduleUrl = pathToFileURL(
 		resolvePath("extractors", "google-cdp-broker-client.mjs"),
 	).href;
+	// SAFETY: The broker module is a trusted local extractor with the known BrokerModule shape.
 	return (await import(moduleUrl)) as unknown as BrokerModule;
 }
 
@@ -1544,6 +1545,7 @@ async function ensureGoogleBroker(
 		Date.now() + BROKER_STARTUP_TIMEOUT_MS,
 	);
 	const generation: BrokerStartupGeneration = {
+		// SAFETY: The startup promise is replaced with the real BrokerClient promise before any waiter observes it.
 		promise: Promise.resolve(undefined as unknown as BrokerClient),
 		controller: new AbortController(),
 		waiters: 0,
@@ -1972,6 +1974,7 @@ export function closeGoogleBroker(
 	})();
 	const closeEntry = {
 		generation: expected?.generation ?? 0,
+		// SAFETY: closeEntry.promise is assigned sharedClosePromise before the entry is published to shared state.
 		promise: undefined as unknown as Promise<void>,
 	};
 	const sharedClosePromise = closePromise.finally(() => {

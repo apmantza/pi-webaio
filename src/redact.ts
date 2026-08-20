@@ -72,7 +72,9 @@ function normalizeBrokerEnvelopeField(field: string): string {
 // normalizer accepts camelCase, snake_case, kebab-case, and spaced JSON-ish
 // labels; the word lists also drive the text matcher, so structured and text
 // scrubbing cannot silently diverge.
-const BROKER_ENVELOPE_FIELD_ALIASES: Readonly<Record<string, readonly string[]>> = {
+const BROKER_ENVELOPE_FIELD_ALIASES: Readonly<
+	Record<string, readonly string[]>
+> = {
 	apikey: ["api", "key"],
 	accesskey: ["access", "key"],
 	accesstoken: ["access", "token"],
@@ -113,16 +115,46 @@ const BROKER_ENVELOPE_FIELD_ALIASES: Readonly<Record<string, readonly string[]>>
 	request: ["request"],
 };
 const BROKER_ENVELOPE_CREDENTIAL_FIELDS = new Set([
-	"apikey", "accesskey", "accesstoken", "authtoken", "refreshtoken",
-	"sessiontoken", "idtoken", "clientsecret", "clientcredential",
-	"clientcredentials", "secretkey", "secret", "token", "password",
-	"passwd", "pwd", "cookie", "cookies", "authorization", "auth",
-	"credential", "credentials", "capability", "capabilities",
+	"apikey",
+	"accesskey",
+	"accesstoken",
+	"authtoken",
+	"refreshtoken",
+	"sessiontoken",
+	"idtoken",
+	"clientsecret",
+	"clientcredential",
+	"clientcredentials",
+	"secretkey",
+	"secret",
+	"token",
+	"password",
+	"passwd",
+	"pwd",
+	"cookie",
+	"cookies",
+	"authorization",
+	"auth",
+	"credential",
+	"credentials",
+	"capability",
+	"capabilities",
 ]);
 const BROKER_ENVELOPE_ID_FIELDS = new Set([
-	"clientid", "targetid", "sessionid", "leaseid", "requestid",
-	"cdptargetid", "cdpsessionid", "brokerid", "connectionid", "client",
-	"target", "session", "lease", "request",
+	"clientid",
+	"targetid",
+	"sessionid",
+	"leaseid",
+	"requestid",
+	"cdptargetid",
+	"cdpsessionid",
+	"brokerid",
+	"connectionid",
+	"client",
+	"target",
+	"session",
+	"lease",
+	"request",
 ]);
 
 /** Return the strict envelope category for a field alias, or undefined for ordinary fields. */
@@ -201,7 +233,10 @@ export function redactBrokerEnvelopeFields(text: string): string {
 					stack.push(character === "{" ? "}" : "]");
 				else if (character === stack[stack.length - 1]) stack.pop();
 			}
-		} else if (text[valueEnd] === "\\" && (text[valueEnd + 1] === '"' || text[valueEnd + 1] === "'")) {
+		} else if (
+			text[valueEnd] === "\\" &&
+			(text[valueEnd + 1] === '"' || text[valueEnd + 1] === "'")
+		) {
 			opening = text.slice(valueEnd, valueEnd + 2);
 			valueEnd += 2;
 			for (; valueEnd < text.length; valueEnd++) {
@@ -227,10 +262,7 @@ export function redactBrokerEnvelopeFields(text: string): string {
 				}
 			}
 		} else {
-			while (
-				valueEnd < text.length &&
-				!/[\s,;\]}]/.test(text[valueEnd])
-			)
+			while (valueEnd < text.length && !/[\s,;\]}]/.test(text[valueEnd]))
 				valueEnd++;
 		}
 		if (valueEnd <= separatorEnd) continue;
@@ -262,20 +294,33 @@ export function redactBrokerEnvelopeFields(text: string): string {
  * receive the broad, entropy-aware redactor. The recursion deliberately builds
  * plain JSON data, so custom toJSON methods cannot reintroduce a raw value.
  */
+type RedactedValue =
+	| string
+	| number
+	| boolean
+	| null
+	| undefined
+	| RedactedValue[]
+	| { [key: string]: RedactedValue };
+
 export function scrubBrokerEnvelopeValue(
 	value: unknown,
 	key?: string,
 	preserveRootRequestId = false,
-): unknown {
+): RedactedValue {
 	const isRootCorrelationId =
 		preserveRootRequestId &&
 		key === "requestId" &&
 		typeof value === "string" &&
-		/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+		/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+			value,
+		);
 	const fieldType = key ? brokerEnvelopeFieldType(key) : undefined;
 	if (fieldType && !isRootCorrelationId) return `[${fieldType}]`;
 	if (typeof value === "string")
-		return isRootCorrelationId ? value : redactBrokerEnvelopeFields(redactSecrets(value));
+		return isRootCorrelationId
+			? value
+			: redactBrokerEnvelopeFields(redactSecrets(value));
 	if (Array.isArray(value))
 		return value.map((item) => scrubBrokerEnvelopeValue(item));
 	if (value && typeof value === "object") {
@@ -292,7 +337,9 @@ export function scrubBrokerEnvelopeValue(
 	}
 	if (typeof value === "bigint") return String(value);
 	if (typeof value === "function" || typeof value === "symbol") return undefined;
-	return value;
+	if (value === null || typeof value === "undefined") return value;
+	if (typeof value === "number" || typeof value === "boolean") return value;
+	return undefined;
 }
 
 // ─── Authorization headers ──────────────────────────────────────────

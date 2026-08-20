@@ -190,10 +190,17 @@ async function browserLevelClick(x, y) {
 		new Promise((r) => {
 			const id = ++msgId;
 			const handler = (evt) => {
-				if (JSON.parse(evt.data).id === id) {
-					ws.removeEventListener("message", handler);
-					r();
+				let message;
+				try {
+					message = JSON.parse(evt.data);
+				} catch {
+					return;
 				}
+				if (!message || typeof message !== "object" || message.id !== id) {
+					return;
+				}
+				ws.removeEventListener("message", handler);
+				r();
 			};
 			ws.addEventListener("message", handler);
 			ws.send(JSON.stringify({ id, method, params }));
@@ -314,7 +321,22 @@ export async function humanClickElement(tab, cdpFn, selector) {
 		return null; // Element not found
 	}
 
-	const parsed = JSON.parse(rect);
+	let parsed;
+	try {
+		parsed = JSON.parse(rect);
+	} catch {
+		return null;
+	}
+	if (
+		!parsed ||
+		typeof parsed !== "object" ||
+		!Number.isFinite(parsed.x) ||
+		!Number.isFinite(parsed.y) ||
+		!Number.isFinite(parsed.w) ||
+		!Number.isFinite(parsed.h)
+	) {
+		return null;
+	}
 	// Skip elements with zero dimensions or off-screen position — clicking at
 	// (0,0) is a false positive (hidden/unmounted element matched the selector).
 	if (parsed.w === 0 || parsed.h === 0 || (parsed.x === 0 && parsed.y === 0)) {

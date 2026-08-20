@@ -1,4 +1,4 @@
-import { Type } from "typebox";
+import { TOOL_METADATA } from "./lazy.ts";
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { setSearchContext } from "../session-store.ts";
@@ -48,56 +48,7 @@ function classifyRedditStatus(status: string, count: number): EngineStatus {
 
 export function registerWebsearchTool(pi: ExtensionAPI): void {
 	pi.registerTool({
-		name: "aio-websearch",
-		label: "Web Search",
-		description:
-			"Search the web; returns deduped, cross-engine ranked results with title, url, snippet, and sourceType (official-docs/repo/academic/maintainer-blog/website/community/news/social). No API keys — runs DDG, Brave, Yahoo, and Bing in parallel, capped at ~7s (returns deterministic partial results at the deadline). Google is enabled by default when Chrome CDP is available; Reddit is an automatic CDP companion whenever CDP is available, including when google:false. Common: query, max. Situational: compact:true for URL-scouting (one line per result — title + url + sourceType, no snippet), goggles to rerank additively (presets: docs-first, research, news-balanced, or custom rules), prefetch to warm the cache with the top hits, google:false to skip Google only.",
-		promptSnippet: "Search the web for current information or references",
-		promptGuidelines: [
-			"Use aio-websearch when the user asks a question that requires current or external information not in your training data.",
-			"After getting search results, use aio-webfetch or aio-webpull to retrieve the full content of the most relevant result.",
-			"Runs DDG/Brave/Yahoo/Bing in parallel. Google requires headless Chrome (auto-launched) and is enabled by default. Reddit is also automatic when Chrome CDP is available; google: false skips Google but does not disable Reddit. Set google: false to skip Google.",
-			"Set compact: true for URL scouting — one line per result (title + URL + sourceType, no snippet) to minimize token waste.",
-		],
-		parameters: Type.Object({
-			query: Type.String({
-				description: "Search query (e.g. 'React Server Components RFC')",
-			}),
-			max: Type.Optional(
-				Type.Number({
-					description:
-						"Max results to request from each engine (default: 15). Up to 25 returned after dedup across all engines.",
-					default: 15,
-				}),
-			),
-			google: Type.Optional(
-				Type.Boolean({
-					description:
-						"Also search Google via Chrome CDP (headless by default; set GREEDY_SEARCH_VISIBLE=1 for visible mode). Default: true.",
-					default: true,
-				}),
-			),
-			compact: Type.Optional(
-				Type.Boolean({
-					description:
-						"Opt-in compact output for URL scouting: render ONE line per result with just title + URL + sourceType (official-docs/repo/academic/maintainer-blog/website/community/news/social) and NO snippet. Keeps the engine-count header and any non-ok engine notes. Default: false (full snippets).",
-					default: false,
-				}),
-			),
-			prefetch: Type.Optional(
-				Type.Union([Type.Boolean(), Type.Number()], {
-					description:
-						"Opt-in speculative prefetch: background-fetch the top result URLs into the session cache while you read the results, so follow-up aio-webfetch calls are served instantly from cache. Pass true to prefetch the top 3 results, or a positive integer to prefetch that many. Default: false (off).",
-				}),
-			),
-			goggles: Type.Optional(
-				Type.Union([Type.String(), Type.Record(Type.String(), Type.Unknown())], {
-					description:
-						"Optional rerank profile applied additively on top of the normal ranking. Pass a built-in preset name ('docs-first', 'research', 'news-balanced'), a path to a JSON file of custom rules, an inline JSON string, or a rules object ({ rules: [{ domains?, domainMarkers?, urlMarkers?, titleTerms?, weight }] }). Omit for unchanged default ranking.",
-				}),
-			),
-		}),
-
+		...TOOL_METADATA["aio-websearch"],
 		async execute(_toolCallId, params, signal, onUpdate) {
 			const query = params.query;
 			setSearchContext(query);

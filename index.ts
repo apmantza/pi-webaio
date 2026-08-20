@@ -1,50 +1,47 @@
+import { recordStartupTiming } from "./src/startup-timing.ts";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import {
-	loadContentCacheFromDisk,
-	loadSearchCacheFromDisk,
-	cleanupSessionCache,
-	SESSION_CACHE_CLEANUP_MS,
-} from "./src/session-store.ts";
-import { initUserExtractors } from "./src/verticals/registry.ts";
-import { registerWebfetchTool } from "./src/tools/webfetch.ts";
-import { registerWebcontentTool } from "./src/tools/webcontent.ts";
-import { registerWebresultTool } from "./src/tools/webresult.ts";
-import { registerWebsearchTool } from "./src/tools/websearch.ts";
-import { registerWebmapTool } from "./src/tools/webmap.ts";
-import { registerWebpullTool } from "./src/tools/webpull.ts";
-import { registerWebqueryTool } from "./src/tools/webquery.ts";
-import { registerWebresearchTool } from "./src/tools/webresearch.ts";
+import { registerLazyTools } from "./src/tools/lazy.ts";
 
+/**
+ * pi-webaio's entry point stays deliberately small. Fetching, extraction,
+ * search, browser, and renderer dependencies are loaded by src/tools/lazy.ts
+ * when the corresponding tool is first called rather than during pi startup.
+ */
 export default function (pi: ExtensionAPI) {
-	// Load user-defined vertical extractors from ~/.pi/agent/webaio/verticals/
-	// A load failure is a user-actionable config error (bad path, syntax error
-	// in a custom vertical), not a best-effort background task — surface it
-	// instead of silently dropping the user's extractors (audit P6).
-	initUserExtractors().catch((err) => {
-		console.warn(
-			`[user-verticals] Failed to initialize user extractors: ${(err as Error).message ?? String(err)}`,
-		);
-	});
+	const factoryStartedAt = performance.now();
+	let userExtractorsReady: Promise<void> | undefined;
+	const ensureUserExtractors = (): Promise<void> => {
+		userExtractorsReady ??= import("./src/verticals/registry.ts")
+			.then(({ initUserExtractors }) => initUserExtractors())
+			.catch((err: unknown) => {
+				process.stderr.write(
+					`[user-verticals] Failed to initialize user extractors: ${err instanceof Error ? err.message : String(err)}\n`,
+				);
+			});
+		return userExtractorsReady;
+	};
 
-	// Load persisted search cache on startup
-	loadSearchCacheFromDisk().catch(() => {});
-	// Load persisted content cache from disk (lazy — contents loaded on first access)
-	loadContentCacheFromDisk();
+	// Cache warming is useful, but it should not extend the synchronous
+	// extension-load window measured by pi. Tool calls that depend on a cache
+	// await this promise, preventing a first-call miss while the disk scan runs.
+	const cacheReady = import("./src/session-store.ts")
+		.then(
+			async ({
+				loadContentCacheFromDisk,
+				loadSearchCacheFromDisk,
+				cleanupSessionCache,
+				SESSION_CACHE_CLEANUP_MS,
+			}) => {
+				await Promise.all([loadSearchCacheFromDisk(), loadContentCacheFromDisk()]);
+				setInterval(cleanupSessionCache, SESSION_CACHE_CLEANUP_MS).unref();
+			},
+		)
+		.catch(() => {});
 
-	// Start session cache cleanup.
-	// .unref() so this recurring timer does not keep the Node.js event loop
-	// alive on its own. Without it, one-shot `pi -p` invocations never exit:
-	// the agent finishes and prints its answer, but the process hangs until
-	// killed because the ref'd interval keeps the loop running.
-	setInterval(cleanupSessionCache, SESSION_CACHE_CLEANUP_MS).unref();
+	// Tool execution awaits these promises, so custom verticals and persisted
+	// caches are ready before the first dependent call without putting either
+	// dependency graph on the synchronous extension import path.
+	registerLazyTools(pi, ensureUserExtractors, cacheReady);
 
-	// Register all 8 tools
-	registerWebfetchTool(pi);
-	registerWebcontentTool(pi);
-	registerWebresultTool(pi);
-	registerWebsearchTool(pi);
-	registerWebmapTool(pi);
-	registerWebpullTool(pi);
-	registerWebqueryTool(pi);
-	registerWebresearchTool(pi);
+	recordStartupTiming(factoryStartedAt);
 }

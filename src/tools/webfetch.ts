@@ -1,7 +1,7 @@
+import { TOOL_METADATA } from "./lazy.ts";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
 import { MAX_PREVIEW_CHARS, pullPageEnhanced } from "../content.ts";
 import { compileContextPackage } from "../context-package.ts";
 import {
@@ -694,176 +694,7 @@ export function composeFetchText(parts: FetchTextParts): string {
 
 export function registerWebfetchTool(pi: ExtensionAPI): void {
 	pi.registerTool({
-		name: "aio-webfetch",
-		label: "Web Fetch",
-		description:
-			"Fetch URL(s) and convert to markdown with anti-bot TLS fingerprinting (detects PDFs, GitHub repos, Next.js RSC). Full content is ALWAYS saved to disk + cached; these controls only change what is RETURNED to keep token use low.\n\nCommon patterns:\n- Fetch one page: aio-webfetch(url).\n- Focused answer from one page: aio-webfetch(url, query) — returns the top-k BM25-ranked chunks (with heading breadcrumbs) that answer the query, not the whole page.\n- Cited multi-source answer: aio-webfetch(urls:[...], query) — pools chunks from ALL pages, ranks them, and returns the top-k each labeled with its source URL + heading (verifiable cited retrieval, not a generated answer).\n- One document from many pages: aio-webfetch(urls:[...], compile) — compiles the batch into a single markdown package.\n\nOutput controls:\n- outline:true — ~50-token heading outline (the page's shape) instead of the body.\n- budgetTokens — HARD output ceiling; guarantees the returned text fits N tokens (heading skeleton preserved).\n- format — markdown (default, saved to disk) | html | text | json | raw (in-memory).\n- summarize:true — OPT-IN AI summary for long content. Off by default: long content returns the frugal outline+largest-section preview instead (cheaper, lossless). Full content is saved either way.\n\nThree output-limit knobs (pick one): prune = score-based relevance pruning to a token budget (drops low-value sections, query-aware); budgetTokens = hard output ceiling (guaranteed fit); max_length = raw character window (pagination with start_index).\n\nAdvanced (rarely needed): mode/browser/os/proxy (fetch tuning), chunks/maxTokens/overlapTokens/topChunks (RAG), start_index/max_length (pagination), bypass/bypassStrategies (opt-in paywall bypass), cacheTtlSeconds, interactive, localCheck, diff.",
-		promptSnippet:
-			"aio-webfetch(url|urls, query?, outline?, budgetTokens?, summarize?, compile?, format?, prune?, topChunks?, …): fetch URL(s) with anti-bot TLS fingerprinting + defuddle extraction. Full content always saved to disk + cached. `url` accepts a string OR an array; `urls` is the array form. `query` alone → single-page answer mode (top-k BM25 chunks w/ breadcrumbs); `urls:[…]+query` → cited multi-source answer (top-k chunks each labeled with its source URL). `outline:true` → ~50-token heading outline. `summarize:true` → opt-in AI summary (off by default; long content otherwise gets the frugal outline+largest-section preview). `format=html|text|json|raw` for an in-memory body. Use the read tool on the saved path for full text.",
-		promptGuidelines: [
-			"Use aio-webfetch when the user wants to retrieve specific webpage(s), article(s), or file(s).",
-			"Use aio-webpull when the user wants to download an entire site or docs collection.",
-			"After aio-webfetch completes, use the built-in read tool to inspect the generated markdown file(s).",
-			"Pass `urls: [...]` (or `url` with an array) to fetch multiple pages in one call — returns per-item progress in the TUI.",
-			"For a question answered by several pages, pass `urls:[...]` WITH `query` to get a cited multi-source answer (each chunk labeled with its source URL).",
-			"AI summarization is opt-in: pass `summarize: true` only when you actually want a lossy summary; otherwise the frugal preview / outline is cheaper and lossless.",
-		],
-		parameters: Type.Object({
-			url: Type.Optional(
-				Type.Union([Type.String(), Type.Array(Type.String())], {
-					description:
-						"URL to fetch. Accepts a single URL string OR an array of URL strings (additive — `urls` still works and takes precedence if both are given).",
-				}),
-			),
-			urls: Type.Optional(
-				Type.Array(Type.String(), {
-					description:
-						"Multiple URLs to fetch in parallel. Takes precedence over `url` if both are given.",
-				}),
-			),
-			out: Type.Optional(
-				Type.String({
-					description:
-						"Output file path under temp for single url (default: auto-derived from URL)",
-				}),
-			),
-			mode: Type.Optional(
-				Type.String({
-					description: `Scrape mode: "auto" (default), "fast", "fingerprint", or "browser". Auto escalates from fast → fingerprint → browser when bot protection is detected.`,
-				}),
-			),
-			browser: Type.Optional(
-				Type.String({
-					description: `Browser profile for TLS fingerprinting. Default: "${getLatestChromeProfile()}"`,
-				}),
-			),
-			os: Type.Optional(
-				Type.String({
-					description: `OS profile for fingerprinting. Default: "${DEFAULT_OS}"`,
-				}),
-			),
-			proxy: Type.Optional(
-				Type.String({
-					description:
-						"Proxy URL (e.g. http://user:pass@host:port or socks5://host:port)",
-				}),
-			),
-			cacheTtlSeconds: Type.Optional(
-				Type.Number({
-					description: "Opt-in cache TTL in seconds. Omit for fresh fetches.",
-				}),
-			),
-			compile: Type.Optional(
-				Type.Boolean({
-					description: "Compile batch results into a single context package.",
-				}),
-			),
-			prune: Type.Optional(
-				Type.Number({
-					description: "Prune markdown to token budget (e.g. 3000).",
-				}),
-			),
-			query: Type.Optional(
-				Type.String({
-					description:
-						"Relevance query for answer mode or query-aware pruning. When set without `prune`, activates answer mode: the page is chunked and only the top-k most relevant chunks (scored by BM25) are returned — ordered by document position with heading breadcrumbs. The full content is still cached so aio-webcontent can retrieve it by URL. When used with `prune`, keeps sections most relevant to this query during pruning.",
-				}),
-			),
-			topChunks: Type.Optional(
-				Type.Number({
-					description:
-						"Maximum number of top-scoring chunks to return in answer mode (query set, prune absent). Default 5. Min 1.",
-					minimum: 1,
-				}),
-			),
-			interactive: Type.Optional(
-				Type.Boolean({
-					description: "Extract interactive elements as numbered refs.",
-				}),
-			),
-			start_index: Type.Optional(
-				Type.Number({
-					description:
-						"Return content starting from this character index (0-based). Use with max_length for pagination.",
-				}),
-			),
-			max_length: Type.Optional(
-				Type.Number({
-					description:
-						"Maximum characters to return (default: unlimited). Use with start_index for pagination.",
-				}),
-			),
-			bypass: Type.Optional(
-				Type.Boolean({
-					description:
-						"Enable paywall bypass. If the fetched content looks paywalled, retry using a chain of strategies (Googlebot UA, archive.org Wayback, Playwright with paywall JS blocked) until one succeeds. Falls back gracefully if no strategy works.",
-				}),
-			),
-			bypassStrategies: Type.Optional(
-				Type.Array(Type.String(), {
-					description:
-						"Override the bypass strategy chain. Valid values: 'ua:googlebot', 'ua:bingbot', 'ua:facebookbot', 'referer:google', 'block_js', 'archive', 'archive_first', 'cookies'. Default is site-specific.",
-				}),
-			),
-			format: Type.Optional(
-				Type.String({
-					description: `Output format. Default: "markdown". Use "html" for raw HTML, "text" for plain text extraction, "json" for structured metadata + body, "raw" for the full HTTP response object.`,
-					default: "markdown",
-				}),
-			),
-			chunks: Type.Optional(
-				Type.Boolean({
-					description:
-						"Return paragraph-bounded chunks alongside the full markdown. Useful for RAG workflows. Only applies to format: markdown (other formats return in-memory body; chunk those yourself).",
-				}),
-			),
-			maxTokens: Type.Optional(
-				Type.Number({
-					description:
-						"Max tokens per chunk. Default 512. Only used when chunks: true. Min 1.",
-					minimum: 1,
-				}),
-			),
-			overlapTokens: Type.Optional(
-				Type.Number({
-					description:
-						"Tokens of tail-overlap from the previous chunk prepended to each chunk after the first. Default 50. Only used when chunks: true. Min 0.",
-					minimum: 0,
-				}),
-			),
-			budgetTokens: Type.Optional(
-				Type.Number({
-					description:
-						"Hard token budget for the content returned to the agent. When set, the output is guaranteed to fit within this many tokens — heading structure is preserved, lowest-value sections are dropped first (BM25-scored when query is also set), and a footer notes how many sections were omitted. Composes with query answer mode: the budget is applied to the answer-mode output. Full content is always cached before trimming. Min 100.",
-					minimum: 100,
-				}),
-			),
-			diff: Type.Optional(
-				Type.Boolean({
-					description:
-						"When true and a previous version of the URL is cached, fetch fresh content and return a section-level diff (added/changed/removed sections by heading) instead of the full page. If content is unchanged (including a 304 Not Modified response), reports 'unchanged since <time>, 0 changes'. When nothing is cached, falls back to a normal full fetch with a note that no baseline exists. The new content replaces the cache so the next diff is against this fetch.",
-				}),
-			),
-			localCheck: Type.Optional(
-				Type.Boolean({
-					description:
-						"Opt-in local-knowledge pre-check. Before the live fetch, search any locally-pulled corpus (from aio-webpull) for the URL's hostname using the fetch's `query` (or a query derived from the URL path). If relevant content is already pulled, it is surfaced as `details.localKnowledge` (top matching files, original URLs, and BM25 scores) plus a note in the output, so you can use cached local content instead of / alongside the network fetch. Default (absent) leaves the fetch completely unchanged.",
-				}),
-			),
-			outline: Type.Optional(
-				Type.Boolean({
-					description:
-						"Opt-in outline/TOC mode. After fetching, return ONLY a compact heading outline (total word count + per-section word counts, ~50 tokens) instead of the body, so you can see a page's shape and then fetch just the section you want (via `query`) or the whole page (via aio-webcontent). The full content is still saved to disk + cached as normal; only what is RETURNED changes. Applies to format: markdown.",
-				}),
-			),
-			summarize: Type.Optional(
-				Type.Boolean({
-					description:
-						"Opt-in AI summarization for long content (via Google AI Mode). Default false: long content returns the frugal outline + largest-section preview instead, which is cheaper and lossless. When true, the relatedness-gated focused-summary behavior is preserved (a recent related search query is injected and the summary is annotated `_[focused on prior search]_`), and an `AI-summarized… full content saved` footer is added. The FULL content is ALWAYS saved to disk + cached regardless of this flag.",
-				}),
-			),
-		}),
-
+		...TOOL_METADATA["aio-webfetch"],
 		async execute(
 			_toolCallId: string,
 			params: any,
@@ -2162,8 +1993,10 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 			}
 		},
 
-		renderCall(args: Record<string, unknown>, theme: any) {
-			return createCallComponent(args, theme);
+		renderCall(args: unknown, theme: any) {
+			const callArgs =
+				args && typeof args === "object" ? (args as Record<string, unknown>) : {};
+			return createCallComponent(callArgs, theme);
 		},
 
 		renderResult(

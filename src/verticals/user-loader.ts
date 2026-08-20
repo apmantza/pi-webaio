@@ -75,6 +75,7 @@ function validate(mod: unknown): UserExtractorModule | string {
 		return `match() threw on a test URL: ${(err as Error).message}`;
 	}
 
+	// SAFETY: The checks above validate every required field and callback before this cast.
 	return m as unknown as UserExtractorModule;
 }
 

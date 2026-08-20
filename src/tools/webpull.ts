@@ -1,7 +1,7 @@
+import { TOOL_METADATA } from "./lazy.ts";
 import { join } from "node:path";
 import { cpus } from "node:os";
 import { readFile, writeFile } from "node:fs/promises";
-import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { getLatestChromeProfile, DEFAULT_OS } from "../fetch.ts";
 import { pullPageEnhanced } from "../content.ts";
@@ -127,112 +127,7 @@ export function computePullConcurrency(
 
 export function registerWebpullTool(pi: ExtensionAPI): void {
 	pi.registerTool({
-		name: "aio-webpull",
-		label: "Webpull",
-		description:
-			"Pull a whole site into local markdown files (offline-queryable via aio-webquery). Discovers pages via sitemap, navigation links, or crawling; writes files preserving URL structure with YAML frontmatter, with anti-bot TLS fingerprinting. Common: url, max, out. Situational: compile (bundle into one context package), resume (checkpoint/resume, auto by default — pass false to force fresh), routes (per-URL-pattern fetcher routing), adaptive (survive site redesigns), bypass (opt-in paywall bypass). Advanced: mode/browser/os/proxy.",
-		promptSnippet: "Pull an entire website into local markdown files",
-		promptGuidelines: [
-			"Use aio-websearch when the user wants to find information online. Returns compact search results.",
-			"Use aio-webfetch when the user wants to download a specific URL or batch of URLs.",
-			"After aio-webpull completes, use the built-in read tool to inspect the generated markdown files.",
-		],
-		parameters: Type.Object({
-			url: Type.String({
-				description: "URL to pull (e.g. https://docs.example.com)",
-			}),
-			out: Type.Optional(
-				Type.String({
-					description: "Output directory under temp (default: <hostname>)",
-				}),
-			),
-			max: Type.Optional(
-				Type.Number({
-					description: `Max pages to pull (default: 100, capped at ${MAX_CRAWL_ITEMS})`,
-					default: 100,
-				}),
-			),
-			mode: Type.Optional(
-				Type.String({
-					description: `Scrape mode: "auto" (default), "fast", "fingerprint", or "browser". Auto escalates when bot protection is detected.`,
-				}),
-			),
-			browser: Type.Optional(
-				Type.String({
-					description: `Browser profile for TLS fingerprinting. Default: "${getLatestChromeProfile()}". Examples: chrome_145, firefox_147, safari_26, edge_145`,
-				}),
-			),
-			os: Type.Optional(
-				Type.String({
-					description: `OS profile for fingerprinting. Default: "${DEFAULT_OS}". Options: windows, macos, linux, android, ios`,
-				}),
-			),
-			proxy: Type.Optional(
-				Type.String({
-					description:
-						"Proxy URL (e.g. http://user:pass@host:port or socks5://host:port)",
-				}),
-			),
-			compile: Type.Optional(
-				Type.Boolean({
-					description:
-						"Compile pulled pages into a single context package after completion.",
-				}),
-			),
-			resume: Type.Optional(
-				Type.Boolean({
-					description:
-						"Resume a previous pull from the output directory (default: auto-detect). Set to false to force a fresh pull.",
-				}),
-			),
-			routes: Type.Optional(
-				Type.Array(
-					Type.Object({
-						pattern: Type.String({
-							description:
-								"URL pattern: path string, glob (*/docs/*), or regex (/^\\/api\\//)",
-						}),
-						mode: Type.Optional(
-							Type.String({
-								description: "Fetcher mode: fast, fingerprint, browser, or auto",
-							}),
-						),
-						extractor: Type.Optional(
-							Type.String({
-								description: "Vertical extractor name (e.g. npm, pypi, wikipedia)",
-							}),
-						),
-						browser: Type.Optional(
-							Type.String({
-								description: "Browser profile override for this route",
-							}),
-						),
-						os: Type.Optional(
-							Type.String({
-								description: "OS profile override for this route",
-							}),
-						),
-					}),
-					{
-						description:
-							"Route definitions: URL pattern -> fetcher mode/extractor. Evaluated in order, first match wins.",
-					},
-				),
-			),
-			adaptive: Type.Optional(
-				Type.Boolean({
-					description:
-						"Enable adaptive content selector — remembers element structure to survive site redesigns (default: false)",
-				}),
-			),
-			bypass: Type.Optional(
-				Type.Boolean({
-					description:
-						"Enable paywall bypass on every page in the pull. If a fetched page looks paywalled, retry using a chain of strategies (Googlebot UA, archive.org Wayback, Playwright with paywall JS blocked) before recording an error.",
-				}),
-			),
-		}),
-
+		...TOOL_METADATA["aio-webpull"],
 		async execute(_toolCallId, params, signal, onUpdate) {
 			const url = normalizeInputUrl(params.url);
 

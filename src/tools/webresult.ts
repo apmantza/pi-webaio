@@ -1,25 +1,10 @@
-import { Type } from "typebox";
+import { TOOL_METADATA } from "./lazy.ts";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { storeResult, getResult, listResults } from "../storage.ts";
 
 export function registerWebresultTool(pi: ExtensionAPI): void {
 	pi.registerTool({
-		name: "aio-webresult",
-		label: "Get Stored Result",
-		description:
-			"Retrieve a previously fetched web scrape result by response ID. Results are stored automatically after every successful aio-webfetch or aio-webpull.",
-		promptSnippet: "Retrieve a stored web scrape by response ID",
-		promptGuidelines: [
-			"Use aio-webresult when you need to retrieve a previously fetched result by its response ID.",
-			"Response IDs are shown after every successful aio-webfetch call.",
-			"Use aio-webcontent to retrieve content by URL instead of by ID.",
-		],
-		parameters: Type.Object({
-			id: Type.String({
-				description: "Response ID from a previous webfetch call",
-			}),
-		}),
-
+		...TOOL_METADATA["aio-webresult"],
 		async execute(_toolCallId: string, params: any): Promise<any> {
 			const stored = await getResult(params.id);
 			if (!stored) {

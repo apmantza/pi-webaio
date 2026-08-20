@@ -390,6 +390,8 @@ function extractAttributes(element: Element): Record<string, string> {
 	for (const name of attrNames) {
 		if (name === "data-*") {
 			// Collect all data-* attributes
+			// SAFETY: The cast only indexes the same element with keys returned by Object.keys;
+			// every value is narrowed to a string before it is stored in the attribute map.
 			const el = element as unknown as Record<string, string>;
 			for (const key of Object.keys(element)) {
 				if (key.startsWith("data-")) {

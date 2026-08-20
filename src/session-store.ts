@@ -252,7 +252,7 @@ async function readFrontmatterHead(path: string): Promise<string | null> {
 	}
 }
 
-export function loadContentCacheFromDisk(): void {
+export function loadContentCacheFromDisk(): Promise<void> {
 	const root = BASE_TEMP;
 
 	async function scan(dir: string): Promise<number> {
@@ -296,8 +296,12 @@ export function loadContentCacheFromDisk(): void {
 		return entries;
 	}
 
-	setImmediate(() => {
-		scan(root).catch(() => {});
+	return new Promise<void>((resolve) => {
+		setImmediate(() => {
+			scan(root)
+				.catch(() => {})
+				.then(() => resolve());
+		});
 	});
 }
 

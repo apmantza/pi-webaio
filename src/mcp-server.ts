@@ -73,9 +73,7 @@ function captureTools(): McpToolDef[] {
 
 			// Strip TypeBox metadata ($schema, $id, Symbol keys) that MCP clients
 			// may not understand. Keep the structural JSON Schema properties.
-			const inputSchema = sanitizeJsonSchema(
-				rawSchema as Record<string, unknown>,
-			);
+			const inputSchema = sanitizeJsonSchema(rawSchema as Record<string, unknown>);
 			// MCP requires inputSchema to be type:"object" at the top level only —
 			// injecting `type` into nested nodes corrupts `properties` maps and unions.
 			if (!inputSchema["type"]) inputSchema["type"] = "object";
@@ -92,6 +90,7 @@ function captureTools(): McpToolDef[] {
 	// Register all eight tools via the same functions the pi extension uses.
 	// Cast to unknown first — pi is a peer-dep not required at MCP runtime;
 	// the shim satisfies the subset of the interface the tools actually call.
+	// SAFETY: piShim implements the registerTool subset consumed by every tool registration.
 	const pi = piShim as unknown as Parameters<typeof registerWebsearchTool>[0];
 	registerWebsearchTool(pi);
 	registerWebfetchTool(pi);
@@ -194,12 +193,7 @@ export async function startMcpServer(): Promise<void> {
 
 		try {
 			// onUpdate progress callbacks are no-ops in MCP context.
-			const result = await tool.execute(
-				toolCallId,
-				params,
-				undefined,
-				undefined,
-			);
+			const result = await tool.execute(toolCallId, params, undefined, undefined);
 			// result.content is already [{type:"text", text}] — pass through.
 			return { content: result.content };
 		} catch (err: unknown) {

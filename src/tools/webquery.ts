@@ -1,5 +1,5 @@
+import { TOOL_METADATA } from "./lazy.ts";
 import { join, isAbsolute, resolve } from "node:path";
-import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { tmpdir } from "node:os";
 import { createBM25Scorer } from "../bm25.ts";
@@ -25,33 +25,7 @@ export function resolveCorpusDir(
 
 export function registerWebqueryTool(pi: ExtensionAPI): void {
 	pi.registerTool({
-		name: "aio-webquery",
-		label: "Web Query",
-		description:
-			"Search a locally-pulled website corpus (from aio-webpull) using BM25. No re-fetching — offline, token-cheap knowledge base retrieval. Returns top-k relevant chunks with source file, original URL, and heading breadcrumb.",
-		promptSnippet: "Search pulled docs locally with BM25",
-		promptGuidelines: [
-			"Use aio-webquery to search content previously pulled with aio-webpull without re-downloading anything.",
-			"Use aio-webpull first if no index exists yet — it will build the BM25 index automatically.",
-			"Use aio-websearch or aio-webfetch for live web searches instead.",
-		],
-		parameters: Type.Object({
-			query: Type.String({
-				description: "Search query to run against the local corpus",
-			}),
-			dir: Type.Optional(
-				Type.String({
-					description: `Directory containing a pulled corpus (output of aio-webpull). Defaults to the standard temp location: ${DEFAULT_BASE}/<hostname>. Relative paths resolve against ${DEFAULT_BASE} (so dir="example.com" targets ${DEFAULT_BASE}/example.com).`,
-				}),
-			),
-			topK: Type.Optional(
-				Type.Number({
-					description: "Number of top chunks to return (default: 8)",
-					default: 8,
-				}),
-			),
-		}),
-
+		...TOOL_METADATA["aio-webquery"],
 		async execute(_toolCallId: string, params: any): Promise<any> {
 			const query: string = params.query;
 			const topK: number =

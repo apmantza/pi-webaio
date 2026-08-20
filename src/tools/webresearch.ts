@@ -1,6 +1,6 @@
+import { TOOL_METADATA } from "./lazy.ts";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { searchWeb } from "../search.ts";
 import { loadGoggles, type GogglesInput } from "../goggles.ts";
@@ -52,61 +52,7 @@ function resolveOutDir(
 
 export function registerWebresearchTool(pi: ExtensionAPI): void {
 	pi.registerTool({
-		name: "aio-webresearch",
-		label: "Web Research",
-		description:
-			"Single-round research orchestrator: fans out aio-websearch over a query (and optional sub-queries), ranks and dedupes sources, fetches the top-N through the webfetch pipeline, indexes them into a local BM25 corpus, and writes an auditable research bundle (STATUS.md, reports/, sources/, data/) to disk. Deterministic retrieval + bookkeeping only — no LLM calls inside the tool; the calling agent writes the cited claims.",
-		promptSnippet:
-			"aio-webresearch(query, queries?, maxSources?, outDir?, writeBundle?): run a single-round research pass and write a bundle under .pi/webaio-research/",
-		promptGuidelines: [
-			"Use aio-webresearch when the user wants a multi-source research pass with a durable, auditable trail (as opposed to a single aio-websearch/aio-webfetch call).",
-			"This is a single-round MVP: one fan-out of searches, one fetch pass, one bundle. There is no iterative follow-up loop yet.",
-			"After the tool returns, read reports/EVIDENCE.md and data/evidence.json, then fill in reports/CLAIMS.md yourself — the tool does not call an LLM to synthesize claims.",
-			"Pass `queries` with a few complementary sub-queries (different phrasings/angles) to widen coverage beyond the single `query`.",
-		],
-		parameters: Type.Object({
-			query: Type.String({
-				description: "Primary research question or topic.",
-			}),
-			queries: Type.Optional(
-				Type.Array(Type.String(), {
-					description:
-						"Optional agent-supplied sub-queries to fan out alongside `query` for wider coverage. Capped at 6 total (including `query`).",
-				}),
-			),
-			maxSources: Type.Optional(
-				Type.Number({
-					description:
-						"Maximum number of ranked sources to fetch and include in the bundle. Clamped to 3-12. Default 6.",
-					default: 6,
-					minimum: 3,
-					maximum: 12,
-				}),
-			),
-			outDir: Type.Optional(
-				Type.String({
-					description:
-						"Output directory for the research bundle, resolved relative to the current working directory. Default: .pi/webaio-research/<timestamp>_<slug>/",
-				}),
-			),
-			writeBundle: Type.Optional(
-				Type.Boolean({
-					description:
-						"Write the research bundle to disk (default: true). Set false to only search/fetch/rank in memory and return the summary without writing files.",
-					default: true,
-				}),
-			),
-			goggles: Type.Optional(
-				Type.Union(
-					[Type.String(), Type.Record(Type.String(), Type.Unknown())],
-					{
-						description:
-							"Optional rerank profile applied additively to each fanned-out search on top of the normal ranking. Pass a built-in preset name ('docs-first', 'research', 'news-balanced'), a path to a JSON file of custom rules, an inline JSON string, or a rules object ({ rules: [{ domains?, domainMarkers?, urlMarkers?, titleTerms?, weight }] }). Omit for unchanged default ranking.",
-					},
-				),
-			),
-		}),
-
+		...TOOL_METADATA["aio-webresearch"],
 		async execute(_toolCallId, params: any, _signal, onUpdate) {
 			const query: string = params.query;
 			const startedAt = new Date();

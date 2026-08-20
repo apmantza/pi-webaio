@@ -375,6 +375,7 @@ export function extractReadability(
 ): { title: string; content: string } | null {
 	try {
 		const { document } = parseHTML(html);
+		// SAFETY: linkedom's document implements the DOM Document surface required by Readability.
 		const reader = new Readability(document as unknown as Document);
 		const article = reader.parse();
 		if (!article || (article.textContent?.length ?? 0) < 200) return null;
