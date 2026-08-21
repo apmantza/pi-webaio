@@ -121,6 +121,23 @@ test("RequestQueue persistence and resume", async () => {
 	await rm(dir, { recursive: true, force: true });
 });
 
+test("RequestQueue can requeue completed entries whose output is missing", async () => {
+	const dir = join(tmpdir(), `rq-test-missing-output-${Date.now()}`);
+	const q = await RequestQueue.create(dir);
+	await q.add(["https://example.com/missing"]);
+	await q.next();
+	await q.complete("https://example.com/missing");
+	await q.close();
+
+	const resumed = await RequestQueue.resume(dir);
+	assert.ok(resumed);
+	assert.strictEqual(await resumed.requeueCompletedMissingFiles(), 1);
+	assert.strictEqual(await resumed.next(), "https://example.com/missing");
+
+	await resumed.close();
+	await rm(dir, { recursive: true, force: true });
+});
+
 test("RequestQueue resume detects existing .md files", async () => {
 	const dir = join(tmpdir(), `rq-test-mdscan-${Date.now()}`);
 	await mkdir(dir, { recursive: true });
@@ -142,6 +159,32 @@ test("RequestQueue resume detects existing .md files", async () => {
 	assert.ok(resumed);
 	assert.strictEqual(resumed.stats().completed, 1);
 	assert.strictEqual(resumed.stats().queued, 1); // page-b still queued
+
+	await resumed.close();
+	await rm(dir, { recursive: true, force: true });
+});
+
+test("RequestQueue resume marks a backfilled seed completed when its file exists", async () => {
+	const dir = join(tmpdir(), `rq-test-seed-resume-${Date.now()}`);
+	await mkdir(dir, { recursive: true });
+	await writeFile(
+		join(dir, "page-seed.md"),
+		"---\ntitle: \"Seed\"\nurl: \"https://example.com/seed.json\"\n---\n\nContent here",
+		"utf8",
+	);
+
+	const q = await RequestQueue.create(dir);
+	await q.add(["https://example.com/other"]);
+	await q.close();
+
+	const resumed = await RequestQueue.resume(dir);
+	assert.ok(resumed);
+	await resumed.addPreservingCompletedFiles([
+		"https://example.com/seed.json?view=full#section",
+	]);
+	assert.strictEqual(resumed.stats().completed, 1);
+	assert.strictEqual(resumed.stats().queued, 1);
+	assert.strictEqual(await resumed.next(), "https://example.com/other");
 
 	await resumed.close();
 	await rm(dir, { recursive: true, force: true });

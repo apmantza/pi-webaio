@@ -17,6 +17,7 @@ const IGNORED =
 const MAX_CHILD_SITEMAPS = 50;
 const SITEMAP_CONCURRENCY = 5;
 const MAX_SITEMAP_URLS = 5000;
+const MAX_SITEMAP_FETCHES = 100;
 
 const NAV_SELECTORS = [
 	"nav a[href]",
@@ -35,8 +36,14 @@ async function tryFetch(
 	url: string,
 	opts?: FetchOpts,
 ): Promise<{ text: string; url: string } | null> {
-	const r = await smartFetch(url, opts);
-	return r?.status && r.status < 400 ? { text: r.text, url: r.url } : null;
+	try {
+		const r = await smartFetch(url, opts);
+		return r?.status && r.status < 400 ? { text: r.text, url: r.url } : null;
+	} catch {
+		// Discovery is best-effort: one unavailable sitemap must not prevent
+		// navigation extraction or bounded crawling from running.
+		return null;
+	}
 }
 
 export function parseLocs(xml: string): string[] {
@@ -45,8 +52,38 @@ export function parseLocs(xml: string): string[] {
 
 // ─── Sitemap fetching (recursive, handles index sitemaps) ──────────
 
-async function fetchSitemap(url: string, depth = 0): Promise<string[]> {
-	if (depth > 3) return [];
+type SitemapBudget = { remaining: number };
+
+function isApprovedSitemapUrl(raw: string, allowedOrigins: Set<string>): boolean {
+	try {
+		const url = new URL(raw);
+		return (
+			(url.protocol === "http:" || url.protocol === "https:") &&
+			allowedOrigins.has(url.origin)
+		);
+	} catch {
+		return false;
+	}
+}
+
+function consumeSitemapBudget(budget: SitemapBudget): boolean {
+	if (budget.remaining <= 0) return false;
+	budget.remaining--;
+	return true;
+}
+
+async function fetchSitemap(
+	url: string,
+	depth: number,
+	allowedOrigins: Set<string>,
+	budget: SitemapBudget,
+): Promise<string[]> {
+	if (
+		depth > 3 ||
+		!isApprovedSitemapUrl(url, allowedOrigins) ||
+		!consumeSitemapBudget(budget)
+	)
+		return [];
 
 	const r = await tryFetch(url);
 	if (!r?.text.includes("<")) return [];
@@ -59,17 +96,29 @@ async function fetchSitemap(url: string, depth = 0): Promise<string[]> {
 		// Cap fan-out width and run with bounded concurrency — an index
 		// listing thousands of nested sitemaps must not spawn an
 		// unbounded (and at depth 3, exponential) burst of fetches.
-		const children = locs.slice(0, MAX_CHILD_SITEMAPS);
+		const children = locs
+			.filter((child) => isApprovedSitemapUrl(child, allowedOrigins))
+			.slice(0, MAX_CHILD_SITEMAPS);
 		const nested = await runInBatches(children, SITEMAP_CONCURRENCY, (u) =>
-			fetchSitemap(u, depth + 1),
+			fetchSitemap(u, depth + 1, allowedOrigins, budget),
 		);
 		return nested.flat().slice(0, MAX_SITEMAP_URLS);
 	}
 	return locs.slice(0, MAX_SITEMAP_URLS);
 }
 
-async function sitemapFromRobots(origin: string): Promise<string[]> {
-	const r = await tryFetch(`${origin}/robots.txt`);
+async function sitemapFromRobots(
+	origin: string,
+	allowedOrigins: Set<string>,
+	budget: SitemapBudget,
+): Promise<string[]> {
+	const robotsUrl = `${origin}/robots.txt`;
+	if (
+		!isApprovedSitemapUrl(robotsUrl, allowedOrigins) ||
+		!consumeSitemapBudget(budget)
+	)
+		return [];
+	const r = await tryFetch(robotsUrl);
 	if (!r) return [];
 	const urls = (r.text.match(/^Sitemap:\s*([^\n]{1,2000})$/gim) ?? []).map(
 		(l: string) => l.replace(/^Sitemap:\s*/i, "").trim(),
@@ -77,9 +126,11 @@ async function sitemapFromRobots(origin: string): Promise<string[]> {
 	if (!urls.length) return [];
 	// robots.txt can list an arbitrary number of "Sitemap:" lines — bound
 	// the same way as nested sitemap indexes.
-	const sitemaps = urls.slice(0, MAX_CHILD_SITEMAPS);
+	const sitemaps = urls
+		.filter((sitemap) => isApprovedSitemapUrl(sitemap, allowedOrigins))
+		.slice(0, MAX_CHILD_SITEMAPS);
 	const results = await runInBatches(sitemaps, SITEMAP_CONCURRENCY, (u) =>
-		fetchSitemap(u),
+		fetchSitemap(u, 0, allowedOrigins, budget),
 	);
 	return results.flat().slice(0, MAX_SITEMAP_URLS);
 }
@@ -104,7 +155,11 @@ function extractNav(base: URL, html: string): string[] {
 			try {
 				const r = new URL(href, base);
 				r.hash = r.search = "";
-				if (!IGNORED.test(r.pathname)) urls.add(r.href);
+				if (
+					(r.protocol === "http:" || r.protocol === "https:") &&
+					!IGNORED.test(r.pathname)
+				)
+					urls.add(r.href);
 			} catch {
 				/* ignore */
 			}
@@ -128,8 +183,9 @@ export function extractLinks(
 			const r = new URL(m[1]!, base);
 			r.hash = r.search = "";
 			if (
+				(r.protocol === "http:" || r.protocol === "https:") &&
 				r.hostname === base.hostname &&
-				r.pathname.startsWith(scope) &&
+				isInScopePath(r.pathname, scope) &&
 				!IGNORED.test(r.pathname) &&
 				!visited.has(r.href)
 			)
@@ -151,6 +207,12 @@ export function getScopePath(pathname: string): string {
 	return segs.length <= 1 ? pathname : `/${segs.slice(0, -1).join("/")}/`;
 }
 
+function isInScopePath(pathname: string, scope: string): boolean {
+	if (scope === "/") return pathname.startsWith("/");
+	const prefix = scope.endsWith("/") ? scope : `${scope}/`;
+	return pathname === scope || pathname.startsWith(prefix);
+}
+
 // ─── Filtering / dedup ─────────────────────────────────────────────
 
 export function filterAndDedupe(
@@ -165,8 +227,9 @@ export function filterAndDedupe(
 		try {
 			const u = new URL(raw);
 			if (
+				(u.protocol !== "http:" && u.protocol !== "https:") ||
 				!hosts.has(u.hostname) ||
-				!u.pathname.startsWith(scope) ||
+				!isInScopePath(u.pathname, scope) ||
 				IGNORED.test(u.pathname)
 			)
 				continue;
@@ -180,6 +243,43 @@ export function filterAndDedupe(
 		}
 	}
 	return out.slice(0, max);
+}
+
+/** Ensure a pull always includes the page the caller explicitly requested. */
+export function includeDiscoverySeed(
+	seedUrl: string,
+	discoveredUrls: string[],
+	hosts: Set<string>,
+	scope: string,
+	max: number,
+): string[] {
+	let seed: string | undefined;
+	let seedPath: string | undefined;
+	try {
+		const parsed = new URL(seedUrl);
+		parsed.hash = parsed.search = "";
+		if (
+			(parsed.protocol === "http:" || parsed.protocol === "https:") &&
+			hosts.has(parsed.hostname)
+		) {
+			// The caller explicitly requested this URL, so do not apply IGNORED.
+			seed = parsed.href;
+			seedPath = parsed.pathname;
+		}
+	} catch {
+		/* ignore malformed seeds */
+	}
+
+	const discovered = filterAndDedupe(discoveredUrls, hosts, scope, max).filter(
+		(url) => {
+			try {
+				return !seedPath || new URL(url).pathname !== seedPath;
+			} catch {
+				return true;
+			}
+		},
+	);
+	return (seed ? [seed, ...discovered] : discovered).slice(0, max);
 }
 
 // ─── Crawl ─────────────────────────────────────────────────────────
@@ -226,40 +326,64 @@ export async function discover(
 	max: number,
 	opts?: FetchOpts,
 ): Promise<string[]> {
-	const r = await smartFetch(baseUrl, opts);
-	if (!r || r.status >= 400)
-		throw new Error(`HTTP ${r?.status ?? "unknown"}: ${baseUrl}`);
-
-	// new URL throws on malformed input; a malformed response URL must not
-	// crash discovery — fall back to the base URL's own components.
-	let actual: URL;
 	let original: URL;
-	try {
-		actual = new URL(r.url);
-	} catch {
-		actual = new URL(baseUrl);
-	}
 	try {
 		original = new URL(baseUrl);
 	} catch {
 		throw new Error(`Invalid base URL: ${baseUrl}`);
 	}
+	if (original.protocol !== "http:" && original.protocol !== "https:")
+		throw new Error(`Unsupported discovery URL scheme: ${original.protocol}`);
+
+	const r = await smartFetch(baseUrl, opts);
+	if (!r || r.status >= 400)
+		throw new Error(`HTTP ${r?.status ?? "unknown"}: ${baseUrl}`);
+
+	// A malformed response URL must not crash discovery — fall back to the
+	// validated base URL's own components.
+	let actual: URL;
+	try {
+		const responseUrl = new URL(r.url);
+		actual =
+			responseUrl.protocol === "http:" || responseUrl.protocol === "https:"
+				? responseUrl
+				: original;
+	} catch {
+		actual = new URL(original.href);
+	}
 	const html = r.text;
 
 	const hosts = new Set([original.hostname, actual.hostname]);
 	const scope = getScopePath(actual.pathname);
+	const includeSeed = (urls: string[]) =>
+		includeDiscoverySeed(
+			original.href,
+			includeDiscoverySeed(actual.href, urls, hosts, scope, max),
+			hosts,
+			scope,
+			max,
+		);
 
 	const origins = [...new Set([original.origin, actual.origin])];
+	const allowedSitemapOrigins = new Set(origins);
+	const sitemapBudget: SitemapBudget = { remaining: MAX_SITEMAP_FETCHES };
 	const basePaths = [
 		...new Set([actual.pathname.replace(/\/[^/]*$/, "/"), "/"]),
 	];
 
 	const strategies: Promise<string[]>[] = [];
 	for (const o of origins) {
-		strategies.push(sitemapFromRobots(o));
+		strategies.push(sitemapFromRobots(o, allowedSitemapOrigins, sitemapBudget));
 		for (const bp of basePaths) {
 			for (const name of ["sitemap.xml", "sitemap_index.xml", "sitemap-0.xml"]) {
-				strategies.push(fetchSitemap(`${o}${bp}${name}`));
+				strategies.push(
+					fetchSitemap(
+						`${o}${bp}${name}`,
+						0,
+						allowedSitemapOrigins,
+						sitemapBudget,
+					),
+				);
 			}
 		}
 	}
@@ -269,15 +393,14 @@ export async function discover(
 	let best: string[] = [];
 	for (const urls of results) {
 		if (!urls.length) continue;
-		for (const u of urls) {
-			try {
-				hosts.add(new URL(u).hostname);
-			} catch {
-				/* ignore */
-			}
-		}
+		// Sitemap contents are untrusted data. Keep the allow-list restricted to
+		// the requested and redirect destination hosts; never authorize a host
+		// merely because it appeared in a sitemap.
 		const filtered = filterAndDedupe(urls, hosts, scope, max);
-		if (filtered.length > best.length) best = filtered;
+		if (filtered.length > 0) {
+			const candidate = includeSeed(filtered);
+			if (candidate.length > best.length) best = candidate;
+		}
 	}
 
 	if (best.length > 0) return best;
@@ -285,8 +408,8 @@ export async function discover(
 	const nav = extractNav(actual, html);
 	if (nav.length > 5) {
 		const filtered = filterAndDedupe(nav, hosts, scope, max);
-		if (filtered.length > 0) return filtered;
+		if (filtered.length > 0) return includeSeed(filtered);
 	}
 
-	return crawl(actual, max, scope, opts);
+	return includeSeed(await crawl(actual, max, scope, opts));
 }

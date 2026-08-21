@@ -15,9 +15,11 @@ import {
 	wordCount,
 } from "../src/content.ts";
 import {
+	discover,
 	extractLinks,
 	filterAndDedupe,
 	getScopePath,
+	includeDiscoverySeed,
 	parseLocs,
 } from "../src/discovery.ts";
 import { fetchWithPlaywright, isRetryableNetworkError } from "../src/fetch.ts";
@@ -788,6 +790,71 @@ test("filterAndDedupe handles invalid URLs", () => {
 		10,
 	);
 	assert.strictEqual(result.length, 1);
+});
+
+test("discover rejects non-HTTP URLs before fetching", async () => {
+	await assert.rejects(
+		discover("ftp://example.com/docs/data.json", 1),
+		/Unsupported discovery URL scheme: ftp:/,
+	);
+});
+
+test("filterAndDedupe enforces URL schemes and scope boundaries", () => {
+	const result = filterAndDedupe(
+		[
+			"ftp://example.com/docs/file",
+			"https://example.com/docs-other/page",
+			"https://example.com/docs/ok",
+		],
+		new Set(["example.com"]),
+		"/docs",
+		10,
+	);
+	assert.deepStrictEqual(result, ["https://example.com/docs/ok"]);
+});
+
+test("includeDiscoverySeed keeps the requested page in a bounded pull", () => {
+	const result = includeDiscoverySeed(
+		"https://example.com/docs/handbook/2/generics.html",
+		[
+			"https://example.com/docs/handbook/2/classes.html",
+			"https://example.com/docs/handbook/2/modules.html",
+		],
+		new Set(["example.com"]),
+		"/docs/handbook/2/",
+		2,
+	);
+	assert.deepStrictEqual(result, [
+		"https://example.com/docs/handbook/2/generics.html",
+		"https://example.com/docs/handbook/2/classes.html",
+	]);
+});
+
+test("includeDiscoverySeed preserves an explicitly requested ignored extension", () => {
+	const result = includeDiscoverySeed(
+		"https://example.com/docs/data.json",
+		["https://example.com/docs/guide.html"],
+		new Set(["example.com"]),
+		"/docs/",
+		2,
+	);
+	assert.deepStrictEqual(result, [
+		"https://example.com/docs/data.json",
+		"https://example.com/docs/guide.html",
+	]);
+});
+
+test("includeDiscoverySeed rejects non-HTTP seeds", () => {
+	assert.deepStrictEqual(
+		includeDiscoverySeed(
+			"ftp://example.com/docs/data.json",
+			["https://example.com/docs/guide.html"],
+			new Set(["example.com"]),
+			"/docs/",
+			2,
+		),
+		["https://example.com/docs/guide.html"],
+	);
 });
 
 // ─── extractLinks ─────────────────────────────────────────────────

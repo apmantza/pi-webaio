@@ -19,6 +19,8 @@ type QueueStatus = "queued" | "in_progress" | "completed" | "failed";
 
 export interface QueueEntry {
 	url: string;
+	/** Final URL whose markdown file was written, when the caller supplies it. */
+	outputUrl?: string;
 	status: QueueStatus;
 	retries: number;
 	lastError?: string;
@@ -31,19 +33,35 @@ const QUEUE_FILENAME = ".pullqueue.jsonl";
 const MAX_RETRIES = 3;
 const SAVE_INTERVAL_MS = 5_000; // flush in-memory changes to disk every 5s
 
+export function canonicalQueueUrl(raw: string): string {
+	try {
+		const url = new URL(raw);
+		url.hash = url.search = "";
+		return url.pathname === "/" ? url.origin : url.href;
+	} catch {
+		return raw;
+	}
+}
+
 // ─── Public API ──────────────────────────────────────────────────────
 
 export class RequestQueue {
 	private readonly entries: Map<string, QueueEntry> = new Map();
+	private readonly completedFileUrls: Set<string>;
 	private readonly queuePath: string;
 	private saveTimer: ReturnType<typeof setTimeout> | null = null;
 	private dirty = false;
 	/** Simple promise-based lock to prevent race conditions in next() */
 	private lockPromise: Promise<void> = Promise.resolve();
 
-	private constructor(outDir: string, entries: Map<string, QueueEntry>) {
+	private constructor(
+		outDir: string,
+		entries: Map<string, QueueEntry>,
+		completedFileUrls: Set<string> = new Set(),
+	) {
 		this.queuePath = join(outDir, QUEUE_FILENAME);
 		this.entries = entries;
+		this.completedFileUrls = completedFileUrls;
 	}
 
 	// ── Factory ─────────────────────────────────────────────────────
@@ -74,6 +92,11 @@ export class RequestQueue {
 		for (const line of raw.split("\n").filter(Boolean)) {
 			try {
 				const entry: QueueEntry = JSON.parse(line);
+				if (typeof entry.url !== "string" || !entry.url) continue;
+				entry.url = canonicalQueueUrl(entry.url);
+				if (typeof entry.outputUrl === "string")
+					entry.outputUrl = canonicalQueueUrl(entry.outputUrl);
+				else delete entry.outputUrl;
 				// Only keep entries that aren't completed (or were in_progress/failed)
 				if (entry.status !== "completed") {
 					entry.status = "queued"; // reset in_progress to queued for retry
@@ -86,18 +109,24 @@ export class RequestQueue {
 
 		// Scan existing .md files to mark URLs as completed. Only read the
 		// frontmatter window; pulled pages can be large and the URL is near the top.
+		const completedFileUrls = new Set<string>();
 		const mdFiles = await scanMarkdownFiles(outDir);
 		for (const mdPath of mdFiles) {
 			const url = await readFrontmatterUrl(mdPath);
 			if (!url) continue;
-			const existing = entries.get(url);
-			if (existing && existing.status !== "completed") {
+			const canonicalUrl = canonicalQueueUrl(url);
+			completedFileUrls.add(canonicalUrl);
+			const existing = [...entries.values()].find(
+				(entry) => entry.url === canonicalUrl || entry.outputUrl === canonicalUrl,
+			);
+			if (existing) {
 				existing.status = "completed";
+				existing.outputUrl ??= canonicalUrl;
 				existing.retries = 0;
 			}
 		}
 
-		const q = new RequestQueue(outDir, entries);
+		const q = new RequestQueue(outDir, entries, completedFileUrls);
 		q.startAutoSave();
 		return q;
 	}
@@ -108,18 +137,79 @@ export class RequestQueue {
 	 * Enqueue a batch of URLs (idempotent — skips duplicates).
 	 */
 	async add(urls: string[]): Promise<void> {
+		this.addInternal(urls, false);
+	}
+
+	/**
+	 * Backfill URLs on a resumed queue without re-fetching matching markdown
+	 * files that were written before the URL was persisted in the queue.
+	 */
+	async addPreservingCompletedFiles(urls: string[]): Promise<void> {
+		this.addInternal(urls, true);
+	}
+
+	private addInternal(urls: string[], preserveCompletedFiles: boolean): void {
 		const now = Date.now();
-		for (const url of urls) {
-			if (!this.entries.has(url)) {
-				this.entries.set(url, {
-					url,
-					status: "queued",
-					retries: 0,
-					timestamp: now,
-				});
-				this.dirty = true;
+		for (const rawUrl of urls) {
+			const url = canonicalQueueUrl(rawUrl);
+			if (!url) continue;
+			const existing = this.entries.get(url);
+			if (existing) {
+				// A queue entry can be marked completed just before a crash and
+				// before its markdown file is written. A seed backfill must make
+				// that missing output eligible for retry.
+				if (
+					preserveCompletedFiles &&
+					!this.hasCompletedFile(existing) &&
+					existing.status !== "queued"
+				) {
+					existing.status = "queued";
+					existing.retries = 0;
+					existing.lastError = undefined;
+					existing.timestamp = now;
+					this.dirty = true;
+				}
+				continue;
 			}
+			this.entries.set(url, {
+				url,
+				status:
+					preserveCompletedFiles && this.completedFileUrls.has(url)
+						? "completed"
+						: "queued",
+				retries: 0,
+				timestamp: now,
+			});
+			this.dirty = true;
 		}
+	}
+
+	/**
+	 * Requeue completed entries whose output file is missing. This is intended
+	 * for webpull resume: older versions marked a queue entry completed before
+	 * writing markdown, so a crash could otherwise lose that page permanently.
+	 */
+	async requeueCompletedMissingFiles(): Promise<number> {
+		let requeued = 0;
+		const now = Date.now();
+		for (const entry of this.entries.values()) {
+			if (entry.status !== "completed" || this.hasCompletedFile(entry)) continue;
+			entry.status = "queued";
+			entry.retries = 0;
+			entry.lastError = undefined;
+			entry.timestamp = now;
+			requeued++;
+		}
+		if (requeued > 0) this.dirty = true;
+		return requeued;
+	}
+
+	private hasCompletedFile(entry: QueueEntry): boolean {
+		return (
+			this.completedFileUrls.has(entry.url) ||
+			(entry.outputUrl !== undefined &&
+				this.completedFileUrls.has(entry.outputUrl))
+		);
 	}
 
 	/**
@@ -154,10 +244,11 @@ export class RequestQueue {
 	/**
 	 * Mark a URL as completed successfully.
 	 */
-	async complete(url: string): Promise<void> {
-		const entry = this.entries.get(url);
+	async complete(url: string, outputUrl = url): Promise<void> {
+		const entry = this.entries.get(canonicalQueueUrl(url));
 		if (entry) {
 			entry.status = "completed";
+			entry.outputUrl = canonicalQueueUrl(outputUrl);
 			entry.lastError = undefined;
 			entry.timestamp = Date.now();
 			this.dirty = true;
@@ -169,7 +260,7 @@ export class RequestQueue {
 	 * Returns true if the entry should be retried (retries < MAX_RETRIES).
 	 */
 	async fail(url: string, error: string): Promise<boolean> {
-		const entry = this.entries.get(url);
+		const entry = this.entries.get(canonicalQueueUrl(url));
 		if (!entry) return false;
 
 		entry.retries++;

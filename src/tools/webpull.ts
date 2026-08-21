@@ -9,7 +9,11 @@ import { discover } from "../discovery.ts";
 import { storeContent, BASE_TEMP } from "../session-store.ts";
 import { compileContextPackage } from "../context-package.ts";
 import { safeResolveInBaseTemp, normalizeInputUrl } from "./utils.ts";
-import { RequestQueue, hasQueueFile } from "../request-queue.ts";
+import {
+	RequestQueue,
+	canonicalQueueUrl,
+	hasQueueFile,
+} from "../request-queue.ts";
 import { BrowserPool } from "../browser-pool.ts";
 import { SessionRouter, parseRoutes } from "../session-router.ts";
 import type { FetchOpts, ScrapeMode, Page } from "../types.ts";
@@ -130,6 +134,7 @@ export function registerWebpullTool(pi: ExtensionAPI): void {
 		...TOOL_METADATA["aio-webpull"],
 		async execute(_toolCallId, params, signal, onUpdate) {
 			const url = normalizeInputUrl(params.url);
+			const seedQueueUrl = canonicalQueueUrl(url.href);
 
 			const outDir = params.out
 				? safeResolveInBaseTemp(params.out)
@@ -185,9 +190,21 @@ export function registerWebpullTool(pi: ExtensionAPI): void {
 
 			let queue: RequestQueue | null = null;
 			let priorCompleted = 0;
+			let seedAlreadyCompleted = false;
 			if (resume && hasQueueFile(outDir)) {
 				queue = await RequestQueue.resume(outDir);
 				if (queue) {
+					// Repair completed-before-write entries from older queue files,
+					// then backfill the explicitly requested page. RequestQueue
+					// preserves an already-written page as completed.
+					await queue.requeueCompletedMissingFiles();
+					await queue.addPreservingCompletedFiles([seedQueueUrl]);
+					seedAlreadyCompleted = queue
+						.snapshot()
+						.some(
+							(entry) =>
+								entry.url === seedQueueUrl && entry.status === "completed",
+						);
 					const s = queue.stats();
 					priorCompleted = s.completed;
 					// Size workers from the URLs still to be fetched (P4).
@@ -249,7 +266,7 @@ export function registerWebpullTool(pi: ExtensionAPI): void {
 
 			// Session warm-up: hit root URL before deep links to establish
 			// cookies, TLS state, and anti-bot clearance.
-			if (mode !== "fast") {
+			if (mode !== "fast" && !seedAlreadyCompleted) {
 				try {
 					await pullPageEnhanced(url.href, {
 						...fetchOpts,
@@ -303,8 +320,6 @@ export function registerWebpullTool(pi: ExtensionAPI): void {
 						return;
 					}
 
-					await queue.complete(pageUrl);
-
 					const page: Page = {
 						url: result.url!,
 						title: result.title || new URL(result.url!).pathname,
@@ -319,6 +334,7 @@ export function registerWebpullTool(pi: ExtensionAPI): void {
 					};
 
 					const rel = await writePage(page, outDir);
+					await queue.complete(pageUrl, result.url!);
 					files.push(rel);
 					pageUrlToPath.set(page.url, rel);
 					pagePathToUrl.set(rel, page.url);
