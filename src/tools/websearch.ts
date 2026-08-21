@@ -141,6 +141,11 @@ export function registerWebsearchTool(
 
 	pi.registerTool({
 		...TOOL_METADATA["aio-websearch"],
+		// Render our own framing/background instead of the default Box: every
+		// line is padded and painted uniformly (toolPendingBg while running,
+		// toolSuccessBg/toolErrorBg when settled), which eliminates black gaps
+		// from host-side background application on styled lines.
+		renderShell: "self",
 		async execute(_toolCallId, params, signal, onUpdate) {
 			const query = params.query;
 			setSearchContext(query);
@@ -763,7 +768,7 @@ export function registerWebsearchTool(
 				"accent",
 				`"${args.query.slice(0, 90)}${args.query.length > 90 ? "…" : ""}"`,
 			);
-			return new Text(head + query);
+			return new Text(head + query, 0, 0, (t) => theme.bg("toolPendingBg", t));
 		},
 		renderResult(result, options, theme: Theme) {
 			const details = result.details as any;
@@ -771,7 +776,7 @@ export function registerWebsearchTool(
 			// In-flight: animated per-provider progress rows with an
 			// elapsed-vs-response-target bar (#97 UX).
 			if (options.isPartial) {
-				return createSearchProgressComponent(details, theme);
+				return createSearchProgressComponent(details, theme, "toolPendingBg");
 			}
 
 			return createSearchResultComponent(
@@ -789,6 +794,7 @@ export function registerWebsearchTool(
 				},
 				options.expanded === true,
 				theme,
+				result.isError ? "toolErrorBg" : "toolSuccessBg",
 			);
 		},
 	});

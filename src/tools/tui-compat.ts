@@ -78,6 +78,7 @@ export const Text = (tui?.Text ?? FallbackText) as new (
 	text?: string,
 	paddingX?: number,
 	paddingY?: number,
+	customBgFn?: (text: string) => string,
 ) => TextLike;
 
 export const Spacer = (tui?.Spacer ?? FallbackSpacer) as new (

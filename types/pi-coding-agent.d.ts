@@ -30,6 +30,8 @@ declare module "@earendil-works/pi-coding-agent" {
 			renderCall?: (args: any, theme: any) => any;
 			/** Custom rendering for tool result display in TUI */
 			renderResult?: (result: any, options: any, theme: any) => any;
+			/** Render own framing/background instead of the default Box wrapper. */
+			renderShell?: "self" | "box";
 		}): void;
 
 		/** Register a slash command. */

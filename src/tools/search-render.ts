@@ -308,8 +308,12 @@ export function createSearchProgressComponent(
 		responseTargetMs?: number;
 	},
 	theme: ThemeLike,
+	bgColor = "toolPendingBg",
 ) {
-	const text = new Text("", 0, 0);
+	// Self-painted background (paired with renderShell: "self"): every line
+	// is padded to full width and painted uniformly, so no black gaps can
+	// appear regardless of how the host shell handles backgrounds.
+	const text = new Text("", 0, 0, (t) => theme.bg(bgColor, t));
 
 	function buildRows(width: number): string[] {
 		const providers = details.providers ?? [];
@@ -370,8 +374,9 @@ export function createSearchResultComponent(
 	},
 	expanded: boolean,
 	theme: ThemeLike,
+	bgColor = "toolSuccessBg",
 ) {
-	const text = new Text("", 0, 0);
+	const text = new Text("", 0, 0, (t) => theme.bg(bgColor, t));
 
 	function buildSummaryParts(): { styled: string; plain: string } {
 		const parts: string[] = [];
