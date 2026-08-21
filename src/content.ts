@@ -513,25 +513,56 @@ export function extractClientSideRedirect(
 	baseUrl: string,
 ): string | null {
 	const snippet = html.slice(0, 4096);
-	const m = snippet.match(
+	const resolveTarget = (rawTarget: string): string | null => {
+		const target = rawTarget.trim().replace(/^['"]|['"]$/g, "");
+		if (!target || /[\u0000-\u001f\u007f]/.test(target)) return null;
+		try {
+			const resolvedUrl = new URL(target, baseUrl);
+			if (resolvedUrl.protocol !== "http:" && resolvedUrl.protocol !== "https:")
+				return null;
+			const resolved = resolvedUrl.toString();
+			return resolved === baseUrl ? null : resolved;
+		} catch {
+			return null;
+		}
+	};
+
+	const meta = snippet.match(
 		/<meta[^>]+http-equiv=["']?refresh["']?[^>]+content=["']?([^"'>]*)/i,
 	);
-	if (!m) return null;
-	const parts = m[1]!.split(";");
-	const delay = Number.parseFloat(parts[0]!.trim());
-	if (!Number.isFinite(delay) || delay < 0 || delay >= 30) return null;
-	const urlMatch = parts
-		.slice(1)
-		.join(";")
-		.match(/url\s*=\s*(.+)/i);
-	if (!urlMatch) return null;
-	const target = urlMatch[1]!.trim().replace(/^['"]|['"]$/g, "");
-	try {
-		const resolved = new URL(target, baseUrl).toString();
-		return resolved === baseUrl ? null : resolved;
-	} catch {
-		return null;
+	if (meta) {
+		const parts = meta[1]!.split(";");
+		const delay = Number.parseFloat(parts[0]!.trim());
+		if (Number.isFinite(delay) && delay >= 0 && delay < 30) {
+			const urlMatch = parts
+				.slice(1)
+				.join(";")
+				.match(/url\s*=\s*(.+)/i);
+			if (urlMatch) {
+				const resolved = resolveTarget(urlMatch[1]!);
+				if (resolved) return resolved;
+			}
+		}
 	}
+
+	// Some static sites emit a tiny HTML shell that redirects with JavaScript
+	// instead of a meta tag (for example, `/release-notes/overview` on the
+	// TypeScript docs site). Inspect script bodies only and accept literal
+	// location assignments/calls; do not evaluate arbitrary page JavaScript.
+	for (const match of snippet.matchAll(
+		/<script\b[^>]*>([\s\S]*?)<\/script>/gi,
+	)) {
+		const script = match[1] ?? "";
+		const assignment = script.match(
+			/^\s*(?:window\.|document\.)?location(?:\.href)?\s*=\s*(["'])(.*?)\1\s*;?\s*$/i,
+		);
+		const call = script.match(
+			/^\s*(?:window\.|document\.)?location\.(?:replace|assign)\(\s*(["'])(.*?)\1\s*\)\s*;?\s*$/i,
+		);
+		const resolved = resolveTarget(assignment?.[2] ?? call?.[2] ?? "");
+		if (resolved) return resolved;
+	}
+	return null;
 }
 
 // ─── Alternate link extraction ─────────────────────────────────────
@@ -797,11 +828,9 @@ export async function runHtmlPipeline(
 	_opts: FetchOpts | undefined,
 	redirectNotice: string | undefined,
 ): Promise<PullResult> {
-	if (text.includes("http-equiv")) {
-		const redirectTarget = extractClientSideRedirect(text, finalUrl);
-		if (redirectTarget) {
-			return pullPage(redirectTarget, _opts, 1);
-		}
+	const redirectTarget = extractClientSideRedirect(text, finalUrl);
+	if (redirectTarget) {
+		return pullPage(redirectTarget, _opts, 1);
 	}
 
 	const hookedText = await runAfterFetchHooks(url, {

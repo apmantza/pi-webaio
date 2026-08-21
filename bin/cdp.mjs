@@ -9,12 +9,14 @@
 // the CDP session open. Chrome's "Allow debugging" modal fires once per
 // daemon (= once per tab). Daemons auto-exit after 20min idle.
 
+import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import {
 	existsSync,
 	mkdirSync,
 	readdirSync,
 	readFileSync,
+	linkSync,
 	renameSync,
 	statSync,
 	unlinkSync,
@@ -114,6 +116,10 @@ const DAEMON_REGISTRY_DIR = `${_tmpdir}/pi-cdp-daemons`;
 // Orphaned `.tmp` files from _writeDaemonRegistry's atomic write (a hard
 // crash between writeFileSync and renameSync) are swept once older than this.
 const REGISTRY_TMP_MAX_AGE_MS = 10 * 60 * 1000;
+// Unix socket discovery only performs a bounded maintenance slice; the next
+// invocation rotates the slice so a large historical registry cannot turn a
+// hot command path into an unbounded PID/filesystem scan.
+const MAX_REGISTRY_MAINTENANCE_RECORDS = 128;
 
 function _daemonRegistryPath(targetId) {
 	return join(DAEMON_REGISTRY_DIR, `${targetId}.json`);
@@ -168,6 +174,50 @@ function _removeDaemonRegistry(targetId) {
 	_removeDaemonRegistryFile(_daemonRegistryPath(targetId));
 }
 
+/**
+ * Remove a stale registry record without deleting a replacement written by a
+ * daemon restart. Rename the observed path to a private quarantine, verify the
+ * moved bytes still match, and preserve the quarantine on any ambiguity.
+ */
+function _removeDaemonRegistryIfCurrent(path, expectedRaw) {
+	const quarantine = `${path}.stale-${process.pid}-${randomUUID()}`;
+	try {
+		renameSync(path, quarantine);
+	} catch {
+		return false;
+	}
+	let movedRaw;
+	try {
+		movedRaw = readFileSync(quarantine, "utf8");
+	} catch {
+		// The moved record is safer preserved than deleted when it cannot be
+		// verified. A later sweep can retry it.
+		return false;
+	}
+	if (movedRaw !== expectedRaw) {
+		try {
+			// linkSync is no-clobber: if a replacement already occupies path,
+			// restoration fails without overwriting it. Remove the quarantine
+			// only after the replacement is known to remain in place.
+			linkSync(quarantine, path);
+			unlinkSync(quarantine);
+		} catch {
+			if (existsSync(path)) {
+				try {
+					unlinkSync(quarantine);
+				} catch {}
+			}
+		}
+		return false;
+	}
+	try {
+		unlinkSync(quarantine);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 function _sweepStaleRegistryTmpFiles(entries) {
 	// Best-effort cleanup of orphaned atomic-write temp files left behind by
 	// a crash between writeFileSync and renameSync in _writeDaemonRegistry.
@@ -186,6 +236,26 @@ function _sweepStaleRegistryTmpFiles(entries) {
 		}
 		if (mtimeMs >= cutoff) continue; // fresh — writer may be mid-rename
 		_removeDaemonRegistryFile(path);
+	}
+}
+
+function _sweepStaleRegistryQuarantines(entries) {
+	const cutoff = Date.now() - REGISTRY_TMP_MAX_AGE_MS;
+	for (const file of entries) {
+		const marker = ".stale-";
+		const markerIndex = file.indexOf(marker);
+		if (markerIndex === -1) continue;
+		const quarantine = join(DAEMON_REGISTRY_DIR, file);
+		const original = join(DAEMON_REGISTRY_DIR, file.slice(0, markerIndex));
+		// A quarantine with no replacement may be the only surviving registry
+		// record after an ambiguous race; preserve it until a replacement exists.
+		if (!existsSync(original)) continue;
+		try {
+			if (statSync(quarantine).mtimeMs < cutoff)
+				_removeDaemonRegistryFile(quarantine);
+		} catch {
+			// Best effort only; a concurrent writer may be moving the record.
+		}
 	}
 }
 
@@ -233,7 +303,10 @@ function _probeSocket(socketPath) {
 	});
 }
 
-async function _listDaemonSocketsFromRegistry() {
+async function _listDaemonSocketsFromRegistry({
+	probeSockets = true,
+	maxRecords = undefined,
+} = {}) {
 	let files;
 	try {
 		files = readdirSync(DAEMON_REGISTRY_DIR);
@@ -241,13 +314,29 @@ async function _listDaemonSocketsFromRegistry() {
 		return [];
 	}
 	_sweepStaleRegistryTmpFiles(files);
+	_sweepStaleRegistryQuarantines(files);
 	files = files.filter((f) => f.endsWith(".json"));
+	if (
+		!probeSockets &&
+		Number.isInteger(maxRecords) &&
+		maxRecords > 0 &&
+		files.length > maxRecords
+	) {
+		const limit = maxRecords;
+		const offset = Math.floor(Date.now() / 1000) % files.length;
+		files = Array.from(
+			{ length: limit },
+			(_, index) => files[(offset + index) % files.length],
+		);
+	}
 	const live = [];
 	for (const file of files) {
 		const path = join(DAEMON_REGISTRY_DIR, file);
+		let raw;
 		let record;
 		try {
-			record = JSON.parse(readFileSync(path, "utf8"));
+			raw = readFileSync(path, "utf8");
+			record = JSON.parse(raw);
 		} catch {
 			// Unreadable/torn entry: skip it but DO NOT delete. Deleting on
 			// parse failure could remove a live daemon's entry if a writer
@@ -266,16 +355,17 @@ async function _listDaemonSocketsFromRegistry() {
 			continue;
 		}
 		if (!_isPidAlive(record.pid)) {
-			_removeDaemonRegistryFile(path); // stale entry, best-effort removal
+			_removeDaemonRegistryIfCurrent(path, raw); // stale entry, best-effort CAS removal
 			continue;
 		}
 		// #96 reaping: the daemon's session owner is gone. The daemon polls
 		// and exits on its own within seconds, but prune the registry entry
 		// now so `cdp list` does not advertise an orphaned daemon.
 		if (record.ownerPid && !_isPidAlive(record.ownerPid)) {
-			_removeDaemonRegistryFile(path);
+			_removeDaemonRegistryIfCurrent(path, raw);
 			continue;
 		}
+		if (!probeSockets) continue;
 		if (!(await _probeSocket(record.socketPath))) {
 			// Daemon process is alive but not accepting connections (yet or
 			// anymore). Skip it but keep the entry — deleting could race a
@@ -298,7 +388,16 @@ async function listDaemonSockets() {
 					targetId: f.slice(4, -5),
 					socketPath: join(tmp, f),
 				}));
-			if (found.length > 0) return found;
+			if (found.length > 0) {
+				// Socket enumeration is authoritative for Unix discovery, but do not
+				// bypass registry maintenance just because one socket exists. A dead
+				// registry entry may belong to a daemon whose socket disappeared.
+				await _listDaemonSocketsFromRegistry({
+					probeSockets: false,
+					maxRecords: MAX_REGISTRY_MAINTENANCE_RECORDS,
+				});
+				return found;
+			}
 		} catch {
 			// Fall through to the registry.
 		}
@@ -1509,5 +1608,7 @@ export {
 	_daemonRegistryPath,
 	_writeDaemonRegistry,
 	_removeDaemonRegistry,
+	_removeDaemonRegistryIfCurrent,
 	_listDaemonSocketsFromRegistry,
+	listDaemonSockets,
 };

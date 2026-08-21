@@ -245,6 +245,8 @@ type BrokerState = {
 	closePromise: Promise<void> | null;
 };
 
+const MAX_CHILD_OUTPUT_BYTES = 1024 * 1024;
+
 function collectProcessOutput(proc: ReturnType<typeof spawn>): {
 	stdout: () => string;
 	stderr: () => string;
@@ -252,11 +254,32 @@ function collectProcessOutput(proc: ReturnType<typeof spawn>): {
 } {
 	const stdoutChunks: Buffer[] = [];
 	const stderrChunks: Buffer[] = [];
-	proc.stdout?.on("data", (d: Buffer) => stdoutChunks.push(d));
-	proc.stderr?.on("data", (d: Buffer) => stderrChunks.push(d));
+	let stdoutBytes = 0;
+	let stderrBytes = 0;
+	const append = (chunks: Buffer[], bytes: number, data: Buffer): number => {
+		const remaining = MAX_CHILD_OUTPUT_BYTES - bytes;
+		if (remaining <= 0) return bytes;
+		const chunk = data.subarray(0, Math.min(data.length, remaining));
+		// Copy the slice so a large stream buffer is not retained past the cap.
+		chunks.push(Buffer.from(chunk));
+		return bytes + chunk.length;
+	};
+	proc.stdout?.on("data", (d: Buffer) => {
+		stdoutBytes = append(stdoutChunks, stdoutBytes, d);
+	});
+	proc.stderr?.on("data", (d: Buffer) => {
+		stderrBytes = append(stderrChunks, stderrBytes, d);
+	});
 	const stdout = () => Buffer.concat(stdoutChunks).toString("utf8");
 	const stderr = () => Buffer.concat(stderrChunks).toString("utf8");
 	return { stdout, stderr, combined: () => stdout() + stderr() };
+}
+
+/** Narrow test seam for verifying child-output resource bounds. */
+export function collectProcessOutputForTests(
+	proc: ReturnType<typeof spawn>,
+): ReturnType<typeof collectProcessOutput> {
+	return collectProcessOutput(proc);
 }
 
 const MAX_GOOGLE_CHILD_PROCESSES = 2;
@@ -1140,6 +1163,10 @@ function retainDeferredProcess(
 	const promise = new Promise<void>((resolve) => {
 		const onExit = () => {
 			if (!processHasExited(processHandle)) return;
+			// Either event can be the first terminal notification. Remove both
+			// listeners so a process that emits only one of them cannot retain the
+			// other callback until the handle is collected.
+			processHandle.removeListener("exit", onExit);
 			processHandle.removeListener("close", onExit);
 			forgetDeferredProcess(state, processHandle);
 			resolve();
@@ -1691,7 +1718,15 @@ async function ensureGoogleBroker(
 					ownedProcess.once("spawn", () => {
 						childCreated = true;
 					});
+					const clearProcessEventListeners = () => {
+						ownedProcess.removeListener("error", onError);
+						ownedProcess.removeListener("close", onClose);
+						ownedProcess.removeListener("exit", onExit);
+					};
 					const processEvent = (kind: "error" | "close" | "exit") => {
+						// ChildProcess normally emits both exit and close, but a close-only
+						// terminal path must not retain the sibling listener indefinitely.
+						clearProcessEventListeners();
 						void withBrokerLifecycle(() =>
 							handleBrokerProcessEvent(
 								state,
@@ -1700,9 +1735,12 @@ async function ensureGoogleBroker(
 							),
 						).catch(() => undefined);
 					};
-					ownedProcess.once("error", () => processEvent("error"));
-					ownedProcess.once("close", () => processEvent("close"));
-					ownedProcess.once("exit", () => processEvent("exit"));
+					const onError = () => processEvent("error");
+					const onClose = () => processEvent("close");
+					const onExit = () => processEvent("exit");
+					ownedProcess.once("error", onError);
+					ownedProcess.once("close", onClose);
+					ownedProcess.once("exit", onExit);
 				}
 				await new Promise<void>((resolve) => {
 					const timer = setTimeout(

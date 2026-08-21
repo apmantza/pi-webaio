@@ -361,6 +361,122 @@ test("CDP broker owns target lifecycle and never exposes CDP IDs", async () => {
 	}
 });
 
+test("idle target eviction closes the corresponding CDP target", async () => {
+	const setup = await setupBroker({ onCommand: respondToCommands() });
+	try {
+		const lease = await setup.client.request("lease", {
+			provider: "google-search",
+		});
+		await setup.client.request("release", {
+			leaseId: lease.leaseId,
+			generation: lease.generation,
+		});
+		setup.broker.registry.idleTargetTtlMs = 1;
+		const sweep = setup.broker.registry.sweep(Date.now() + 10);
+		assert.equal(sweep.evictedTargets.length, 1);
+		await setup.broker.cleanupCdpTargets();
+		const closes = setup.fake.socket.sent.filter(
+			(message) => message.method === "Target.closeTarget",
+		);
+		assert.equal(closes.length, 1);
+		assert.deepEqual(closes[0].params, { targetId: "private-target-1" });
+	} finally {
+		await teardown(setup);
+	}
+});
+
+test("failed idle-target close remains tracked for a later retry", async () => {
+	let closeAttempts = 0;
+	const fallback = respondToCommands();
+	const setup = await setupBroker({
+		onCommand: (socket, message) => {
+			if (message.method === "Target.closeTarget" && closeAttempts++ === 0) {
+				setImmediate(() =>
+					socket.respond({
+						id: message.id,
+						error: { code: "close_failed", message: "close failed" },
+					}),
+				);
+				return;
+			}
+			fallback(socket, message);
+		},
+	});
+	try {
+		const lease = await setup.client.request("lease", {
+			provider: "google-search",
+		});
+		await setup.client.request("release", {
+			leaseId: lease.leaseId,
+			generation: lease.generation,
+		});
+		setup.broker.registry.idleTargetTtlMs = 1;
+		setup.broker.registry.sweep(Date.now() + 10);
+		await Promise.all([
+			setup.broker.cleanupCdpTargets(),
+			setup.broker.cleanupCdpTargets(),
+		]);
+		assert.equal(closeAttempts, 1);
+		assert.equal(setup.broker.cdpTargets.size, 1);
+		for (const retry of setup.broker.cdpTargetCloseRetries.values())
+			retry.nextRetryAt = Date.now();
+		await setup.broker.cleanupCdpTargets();
+		assert.equal(closeAttempts, 2);
+		assert.equal(setup.broker.cdpTargets.size, 0);
+	} finally {
+		await teardown(setup);
+	}
+});
+
+test("stale target close never retries on a new CDP generation", async () => {
+	const setup = await setupBroker({
+		delay: new Set(["Target.closeTarget"]),
+		onCommand: respondToCommands({
+			delay: new Set(["Target.closeTarget"]),
+		}),
+	});
+	try {
+		const target = {
+			targetId: "logical-old-target",
+			cdpTargetId: "old-cdp-target",
+			cdpSessionId: null,
+		};
+		setup.broker.cdpTargets.set(target.targetId, target);
+		const closing = setup.broker.closeCdpTarget(target);
+		await sleep(5);
+		assert.equal(
+			setup.fake.socket.sent.filter(
+				(message) => message.method === "Target.closeTarget",
+			).length,
+			1,
+		);
+
+		setup.fake.socket.close();
+		await sleep(10);
+		assert.equal(setup.broker.cdp.generation, 2);
+		await setup.broker.cdpTransport.connect();
+		const replacementSocket = setup.fake.socket;
+		await closing;
+		await sleep(10);
+
+		assert.equal(target.cdpTargetId, null);
+		assert.equal(
+			replacementSocket.sent.filter(
+				(message) => message.method === "Target.closeTarget",
+			).length,
+			0,
+		);
+		assert.equal(
+			replacementSocket.sent.filter(
+				(message) => message.method === "Target.getTargets",
+			).length,
+			0,
+		);
+	} finally {
+		await teardown(setup);
+	}
+});
+
 test("CDP loss bumps generation, quarantines targets, and rejects in-flight lifecycle work", async () => {
 	const behavior = { delay: new Set(["Target.createTarget"]) };
 	const setup = await setupBroker({ onCommand: respondToCommands(behavior) });

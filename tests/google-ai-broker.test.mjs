@@ -11,6 +11,7 @@ import {
 	aiSummaryAvailable,
 	cdpAvailable,
 	closeGoogleBroker,
+	collectProcessOutputForTests,
 	googleSearchWithDependencies,
 	isBrokerInfrastructureError,
 	notifyGoogleBrokerProcessEventForTests,
@@ -160,6 +161,17 @@ function parseEnvelope(captured) {
 	assert.ok(match, `missing broker envelope: ${captured}`);
 	return JSON.parse(match[1]);
 }
+
+test("child output capture is bounded per stream", () => {
+	const stdout = new EventEmitter();
+	const stderr = new EventEmitter();
+	const output = collectProcessOutputForTests({ stdout, stderr });
+	stdout.emit("data", Buffer.alloc(2 * 1024 * 1024, "a"));
+	stderr.emit("data", Buffer.alloc(2 * 1024 * 1024, "b"));
+	assert.equal(output.stdout().length, 1024 * 1024);
+	assert.equal(output.stderr().length, 1024 * 1024);
+	assert.equal(output.combined().length, 2 * 1024 * 1024);
+});
 
 test("Google broker branch is the default and legacy is the opt-out", async () => {
 	delete process.env.PI_WEBAIO_CDP_BROKER;
@@ -1762,6 +1774,41 @@ test("shared startup is reaped when every waiter fences", async () => {
 	}
 });
 
+test("production close fences a connector racing delayed broker registration", async () => {
+	process.env.PI_WEBAIO_CDP_BROKER = "1";
+	const factory = makeBrokerProcessFactory({
+		registerDelayMs: 100,
+		exitAfterKillMs: 10,
+	});
+	try {
+		const request = googleSearchWithDependencies(
+			"production close race",
+			{ timeoutMs: 2_000 },
+			{
+				ensureChrome: async () => ({ running: true, ready: true }),
+				brokerProcessFactory: factory,
+				brokerProfileDir: factory.profileDir(),
+			},
+		);
+		await factory.waitForChild();
+		const close = closeGoogleBroker(undefined, {
+			deadlineAt: Date.now() + 1_000,
+		});
+		await assert.rejects(request, (error) =>
+			["request_fenced", "connection_closed", "connect_timeout"].includes(
+				error.code,
+			),
+		);
+		await close;
+		assert.equal(factory.calls(), 1);
+		assert.equal(factory.children[0].killCalls, 1);
+	} finally {
+		factory.children.at(-1)?.exitNow();
+		await closeGoogleBroker().catch(() => {});
+		restoreFlag();
+	}
+});
+
 test("spawn error without a child is terminal without permanently fencing replacement", async () => {
 	process.env.PI_WEBAIO_CDP_BROKER = "1";
 	const factory = makeBrokerProcessFactory({ failFirstSpawn: true });
@@ -1825,6 +1872,9 @@ test("actual ensure/child cleanup fences replacement until child exit", async ()
 		assert.equal(factory.calls(), 1);
 
 		factory.children[0].exitNow();
+		assert.equal(factory.children[0].listenerCount("error"), 0);
+		assert.equal(factory.children[0].listenerCount("close"), 0);
+		assert.equal(factory.children[0].listenerCount("exit"), 0);
 		assert.equal(
 			(
 				await googleSearchWithDependencies(

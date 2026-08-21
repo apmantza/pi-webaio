@@ -43,7 +43,9 @@ const {
 	_daemonRegistryPath,
 	_writeDaemonRegistry,
 	_removeDaemonRegistry,
+	_removeDaemonRegistryIfCurrent,
 	_listDaemonSocketsFromRegistry,
+	listDaemonSockets,
 } = await import("../bin/cdp.mjs");
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -296,6 +298,20 @@ test("daemon registry: live entry round-trips through write/list", async () => {
 	}
 });
 
+test("daemon registry: stale cleanup preserves a replacement record", () => {
+	const targetId = `replace-${process.pid}-${Date.now().toString(36)}`;
+	const path = _daemonRegistryPath(targetId);
+	const observed = JSON.stringify({ targetId, pid: 1 });
+	const replacement = JSON.stringify({ targetId, pid: process.pid });
+	writeFileSync(path, replacement);
+	try {
+		assert.equal(_removeDaemonRegistryIfCurrent(path, observed), false);
+		assert.equal(readFileSync(path, "utf8"), replacement);
+	} finally {
+		_removeDaemonRegistry(targetId);
+	}
+});
+
 test("daemon registry: dead-pid entries are removed; corrupt entries are skipped but kept", async () => {
 	const deadPid = await obtainDeadPid();
 	const suffix = `${process.pid}-${Date.now().toString(36)}`;
@@ -388,6 +404,50 @@ test("daemon registry: sweep removes aged .tmp orphans, keeps fresh ones, and pr
 				unlinkSync(sp);
 			} catch {}
 		}
+	}
+});
+
+test("Unix socket enumeration still sweeps dead registry entries", {
+	skip: platform() === "win32",
+}, async () => {
+	const suffix = `${process.pid}-${Date.now().toString(36)}`;
+	const liveId = `unix-live-${suffix}`;
+	const staleId = `unix-stale-${suffix}`;
+	const sp = sockPath(liveId);
+	const connections = new Set();
+	const server = net.createServer((conn) => {
+		connections.add(conn);
+		conn.on("close", () => connections.delete(conn));
+		conn.on("error", () => {});
+	});
+	await new Promise((resolve) => server.listen(sp, resolve));
+	const deadPid = await obtainDeadPid();
+	try {
+		_writeDaemonRegistry(liveId);
+		writeFileSync(
+			_daemonRegistryPath(staleId),
+			JSON.stringify({
+				targetId: staleId,
+				socketPath: sockPath(staleId),
+				pid: deadPid,
+				startedAt: Date.now(),
+			}),
+		);
+		const found = await listDaemonSockets();
+		assert.ok(found.some((entry) => entry.targetId === liveId));
+		assert.equal(
+			existsSync(_daemonRegistryPath(staleId)),
+			false,
+			"Unix socket discovery must not bypass dead-entry cleanup",
+		);
+	} finally {
+		_removeDaemonRegistry(liveId);
+		_removeDaemonRegistry(staleId);
+		for (const conn of connections) conn.destroy();
+		await new Promise((resolve) => server.close(resolve));
+		try {
+			unlinkSync(sp);
+		} catch {}
 	}
 });
 

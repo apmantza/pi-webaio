@@ -873,10 +873,7 @@ test("fetchWithPlaywright gracefully degrades when Playwright not installed", {
 
 test("isJsonContentType detects application/json", () => {
 	assert.strictEqual(isJsonContentType("application/json"), true);
-	assert.strictEqual(
-		isJsonContentType("application/json; charset=utf-8"),
-		true,
-	);
+	assert.strictEqual(isJsonContentType("application/json; charset=utf-8"), true);
 });
 
 test("isJsonContentType detects text/json", () => {
@@ -984,7 +981,62 @@ test("extractClientSideRedirect ignores self-redirects", () => {
 	);
 });
 
-test("extractClientSideRedirect returns null when no meta refresh", () => {
+test("extractClientSideRedirect follows a literal script assignment", () => {
+	const html = '<script>window.location.href="/docs"</script>';
+	assert.strictEqual(
+		extractClientSideRedirect(html, "https://example.com/release-notes"),
+		"https://example.com/docs",
+	);
+});
+
+test("extractClientSideRedirect follows location.replace calls", () => {
+	const html = '<script>location.replace("https://example.com/new")</script>';
+	assert.strictEqual(
+		extractClientSideRedirect(html, "https://old.com"),
+		"https://example.com/new",
+	);
+});
+
+test("extractClientSideRedirect ignores self script redirects", () => {
+	const html = '<script>window.location="/same"</script>';
+	assert.strictEqual(
+		extractClientSideRedirect(html, "https://example.com/same"),
+		null,
+	);
+});
+
+test("extractClientSideRedirect rejects non-http script targets", () => {
+	for (const target of [
+		"javascript:alert(1)",
+		"data:text/html,hello",
+		"file:///tmp/x",
+	]) {
+		assert.strictEqual(
+			extractClientSideRedirect(
+				`<script>window.location.href=${JSON.stringify(target)}</script>`,
+				"https://example.com/old",
+			),
+			null,
+		);
+	}
+});
+
+test("extractClientSideRedirect ignores inert script text", () => {
+	for (const script of [
+		'// window.location="/comment"',
+		"const text = 'window.location=\"/quoted\"'",
+	]) {
+		assert.strictEqual(
+			extractClientSideRedirect(
+				`<script>${script}</script>`,
+				"https://example.com/old",
+			),
+			null,
+		);
+	}
+});
+
+test("extractClientSideRedirect returns null when no redirect", () => {
 	assert.strictEqual(
 		extractClientSideRedirect("<html></html>", "https://example.com"),
 		null,
@@ -1022,10 +1074,7 @@ test("extractAlternateLinks handles type before rel", () => {
 
 test("extractAlternateLinks ignores non-alternate links", () => {
 	const html = `<head><link rel="stylesheet" type="text/css" href="/style.css"></head>`;
-	assert.deepStrictEqual(
-		extractAlternateLinks(html, "https://example.com"),
-		[],
-	);
+	assert.deepStrictEqual(extractAlternateLinks(html, "https://example.com"), []);
 });
 
 test("extractAlternateLinks deduplicates results", () => {

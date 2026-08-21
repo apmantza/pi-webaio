@@ -21,7 +21,7 @@ import {
 	type MarkdownTheme,
 	Spacer,
 	Text,
-} from "@earendil-works/pi-tui";
+} from "./tui-compat.ts";
 import { redactSecrets } from "../redact.ts";
 import type { OutlineHeading } from "../outline.ts";
 
@@ -492,10 +492,7 @@ export function createProgressComponent(
 		if (total > 1) {
 			return (
 				theme.fg("toolTitle", theme.bold("aio-webfetch ")) +
-				theme.fg(
-					"muted",
-					`${completed}/${total} · ok ${succeeded} · err ${failed}`,
-				)
+				theme.fg("muted", `${completed}/${total} · ok ${succeeded} · err ${failed}`)
 			);
 		}
 		// Single URL: just show tool title + URL.
@@ -715,8 +712,7 @@ export function createResultComponent(
 		if (details.errorPhase || details.errorCategory) {
 			const bits: string[] = [];
 			if (details.errorPhase) bits.push(`phase: ${details.errorPhase}`);
-			if (details.errorCategory)
-				bits.push(`category: ${details.errorCategory}`);
+			if (details.errorCategory) bits.push(`category: ${details.errorCategory}`);
 			container.addChild(new Text(theme.fg("muted", bits.join("  ·  ")), 0, 0));
 		}
 		// Suggested retry timeout — only shown when the error is retryable

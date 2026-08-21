@@ -1,6 +1,6 @@
 import { TOOL_METADATA } from "./lazy.ts";
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { Text } from "./tui-compat.ts";
 import { setSearchContext } from "../session-store.ts";
 import {
 	searchWeb,

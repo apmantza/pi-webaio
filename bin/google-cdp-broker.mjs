@@ -404,6 +404,9 @@ const GOOGLE_PAGE_BUDGET_FLOOR_MS = 2_000;
 // individually; the overall search deadline still applies on top.
 const GOOGLE_PAGE_EXTRACT_BUDGET_MS = 3_500;
 const SEARCH_POLL_INTERVAL_MS = 150;
+const CDP_CLOSE_RETRY_BASE_MS = 250;
+const CDP_CLOSE_RETRY_MAX_MS = 30_000;
+const CDP_CLOSE_CONFIRM_AFTER_ATTEMPTS = 3;
 const SEARCH_REQUEST_FIELDS = new Set([
 	"id",
 	"op",
@@ -1180,6 +1183,8 @@ export class GoogleCdpBroker {
 				? new BrowserCdpTransport({ port: this.cdpPort })
 				: null);
 		this.cdpTargets = new Map();
+		this.cdpTargetCloseRetries = new Map();
+		this.cdpTargetClosePromises = new Map();
 		this.runtimeError = null;
 		this.lifecycle = Promise.resolve();
 	}
@@ -1210,6 +1215,8 @@ export class GoogleCdpBroker {
 		this.cdp.connected = false;
 		this.cdp.generation = this.registry.bumpBrowserGeneration().generation;
 		this.cdpTargets.clear();
+		this.cdpTargetCloseRetries.clear();
+		this.cdpTargetClosePromises.clear();
 		if (error) this.runtimeError = errorInfo(error);
 	}
 
@@ -1233,10 +1240,34 @@ export class GoogleCdpBroker {
 	async closeCdpTarget(target, request = undefined) {
 		if (!target?.cdpTargetId) return;
 		const targetId = target.cdpTargetId;
-		target.cdpTargetId = null;
-		target.cdpSessionId = null;
-		this.cdpTargets.delete(target.targetId);
-		if (!this.cdp.connected) return;
+		const existing = this.cdpTargetClosePromises.get(targetId);
+		if (existing) return existing;
+		const promise = this.closeCdpTargetAttempt(target, request);
+		this.cdpTargetClosePromises.set(targetId, promise);
+		try {
+			await promise;
+		} finally {
+			if (this.cdpTargetClosePromises.get(targetId) === promise)
+				this.cdpTargetClosePromises.delete(targetId);
+		}
+	}
+
+	async closeCdpTargetAttempt(target, request = undefined) {
+		if (!target?.cdpTargetId) return;
+		const targetId = target.cdpTargetId;
+		const generation = this.cdp.generation;
+		const isCurrentCdp = () =>
+			this.cdp.connected && this.cdp.generation === generation;
+		if (!isCurrentCdp()) {
+			// Browser loss clears the in-memory map in handleCdpLoss(); if the
+			// transport is already unavailable here, there is no live CDP target
+			// left that a later sweep could close.
+			target.cdpTargetId = null;
+			target.cdpSessionId = null;
+			this.cdpTargets.delete(target.targetId);
+			this.cdpTargetCloseRetries.delete(targetId);
+			return;
+		}
 		try {
 			await this.cdpTransport.send(
 				"Target.closeTarget",
@@ -1245,8 +1276,68 @@ export class GoogleCdpBroker {
 					deadlineAt: boundedCleanupDeadline(request),
 				},
 			);
+			// A response from a previous browser generation must not mutate the
+			// state of a newly connected browser. The old target ID is invalid
+			// after CDP loss, so clear it from the lease object but do not touch
+			// the new generation's maps.
+			if (!isCurrentCdp()) {
+				target.cdpTargetId = null;
+				target.cdpSessionId = null;
+				return;
+			}
+			// Only forget the target after CDP confirms the close. A failed close
+			// remains tracked so the next bounded sweep can retry it.
+			target.cdpTargetId = null;
+			target.cdpSessionId = null;
+			this.cdpTargets.delete(target.targetId);
+			this.cdpTargetCloseRetries.delete(targetId);
 		} catch {
-			// Closing is best effort; browser loss already quarantines its targets.
+			if (!isCurrentCdp()) {
+				target.cdpTargetId = null;
+				target.cdpSessionId = null;
+				return;
+			}
+			// Keep the target tracked for a later retry. Backoff prevents a
+			// permanently failing close from consuming every sweep tick.
+			const previous = this.cdpTargetCloseRetries.get(targetId);
+			const attempts = (previous?.attempts ?? 0) + 1;
+			if (attempts >= CDP_CLOSE_CONFIRM_AFTER_ATTEMPTS) {
+				try {
+					const result = await this.cdpTransport.send(
+						"Target.getTargets",
+						{},
+						{ deadlineAt: boundedCleanupDeadline(request) },
+					);
+					if (!isCurrentCdp()) {
+						target.cdpTargetId = null;
+						target.cdpSessionId = null;
+						return;
+					}
+					if (!Array.isArray(result?.targetInfos))
+						throw new Error("Target enumeration response was malformed");
+					const stillPresent = result.targetInfos.some(
+						(info) => info?.targetId === targetId,
+					);
+					if (!stillPresent) {
+						target.cdpTargetId = null;
+						target.cdpSessionId = null;
+						this.cdpTargets.delete(target.targetId);
+						this.cdpTargetCloseRetries.delete(targetId);
+						return;
+					}
+				} catch {
+					// Keep the record when confirmation is unavailable; a later
+					// bounded retry may still close the live target.
+				}
+			}
+			const delay = Math.min(
+				CDP_CLOSE_RETRY_BASE_MS * 2 ** Math.min(attempts - 1, 10),
+				CDP_CLOSE_RETRY_MAX_MS,
+			);
+			this.cdpTargetCloseRetries.set(targetId, {
+				attempts,
+				nextRetryAt: Date.now() + delay,
+			});
 		}
 	}
 
@@ -1648,9 +1739,13 @@ export class GoogleCdpBroker {
 	}
 
 	async cleanupCdpTargets() {
-		for (const target of [...this.cdpTargets.values()])
-			if (!this.registry.targets.has(target.targetId))
-				await this.closeCdpTarget(target);
+		const now = Date.now();
+		for (const target of [...this.cdpTargets.values()]) {
+			if (this.registry.targets.has(target.targetId)) continue;
+			const retry = this.cdpTargetCloseRetries.get(target.cdpTargetId);
+			if (retry && retry.nextRetryAt > now) continue;
+			await this.closeCdpTarget(target);
+		}
 	}
 
 	// Crash-orphan target recovery (#95 P2 item 2). After a hard broker
@@ -2179,6 +2274,8 @@ export class GoogleCdpBroker {
 		}
 		this.cdp.connected = false;
 		this.cdpTargets.clear();
+		this.cdpTargetCloseRetries.clear();
+		this.cdpTargetClosePromises.clear();
 		this.started = false;
 		// Keep the startup lock while removing our endpoint: otherwise a new
 		// owner could bind the path between release() and cleanup().
