@@ -122,18 +122,22 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
-    "@earendil-works/pi-tui": "^0.83.0 || ^0.84.0",
     "@mozilla/readability": "^0.6.0",
     "defuddle": "^0.19.2",
     "linkedom": "^0.18.12",
     "pdf-parse": "^2.4.5",
-    "typebox": "^1.1.34",
     "wreq-js": "^3.0.0",
     "youtube-transcript-plus": "^2.0.0",
     "ws": "^8.21.1"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "^0.83.0 || ^0.84.0"
+    "@earendil-works/pi-coding-agent": "^0.83.0 || ^0.84.0",
+    "@earendil-works/pi-tui": "^0.83.0 || ^0.84.0"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-tui": {
+      "optional": true
+    }
   },
   "overrides": {
     "protobufjs": "^7.6.5",
@@ -143,6 +147,7 @@
     "playwright": "^1.55.0"
   },
   "devDependencies": {
+    "@earendil-works/pi-tui": "^0.83.0 || ^0.84.0",
     "@types/node": "^26.1.2",
     "typescript": "^7.0.2",
     "@types/ws": "^8.18.1"

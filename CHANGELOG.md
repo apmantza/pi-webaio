@@ -2,6 +2,12 @@
 
 All notable changes to pi-webaio will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- **Stopped vendoring host-provided `typebox` and `@earendil-works/pi-tui`** (#108, same shape as pi-lens#1928). `typebox` is removed outright: nothing in `src/` imports it, and pi's own `@earendil-works/pi-coding-agent` subtree already carries the copy it needs. `@earendil-works/pi-tui` is genuinely used, lazily, in `src/tools/websearch.ts` and `src/tools/render-result.ts`. It moves to an optional peer dependency plus a devDependency, and pi resolves the bare specifier from its own runtime, as it already does for the `@earendil-works/pi-coding-agent` peer. A production install (`npm install --omit=dev`) no longer vendors either package.
+
 ## [0.9.0] - 2026-08-17
 
 ### Changed

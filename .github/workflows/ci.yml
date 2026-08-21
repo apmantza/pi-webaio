@@ -37,10 +37,11 @@ jobs:
       # PRs on fix-less moderate advisories; transitive moderate ones are
       # handled by Dependabot security updates. DevDeps are excluded — they
       # never reach users.
-      # Peer deps are excluded as well: the only peer (pi-coding-agent) is
-      # host-provided, and npm overrides do NOT cascade into a peer's subtree,
-      # so its transitive brace-expansion@5.0.7 advisory (GHSA-mh99-v99m-4gvg)
-      # cannot be bumped from this repo — it is upstream's responsibility.
+      # Peer deps are excluded as well: both peers (pi-coding-agent, pi-tui;
+      # #108) are host-provided, and npm overrides do NOT cascade into a
+      # peer's subtree, so pi-coding-agent's transitive brace-expansion@5.0.7
+      # advisory (GHSA-mh99-v99m-4gvg) cannot be bumped from this repo — it is
+      # upstream's responsibility.
       - name: Audit production dependencies
         run: npm audit --omit=dev --omit=peer --audit-level=high
 
@@ -124,10 +125,10 @@ jobs:
               "(TS2688? prepare/build:dist failed)" && exit 1)
           node dist/index.js 2>&1 | tee /tmp/load.txt || true
           # ERR_MODULE_NOT_FOUND = a runtime dep was wrongly in devDependencies.
-          # pi-coding-agent is a host-provided peer; its absence is expected
-          # here.
+          # pi-coding-agent and pi-tui (#108) are host-provided peers; their
+          # absence is expected here.
           if grep -q "ERR_MODULE_NOT_FOUND\|Cannot find module" /tmp/load.txt \
-             && ! grep -q "pi-coding-agent" /tmp/load.txt; then
+             && ! grep -Eq "pi-coding-agent|pi-tui" /tmp/load.txt; then
             echo "FAILED: missing runtime module under --omit=dev"
             cat /tmp/load.txt
             exit 1
@@ -245,14 +246,14 @@ jobs:
           # loaded by node.
           # ERR_MODULE_NOT_FOUND = missing dep -> fail
           # Any other error = expected in CI (no pi API available) -> pass
-          # pi-coding-agent is a host-provided peer dep; its absence is
-          # expected here
+          # pi-coding-agent and pi-tui (#108) are host-provided peer deps;
+          # their absence is expected here
           ENTRY=$(node -p "require('./package.json').pi.extensions[0]")
           echo "Loading entry: $ENTRY"
           node "$ENTRY" 2>&1 | tee /tmp/load-output.txt || true
           if grep -q "ERR_MODULE_NOT_FOUND\|Cannot find module" \
              /tmp/load-output.txt \
-             && ! grep -q "pi-coding-agent" /tmp/load-output.txt; then
+             && ! grep -Eq "pi-coding-agent|pi-tui" /tmp/load-output.txt; then
             echo "FAILED: missing module dependency detected"
             cat /tmp/load-output.txt
             exit 1
