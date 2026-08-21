@@ -239,7 +239,9 @@ export function createSearchProgressComponent(
 		const providers = details.providers ?? [];
 		const labelWidth = Math.max(...providers.map((p) => p.label.length), 4);
 		for (const p of providers) {
-			lines.push(renderProviderRow(p, details.spinnerTick ?? 0, labelWidth, theme));
+			lines.push(
+				renderProviderRow(p, details.spinnerTick ?? 0, labelWidth, theme),
+			);
 		}
 		return lines;
 	}

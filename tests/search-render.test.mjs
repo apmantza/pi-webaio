@@ -367,7 +367,8 @@ test("result component colors engine rows by outcome", () => {
 	const raw = comp.render(200).join("\n");
 	assert.ok(raw.includes("<success>"), "ok rows should be success-colored");
 	assert.ok(
-		raw.includes("HTTP 429") && theme.colorLog.some((c) => c.startsWith("error:")),
+		raw.includes("HTTP 429") &&
+			theme.colorLog.some((c) => c.startsWith("error:")),
 		"error rows should be error-colored",
 	);
 	assert.ok(theme.colorLog.some((c) => c.startsWith("warning:")));
@@ -377,7 +378,10 @@ test("final view keeps the in-flight row schema (stability)", () => {
 	const theme = makeTheme();
 	const providers = RESULT_PROVIDERS;
 	const progressRows = strip(
-		createSearchProgressComponent({ query: "q", providers, spinnerTick: 3 }, theme)
+		createSearchProgressComponent(
+			{ query: "q", providers, spinnerTick: 3 },
+			theme,
+		)
 			.render(200)
 			.join("\n"),
 	);
