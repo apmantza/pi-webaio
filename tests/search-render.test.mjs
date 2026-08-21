@@ -18,22 +18,25 @@ import {
 
 function makeTheme() {
 	const colorLog = [];
+	// Emit REAL ANSI escapes (like the production Theme) so the installed
+	// pi-tui Text treats them as zero-width — literal <tag> placeholders
+	// would inflate string length and skew word-wrap/width math.
 	const wrap = (color, text) => {
 		colorLog.push(`${color}:${text.length}`);
-		return `<${color}>${text}</${color}>`;
+		return `\x1b[90m${text}\x1b[0m`;
 	};
 	return {
 		wrap,
 		fg: wrap,
-		bg: (_color, text) => `<bg>${text}</bg>`,
-		bold: (text) => `<b>${text}</b>`,
+		bg: (_color, text) => `\x1b[7m${text}\x1b[0m`,
+		bold: (text) => `\x1b[1m${text}\x1b[0m`,
 		colorLog,
 	};
 }
 
-// Strip sentinel tags for plain-text assertions.
+// Strip ANSI escapes (and any stray tag markup) for plain-text assertions.
 function strip(s) {
-	return s.replace(/<\/?[a-zA-Z][^>]*>/g, "");
+	return s.replace(/\x1b\[[0-9;]*m/g, "").replace(/<\/?[a-zA-Z][^>]*>/g, "");
 }
 
 // ─── providerFromEngineStatus ───────────────────────────────────────
@@ -236,15 +239,16 @@ const PROGRESS_DETAILS = {
 	responseTargetMs: 2900,
 };
 
-test("progress component renders header + one row per provider", () => {
+test("progress component renders bar + one row per provider", () => {
 	const theme = makeTheme();
 	const comp = createSearchProgressComponent(PROGRESS_DETAILS, theme);
-	const lines = comp.render(120).join("\n");
-	const plain = strip(lines);
-	assert.match(plain, /aio-websearch "pi coding agent"/);
+	const plain = strip(comp.render(120).join("\n"));
+	// No in-component header — pi renders renderCall above this view.
+	assert.doesNotMatch(plain, /aio-websearch/);
 	for (const label of ["DDG", "Brave", "Yahoo", "Bing", "Google", "Reddit"]) {
 		assert.ok(plain.includes(label), `missing ${label}`);
 	}
+	assert.match(plain, /1\.4s \/ 2\.9s/);
 	assert.match(plain, /searching/);
 	assert.match(plain, /9 results \(800ms\)/);
 });
@@ -280,8 +284,6 @@ test("progress component tolerates missing providers/details", () => {
 	const theme = makeTheme();
 	const comp = createSearchProgressComponent({ query: "solo" }, theme);
 	assert.doesNotThrow(() => comp.render(80));
-	const out = strip(comp.render(80).join("\n"));
-	assert.match(out, /aio-websearch "solo"/);
 });
 
 // ─── createSearchResultComponent ────────────────────────────────────
@@ -334,8 +336,8 @@ test("result component collapsed: full bar + one settled row per engine", () => 
 		theme,
 	);
 	const plain = strip(comp.render(200).join("\n"));
-	// Stable schema: header + full bar + summary line…
-	assert.match(plain, /aio-websearch "stable schema"/);
+	// Stable schema: full bar + summary line (header comes from renderCall)…
+	assert.doesNotMatch(plain, /aio-websearch/);
 	assert.match(plain, /█+ \/? ?.*2\.9s/);
 	assert.match(plain, /✓ 2 results in 2\.9s/);
 	// …then one row per engine with count and timing.
@@ -365,7 +367,10 @@ test("result component colors engine rows by outcome", () => {
 		theme,
 	);
 	const raw = comp.render(200).join("\n");
-	assert.ok(raw.includes("<success>"), "ok rows should be success-colored");
+	assert.ok(
+		theme.colorLog.some((c) => c.startsWith("success:")),
+		"ok rows should be success-colored",
+	);
 	assert.ok(
 		raw.includes("HTTP 429") &&
 			theme.colorLog.some((c) => c.startsWith("error:")),
@@ -453,4 +458,29 @@ test("result component renders zero-result searches without crashing", () => {
 	const theme = makeTheme();
 	const comp = createSearchResultComponent({}, false, theme);
 	assert.doesNotThrow(() => comp.render(80));
+});
+
+test("rows degrade gracefully at narrow widths instead of being clipped", () => {
+	const theme = makeTheme();
+	// pi hard-clips lines with an ellipsis at the component width; simulate
+	// a ~22-column layout (observed in real TUIs) and require that every
+	// row still shows its glyph + label + count/status within 22 columns.
+	const comp = createSearchResultComponent(
+		{ responseTargetMs: 2900, resultCount: 14, durationMs: 2870, providers: RESULT_PROVIDERS },
+		false,
+		theme,
+	);
+	const lines = strip(comp.render(22).join("\n")).split("\n");
+	for (const line of lines) {
+		assert.ok(
+			line.trimEnd().length <= 22,
+			`line exceeds width: "${line}" (${line.length})`,
+		);
+	}
+	const plain = lines.join("\n");
+	// Counts survive clipping because rows degrade before pi can clip.
+	for (const label of ["DDG", "Brave", "Yahoo", "Bing", "Google", "Reddit"]) {
+		assert.ok(plain.includes(label), `missing ${label} at narrow width`);
+	}
+	assert.match(plain, /9 results/, "ok row keeps its count");
 });
