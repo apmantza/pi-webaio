@@ -466,7 +466,12 @@ test("rows degrade gracefully at narrow widths instead of being clipped", () => 
 	// a ~22-column layout (observed in real TUIs) and require that every
 	// row still shows its glyph + label + count/status within 22 columns.
 	const comp = createSearchResultComponent(
-		{ responseTargetMs: 2900, resultCount: 14, durationMs: 2870, providers: RESULT_PROVIDERS },
+		{
+			responseTargetMs: 2900,
+			resultCount: 14,
+			durationMs: 2870,
+			providers: RESULT_PROVIDERS,
+		},
 		false,
 		theme,
 	);

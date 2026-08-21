@@ -172,15 +172,18 @@ export function renderProviderStatusText(
 }
 
 /**
- * Overall elapsed-vs-target bar for the in-flight view. Classic block fill
- * advances with elapsed time toward the response target and caps at full;
- * past the target the fill turns red.
+ * Overall elapsed-vs-target bar. Classic block fill advances with elapsed
+ * time toward the response target and caps at full. In live views the fill
+ * turns red past the target; pass `colorOverride` (e.g. "success") for
+ * completed views — durationMs is measured after the budget wait, so it
+ * routinely lands a few ms past target on perfectly healthy searches.
  */
 export function renderElapsedBar(
 	elapsedMs: number,
 	targetMs: number | undefined,
 	width: number,
 	theme: ThemeLike,
+	colorOverride?: string,
 ): string {
 	const innerWidth = Math.max(8, width - 2);
 	const ratio = targetMs && targetMs > 0 ? Math.min(1, elapsedMs / targetMs) : 0;
@@ -189,7 +192,8 @@ export function renderElapsedBar(
 	const elapsedText = `${(elapsedMs / 1000).toFixed(1)}s`;
 	const targetText = targetMs ? ` / ${(targetMs / 1000).toFixed(1)}s` : "";
 	const fillColor =
-		targetMs && targetMs > 0 && elapsedMs > targetMs ? "error" : "accent";
+		colorOverride ??
+		(targetMs && targetMs > 0 && elapsedMs > targetMs ? "error" : "accent");
 	return [
 		theme.fg(fillColor, "█".repeat(filled)),
 		theme.fg("muted", "░".repeat(empty)),
@@ -210,12 +214,11 @@ export function renderElapsedBar(
 function renderProviderRow(
 	provider: SearchProviderProgress,
 	spinnerTick: number,
-	labelWidth: number,
 	theme: ThemeLike,
 	width = Number.POSITIVE_INFINITY,
 ): string {
 	const glyph = renderProviderGlyph(provider.status, spinnerTick, theme);
-	const labelPlain = provider.label.padEnd(labelWidth);
+	const labelPlain = provider.label;
 	const prefixPlain = `${plainGlyph(provider.status, spinnerTick)} ${labelPlain}`;
 
 	// Candidate right-hand texts, longest (most informative) first.
@@ -268,9 +271,7 @@ function plainGlyph(status: SearchProviderStatus, spinnerTick: number): string {
 		case "pending":
 			return "·";
 		default:
-			return (
-				SPINNER_FRAMES[spinnerTick % SPINNER_FRAMES.length] ?? "⠋"
-			);
+			return SPINNER_FRAMES[spinnerTick % SPINNER_FRAMES.length] ?? "⠋";
 	}
 }
 
@@ -311,15 +312,10 @@ export function createSearchProgressComponent(
 	const text = new Text("", 0, 0);
 
 	function buildRows(width: number): string[] {
-		const lines: string[] = [];
 		const providers = details.providers ?? [];
-		const labelWidth = Math.max(...providers.map((p) => p.label.length), 4);
-		for (const p of providers) {
-			lines.push(
-				renderProviderRow(p, details.spinnerTick ?? 0, labelWidth, theme, width),
-			);
-		}
-		return lines;
+		return providers.map((p) =>
+			renderProviderRow(p, details.spinnerTick ?? 0, theme, width),
+		);
 	}
 
 	return {
@@ -329,7 +325,12 @@ export function createSearchProgressComponent(
 				// Bar fills the line it has, never wider than the terminal.
 				const barWidth = Math.max(8, Math.min(24, width - 2));
 				lines.push(
-					renderElapsedBar(details.elapsedMs, details.responseTargetMs, barWidth, theme),
+					renderElapsedBar(
+						details.elapsedMs,
+						details.responseTargetMs,
+						barWidth,
+						theme,
+					),
 				);
 			}
 			lines.push(...buildRows(width));
@@ -393,7 +394,10 @@ export function createSearchResultComponent(
 		}
 		// Degrade gracefully on narrow terminals: drop the duration first,
 		// then the budget note — the count always survives.
-		while (plains.length > 1 && plains.join(" ").length > Math.max(width - 2, 10)) {
+		while (
+			plains.length > 1 &&
+			plains.join(" ").length > Math.max(width - 2, 10)
+		) {
 			parts.pop();
 			plains.pop();
 		}
@@ -401,10 +405,9 @@ export function createSearchResultComponent(
 	}
 
 	function buildProviderRows(width: number): string[] {
-		const providers = details.providers ?? [];
-		if (!providers.length) return [];
-		const labelWidth = Math.max(...providers.map((p) => p.label.length), 4);
-		return providers.map((p) => renderProviderRow(p, 0, labelWidth, theme, width));
+		return (details.providers ?? []).map((p) =>
+			renderProviderRow(p, 0, theme, width),
+		);
 	}
 
 	function buildExpandedRows(): string[] {
@@ -443,7 +446,13 @@ export function createSearchResultComponent(
 				const elapsed = details.durationMs ?? details.responseTargetMs;
 				const barWidth = Math.max(8, Math.min(24, w - 2));
 				lines.push(
-					renderElapsedBar(elapsed, details.responseTargetMs, barWidth, theme),
+					renderElapsedBar(
+						elapsed,
+						details.responseTargetMs,
+						barWidth,
+						theme,
+						"success",
+					),
 				);
 			}
 			lines.push(buildSummaryParts().styled);
