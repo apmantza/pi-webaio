@@ -517,8 +517,7 @@ export function registerWebsearchTool(
 										: "empty",
 						count: res.results.length,
 						latencyMs: res.latencyMs,
-						detail:
-							res.results.length > 0 ? undefined : redditStatus.slice(0, 60),
+						detail: res.results.length > 0 ? undefined : redditStatus.slice(0, 60),
 					});
 				});
 			} else {
@@ -777,9 +776,11 @@ export function registerWebsearchTool(
 
 			return createSearchResultComponent(
 				{
+					query: details.query,
 					providers: details.providers,
 					resultCount: details.results?.length ?? 0,
 					durationMs: details.durationMs,
+					responseTargetMs: details.responseBudgetMs,
 					timedOut: details.timedOut === true,
 					engineNotes: details.engineStatus
 						? engineStatusNotes(details.engineStatus)

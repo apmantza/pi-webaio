@@ -203,6 +203,22 @@ export function renderElapsedBar(
 }
 
 /**
+ * One stable provider row: glyph + padded label + right-hand status text.
+ * Shared by the in-flight and final views so the schema never changes
+ * mid-search — rows fill in place as lanes settle.
+ */
+function renderProviderRow(
+	provider: SearchProviderProgress,
+	spinnerTick: number,
+	labelWidth: number,
+	theme: ThemeLike,
+): string {
+	const glyph = renderProviderGlyph(provider.status, spinnerTick, theme);
+	const label = theme.fg("text", provider.label.padEnd(labelWidth));
+	return `${glyph} ${label} ${renderProviderStatusText(provider, theme)}`;
+}
+
+/**
  * Progress component for partial (in-flight) results: header with query +
  * elapsed/target bar, then one animated row per provider.
  */
@@ -223,9 +239,7 @@ export function createSearchProgressComponent(
 		const providers = details.providers ?? [];
 		const labelWidth = Math.max(...providers.map((p) => p.label.length), 4);
 		for (const p of providers) {
-			const glyph = renderProviderGlyph(p.status, details.spinnerTick ?? 0, theme);
-			const label = theme.fg("text", p.label.padEnd(labelWidth));
-			lines.push(`${glyph} ${label} ${renderProviderStatusText(p, theme)}`);
+			lines.push(renderProviderRow(p, details.spinnerTick ?? 0, labelWidth, theme));
 		}
 		return lines;
 	}
@@ -251,9 +265,10 @@ export function createSearchProgressComponent(
 }
 
 /**
- * Final-result component. Collapsed: success summary + per-engine tokens
- * colored by outcome + engine notes. Expanded: ranked rows with sourceType
- * tags, domain, engine agreement, URL, and snippet.
+ * Final-result component — same schema as the in-flight view so the layout
+ * never jumps: header with query, the elapsed/target bar now full, then one
+ * settled row per engine (count + timing), then engine notes. Expanded adds
+ * ranked result rows with sourceType tags, domain, URL, and snippet.
  */
 export function createSearchResultComponent(
 	details: {
@@ -261,6 +276,7 @@ export function createSearchResultComponent(
 		providers?: SearchProviderProgress[];
 		resultCount?: number;
 		durationMs?: number;
+		responseTargetMs?: number;
 		timedOut?: boolean;
 		engineNotes?: string[];
 		results?: Array<{
@@ -277,7 +293,18 @@ export function createSearchResultComponent(
 ) {
 	const text = new Text("", 0, 0);
 
-	function buildSummary(): string {
+	function buildHeader(): string {
+		const title = theme.fg("toolTitle", theme.bold("aio-websearch "));
+		const query = details.query
+			? theme.fg("accent", `"${truncate(details.query, 70)}"`)
+			: "";
+		return title + query;
+	}
+
+	function buildBarLine(): string {
+		const target = details.responseTargetMs;
+		const elapsed = details.durationMs ?? target ?? 0;
+		const bar = target ? renderElapsedBar(elapsed, target, 24, theme) + " " : "";
 		const parts: string[] = [];
 		const count = details.resultCount ?? 0;
 		const countText = `${count} result${count === 1 ? "" : "s"}`;
@@ -292,29 +319,14 @@ export function createSearchResultComponent(
 		if (details.timedOut) {
 			parts.push(theme.fg("warning", "response budget hit"));
 		}
-		const header = parts.join(" ");
+		return bar + parts.join(" ");
+	}
 
-		const engineTokens = (details.providers ?? []).map((p) => {
-			const glyph = renderProviderGlyph(p.status, 0, theme);
-			const countPart = p.count === undefined ? "" : ` ${p.count}`;
-			const token = `${p.label}${countPart}`;
-			switch (p.status) {
-				case "ok":
-					return `${glyph} ${theme.fg("text", token)}`;
-				case "empty":
-					return `${glyph} ${theme.fg("muted", token)}`;
-				case "error":
-					return `${glyph} ${theme.fg("error", token)}`;
-				case "timeout":
-					return `${glyph} ${theme.fg("warning", token)}`;
-				default:
-					return `${glyph} ${theme.fg("muted", token)}`;
-			}
-		});
-		const engineLine = engineTokens.length
-			? engineTokens.join(theme.fg("muted", " · "))
-			: "";
-		return engineLine ? `${header}\n${engineLine}` : header;
+	function buildProviderRows(): string[] {
+		const providers = details.providers ?? [];
+		if (!providers.length) return [];
+		const labelWidth = Math.max(...providers.map((p) => p.label.length), 4);
+		return providers.map((p) => renderProviderRow(p, 0, labelWidth, theme));
 	}
 
 	function buildExpandedRows(): string[] {
@@ -343,7 +355,8 @@ export function createSearchResultComponent(
 
 	return {
 		render(_width: number): string[] {
-			const lines = [buildSummary()];
+			const lines: string[] = [buildHeader(), buildBarLine()];
+			lines.push(...buildProviderRows());
 			for (const note of details.engineNotes ?? []) {
 				lines.push(theme.fg("dim", note));
 			}

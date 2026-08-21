@@ -135,18 +135,25 @@ test("renderProviderGlyph: running advances spinner frames with tick", () => {
 	assert.notStrictEqual(f0, f3);
 	assert.notStrictEqual(f3, f6);
 	// Wraps around without crashing.
-	assert.strictEqual(
-		strip(renderProviderGlyph("running", 10, theme)),
-		f0,
-	);
+	assert.strictEqual(strip(renderProviderGlyph("running", 10, theme)), f0);
 });
 
 // ─── renderProviderStatusText ───────────────────────────────────────
 
 test("renderProviderStatusText: running/pending show progress text", () => {
 	const theme = makeTheme();
-	assert.match(strip(renderProviderStatusText({ id: "x", label: "X", status: "running" }, theme)), /searching/);
-	assert.match(strip(renderProviderStatusText({ id: "x", label: "X", status: "pending" }, theme)), /waiting/);
+	assert.match(
+		strip(
+			renderProviderStatusText({ id: "x", label: "X", status: "running" }, theme),
+		),
+		/searching/,
+	);
+	assert.match(
+		strip(
+			renderProviderStatusText({ id: "x", label: "X", status: "pending" }, theme),
+		),
+		/waiting/,
+	);
 });
 
 test("renderProviderStatusText: ok includes count and latency", () => {
@@ -160,7 +167,10 @@ test("renderProviderStatusText: ok includes count and latency", () => {
 	assert.match(out, /7 results? \(900ms\)/);
 
 	const noLatency = strip(
-		renderProviderStatusText({ id: "ddg", label: "DDG", status: "ok", count: 1 }, theme),
+		renderProviderStatusText(
+			{ id: "ddg", label: "DDG", status: "ok", count: 1 },
+			theme,
+		),
 	);
 	assert.match(noLatency, /^1 result$/);
 });
@@ -277,12 +287,17 @@ test("progress component tolerates missing providers/details", () => {
 // ─── createSearchResultComponent ────────────────────────────────────
 
 const RESULT_PROVIDERS = [
-	{ id: "ddg", label: "DDG", status: "ok", count: 9 },
-	{ id: "brave", label: "Brave", status: "ok", count: 6 },
-	{ id: "yahoo", label: "Yahoo", status: "empty", count: 0 },
+	{ id: "ddg", label: "DDG", status: "ok", count: 9, latencyMs: 800 },
+	{ id: "brave", label: "Brave", status: "ok", count: 6, latencyMs: 1200 },
+	{ id: "yahoo", label: "Yahoo", status: "empty", count: 0, latencyMs: 300 },
 	{ id: "bing", label: "Bing", status: "error", detail: "HTTP 429" },
-	{ id: "google", label: "Google", status: "ok", count: 15 },
-	{ id: "reddit", label: "Reddit", status: "timeout", detail: "timed out after 2.9s" },
+	{ id: "google", label: "Google", status: "ok", count: 15, latencyMs: 2100 },
+	{
+		id: "reddit",
+		label: "Reddit",
+		status: "timeout",
+		detail: "timed out after 2.9s",
+	},
 ];
 
 const RESULT_ROWS = [
@@ -302,10 +317,12 @@ const RESULT_ROWS = [
 	},
 ];
 
-test("result component collapsed: summary + engine tokens, no rows", () => {
+test("result component collapsed: full bar + one settled row per engine", () => {
 	const theme = makeTheme();
 	const comp = createSearchResultComponent(
 		{
+			query: "stable schema",
+			responseTargetMs: 2900,
 			resultCount: 2,
 			durationMs: 2870,
 			timedOut: false,
@@ -317,15 +334,30 @@ test("result component collapsed: summary + engine tokens, no rows", () => {
 		theme,
 	);
 	const plain = strip(comp.render(200).join("\n"));
+	// Stable schema: header + full bar + summary line…
+	assert.match(plain, /aio-websearch "stable schema"/);
+	assert.match(plain, /█+ \/? ?.*2\.9s/);
 	assert.match(plain, /✓ 2 results in 2\.9s/);
-	for (const label of ["DDG 9", "Brave 6", "Google 15"]) {
-		assert.ok(plain.includes(label), `missing token ${label}`);
+	// …then one row per engine with count and timing.
+	for (const row of [
+		/✓ DDG\s+9 results \(800ms\)/,
+		/✓ Brave\s+6 results \(1\.2s\)/,
+		/∅ Yahoo\s+0 results/,
+		/✗ Bing\s+HTTP 429/,
+		/✓ Google\s+15 results \(2\.1s\)/,
+		/⏱ Reddit\s+timed out after 2\.9s/,
+	]) {
+		assert.match(plain, row);
 	}
 	assert.match(plain, /note one/);
-	assert.doesNotMatch(plain, /First hit/, "expanded rows must be collapsed away");
+	assert.doesNotMatch(
+		plain,
+		/First hit/,
+		"expanded rows must be collapsed away",
+	);
 });
 
-test("result component colors engine tokens by outcome", () => {
+test("result component colors engine rows by outcome", () => {
 	const theme = makeTheme();
 	const comp = createSearchResultComponent(
 		{ resultCount: 2, providers: RESULT_PROVIDERS },
@@ -333,10 +365,36 @@ test("result component colors engine tokens by outcome", () => {
 		theme,
 	);
 	const raw = comp.render(200).join("\n");
-	assert.ok(raw.includes("<success>"), "ok token should be success-colored");
-	assert.ok(raw.includes("<error>HTTP 429") || raw.includes("<error>Bing"), "error token should be error-colored");
-	assert.ok(raw.includes("<warning>timed out after 2.9s</warning>") === false ? true : true); // timeout glyph colored via warning
+	assert.ok(raw.includes("<success>"), "ok rows should be success-colored");
+	assert.ok(
+		raw.includes("HTTP 429") && theme.colorLog.some((c) => c.startsWith("error:")),
+		"error rows should be error-colored",
+	);
 	assert.ok(theme.colorLog.some((c) => c.startsWith("warning:")));
+});
+
+test("final view keeps the in-flight row schema (stability)", () => {
+	const theme = makeTheme();
+	const providers = RESULT_PROVIDERS;
+	const progressRows = strip(
+		createSearchProgressComponent({ query: "q", providers, spinnerTick: 3 }, theme)
+			.render(200)
+			.join("\n"),
+	);
+	const finalRows = strip(
+		createSearchResultComponent({ providers }, false, theme)
+			.render(200)
+			.join("\n"),
+	);
+	// Every settled engine renders the exact same row text in both views.
+	for (const p of providers) {
+		if (p.status === "running") continue;
+		const rowRe = new RegExp(
+			`${p.label}\\s+${p.status === "ok" ? `${p.count} results?` : (p.detail ?? "0 results").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`,
+		);
+		assert.match(progressRows, rowRe, `progress view row for ${p.label}`);
+		assert.match(finalRows, rowRe, `final view row for ${p.label}`);
+	}
 });
 
 test("result component flags a timed-out search in the header", () => {
@@ -362,7 +420,10 @@ test("result component expanded: rank numbers, sourceType tags, urls, snippets",
 		theme,
 	);
 	const plain = strip(comp.render(240).join("\n"));
-	assert.match(plain, /\b1\. \[official-docs\] First hit \(example\.com\) — http\+google/);
+	assert.match(
+		plain,
+		/\b1\. \[official-docs\] First hit \(example\.com\) — http\+google/,
+	);
 	assert.match(plain, /\b2\. \[repo\] Second hit \(other\.org\)/);
 	assert.match(plain, /https:\/\/example\.com\/a/);
 	assert.match(plain, /An example snippet\./);
