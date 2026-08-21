@@ -71,3 +71,65 @@ test("websearch google:false skips Google while preserving Reddit", async () => 
 	assert.doesNotMatch(result.content[0].text, /Google:/);
 	assert.match(result.content[0].text, /Reddit:1/);
 });
+
+test("websearch serializes Reddit CDP after Google when both lanes are enabled", async () => {
+	const events = [];
+	const registered = [];
+
+	registerWebsearchTool(
+		{
+			registerTool(tool) {
+				registered.push(tool);
+			},
+		},
+		{
+			loadGoggles: async () => ({ name: "test", rules: [] }),
+			searchWeb: async () => ({
+				results: [
+					{
+						title: "HTTP result",
+						url: "https://example.com/http",
+						snippet: "http",
+						domain: "example.com",
+					},
+				],
+				ddgCount: 1,
+				braveCount: 0,
+				yahooCount: 0,
+				bingCount: 0,
+				redditCount: 0,
+			}),
+			ensureChrome: async () => ({ running: true, ready: true }),
+			googleSearch: async () => {
+				events.push("google-start");
+				await new Promise((resolve) => setTimeout(resolve, 20));
+				events.push("google-done");
+				return {
+					results: [
+						{
+							title: "Google result",
+							url: "https://example.com/google",
+							snippet: "google",
+						},
+					],
+				};
+			},
+			searchReddit: async () => {
+				events.push("reddit-start");
+				assert.deepEqual(events, ["google-start", "google-done", "reddit-start"]);
+				return { ok: true, elapsed: 1, results: [] };
+			},
+			cdpAvailable: () => true,
+			providerAvailable: () => true,
+		},
+	);
+
+	const result = await registered[0].execute("test-call", {
+		query: "cdp-lane-ordering",
+		google: true,
+		max: 10,
+	});
+
+	assert.deepEqual(events, ["google-start", "google-done", "reddit-start"]);
+	assert.equal(result.details.googleCount, 1);
+});

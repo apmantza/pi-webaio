@@ -57,6 +57,22 @@ function classifyRedditStatus(status: string, count: number): EngineStatus {
 	return "empty";
 }
 
+function waitForPromiseOrDeadline(
+	promise: Promise<unknown>,
+	deadlineAt: number,
+): Promise<void> {
+	return new Promise((resolve) => {
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const finish = () => {
+			if (timer) clearTimeout(timer);
+			resolve();
+		};
+		timer = setTimeout(finish, Math.max(deadlineAt - Date.now(), 1));
+		timer.unref?.();
+		void promise.then(finish, finish);
+	});
+}
+
 export function registerWebsearchTool(
 	pi: ExtensionAPI,
 	dependencies: WebsearchDependencies = {},
@@ -220,6 +236,15 @@ export function registerWebsearchTool(
 			if (redditEnabled) {
 				redditPromise = (async () => {
 					try {
+						// Reddit's legacy CDP client shares Chrome with the broker.
+						// Let the broker-owned Google target finish before Reddit
+						// creates/navigates its own target; concurrent browser-level
+						// CDP traffic can otherwise stall Google's 3s lane.
+						if (googleEnabled) {
+							// Do not let a hung/injected Google implementation prevent
+							// Reddit from getting its remaining share of the deadline.
+							await waitForPromiseOrDeadline(googlePromise, searchDeadlineAt);
+						}
 						await chromeReady;
 						const r = await searchRedditImpl(query);
 						if (!r) {
@@ -280,7 +305,7 @@ export function registerWebsearchTool(
 					["google", googlePromise],
 					["reddit", redditPromise],
 				],
-				SEARCH_DEADLINE_MS,
+				Math.max(searchDeadlineAt - Date.now(), 1),
 			);
 			const result = collected.values;
 
