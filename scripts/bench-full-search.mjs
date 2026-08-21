@@ -2,17 +2,22 @@
 // bench-full-search.mjs — full aio-websearch benchmark (legacy vs broker).
 //
 // Mirrors the real tool's orchestration exactly: searchWeb (HTTP engines,
-// 4.5s per-engine deadline) + googleSearch (CDP lane) + searchReddit (CDP
-// companion), collected under the 7s hard response deadline via
-// collectProviderResults. Records total latency, per-provider status/counts,
-// and Windows process/commit deltas around each sample.
+// 2.7s per-engine deadline in the public tool path) + googleSearch (CDP lane)
+// + searchReddit (CDP companion, serialized after Google), collected under
+// the ~3s public response target with a 7s hard safety deadline. Records total
+// latency, per-provider status/counts, and Windows process/commit deltas around
+// each sample.
 //
 // Usage:
 //   node --experimental-strip-types scripts/bench-full-search.mjs <legacy|broker> [samples] [query...]
 //   e.g. node --experimental-strip-types scripts/bench-full-search.mjs broker 10 "pi coding agent"
 import { execSync } from "node:child_process";
 import { platform } from "node:os";
-import { ensureChrome, googleSearch } from "../src/google-ai.ts";
+import {
+	closeGoogleBroker,
+	ensureChrome,
+	googleSearch,
+} from "../src/google-ai.ts";
 import { searchWeb } from "../src/search.ts";
 import { searchReddit } from "../src/verticals/reddit_search.ts";
 import { collectProviderResults } from "../src/search-orchestration.ts";
@@ -42,6 +47,9 @@ const QUERIES = [
 	`${baseQuery} package publishing`,
 ];
 const SEARCH_DEADLINE_MS = 7000;
+const SEARCH_RESPONSE_TARGET_MS = 2900;
+const HTTP_ENGINE_RESPONSE_DEADLINE_MS = 2700;
+const GOOGLE_LANE_MAX_MS = 2900;
 
 process.env.PI_WEBAIO_CDP_BROKER = mode === "broker" ? "1" : "0";
 console.log(
@@ -88,13 +96,41 @@ function nodeProcessCount() {
 }
 
 // ─── One full-search iteration (mirrors registerWebsearchTool.execute) ─
+function waitForPromiseOrDeadline(promise, deadlineAt) {
+	return new Promise((resolve) => {
+		let timer;
+		const finish = () => {
+			if (timer) clearTimeout(timer);
+			resolve();
+		};
+		timer = setTimeout(finish, Math.max(deadlineAt - Date.now(), 1));
+		timer.unref?.();
+		void promise.then(finish, finish);
+	});
+}
+
+function classifyBenchGoogleStatus(google) {
+	if (google === undefined) return "not-settled";
+	return google.results.length > 0 ? "ok" : "empty";
+}
+
+function classifyBenchRedditStatus(reddit) {
+	if (!reddit) return "not-settled";
+	if (reddit.ok) return "ok";
+	// searchReddit's own deadline miss is a timeout, not a provider error.
+	return reddit.budgetMiss ? "timeout" : "error";
+}
+
 async function runFullSearch(sampleIndex) {
 	const query = QUERIES[Math.min(sampleIndex, QUERIES.length - 1)];
 	const startedAt = Date.now();
 	const searchDeadlineAt = startedAt + SEARCH_DEADLINE_MS;
+	const responseDeadlineAt = startedAt + SEARCH_RESPONSE_TARGET_MS;
 
 	// HTTP engines (independent of Chrome).
-	const httpPromise = searchWeb(query).then(
+	const httpPromise = searchWeb(query, undefined, {
+		engineDeadlineMs: HTTP_ENGINE_RESPONSE_DEADLINE_MS,
+	}).then(
 		(r) => ({ source: "http", results: r.results, counts: r }),
 		() => ({ source: "http", results: [], counts: null }),
 	);
@@ -109,9 +145,9 @@ async function runFullSearch(sampleIndex) {
 		try {
 			await chromeReady;
 			const g = await googleSearch(query, {
-				timeoutMs: SEARCH_DEADLINE_MS,
+				timeoutMs: Math.min(SEARCH_DEADLINE_MS, GOOGLE_LANE_MAX_MS),
 				maxResults: 10,
-				deadlineAt: searchDeadlineAt,
+				deadlineAt: Math.min(searchDeadlineAt, Date.now() + GOOGLE_LANE_MAX_MS),
 			});
 			return { source: "google", results: g.results };
 		} catch {
@@ -120,11 +156,26 @@ async function runFullSearch(sampleIndex) {
 	})();
 	const redditPromise = (async () => {
 		try {
-			await chromeReady;
-			const r = await searchReddit(query);
-			return { source: "reddit", results: r?.results ?? [], ok: r?.ok ?? false };
+			await waitForPromiseOrDeadline(googlePromise, responseDeadlineAt);
+			if (Date.now() >= responseDeadlineAt) {
+				return { source: "reddit", results: [], ok: false, budgetMiss: true };
+			}
+			await waitForPromiseOrDeadline(chromeReady, responseDeadlineAt);
+			if (Date.now() >= responseDeadlineAt) {
+				return { source: "reddit", results: [], ok: false, budgetMiss: true };
+			}
+			const r = await searchReddit(query, { deadlineAt: responseDeadlineAt });
+			return {
+				source: "reddit",
+				results: r?.results ?? [],
+				ok: r?.ok ?? false,
+				// searchReddit's own deadline miss is a timeout, not a provider error.
+				budgetMiss: r
+					? r.ok === false && r.error?.includes("response budget") === true
+					: true,
+			};
 		} catch {
-			return { source: "reddit", results: [], ok: false };
+			return { source: "reddit", results: [], ok: false, budgetMiss: false };
 		}
 	})();
 
@@ -134,7 +185,7 @@ async function runFullSearch(sampleIndex) {
 			["google", googlePromise],
 			["reddit", redditPromise],
 		],
-		SEARCH_DEADLINE_MS,
+		Math.max(Math.min(responseDeadlineAt, searchDeadlineAt) - Date.now(), 1),
 	);
 	const v = collected.values;
 	const http = v.http?.counts;
@@ -152,8 +203,11 @@ async function runFullSearch(sampleIndex) {
 		brave: http?.braveCount ?? 0,
 		yahoo: http?.yahooCount ?? 0,
 		bing: http?.bingCount ?? 0,
-		googleStatus: v.google ? "ok" : "not-settled",
-		redditStatus: v.reddit ? (v.reddit.ok ? "ok" : "error") : "not-settled",
+		googleStatus: classifyBenchGoogleStatus(v.google),
+		redditStatus: classifyBenchRedditStatus(v.reddit),
+		// A Reddit budget miss inside searchReddit counts as a response-budget
+		// cut even when the outer collector did not fire first (#97 fidelity).
+		responseBudgetCut: collected.timedOut || v.reddit?.budgetMiss === true,
 	};
 }
 
@@ -167,12 +221,15 @@ for (let i = 0; i < samples; i++) {
 		`  sample ${String(i + 1).padStart(2)}: ${String(row.elapsedMs).padStart(5)}ms ` +
 			`http=${row.httpResults} google=${row.googleResults} reddit=${row.redditResults} ` +
 			`total=${row.total} ddg=${row.ddg} brave=${row.brave} yahoo=${row.yahoo} bing=${row.bing} ` +
-			`google=${row.googleStatus} reddit=${row.redditStatus}${row.timedOut ? " [deadline-cut]" : ""}`,
+			`google=${row.googleStatus} reddit=${row.redditStatus}${row.responseBudgetCut ? " [response-budget-cut]" : ""}`,
 	);
 	if (spacingMs > 0 && i < samples - 1) {
 		await new Promise((resolve) => setTimeout(resolve, spacingMs));
 	}
 }
+await closeGoogleBroker(undefined, { deadlineAt: Date.now() + 5_000 }).catch(
+	() => undefined,
+);
 const after = systemSnapshot();
 
 // ─── Summary ────────────────────────────────────────────────────────
@@ -184,7 +241,7 @@ const avg = latencies.reduce((a, b) => a + b, 0) / latencies.length;
 const httpOk = rows.filter((r) => r.httpResults > 0).length;
 const googleOk = rows.filter((r) => r.googleResults > 0).length;
 const redditOk = rows.filter((r) => r.redditResults > 0).length;
-const deadlineCut = rows.filter((r) => r.timedOut).length;
+const deadlineCut = rows.filter((r) => r.responseBudgetCut).length;
 
 console.log(`\n=== SUMMARY (${mode}, n=${samples}) ===`);
 console.log(
@@ -201,3 +258,9 @@ console.log(
 	`  system: processes ${before?.processes ?? "?"} -> ${after?.processes ?? "?"}  ` +
 		`working set ${before?.workingSetGb ?? "?"}GB -> ${after?.workingSetGb ?? "?"}GB`,
 );
+
+// This is a one-shot live benchmark harness, not the long-lived pi host. Some
+// native/browser libraries can keep diagnostic sockets alive after their public
+// promises and broker cleanup have completed; exit explicitly after printing
+// the measured summary so CI/manual benchmark runs do not hang on idle handles.
+process.exit(0);

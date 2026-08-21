@@ -9,6 +9,34 @@ Harness: `scripts/bench-full-search.mjs` (rotates distinct queries per sample
 to avoid the 10-min search cache; shares one `chromeReady` between the Google
 and Reddit lanes exactly like the tool).
 
+## Full-tool: broker with 2.9s response target (#97, 2026-08-21)
+
+The public `aio-websearch` orchestration now returns providers that settle by a
+2.9s response target while preserving the 7s hard safety deadline for child/browser
+work. In this path HTTP engines use a 2.7s per-engine budget, Google remains
+capped under 3s, and Reddit still serializes after Google but is marked as a late
+provider timeout if it misses the response target.
+
+Live broker run, zero-spacing burst, n=10, query family
+`"pi coding agent post97final 1787328255"`:
+
+| Metric | Broker (#97 response target) |
+| --- | ---: |
+| p50 total | **2,876 ms** |
+| p95 total | **2,906 ms** |
+| avg total | **2,731 ms** |
+| HTTP success | 10/10 (100%) |
+| Google success | 10/10 (100%) |
+| Reddit success | 6/10 (60%) |
+| Response-budget cuts | 4/10 |
+| Processes (before→after) | 578 → 580 |
+| Working set (before→after) | 8.51 GB → 8.88 GB |
+
+**Reading:** the full public broker path now meets the warm p50 target for #97
+(p50 < 3.0s) while preserving HTTP + Google success. Reddit is opportunistic
+within the response target: fast Reddit runs are included, and late Reddit runs
+surface as explicit timeouts instead of holding the whole search open.
+
 ## Full-tool: legacy vs broker (2026-08-16)
 
 **Machine:** Windows (dev laptop), Node 24.18.1, Chrome (headless CDP), warm

@@ -90,20 +90,35 @@ export class CDPClient {
 		this.wsUrl = wsUrl;
 	}
 
-	async connect(): Promise<void> {
+	async connect(timeout = CDP_CONNECT_TIMEOUT_MS): Promise<void> {
 		if (this.#closed) throw new Error("CDP connection is closed");
 		const { default: WebSocket } = await import("ws");
 		return new Promise((resolve, reject) => {
 			let settled = false;
+			let timer: ReturnType<typeof setTimeout> | undefined;
 			const failConnect = (error: Error) => {
 				if (settled) return;
 				settled = true;
+				if (timer) clearTimeout(timer);
 				reject(error);
 			};
 			this.#ws = new WebSocket(this.wsUrl);
+			timer = setTimeout(() => {
+				this.#closed = true;
+				this.#rejectPending(new Error("CDP connection closed"));
+				this.#notifyClose();
+				try {
+					this.#ws?.close();
+				} catch {
+					// The socket may already be closing after a timeout.
+				}
+				failConnect(new Error("CDP connection timed out"));
+			}, timeout);
+			timer.unref?.();
 			this.#ws.onopen = () => {
 				if (settled) return;
 				settled = true;
+				if (timer) clearTimeout(timer);
 				resolve();
 			};
 			this.#ws.onerror = (e: any) => {
@@ -218,12 +233,8 @@ export class CDPClient {
 				finish(reject, new Error("CDP connection closed")),
 			);
 			timer = setTimeout(
-				() =>
-					finish(
-						reject,
-						new Error(`Timeout waiting for event: ${method}`),
-					),
-				 timeout,
+				() => finish(reject, new Error(`Timeout waiting for event: ${method}`)),
+				timeout,
 			);
 		});
 		promise.catch(() => {});
@@ -257,7 +268,12 @@ export class CDPClient {
 		this.#pending.clear();
 	}
 
-	send(method: string, params = {}, sessionId?: string): Promise<any> {
+	send(
+		method: string,
+		params = {},
+		sessionId?: string,
+		timeout = CDP_CONNECT_TIMEOUT_MS,
+	): Promise<any> {
 		const id = ++this.#id;
 		return new Promise((resolve, reject) => {
 			if (this.#closed || !this.#ws) {
@@ -269,7 +285,8 @@ export class CDPClient {
 					this.#pending.delete(id);
 					reject(new Error(`Timeout: ${method}`));
 				}
-			}, CDP_CONNECT_TIMEOUT_MS);
+			}, timeout);
+			timer.unref?.();
 			this.#pending.set(id, { resolve, reject, timer });
 			const msg: any = { id, method, params };
 			if (sessionId) msg.sessionId = sessionId;
@@ -321,8 +338,7 @@ export async function captureMainContext(
 	} finally {
 		// Cleanup is required even when enable or the session itself fails.
 		off();
-		if (enabled)
-			await cdp.send("Runtime.disable", {}, sessionId).catch(() => {});
+		if (enabled) await cdp.send("Runtime.disable", {}, sessionId).catch(() => {});
 	}
 
 	let rootFrameId: string | null = null;
@@ -395,9 +411,7 @@ export async function evalInMainContext(
 		mainCtxCache.delete(sessionId);
 		contextId = await captureMainContext(cdp, sessionId);
 		if (contextId == null) {
-			throw new Error(
-				"Failed to re-capture execution context after navigation",
-			);
+			throw new Error("Failed to re-capture execution context after navigation");
 		}
 		mainCtxCache.set(sessionId, contextId);
 		return await doEval(contextId);

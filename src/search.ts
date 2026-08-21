@@ -1045,7 +1045,18 @@ export async function searchWeb(
 			deadlineHandle = setTimeout(() => resolve(true), deadlineMs);
 			deadlineHandle.unref?.();
 		});
-		const attempt = fetchFn(engine.url, { headers: commonHeaders })
+		const attempt = fetchFn(engine.url, {
+			headers: commonHeaders,
+			// Search probes favor freshness and bounded orchestration over transport
+			// persistence: a 429/5xx should surface as that engine's status within the
+			// response budget, not keep retrying after the public tool has returned.
+			maxRetries: 0,
+			timeoutMs: deadlineMs,
+			// No cookie-warm retries / Playwright / bot-ladder escalation: the
+			// per-engine deadline must be a real upper bound, not a race whose loser
+			// keeps a browser job running after aio-websearch has returned.
+			disableFallbacks: true,
+		})
 			.then((res) => ({
 				res,
 				timedOut: false as const,

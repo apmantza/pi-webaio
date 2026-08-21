@@ -16,7 +16,6 @@ import { STEALTH_SCRIPT } from "#stealth-script";
 import { detectBotBlock, detectLoginRedirect } from "./bot-detection.ts";
 import { BrowserPool } from "./browser-pool.ts";
 import {
-	createPinnedLookup,
 	fastSsrfBlock,
 	scanForSecrets,
 	ssrfVerdictToFetchError,
@@ -128,7 +127,7 @@ export function summarizeBotBlockLadder(attempts: BotBlockAttempt[]): string {
 	if (attempts.length === 0) return "no fallback attempts recorded";
 	return attempts
 		.map((a) => {
-			const outcome = a.status != null ? String(a.status) : (a.error ?? "blocked");
+			const outcome = a.status == null ? (a.error ?? "blocked") : String(a.status);
 			return `${a.profile}=${outcome}`;
 		})
 		.join(", ");
@@ -694,9 +693,9 @@ function throwResponseTooLarge(
 ): never {
 	const err: any = new Error(
 		`Response exceeds ${limit} byte limit (${
-			declaredLen !== null
-				? `Content-Length: ${(declaredLen / 1024 / 1024).toFixed(1)}MB`
-				: `${(bytesRead / 1024 / 1024).toFixed(1)}MB received`
+			declaredLen === null
+				? `${(bytesRead / 1024 / 1024).toFixed(1)}MB received`
+				: `Content-Length: ${(declaredLen / 1024 / 1024).toFixed(1)}MB`
 		})`,
 	);
 	err.code = "ERR_RESPONSE_TOO_LARGE";
@@ -783,9 +782,9 @@ export async function readResponseTextWithProgress(
 		// TUI and used by `suggestRetryTimeoutMs` is accurate for
 		// multi-byte UTF-8 (CJK, emoji).
 		const byteLength =
-			typeof Buffer !== "undefined"
-				? Buffer.byteLength(t, "utf8")
-				: new TextEncoder().encode(t).length;
+			typeof Buffer === "undefined"
+				? new TextEncoder().encode(t).length
+				: Buffer.byteLength(t, "utf8");
 		return { text: t, bytesRead: byteLength, contentLength: null };
 	}
 	const contentLengthHeader = response.headers?.get("content-length");
@@ -869,8 +868,9 @@ async function fetchWithRetry(
 	}
 
 	let lastError: Error | null = null;
+	const maxRetries = Math.max(0, Math.floor(options.maxRetries ?? MAX_RETRIES));
 
-	for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+	for (let attempt = 0; attempt <= maxRetries; attempt++) {
 		try {
 			const fetchFn = options.wreqSession
 				? (u: string, init: any) => options.wreqSession.fetch(u, init)
@@ -896,7 +896,11 @@ async function fetchWithRetry(
 				return res; // let caller handle
 			}
 
-			if (res.ok || !RETRYABLE_STATUS_CODES.has(res.status)) {
+			if (
+				res.ok ||
+				!RETRYABLE_STATUS_CODES.has(res.status) ||
+				attempt >= maxRetries
+			) {
 				return res;
 			}
 
@@ -907,14 +911,14 @@ async function fetchWithRetry(
 			if (!isRetryableNetworkError(err)) {
 				throw err; // Non-retryable: fail fast
 			}
-			if (attempt < MAX_RETRIES) {
+			if (attempt < maxRetries) {
 				await sleep(jitteredDelay(RETRY_INITIAL_DELAY_MS, attempt));
 			}
 		}
 	}
 
 	console.error(
-		`[FETCH] All ${MAX_RETRIES + 1} attempts failed for ${url}: ${lastError?.message}`,
+		`[FETCH] All ${maxRetries + 1} attempts failed for ${url}: ${lastError?.message}`,
 	);
 	return null;
 }
@@ -1069,6 +1073,7 @@ export async function smartFetch(
 
 	const domain = parsedUrl.hostname;
 	const rememberedStrategy = getStartingStrategy(domain);
+	const disableFallbacks = options.disableFallbacks === true;
 	const cookieKey = cookieCacheKey(
 		url,
 		options.proxy,
@@ -1079,26 +1084,30 @@ export async function smartFetch(
 	// explicit options.browserPool wins, else the shared process-level pool
 	// (perf P2) — so single fetches reuse a warm browser instead of
 	// launch-close per request. See the shared-pool note above for the SSRF
-	// tradeoff this relies on.
-	const browserPool = resolveBrowserPool(options);
+	// tradeoff this relies on. Search-engine probes disable fallbacks so their
+	// deadline is a real upper bound and no browser job is left running after
+	// aio-websearch returns.
+	const browserPool = disableFallbacks ? undefined : resolveBrowserPool(options);
 
 	// ── Cookie-cache warm-path: reuse cookies from an earlier headless
 	// render of this same origin (+ proxy + browser profile) to try the
 	// cheap tier before escalating to a browser — even when memory says
 	// the last successful strategy here was "browser". Cheap no-op when
 	// there's no cache entry.
-	const warmed = await tryCookieWarmedFetch(
-		url,
-		domain,
-		cookieKey,
-		options,
-		startedAt,
-	);
-	if (warmed) return warmed;
+	if (!disableFallbacks) {
+		const warmed = await tryCookieWarmedFetch(
+			url,
+			domain,
+			cookieKey,
+			options,
+			startedAt,
+		);
+		if (warmed) return warmed;
+	}
 
 	// ── Rung 2 fast-path: skip straight to browser if memory says so ──
 	// Only when we have a remembered "browser" strategy and are not re-probing.
-	if (rememberedStrategy === "browser") {
+	if (!disableFallbacks && rememberedStrategy === "browser") {
 		const pwHtml = await fetchWithPlaywright(
 			url,
 			browserPool,
@@ -1138,6 +1147,7 @@ export async function smartFetch(
 	}
 
 	if (!res) {
+		if (disableFallbacks) return null;
 		// ── Rung 1b: wreq with alternate browser profiles (bot-fallback) ──
 		if (!skipPlain) {
 			// Only reach here if fetchWithRetry returned null (hard network fail);
@@ -1182,6 +1192,7 @@ export async function smartFetch(
 	// stays false and we fall through to return the original 404 (fail-fast
 	// preserved). Opt out with PI_WEBAIO_404_BROWSER_ESCALATION=0.
 	if (
+		!disableFallbacks &&
 		res.status === 404 &&
 		process.env.PI_WEBAIO_404_BROWSER_ESCALATION !== "0"
 	) {
@@ -1256,8 +1267,22 @@ export async function smartFetch(
 	}
 
 	if (detectBotBlock(text).blocked) {
-		// Record plain fetch as blocked before trying alternate wreq profiles
+		// Record plain fetch as blocked before trying alternate wreq profiles.
+		// Search-engine probes disable fallback ladders so a bot/verification page
+		// is treated as that engine's empty/error result instead of launching
+		// detached alternate-profile/browser work after the response budget.
 		recordDomainFailure(domain, "plain");
+		if (disableFallbacks) {
+			return {
+				text,
+				url: normalizeFetchedUrl(res.url),
+				status: res.status,
+				headers: res.headers,
+				downloadedBytes: bytesRead,
+				contentLength: declaredLen,
+				elapsedMs: Date.now() - startedAt,
+			};
+		}
 
 		// Accumulate every attempt so a total failure can report the full ladder
 		// instead of a generic bot-block error (P7).

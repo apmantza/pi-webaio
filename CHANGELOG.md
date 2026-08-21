@@ -4,6 +4,10 @@ All notable changes to pi-webaio will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- **Full `aio-websearch` now has an approximately 3s public response target** (#97). The 7s hard safety deadline still bounds child/browser work, but the tool returns the HTTP/Google/Reddit providers that settled by the 2.9s target and marks late providers as explicit timeouts instead of letting slow HTTP/Reddit tails hold a healthy warm search at ~4.5–7s. The public tool path gives HTTP engines a 2.7s per-engine budget so timeout statuses usually arrive before the provider collector cuts the response, disables search-engine transport retries and browser/cookie fallback ladders so late 429/5xx retry loops or detached Playwright jobs do not linger after return, keeps the Google lane capped under 3s, and surfaces `responseBudgetMs` in details. `scripts/bench-full-search.mjs` now mirrors this orchestration, including serialized Reddit-after-Google behavior, and the recorded broker n=10 run in `speed.md` reached p50 2,876ms / p95 2,906ms.
+
 ### Fixed
 
 - **Stopped vendoring host-provided `typebox` and `@earendil-works/pi-tui`** (#108, same shape as pi-lens#1928). `typebox` is removed outright: nothing in `src/` imports it, and pi's own `@earendil-works/pi-coding-agent` subtree already carries the copy it needs. `@earendil-works/pi-tui` is genuinely used, lazily, in `src/tools/websearch.ts` and `src/tools/render-result.ts`. It moves to an optional peer dependency plus a devDependency, and pi resolves the bare specifier from its own runtime, as it already does for the `@earendil-works/pi-coding-agent` peer. A production install (`npm install --omit=dev`) no longer vendors either package.

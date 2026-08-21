@@ -148,6 +148,20 @@ export interface FetchOpts {
 	 * DEFAULT_TIMEOUT_MS / DEFAULT_BODY_READ_MS in fetch.ts.
 	 */
 	timeoutMs?: number;
+	/**
+	 * Override the retry count for the primary wreq ladder. Search-engine probes
+	 * use 0 so a rate-limited engine can report status within the public search
+	 * response budget instead of continuing abandoned retries after the tool
+	 * returns.
+	 */
+	maxRetries?: number;
+	/**
+	 * Disable higher-cost fallback ladders (cookie-warmed retry, remembered
+	 * browser fast path, Playwright escalation, 404 soft-block escalation, and
+	 * alternate bot-profile attempts). Used by search-engine probes so a provider
+	 * timeout is a real upper bound rather than a detached background browser job.
+	 */
+	disableFallbacks?: boolean;
 }
 
 export interface StoredContent {

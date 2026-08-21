@@ -38,6 +38,60 @@ export interface RedditSearchOutput {
 	error?: string;
 }
 
+interface RedditSearchOptions {
+	/** Do not start/continue optional Reddit CDP work after this timestamp. */
+	deadlineAt?: number;
+	signal?: AbortSignal;
+}
+
+function redditDeadlineExpired(options: RedditSearchOptions): boolean {
+	return (
+		options.signal?.aborted === true ||
+		(options.deadlineAt !== undefined && Date.now() >= options.deadlineAt)
+	);
+}
+
+function redditRemainingMs(
+	options: RedditSearchOptions,
+	fallbackMs: number,
+): number {
+	if (options.deadlineAt === undefined) return fallbackMs;
+	return Math.max(1, Math.min(fallbackMs, options.deadlineAt - Date.now()));
+}
+
+/**
+ * CDP send bounded by both the client default and the caller's response
+ * budget (#97): a slow/hung Chrome command must not keep running long after
+ * aio-websearch has returned.
+ */
+async function sendBounded(
+	cdp: CDPClient,
+	options: RedditSearchOptions,
+	method: string,
+	params: Record<string, unknown> = {},
+	sessionId?: string,
+): Promise<any> {
+	const remaining =
+		options.deadlineAt !== undefined
+			? Math.max(1, options.deadlineAt - Date.now())
+			: Number.POSITIVE_INFINITY;
+	return cdp.send(method, params, sessionId, Math.min(5_000, remaining));
+}
+
+function redditTimeoutResult(
+	query: string,
+	startTime: number,
+): RedditSearchOutput {
+	return {
+		ok: false,
+		query,
+		count: 0,
+		results: [],
+		elapsed: Date.now() - startTime,
+		error: "Reddit search missed the aio-websearch response budget",
+	};
+}
+
 function buildSearchExtractor(): string {
 	return String.raw`
     (function() {
@@ -185,7 +239,11 @@ async function recoverLeakedTargets(
  */
 export async function searchReddit(
 	query: string,
+	options: RedditSearchOptions = {},
 ): Promise<RedditSearchOutput | null> {
+	const startTime = Date.now();
+	if (redditDeadlineExpired(options))
+		return redditTimeoutResult(query, startTime);
 	// Quick liveness probe — confirm Chrome is actually responding
 	const portPath = join(
 		process.env.CDP_PROFILE_DIR ||
@@ -194,21 +252,33 @@ export async function searchReddit(
 	);
 	if (!existsSync(portPath)) return null;
 	try {
-		const alive = await cdpIsAvailable(portPath);
+		// Liveness probe raced against the response budget so a hung probe cannot
+		// outlive aio-websearch (#97).
+		const alive = await Promise.race([
+			cdpIsAvailable(portPath),
+			new Promise<false>((resolve) => {
+				const t = setTimeout(
+					() => resolve(false),
+					redditRemainingMs(options, 3_000),
+				);
+				t.unref?.();
+			}),
+		]);
 		if (!alive) return null;
 	} catch {
 		return null;
 	}
 
-	const startTime = Date.now();
 	let cdp: CDPClient | undefined;
 	let targetId: string | undefined;
 	let sessionId: string | undefined;
 
 	try {
+		if (redditDeadlineExpired(options))
+			return redditTimeoutResult(query, startTime);
 		const wsUrl = getCdpWsUrl();
 		cdp = new CDPClient(wsUrl);
-		await cdp.connect();
+		await cdp.connect(redditRemainingMs(options, 5_000));
 
 		// Leak-recovery snapshot: record which targets exist BEFORE we create
 		// ours, so that if the Target.createTarget response is lost (Chrome
@@ -220,7 +290,7 @@ export async function searchReddit(
 		// never abort the search.
 		let snapshotIds: Set<string> | undefined;
 		try {
-			const targets = await cdp.send("Target.getTargets");
+			const targets = await sendBounded(cdp, options, "Target.getTargets");
 			snapshotIds = new Set(
 				(targets?.targetInfos ?? [])
 					.map((t: any) => t?.targetId)
@@ -240,7 +310,7 @@ export async function searchReddit(
 		const markerUrl = `data:text/plain,pi-webaio-${process.pid}-${randomInt(0, 2 ** 31)}`;
 		let created: { targetId?: string } | undefined;
 		try {
-			created = await cdp.send("Target.createTarget", {
+			created = await sendBounded(cdp, options, "Target.createTarget", {
 				url: markerUrl,
 			});
 		} catch {
@@ -254,23 +324,27 @@ export async function searchReddit(
 			throw new Error("CDP target setup returned no target id");
 		}
 
-		const attached = await cdp.send("Target.attachToTarget", {
+		const attached = await sendBounded(cdp, options, "Target.attachToTarget", {
 			targetId,
 			flatten: true,
 		});
 		sessionId = attached?.sessionId;
 		if (!sessionId) throw new Error("CDP target setup returned no session id");
-		await cdp.send("Page.enable", {}, sessionId);
+		await sendBounded(cdp, options, "Page.enable", {}, sessionId);
 
 		// Navigate to Reddit search. Cancel the competing event wait on every
 		// navigation exit, including a failed Page.navigate command.
 		const searchUrl = `https://www.reddit.com/search?q=${encodeURIComponent(query)}&sort=relevance`;
+		if (redditDeadlineExpired(options))
+			return redditTimeoutResult(query, startTime);
 		const loadEvent = cdp.waitForEvent(
 			"Page.loadEventFired",
-			CDP_NAV_TIMEOUT_MS,
+			redditRemainingMs(options, CDP_NAV_TIMEOUT_MS),
 		);
 		try {
-			const navResult = await cdp.send(
+			const navResult = await sendBounded(
+				cdp,
+				options,
 				"Page.navigate",
 				{ url: searchUrl },
 				sessionId,
@@ -282,11 +356,17 @@ export async function searchReddit(
 			loadEvent.cancel();
 		}
 
-		// Wait for Reddit JS to hydrate + render results
+		// Wait for Reddit JS to hydrate + render results, but never beyond the
+		// caller's public response target (#97). If Google used most of the budget,
+		// Reddit degrades to an explicit timeout instead of lingering in the
+		// background after aio-websearch has already returned.
 		const POLL_INTERVAL = 1_000;
-		const pollDeadline = Date.now() + CDP_HYDRATE_TIMEOUT_MS;
-		while (Date.now() < pollDeadline) {
-			const countRaw = await cdp.send(
+		const pollDeadline =
+			Date.now() + redditRemainingMs(options, CDP_HYDRATE_TIMEOUT_MS);
+		while (Date.now() < pollDeadline && !redditDeadlineExpired(options)) {
+			const countRaw = await sendBounded(
+				cdp,
+				options,
 				"Runtime.evaluate",
 				{
 					expression: `document.querySelectorAll('[data-testid="sdui-post-unit"], [data-testid="search-post-unit"]').length`,
@@ -299,7 +379,12 @@ export async function searchReddit(
 			await new Promise((r) => setTimeout(r, POLL_INTERVAL));
 		}
 
-		const blocked = await cdp.send(
+		if (redditDeadlineExpired(options))
+			return redditTimeoutResult(query, startTime);
+
+		const blocked = await sendBounded(
+			cdp,
+			options,
 			"Runtime.evaluate",
 			{ expression: buildBlockDetector(), returnByValue: true },
 			sessionId,
@@ -314,6 +399,9 @@ export async function searchReddit(
 				error: "Reddit returned a verification/block page",
 			};
 		}
+
+		if (redditDeadlineExpired(options))
+			return redditTimeoutResult(query, startTime);
 
 		const raw = await evalInMainContext(cdp, sessionId, buildSearchExtractor());
 		let posts: RedditSearchResult[];

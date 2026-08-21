@@ -35,9 +35,13 @@ function idForUrl(url) {
 
 // Build a mock fetchFn shaped like smartFetch. `behaviors[id]` controls each
 // engine: { delayMs, status, text, neverResolve }. Unlisted engines return an
-// empty HTTP 200 (parsed to 0 results → status `empty`).
+// empty HTTP 200 (parsed to 0 results → status `empty`). Captures the options
+// passed by searchWeb so tests can assert the bounded-probe contract
+// (#97: disableFallbacks + maxRetries 0 + timeoutMs must be forwarded).
+let lastFetchOptions = undefined;
 function makeFetchFn(behaviors) {
-	return async (url) => {
+	return async (url, options) => {
+		lastFetchOptions = options;
 		const id = idForUrl(url);
 		const b = (id && behaviors[id]) || {};
 		if (b.neverResolve) return new Promise(() => {}); // never settles
@@ -63,6 +67,18 @@ function resetEngineHealth() {
 test("ENGINE_DEADLINE_MS: exposes a sane per-engine deadline constant", () => {
 	assert.strictEqual(typeof ENGINE_DEADLINE_MS, "number");
 	assert.ok(ENGINE_DEADLINE_MS >= 3000 && ENGINE_DEADLINE_MS <= 6000);
+});
+
+test("searchWeb forwards the bounded-probe contract to fetchFn (#97)", async () => {
+	resetEngineHealth();
+	const fetchFn = makeFetchFn({ ddg: { delayMs: 5, text: DDG_HTML } });
+	await searchWeb("deadline-options-forwarding-probe", undefined, {
+		fetchFn,
+		engineDeadlineMs: 2000,
+	});
+	assert.equal(lastFetchOptions?.disableFallbacks, true);
+	assert.equal(lastFetchOptions?.maxRetries, 0);
+	assert.equal(lastFetchOptions?.timeoutMs, 2000);
 });
 
 test("a stalled engine is cut off at the deadline; the merge completes promptly with the others' results", async () => {

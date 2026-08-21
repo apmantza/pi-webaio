@@ -10,9 +10,11 @@ import {
 	extractDomain,
 	scoreAndRankResults,
 	buildResultBuckets,
+	buildEngineStatusMap,
 	engineStatusNotes,
 	formatEngineLatency,
 	renderSearchResults,
+	type EngineOutcome,
 	type EngineStatus,
 	type EngineStatusMap,
 } from "../search.ts";
@@ -32,12 +34,23 @@ import {
 } from "../search-orchestration.ts";
 
 const SEARCH_DEADLINE_MS = 7000;
+// Public response target for the full aio-websearch orchestration (#97). The
+// 7s hard deadline is still passed to child/browser work as a safety ceiling,
+// but the tool returns the providers that settled by this soft budget so slow
+// Reddit/HTTP tails cannot hold a healthy warm search at ~4.5-7s. Keep the
+// timer just under 3s so normal scheduling overhead still lands below the
+// p50<=3.0s release target.
+const SEARCH_RESPONSE_TARGET_MS = 2900;
+// HTTP engines get a small cushion before the response target so their timeout
+// statuses can be parsed and included in the returned engineStatus map instead
+// of racing the outer provider collector at the exact same millisecond.
+const HTTP_ENGINE_RESPONSE_DEADLINE_MS = 2700;
 // Hard upper bound for the Google lane itself (measured from when the lane's
 // search actually starts, after chromeReady). The broker's pagination
 // budget-fencing (2s page floor, per-page 3.5s cap) fits inside this window:
 // a hot broker returns ~1s for max 15, and even a slow sparse tail page can
 // never burn more than this. The overall tool deadline stays 7s.
-const GOOGLE_LANE_MAX_MS = 3000;
+const GOOGLE_LANE_MAX_MS = 2900;
 
 type WebsearchDependencies = {
 	loadGoggles?: typeof loadGoggles;
@@ -47,6 +60,14 @@ type WebsearchDependencies = {
 	searchReddit?: typeof searchReddit;
 	cdpAvailable?: typeof cdpAvailableGA;
 	providerAvailable?: typeof isProviderAvailable;
+	/** Test/benchmark seam for the hard safety ceiling. Defaults to 7s. */
+	searchDeadlineMs?: number;
+	/** Test/benchmark seam for the public response target. Defaults to 3s. */
+	responseTargetMs?: number;
+	/** Test/benchmark seam for the HTTP engine deadline used by this tool path. */
+	httpEngineDeadlineMs?: number;
+	/** Test/benchmark seam for the Google lane cap. Defaults to 3s. */
+	googleLaneMaxMs?: number;
 };
 
 function classifyRedditStatus(status: string, count: number): EngineStatus {
@@ -85,6 +106,31 @@ export function registerWebsearchTool(
 	const cdpAvailableImpl = dependencies.cdpAvailable ?? cdpAvailableGA;
 	const providerAvailableImpl =
 		dependencies.providerAvailable ?? isProviderAvailable;
+	const searchDeadlineMs = Math.max(
+		1,
+		dependencies.searchDeadlineMs ?? SEARCH_DEADLINE_MS,
+	);
+	const responseTargetMs = Math.max(
+		1,
+		Math.min(
+			dependencies.responseTargetMs ?? SEARCH_RESPONSE_TARGET_MS,
+			searchDeadlineMs,
+		),
+	);
+	const httpEngineDeadlineMs = Math.max(
+		1,
+		Math.min(
+			dependencies.httpEngineDeadlineMs ?? HTTP_ENGINE_RESPONSE_DEADLINE_MS,
+			responseTargetMs,
+		),
+	);
+	const googleLaneMaxMs = Math.max(
+		1,
+		Math.min(
+			dependencies.googleLaneMaxMs ?? GOOGLE_LANE_MAX_MS,
+			searchDeadlineMs,
+		),
+	);
 
 	pi.registerTool({
 		...TOOL_METADATA["aio-websearch"],
@@ -95,7 +141,8 @@ export function registerWebsearchTool(
 			const useGoogle = params.google ?? true;
 			const compact = params.compact === true;
 			const startedAt = Date.now();
-			const searchDeadlineAt = startedAt + SEARCH_DEADLINE_MS;
+			const searchDeadlineAt = startedAt + searchDeadlineMs;
+			const responseDeadlineAt = startedAt + responseTargetMs;
 			const goggles = await loadGogglesImpl(params.goggles as GogglesInput);
 
 			// Resolve prefetch count: false/undefined → 0, true → default, number → clamp ≥ 0.
@@ -152,7 +199,10 @@ export function registerWebsearchTool(
 				],
 			});
 
-			const httpPromise = searchWebImpl(query, goggles).then(
+			const httpStartedAt = Date.now();
+			const httpPromise = searchWebImpl(query, goggles, {
+				engineDeadlineMs: httpEngineDeadlineMs,
+			}).then(
 				(r) => ({
 					source: "http" as const,
 					results: r.results.slice(0, max),
@@ -165,12 +215,27 @@ export function registerWebsearchTool(
 					},
 					engineStatus: r.engineStatus as EngineStatusMap | undefined,
 				}),
-				() => ({
-					source: "http" as const,
-					results: [] as SearchResult[],
-					httpCounts: { ddg: 0, brave: 0, yahoo: 0, bing: 0, reddit: 0 },
-					engineStatus: undefined as EngineStatusMap | undefined,
-				}),
+				() => {
+					const latencyMs = Date.now() - httpStartedAt;
+					const httpErrorOutcomes: EngineOutcome[] = [
+						"ddg",
+						"brave",
+						"yahoo",
+						"bing",
+					].map((id) => ({
+						id: id as EngineOutcome["id"],
+						httpStatus: null,
+						count: 0,
+						latencyMs,
+						skipReason: "error" as const,
+					}));
+					return {
+						source: "http" as const,
+						results: [] as SearchResult[],
+						httpCounts: { ddg: 0, brave: 0, yahoo: 0, bing: 0, reddit: 0 },
+						engineStatus: buildEngineStatusMap(httpErrorOutcomes),
+					};
+				},
 			);
 
 			let googlePromise: Promise<{
@@ -186,10 +251,10 @@ export function registerWebsearchTool(
 						// the overall tool deadline.
 						const googleDeadlineAt = Math.min(
 							searchDeadlineAt,
-							Date.now() + GOOGLE_LANE_MAX_MS,
+							Date.now() + googleLaneMaxMs,
 						);
 						const g = await googleSearchImpl(query, {
-							timeoutMs: Math.min(SEARCH_DEADLINE_MS, GOOGLE_LANE_MAX_MS),
+							timeoutMs: Math.min(searchDeadlineMs, googleLaneMaxMs),
 							maxResults: max,
 							signal,
 							deadlineAt: googleDeadlineAt,
@@ -214,7 +279,7 @@ export function registerWebsearchTool(
 								: undefined;
 						googleStatus =
 							errorCode === "deadline_expired"
-								? `timeout (search deadline ${SEARCH_DEADLINE_MS}ms)`
+								? `timeout (Google lane cap ${googleLaneMaxMs}ms; hard deadline ${searchDeadlineMs}ms)`
 								: `error (${String(err).slice(0, 120)})`;
 						return { source: "google" as const, results: [] };
 					}
@@ -239,14 +304,35 @@ export function registerWebsearchTool(
 						// Reddit's legacy CDP client shares Chrome with the broker.
 						// Let the broker-owned Google target finish before Reddit
 						// creates/navigates its own target; concurrent browser-level
-						// CDP traffic can otherwise stall Google's 3s lane.
+						// CDP traffic can otherwise stall Google's 3s lane. Bound this
+						// wait by the public response target, not the 7s safety ceiling,
+						// so Reddit never starts fresh CDP work after the response cut.
 						if (googleEnabled) {
-							// Do not let a hung/injected Google implementation prevent
-							// Reddit from getting its remaining share of the deadline.
-							await waitForPromiseOrDeadline(googlePromise, searchDeadlineAt);
+							await waitForPromiseOrDeadline(googlePromise, responseDeadlineAt);
 						}
-						await chromeReady;
-						const r = await searchRedditImpl(query);
+						if (Date.now() >= responseDeadlineAt) {
+							redditStatus = `timeout (response budget ${responseTargetMs}ms; hard deadline ${searchDeadlineMs}ms)`;
+							return {
+								source: "reddit" as const,
+								results: [],
+								latencyMs: responseTargetMs,
+							};
+						}
+						if (chromeReady) {
+							await waitForPromiseOrDeadline(chromeReady, responseDeadlineAt);
+						}
+						if (Date.now() >= responseDeadlineAt) {
+							redditStatus = `timeout (response budget ${responseTargetMs}ms; hard deadline ${searchDeadlineMs}ms)`;
+							return {
+								source: "reddit" as const,
+								results: [],
+								latencyMs: responseTargetMs,
+							};
+						}
+						const r = await searchRedditImpl(query, {
+							deadlineAt: responseDeadlineAt,
+							signal,
+						});
 						if (!r) {
 							redditStatus = "unavailable (CDP search returned null)";
 							return {
@@ -256,7 +342,12 @@ export function registerWebsearchTool(
 							};
 						}
 						if (!r.ok) {
-							redditStatus = `error (${r.error})`;
+							// A deadline miss inside searchReddit is a response-budget
+							// timeout, not a provider error — classify it as such so
+							// engineStatus/notes stay truthful (#97).
+							redditStatus = r.error?.includes("response budget")
+								? `timeout (response budget ${responseTargetMs}ms; hard deadline ${searchDeadlineMs}ms)`
+								: `error (${r.error})`;
 							return {
 								source: "reddit" as const,
 								results: [],
@@ -305,7 +396,7 @@ export function registerWebsearchTool(
 					["google", googlePromise],
 					["reddit", redditPromise],
 				],
-				Math.max(searchDeadlineAt - Date.now(), 1),
+				Math.max(Math.min(responseDeadlineAt, searchDeadlineAt) - Date.now(), 1),
 			);
 			const result = collected.values;
 
@@ -338,9 +429,24 @@ export function registerWebsearchTool(
 
 			if (collected.timedOut) {
 				if (googleEnabled && !googleResult)
-					googleStatus = `timeout (search deadline ${SEARCH_DEADLINE_MS}ms)`;
+					googleStatus = `timeout (response budget ${responseTargetMs}ms; hard deadline ${searchDeadlineMs}ms)`;
 				if (redditEnabled && !redditResult)
-					redditStatus = `timeout (search deadline ${SEARCH_DEADLINE_MS}ms)`;
+					redditStatus = `timeout (response budget ${responseTargetMs}ms; hard deadline ${searchDeadlineMs}ms)`;
+				if (!httpResult) {
+					const httpTimeoutOutcomes: EngineOutcome[] = [
+						"ddg",
+						"brave",
+						"yahoo",
+						"bing",
+					].map((id) => ({
+						id: id as EngineOutcome["id"],
+						httpStatus: null,
+						count: 0,
+						latencyMs: responseTargetMs,
+						skipReason: "timeout" as const,
+					}));
+					engineStatus = buildEngineStatusMap(httpTimeoutOutcomes);
+				}
 			}
 
 			const buckets = buildResultBuckets(httpResults, "http");
@@ -373,7 +479,7 @@ export function registerWebsearchTool(
 						status: redditResult
 							? classifyRedditStatus(redditStatus, redditResults.length)
 							: "timeout",
-						latencyMs: redditResult?.latencyMs ?? SEARCH_DEADLINE_MS,
+						latencyMs: redditResult?.latencyMs ?? responseTargetMs,
 					},
 				};
 			}
@@ -391,7 +497,8 @@ export function registerWebsearchTool(
 				redditCount: redditResults.length,
 				redditStatus,
 				durationMs: Date.now() - startedAt,
-				deadlineMs: SEARCH_DEADLINE_MS,
+				deadlineMs: searchDeadlineMs,
+				responseBudgetMs: responseTargetMs,
 				timedOut: collected.timedOut,
 			};
 
