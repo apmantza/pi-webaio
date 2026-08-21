@@ -4,6 +4,10 @@ All notable changes to pi-webaio will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **Live per-provider TUI progress for `aio-websearch`** — the tool's partial view now renders one animated row per provider (DDG, Brave, Yahoo, Bing, Google, Reddit) with a status glyph (spinner while running, ✓/✗/⏱/∅/– when settled), live result counts with measured latency, and an elapsed-vs-response-target bar that turns red past the 2.9s budget, re-emitted via ~100ms `onUpdate` ticks. The final view gains a status-colored collapsed header (per-engine outcome tokens) and, when expanded, ranked rows with `[sourceType]` tags, domain, multi-engine agreement, URL, and snippet. New module `src/tools/search-render.ts` stays off the `@earendil-works/pi-coding-agent` runtime graph so websearch still registers and renders without the optional pi-tui peer; agent-facing text output is byte-identical. 26 new offline render tests.
+
 ### Changed
 
 - **Full `aio-websearch` now has an approximately 3s public response target** (#97). The 7s hard safety deadline still bounds child/browser work, but the tool returns the HTTP/Google/Reddit providers that settled by the 2.9s target and marks late providers as explicit timeouts instead of letting slow HTTP/Reddit tails hold a healthy warm search at ~4.5–7s. The public tool path gives HTTP engines a 2.7s per-engine budget so timeout statuses usually arrive before the provider collector cuts the response, disables search-engine transport retries and browser/cookie fallback ladders so late 429/5xx retry loops or detached Playwright jobs do not linger after return, keeps the Google lane capped under 3s, and surfaces `responseBudgetMs` in details. `scripts/bench-full-search.mjs` now mirrors this orchestration, including serialized Reddit-after-Google behavior, and the recorded broker n=10 run in `speed.md` reached p50 2,876ms / p95 2,906ms.

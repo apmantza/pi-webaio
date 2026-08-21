@@ -32,6 +32,13 @@ import {
 	shouldRunGoogle,
 	shouldRunReddit,
 } from "../search-orchestration.ts";
+import {
+	createSearchProgressComponent,
+	createSearchResultComponent,
+	providerFromEngineStatus,
+	SPINNER_INTERVAL_MS,
+	type SearchProviderProgress,
+} from "./search-render.ts";
 
 const SEARCH_DEADLINE_MS = 7000;
 // Public response target for the full aio-websearch orchestration (#97). The
@@ -190,6 +197,82 @@ export function registerWebsearchTool(
 			const engineNames = ["DDG", "Brave", "Yahoo", "Bing"];
 			if (useGoogle) engineNames.push("Google");
 			if (redditEnabled) engineNames.push("Reddit");
+
+			// ── Live TUI progress (#97 UX) ────────────────────────────
+			// One row per provider, mutated as each lane settles and re-emitted
+			// via onUpdate ticks so the partial view animates. Agent-facing text
+			// output is unchanged.
+			const liveProviders: SearchProviderProgress[] = [
+				{ id: "ddg", label: "DDG", status: "running" },
+				{ id: "brave", label: "Brave", status: "running" },
+				{ id: "yahoo", label: "Yahoo", status: "running" },
+				{ id: "bing", label: "Bing", status: "running" },
+				{
+					id: "google",
+					label: "Google",
+					status: googleEnabled ? "running" : "skipped",
+					detail: googleEnabled ? undefined : "disabled",
+				},
+				{
+					id: "reddit",
+					label: "Reddit",
+					status: redditEnabled ? "running" : "skipped",
+					detail: redditEnabled ? undefined : "disabled",
+				},
+			];
+			const renderDetails = {
+				query,
+				providers: liveProviders,
+				spinnerTick: 0,
+				elapsedMs: 0,
+				responseTargetMs,
+			};
+			let searchFinished = false;
+			function pushSearchUpdate(): void {
+				if (!onUpdate || searchFinished) return;
+				renderDetails.elapsedMs = Date.now() - startedAt;
+				try {
+					onUpdate({
+						content: [
+							{
+								type: "text",
+								text: `Searching "${query}" via ${engineNames.join(", ")}...`,
+							},
+						],
+						details: {
+							...renderDetails,
+							providers: liveProviders.map((p) => ({ ...p })),
+						},
+					});
+				} catch {
+					// A throwing host callback must never escape into the interval
+					// tick (uncaughtException) or a lane observer (unhandled rejection).
+				}
+			}
+			function setProvider(
+				id: string,
+				update: Partial<SearchProviderProgress>,
+			): void {
+				const row = liveProviders.find((p) => p.id === id);
+				if (row) Object.assign(row, update);
+				pushSearchUpdate();
+			}
+			let spinnerTimer: ReturnType<typeof setInterval> | null = null;
+			if (onUpdate) {
+				spinnerTimer = setInterval(() => {
+					renderDetails.spinnerTick += 1;
+					pushSearchUpdate();
+				}, SPINNER_INTERVAL_MS);
+				spinnerTimer.unref?.();
+			}
+			function finishSearchTui(): void {
+				searchFinished = true;
+				if (spinnerTimer) {
+					clearInterval(spinnerTimer);
+					spinnerTimer = null;
+				}
+			}
+
 			onUpdate?.({
 				content: [
 					{
@@ -197,24 +280,41 @@ export function registerWebsearchTool(
 						text: `Searching "${query}" via ${engineNames.join(", ")}...`,
 					},
 				],
+				details: {
+					...renderDetails,
+					providers: liveProviders.map((p) => ({ ...p })),
+				},
 			});
 
 			const httpStartedAt = Date.now();
 			const httpPromise = searchWebImpl(query, goggles, {
 				engineDeadlineMs: httpEngineDeadlineMs,
 			}).then(
-				(r) => ({
-					source: "http" as const,
-					results: r.results.slice(0, max),
-					httpCounts: {
-						ddg: r.ddgCount,
-						brave: r.braveCount,
-						yahoo: r.yahooCount,
-						bing: r.bingCount,
-						reddit: r.redditCount,
-					},
-					engineStatus: r.engineStatus as EngineStatusMap | undefined,
-				}),
+				(r) => {
+					// Live TUI: populate each HTTP engine row from its measured
+					// outcome as soon as the lane settles.
+					for (const id of ["ddg", "brave", "yahoo", "bing"] as const) {
+						const row = liveProviders.find((p) => p.id === id);
+						if (row)
+							Object.assign(
+								row,
+								providerFromEngineStatus(id, row.label, r.engineStatus?.[id]),
+							);
+					}
+					pushSearchUpdate();
+					return {
+						source: "http" as const,
+						results: r.results.slice(0, max),
+						httpCounts: {
+							ddg: r.ddgCount,
+							brave: r.braveCount,
+							yahoo: r.yahooCount,
+							bing: r.bingCount,
+							reddit: r.redditCount,
+						},
+						engineStatus: r.engineStatus as EngineStatusMap | undefined,
+					};
+				},
 				() => {
 					const latencyMs = Date.now() - httpStartedAt;
 					const httpErrorOutcomes: EngineOutcome[] = [
@@ -284,6 +384,25 @@ export function registerWebsearchTool(
 						return { source: "google" as const, results: [] };
 					}
 				})();
+				// Live TUI: reflect the Google row as soon as the lane settles.
+				void googlePromise.then((res) => {
+					setProvider("google", {
+						status:
+							res.results.length > 0
+								? "ok"
+								: googleStatus.startsWith("empty")
+									? "empty"
+									: googleStatus.startsWith("timeout")
+										? "timeout"
+										: googleStatus.startsWith("disabled") ||
+												googleStatus.startsWith("unavailable")
+											? "skipped"
+											: "error",
+						count: res.results.length,
+						latencyMs: Date.now() - startedAt,
+						detail: res.results.length > 0 ? undefined : googleStatus.slice(0, 60),
+					});
+				});
 			} else {
 				googlePromise = Promise.resolve({
 					source: "google" as const,
@@ -378,6 +497,30 @@ export function registerWebsearchTool(
 						};
 					}
 				})();
+				// Live TUI: reflect the Reddit row as soon as the lane settles.
+				// Attached only when the lane actually runs — otherwise the seeded
+				// "skipped/disabled" row would be overwritten with a misleading
+				// "error" derived from the unavailable-status string.
+				void redditPromise.then((res) => {
+					const engineStatus = classifyRedditStatus(
+						redditStatus,
+						res.results.length,
+					);
+					setProvider("reddit", {
+						status:
+							engineStatus === "timeout"
+								? "timeout"
+								: engineStatus === "error"
+									? "error"
+									: engineStatus === "ok"
+										? "ok"
+										: "empty",
+						count: res.results.length,
+						latencyMs: res.latencyMs,
+						detail:
+							res.results.length > 0 ? undefined : redditStatus.slice(0, 60),
+					});
+				});
 			} else {
 				redditPromise = Promise.resolve({
 					source: "reddit" as const,
@@ -399,6 +542,11 @@ export function registerWebsearchTool(
 				Math.max(Math.min(responseDeadlineAt, searchDeadlineAt) - Date.now(), 1),
 			);
 			const result = collected.values;
+
+			// The response content is now determined: freeze the live TUI state
+			// IMMEDIATELY so a throw during final rendering cannot leave the
+			// spinner timer emitting forever. finishSearchTui is idempotent.
+			finishSearchTui();
 
 			let httpResults: SearchResult[] = [];
 			let googleResults: SearchResult[] = [];
@@ -487,6 +635,20 @@ export function registerWebsearchTool(
 			const scored = scoreAndRankResults(buckets, query, goggles);
 			const merged = scored.map((s) => s.result);
 
+			// Freeze the final providers snapshot: lanes that missed the response
+			// budget must not be captured as frozen "running" spinner frames.
+			const markUnsettled = (id: string): void => {
+				const row = liveProviders.find((p) => p.id === id);
+				if (row && row.status === "running") {
+					row.status = "timeout";
+					row.detail = "missed response budget";
+				}
+			};
+			for (const id of ["ddg", "brave", "yahoo", "bing"]) markUnsettled(id);
+			if (!googleResult) markUnsettled("google");
+			if (!redditResult) markUnsettled("reddit");
+			renderDetails.elapsedMs = Date.now() - startedAt;
+
 			const resultDetails = {
 				query,
 				results: merged.slice(0, 25),
@@ -500,6 +662,7 @@ export function registerWebsearchTool(
 				deadlineMs: searchDeadlineMs,
 				responseBudgetMs: responseTargetMs,
 				timedOut: collected.timedOut,
+				providers: liveProviders.map((p) => ({ ...p })),
 			};
 
 			if (!merged.length) {
@@ -606,62 +769,26 @@ export function registerWebsearchTool(
 		renderResult(result, options, theme: Theme) {
 			const details = result.details as any;
 
+			// In-flight: animated per-provider progress rows with an
+			// elapsed-vs-response-target bar (#97 UX).
 			if (options.isPartial) {
-				return new Text(theme.fg("warning", `Searching "${details.query}"...`));
+				return createSearchProgressComponent(details, theme);
 			}
 
-			const count = details.results?.length ?? 0;
-			const engines: string[] = [];
-			if (details.ddgCount) engines.push(`DDG:${details.ddgCount}`);
-			if (details.braveCount) engines.push(`Brave:${details.braveCount}`);
-			if (details.yahooCount) engines.push(`Yahoo:${details.yahooCount}`);
-			if (details.bingCount) engines.push(`Bing:${details.bingCount}`);
-			if (details.googleCount) engines.push(`Google:${details.googleCount}`);
-			if (details.redditCount) engines.push(`Reddit:${details.redditCount}`);
-			const engineStr = engines.join("+") || "HTTP";
-
-			const dur = details.durationMs ?? 0;
-			const durText = dur >= 1000 ? `${Math.round(dur / 1000)}s` : `${dur}ms`;
-
-			const summary =
-				theme.fg("success", `${count} result${count === 1 ? "" : "s"}`) +
-				theme.fg("muted", ` via ${engineStr} in ${durText}`);
-
-			// Compact notes for any non-ok HTTP engine (P2), so the TUI reader also
-			// sees why an engine is missing rather than only the agent text.
-			const statusNotes = details.engineStatus
-				? engineStatusNotes(details.engineStatus)
-				: [];
-			const noteLine = statusNotes.length
-				? theme.fg("dim", statusNotes.join(" "))
-				: "";
-
-			if (count === 0) return new Text(summary);
-			if (!options.expanded)
-				return new Text(noteLine ? `${summary}\n${noteLine}` : summary);
-
-			const rows = [summary];
-			if (noteLine) rows.push(noteLine);
-			const visibleLimit = 8;
-			for (const item of details.results.slice(0, visibleLimit)) {
-				const domainTag = item.domain ? ` (${item.domain})` : "";
-				const srcTag =
-					item.sources && item.sources.length > 1
-						? ` — ${item.sources.join("+")}`
-						: "";
-				rows.push(
-					`${theme.fg("accent", item.title?.slice(0, 80) ?? "")}${theme.fg("dim", domainTag + srcTag)}`,
-				);
-				rows.push(theme.fg("dim", `  ${item.url?.slice(0, 100) ?? ""}`));
-				if (item.snippet)
-					rows.push(theme.fg("muted", `  ${item.snippet.slice(0, 140)}`));
-			}
-			if (details.results.length > visibleLimit) {
-				rows.push(
-					theme.fg("dim", `… ${details.results.length - visibleLimit} more`),
-				);
-			}
-			return new Text(rows.join("\n"));
+			return createSearchResultComponent(
+				{
+					providers: details.providers,
+					resultCount: details.results?.length ?? 0,
+					durationMs: details.durationMs,
+					timedOut: details.timedOut === true,
+					engineNotes: details.engineStatus
+						? engineStatusNotes(details.engineStatus)
+						: [],
+					results: details.results,
+				},
+				options.expanded === true,
+				theme,
+			);
 		},
 	});
 }
