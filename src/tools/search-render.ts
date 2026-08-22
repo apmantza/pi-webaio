@@ -158,10 +158,11 @@ export function renderProviderStatusText(
 		case "ok": {
 			const count = `${provider.count ?? 0} result${(provider.count ?? 0) === 1 ? "" : "s"}`;
 			const latency = formatLatency(provider.latencyMs);
-			return theme.fg("muted", latency ? `${count} (${latency})` : count);
+			// Bright text: muted fails contrast on colored row backgrounds.
+			return theme.fg("text", latency ? `${count} (${latency})` : count);
 		}
 		case "empty":
-			return theme.fg("muted", "0 results");
+			return theme.fg("text", "0 results");
 		case "error":
 			return theme.fg("error", provider.detail ?? "error");
 		case "timeout":
@@ -197,7 +198,7 @@ export function renderElapsedBar(
 	return [
 		theme.fg(fillColor, "█".repeat(filled)),
 		theme.fg("muted", "░".repeat(empty)),
-		theme.fg("muted", ` ${elapsedText}${targetText}`),
+		theme.fg("text", ` ${elapsedText}${targetText}`),
 	].join("");
 }
 
@@ -289,7 +290,9 @@ function statusTextColor(
 		case "running":
 			return theme.fg("accent", text);
 		default:
-			return theme.fg("muted", text);
+			// "muted" measures ~1.6:1 contrast on toolSuccessBg — effectively
+			// invisible on dark themes. Counts/statuses must be readable.
+			return theme.fg("text", text);
 	}
 }
 
