@@ -195,11 +195,12 @@ export function renderElapsedBar(
 	const fillColor =
 		colorOverride ??
 		(targetMs && targetMs > 0 && elapsedMs > targetMs ? "error" : "accent");
-	return [
-		theme.fg(fillColor, "█".repeat(filled)),
-		theme.fg("muted", "░".repeat(empty)),
-		theme.fg("text", ` ${elapsedText}${targetText}`),
-	].join("");
+	// Single styled run for the whole bar line (pi-lens-style rendering):
+	// multi-segment lines lose content in some terminal environments.
+	return theme.fg(
+		fillColor,
+		`${"█".repeat(filled)}${"░".repeat(empty)} ${elapsedText}${targetText}`,
+	);
 }
 
 /**
@@ -218,7 +219,6 @@ function renderProviderRow(
 	theme: ThemeLike,
 	width = Number.POSITIVE_INFINITY,
 ): string {
-	const glyph = renderProviderGlyph(provider.status, spinnerTick, theme);
 	const labelPlain = provider.label;
 	const prefixPlain = `${plainGlyph(provider.status, spinnerTick)} ${labelPlain}`;
 
@@ -252,8 +252,10 @@ function renderProviderRow(
 		candidates.find((c) => prefixPlain.length + 1 + c.length <= width) ??
 		candidates[candidates.length - 1];
 
-	const label = theme.fg("text", labelPlain);
-	return `${glyph} ${label} ${statusTextColor(provider.status, chosen, theme)}`;
+	// Single styled run for the entire row (pi-lens-style): glyph, label and
+	// status share one color so the line never splits into multiple ANSI
+	// segments — multi-run lines are what breaks in some environments.
+	return theme.fg(rowTextColor(provider.status), `${plainGlyph(provider.status, spinnerTick)} ${labelPlain} ${chosen}`);
 }
 
 /** Plain (unstyled) glyph character for width math. */
@@ -276,23 +278,22 @@ function plainGlyph(status: SearchProviderStatus, spinnerTick: number): string {
 	}
 }
 
-/** Style a (possibly degraded) status text with the color for its status. */
-function statusTextColor(
-	status: SearchProviderStatus,
-	text: string,
-	theme: ThemeLike,
-): string {
+/** One foreground color for an entire provider row. */
+function rowTextColor(status: SearchProviderStatus): string {
 	switch (status) {
 		case "error":
-			return theme.fg("error", text);
+			return "error";
 		case "timeout":
-			return theme.fg("warning", text);
+			return "warning";
 		case "running":
-			return theme.fg("accent", text);
+			return "accent";
+		case "pending":
+		case "skipped":
+			return "muted";
 		default:
-			// "muted" measures ~1.6:1 contrast on toolSuccessBg — effectively
-			// invisible on dark themes. Counts/statuses must be readable.
-			return theme.fg("text", text);
+			// "muted" measures ~1.6:1 contrast on colored tool backgrounds —
+			// effectively invisible on dark themes. Counts must be readable.
+			return "text";
 	}
 }
 
@@ -311,12 +312,10 @@ export function createSearchProgressComponent(
 		responseTargetMs?: number;
 	},
 	theme: ThemeLike,
-	bgColor = "toolPendingBg",
 ) {
-	// Self-painted background (paired with renderShell: "self"): every line
-	// is padded to full width and painted uniformly, so no black gaps can
-	// appear regardless of how the host shell handles backgrounds.
-	const text = new Text("", 0, 0, (t) => theme.bg(bgColor, t));
+	// Plain Text under pi's default Box (pi-lens-style): no self-painted
+	// background, no per-line bg callbacks.
+	const text = new Text("", 0, 0);
 
 	function buildRows(width: number): string[] {
 		const providers = details.providers ?? [];
@@ -377,27 +376,18 @@ export function createSearchResultComponent(
 	},
 	expanded: boolean,
 	theme: ThemeLike,
-	bgColor = "toolSuccessBg",
 ) {
-	const text = new Text("", 0, 0, (t) => theme.bg(bgColor, t));
+	const text = new Text("", 0, 0);
 
 	function buildSummaryParts(): { styled: string; plain: string } {
-		const parts: string[] = [];
 		const plains: string[] = [];
 		const count = details.resultCount ?? 0;
 		const countText = `${count} result${count === 1 ? "" : "s"}`;
-		parts.push(
-			count > 0
-				? theme.fg("success", `✓ ${countText}`)
-				: theme.fg("warning", countText),
-		);
 		plains.push(`✓ ${countText}`);
 		if (details.durationMs !== undefined && details.durationMs > 0) {
-			parts.push(theme.fg("muted", `in ${formatLatency(details.durationMs)}`));
 			plains.push(`in ${formatLatency(details.durationMs)}`);
 		}
 		if (details.timedOut) {
-			parts.push(theme.fg("warning", "response budget hit"));
 			plains.push("response budget hit");
 		}
 		// Degrade gracefully on narrow terminals: drop the duration first,
@@ -406,10 +396,11 @@ export function createSearchResultComponent(
 			plains.length > 1 &&
 			plains.join(" ").length > Math.max(width - 2, 10)
 		) {
-			parts.pop();
 			plains.pop();
 		}
-		return { styled: parts.join(" "), plain: plains.join(" ") };
+		// Single styled run for the whole summary line (pi-lens-style).
+		const color = count > 0 ? "success" : "warning";
+		return { styled: theme.fg(color, plains.join(" ")), plain: plains.join(" ") };
 	}
 
 	function buildProviderRows(width: number): string[] {
@@ -423,15 +414,19 @@ export function createSearchResultComponent(
 		const visibleLimit = 8;
 		const results = details.results ?? [];
 		results.slice(0, visibleLimit).forEach((r, i) => {
-			const rank = theme.fg("accent", `${String(i + 1).padStart(2)}. `);
-			const typeTag = r.sourceType ? theme.fg("muted", `[${r.sourceType}] `) : "";
-			const domainTag = r.domain ? theme.fg("dim", ` (${r.domain})`) : "";
-			const srcTag =
-				r.sources && r.sources.length > 1
-					? theme.fg("dim", ` — ${r.sources.join("+")}`)
-					: "";
+			// One themed run per line (pi-lens-style) — no multi-segment rows.
+			const meta = [
+				r.sourceType ? `[${r.sourceType}]` : "",
+				r.domain ? `(${r.domain})` : "",
+				r.sources && r.sources.length > 1 ? `— ${r.sources.join("+")}` : "",
+			]
+				.filter(Boolean)
+				.join(" ");
 			rows.push(
-				`${rank}${typeTag}${theme.fg("accent", (r.title ?? "").slice(0, 80))}${domainTag}${srcTag}`,
+				theme.fg(
+					"accent",
+					`${String(i + 1).padStart(2)}. ${(r.title ?? "").slice(0, 80)}${meta ? `  ${meta}` : ""}`,
+				),
 			);
 			if (r.url) rows.push(theme.fg("dim", `   ${r.url.slice(0, 100)}`));
 			if (r.snippet) rows.push(theme.fg("muted", `   ${r.snippet.slice(0, 140)}`));

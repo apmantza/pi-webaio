@@ -431,9 +431,9 @@ test("result component expanded: rank numbers, sourceType tags, urls, snippets",
 	const plain = strip(comp.render(240).join("\n"));
 	assert.match(
 		plain,
-		/\b1\. \[official-docs\] First hit \(example\.com\) — http\+google/,
+		/\b1\. First hit  \[official-docs\] \(example\.com\) — http\+google/,
 	);
-	assert.match(plain, /\b2\. \[repo\] Second hit \(other\.org\)/);
+	assert.match(plain, /\b2\. Second hit  \[repo\] \(other\.org\)/);
 	assert.match(plain, /https:\/\/example\.com\/a/);
 	assert.match(plain, /An example snippet\./);
 });
