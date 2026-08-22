@@ -45,6 +45,31 @@ lanes that cannot make the budget in this bench environment. The response
 target is doing its job — the tool returns at 2.9s rather than at the ~3.1s
 full-settle time of the slowest lane.
 
+### Google lane: daemon state vs SERP latency (2026-08-22 follow-up)
+
+`scripts/probe-google-lane.mjs --kill-first` splits the Google lane into
+chromeReady (daemon/browser acquisition) vs the actual SERP fetch:
+
+| Probe | chromeReady | search | total | results |
+| --- | ---: | ---: | ---: | ---: |
+| run1 (after daemon kill) | 186 ms | 4,328 ms | 4,514 ms | 10 |
+| run2–6 (warm daemon) | 155–176 ms | 3,785–5,769 ms | 3,944–5,938 ms | 10 each |
+
+Findings:
+
+- **Daemon state is not the bottleneck** — `chromeReady` is ~170 ms whether
+  the broker daemon was killed or already running; browser reuse works.
+- **The SERP fetch itself ran 3.8–5.9 s warm**, consistently over the 2.9 s
+  lane cap while still returning 10 results.
+- A live `aio-websearch` call minutes later agreed: `Google: timeout
+  (response budget 2900ms)` where the same morning's live calls returned
+  `Google:8` inside the budget, and yesterday's #97 bench recorded Google
+  success 10/10 under the cap.
+- Conclusion: **same-day progressive throttling** is the best explanation
+  (Brave went quota-dead mid-session the same way). The lane cap did its job;
+  nothing regressed in the code path. Re-run the probe after a cool-down to
+  confirm recovery.
+
 Environment caveats for this run: Brave was quota-exhausted for the entire
 session (`brave=0` in every sample, matching live `rate-limited` statuses), and
 the Google lane never settled inside the 2.9s budget in this bench context
