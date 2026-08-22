@@ -70,6 +70,22 @@ Findings:
   nothing regressed in the code path. Re-run the probe after a cool-down to
   confirm recovery.
 
+#### Recovery confirmed (~20 min later)
+
+A/B pagination test (`maxResults` 8 vs 10) plus a 6-run spaced stability
+probe, all warm daemon:
+
+| Probe | latency | results |
+| --- | ---: | ---: |
+| max=8 ×2 | 740 / 1,070 ms | 8 each |
+| max=10 ×2 | 709 / 1,419 ms | 10 each |
+| stability runs 1–6 (2 s spacing) | p50 1,382 ms (1,175–1,403) | 9–10 each |
+
+No pagination penalty at `max=10` (single SERP page satisfied it). The slow
+window fully recovered within ~20 minutes with zero code changes — confirming
+transient server-side throttling rather than any structural latency. Steady-
+state Google lane cost is ≈1.2–1.4 s, comfortably inside the 2.9 s budget.
+
 Environment caveats for this run: Brave was quota-exhausted for the entire
 session (`brave=0` in every sample, matching live `rate-limited` statuses), and
 the Google lane never settled inside the 2.9s budget in this bench context
