@@ -136,10 +136,9 @@ const lazyTools: LazyTool[] = [
 				query: string("Search query (e.g. 'React Server Components RFC')."),
 				max: number("Max results to request from each engine.", { default: 15 }),
 				google: boolean("Also search Google via Chrome CDP.", { default: true }),
-				reddit: boolean(
-					"Also search Reddit via Chrome CDP (off by default).",
-					{ default: false },
-				),
+				reddit: boolean("Also search Reddit via Chrome CDP (off by default).", {
+					default: false,
+				}),
 				compact: boolean("Return one compact line per result.", { default: false }),
 				prefetch: {
 					anyOf: [boolean(), number()],

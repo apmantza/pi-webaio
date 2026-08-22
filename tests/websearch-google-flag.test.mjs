@@ -145,7 +145,7 @@ test("websearch returns at the response target and marks late Reddit as timeout"
 	const started = Date.now();
 	const result = await registered[0].execute("test-call", {
 		query: "response-target-reddit-timeout",
-			reddit: true,
+		reddit: true,
 		google: true,
 		max: 10,
 	});
@@ -274,7 +274,7 @@ test("websearch classifies searchReddit's own response-budget miss as timeout, n
 
 	const result = await registered[0].execute("test-call", {
 		query: "reddit-budget-miss-classification",
-			reddit: true,
+		reddit: true,
 		google: true,
 		max: 10,
 	});
@@ -337,7 +337,7 @@ test("websearch serializes Reddit CDP after Google when both lanes are enabled",
 
 	const result = await registered[0].execute("test-call", {
 		query: "cdp-lane-ordering",
-			reddit: true,
+		reddit: true,
 		google: true,
 		max: 10,
 	});
