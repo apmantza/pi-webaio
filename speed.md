@@ -9,6 +9,29 @@ Harness: `scripts/bench-full-search.mjs` (rotates distinct queries per sample
 to avoid the 10-min search cache; shares one `chromeReady` between the Google
 and Reddit lanes exactly like the tool).
 
+## Full-tool cold/warm, 3s spacing (2026-08-22)
+
+Usage: `node --experimental-strip-types scripts/bench-full-search.mjs
+<legacy|broker> [samples] [spacingMs] [query...]`. Sample 1 is the cold sample
+(fresh process / broker spawn); samples 2–n are warm. Queries rotate so no
+sample hits the search cache. n=10, spacing 3000ms.
+
+| Metric | Broker | Legacy |
+| --- | ---: | ---: |
+| cold (sample 1) | 2,904 ms | 2,912 ms |
+| warm p50 (samples 2–10) | 2,903 ms | 2,904 ms |
+| overall p50 | 2,904 ms | 2,906 ms |
+| overall p95 | 2,918 ms | 2,915 ms |
+| HTTP success | 10/10 | 10/10 |
+| deadline cuts | 10/10 (by design — response-budget return) | 10/10 |
+
+Environment caveats for this run: Brave was quota-exhausted for the entire
+session (`brave=0` in every sample, matching live `rate-limited` statuses), and
+the Google lane never settled inside the 2.9s budget in this bench context
+(CDP/Chrome unavailable here; in live tool sessions the same day Google settled
+every time with a warm browser pool). Latency is pinned at the response budget
+by design — the tool returns what settled instead of waiting out slow tails.
+
 ## Full-tool: broker with 2.9s response target (#97, 2026-08-21)
 
 The public `aio-websearch` orchestration now returns providers that settle by a

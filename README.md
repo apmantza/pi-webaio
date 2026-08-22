@@ -11,7 +11,7 @@ extract, map, cache, chunk, and render web content for AI agents.
 
 pi-webaio registers eight pi tools:
 
-- `aio-websearch` — search DuckDuckGo, Brave, Yahoo, and Bing in parallel, with default Google (via a local CDP broker) and automatic Reddit CDP companions when Chrome is available
+- `aio-websearch` — search DuckDuckGo, Brave, Yahoo, and Bing in parallel, with default Google (via a local CDP broker) and automatic Reddit CDP companions when Chrome is available. Returns in ~2.9s with live per-provider TUI progress (spinner rows, result counts with latency, an elapsed-vs-target bar) and a stable final view showing every engine's count and timing
 - `aio-webfetch` — fetch one or many URLs into markdown or structured formats, with an opt-in heading outline, query-focused answer mode, and multi-source cited answers
 - `aio-webcontent` — retrieve cached content by URL (with opt-in section-level diff)
 - `aio-webresult` — retrieve cached results by response ID
@@ -41,6 +41,19 @@ the legacy extractor.
 The manual, live-only benchmark is `npm run bench:google-cdp -- --live
 --query "..." --samples 3`. It reports total/startup measurements; detailed CDP
 phase timings are not yet instrumented, and no speedup is inferred.
+
+For the **full public tool path** (HTTP engines + Google + Reddit under the
+response target), use `scripts/bench-full-search.mjs`:
+
+```bash
+node --experimental-strip-types scripts/bench-full-search.mjs broker 10 3000 "query"
+```
+
+`<legacy|broker>` picks the Google path; sample 1 measures cold start and
+samples 2–n are warm; the third argument is inter-sample spacing in ms. On the
+2.9s response-target path the tool returns at the budget by design — recent
+runs: p50 ≈ 2.90s both modes, HTTP success 10/10 (see `speed.md` for full
+tables and environment caveats).
 
 ## Install
 
