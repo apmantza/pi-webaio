@@ -4,6 +4,14 @@ All notable changes to pi-webaio will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+### Changed
+
+### Fixed
+
+## [1.0.1] - 2026-08-22
+
 ### Changed
 
 - **Reddit is now opt-in in `aio-websearch`** (`src/tools/lazy.ts`, `src/tools/websearch.ts`, `src/search-orchestration.ts`) — the Reddit CDP lane no longer runs as an automatic companion whenever Chrome is available; it runs only when `reddit: true` is passed (default `false`). A non-requested Reddit lane is surfaced as `redditStatus: "disabled (reddit not requested)"`, and the TUI progress row shows it as skipped. Google remains default-on via `google: true`. Docs (`README.md`, `docs/tools.md`, `docs/usage.md`) updated to match.
