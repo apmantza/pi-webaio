@@ -78,6 +78,16 @@ export interface BrokerSearchTimings {
 	navigationMs: number;
 	extractionMs: number;
 	resetMs: number;
+	/** Per-SERP-page phase breakdown (additive, broker path only).
+	 * Page 1 carries no navigationMs — the top-level navigationMs owns it.
+	 * Failed page attempts carry `error` instead of `results`. */
+	pages?: Array<{
+		start: number;
+		navigationMs?: number;
+		extractionMs?: number;
+		results?: number;
+		error?: string;
+	}>;
 }
 
 export interface GoogleSearchOutput {

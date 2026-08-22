@@ -24,9 +24,11 @@ import {
 import { dismissConsent } from "./consent.mjs";
 
 // ─── Legacy phase timing instrumentation ────────────────────────────
-// Opt-in via PI_WEBAIO_LEGACY_TIMINGS=1. Timing output is written to stderr
-// so the extractor's stdout JSON contract remains unchanged.
-const LEGACY_TIMINGS_ENABLED = process.env.PI_WEBAIO_LEGACY_TIMINGS === "1";
+// Opt-in via PI_WEBAIO_LEGACY_TIMINGS=1 or PI_WEBAIO_DEBUG=1. Timing output
+// is written to stderr so the extractor's stdout JSON contract remains unchanged.
+const LEGACY_TIMINGS_ENABLED =
+	process.env.PI_WEBAIO_LEGACY_TIMINGS === "1" ||
+	process.env.PI_WEBAIO_DEBUG === "1";
 const phaseTimings = {};
 let phaseStartedAt = Date.now();
 const searchStartedAt = Date.now();

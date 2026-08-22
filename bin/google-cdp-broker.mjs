@@ -1568,13 +1568,20 @@ export class GoogleCdpBroker {
 		const merged = [];
 		const seenUrls = new Set();
 		let degraded = false;
+		// Per-page phase envelope: entries of shape
+		// { start, navigationMs?, extractionMs, results } or { ..., error }
+		// for every SERP page touched. Page 1 has no navigationMs (the caller's
+		// navigationMs phase owns it). Additive.
+		const pages = [];
 		let start = 0;
 		while (true) {
 			checkSignal(signal);
 			if (start > 0 && deadlineAt - Date.now() < GOOGLE_PAGE_BUDGET_FLOOR_MS)
 				break;
+			let pageNavigationMs;
 			if (start > 0) {
 				const pageUrl = canonicalGoogleSearchUrl(query, maxResults, start);
+				const navStarted = performance.now();
 				try {
 					const navigation = await this.cdpSend(
 						"Page.navigate",
@@ -1595,14 +1602,21 @@ export class GoogleCdpBroker {
 						signal,
 						`Google search page ${start / GOOGLE_PAGE_STRIDE + 1}`,
 					);
-				} catch (error) {
+					pageNavigationMs = Math.max(0, Math.round(performance.now() - navStarted));
+				} catch {
 					// A page-2+ navigation/verification failure must not abort the
 					// search: keep the merged results collected so far.
+					pages.push({
+						start,
+						navigationMs: Math.max(0, Math.round(performance.now() - navStarted)),
+						error: "navigation_failed",
+					});
 					degraded = true;
 					break;
 				}
 			}
 			let pageResults;
+			const extractStarted = performance.now();
 			try {
 				pageResults = await this.extractGoogleSearchResults(
 					request,
@@ -1622,9 +1636,25 @@ export class GoogleCdpBroker {
 				// blank/empty tail page) means the SERP is exhausted or the page
 				// never rendered: degrade to the merged set rather than throwing.
 				if (start === 0) throw error;
+				pages.push({
+					start,
+					...(pageNavigationMs === undefined
+						? {}
+						: { navigationMs: pageNavigationMs }),
+					extractionMs: Math.max(0, Math.round(performance.now() - extractStarted)),
+					error: "extraction_failed",
+				});
 				degraded = true;
 				break;
 			}
+			pages.push({
+				start,
+				...(pageNavigationMs === undefined
+					? {}
+					: { navigationMs: pageNavigationMs }),
+				extractionMs: Math.max(0, Math.round(performance.now() - extractStarted)),
+				results: pageResults.length,
+			});
 			let added = 0;
 			for (const result of pageResults) {
 				if (seenUrls.has(result.url)) continue;
@@ -1640,7 +1670,7 @@ export class GoogleCdpBroker {
 			if (Date.now() >= deadlineAt) break;
 			start += GOOGLE_PAGE_STRIDE;
 		}
-		return { results: merged, degraded };
+		return { results: merged, degraded, pages };
 	}
 
 	async searchGoogle(request, identity, signal) {
@@ -1708,7 +1738,7 @@ export class GoogleCdpBroker {
 					"Google search",
 				);
 			});
-			const { results, degraded } = await timePhase("extractionMs", () =>
+			const { results, degraded, pages } = await timePhase("extractionMs", () =>
 				this.extractGoogleSearchResultsPaginated(
 					request,
 					target,
@@ -1717,6 +1747,7 @@ export class GoogleCdpBroker {
 					signal,
 				),
 			);
+			if (pages?.length) timings.pages = pages;
 			checkSignal(signal);
 			await timePhase("resetMs", async () => {
 				await this.resetCdpTarget(target, request, signal);
