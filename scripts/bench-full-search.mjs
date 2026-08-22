@@ -179,6 +179,20 @@ async function runFullSearch(sampleIndex) {
 		}
 	})();
 
+	// Stamp each lane's ACTUAL settlement time so the log can show real
+	// completion times even when the response budget returns early.
+	const laneSettleMs = {};
+	const stamp = (key, p) =>
+		p.then((v) => {
+			laneSettleMs[key] = Date.now() - startedAt;
+			return v;
+		});
+	const allSettled = Promise.all([
+		stamp("http", httpPromise),
+		stamp("google", googlePromise),
+		stamp("reddit", redditPromise),
+	]);
+
 	const collected = await collectProviderResults(
 		[
 			["http", httpPromise],
@@ -189,9 +203,17 @@ async function runFullSearch(sampleIndex) {
 	);
 	const v = collected.values;
 	const http = v.http?.counts;
+	// Capture the true return moment FIRST (the tool would hand control back
+	// here), then keep listening past the budget cut so we capture when every
+	// lane actually finishes.
+	const returnElapsedMs = Date.now() - startedAt;
+	await waitForPromiseOrDeadline(allSettled, searchDeadlineAt + 5_000);
+	const trueSettleMs = Math.max(...Object.values(laneSettleMs), 0);
 	return {
 		timedOut: collected.timedOut,
-		elapsedMs: Date.now() - startedAt,
+		elapsedMs: returnElapsedMs,
+		laneSettleMs,
+		trueSettleMs,
 		httpResults: v.http?.results?.length ?? 0,
 		googleResults: v.google?.results?.length ?? 0,
 		redditResults: v.reddit?.results?.length ?? 0,
@@ -221,7 +243,11 @@ for (let i = 0; i < samples; i++) {
 		`  sample ${String(i + 1).padStart(2)}: ${String(row.elapsedMs).padStart(5)}ms ` +
 			`http=${row.httpResults} google=${row.googleResults} reddit=${row.redditResults} ` +
 			`total=${row.total} ddg=${row.ddg} brave=${row.brave} yahoo=${row.yahoo} bing=${row.bing} ` +
-			`google=${row.googleStatus} reddit=${row.redditStatus}${row.responseBudgetCut ? " [response-budget-cut]" : ""}`,
+			`google=${row.googleStatus} reddit=${row.redditStatus}${row.responseBudgetCut ? " [response-budget-cut]" : ""} ` +
+			`actual-settle=${row.trueSettleMs}ms` +
+			(row.laneSettleMs?.http != null ? ` (http ${row.laneSettleMs.http}ms)` : "") +
+			(row.laneSettleMs?.google != null ? ` (google ${row.laneSettleMs.google}ms)` : "") +
+			(row.laneSettleMs?.reddit != null ? ` (reddit ${row.laneSettleMs.reddit}ms)` : ""),
 	);
 	if (spacingMs > 0 && i < samples - 1) {
 		await new Promise((resolve) => setTimeout(resolve, spacingMs));
@@ -245,7 +271,17 @@ const deadlineCut = rows.filter((r) => r.responseBudgetCut).length;
 
 console.log(`\n=== SUMMARY (${mode}, n=${samples}) ===`);
 console.log(
-	`  total latency: p50=${p50}ms  p95=${p95}ms  avg=${Math.round(avg)}ms`,
+	`  return latency (response budget): p50=${p50}ms  p95=${p95}ms  avg=${Math.round(avg)}ms`,
+);
+const settleLatencies = rows.map((r) => r.trueSettleMs).sort((a, b) => a - b);
+const sP50 = settleLatencies[Math.floor(settleLatencies.length * 0.5)];
+const sP95 =
+	settleLatencies[
+		Math.min(settleLatencies.length - 1, Math.floor(settleLatencies.length * 0.95))
+	];
+const sAvg = settleLatencies.reduce((a, b) => a + b, 0) / settleLatencies.length;
+console.log(
+	`  actual full-settle (lanes truly done): p50=${sP50}ms  p95=${sP95}ms  avg=${Math.round(sAvg)}ms`,
 );
 console.log(
 	`  success: http=${httpOk}/${samples} (${Math.round((httpOk / samples) * 100)}%)  ` +

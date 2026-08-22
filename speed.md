@@ -25,6 +25,26 @@ sample hits the search cache. n=10, spacing 3000ms.
 | HTTP success | 10/10 | 10/10 |
 | deadline cuts | 10/10 (by design — response-budget return) | 10/10 |
 
+### True settlement times (instrumented run, same day)
+
+`bench-full-search.mjs` now stamps each lane's actual settlement and keeps
+listening past the response-budget cut (`actual-settle` per sample, plus an
+"actual full-settle" summary line). Same environment, n=10, spacing 3000ms:
+
+| Metric | Broker | Legacy |
+| --- | ---: | ---: |
+| return latency (budget cut) | p50 2,902 ms / p95 2,914 ms | p50 2,908 ms / p95 2,916 ms |
+| actual full-settle | p50 3,083 ms / p95 3,256 ms | p50 3,081 ms / p95 3,390 ms |
+| **HTTP lanes actually settle at** | **~0.87–1.34 s** | ~0.90–1.41 s |
+| Google lane settles at | ~3.08–3.20 s (fails here — no CDP) | ~3.08–3.39 s (same) |
+| Reddit settles at | ~2.90 s (budget miss) | ~2.90 s |
+
+Interpretation: the genuinely useful work (HTTP consensus results) completes
+in ≈1s; everything between that and the 2.9s return is spent waiting on CDP
+lanes that cannot make the budget in this bench environment. The response
+target is doing its job — the tool returns at 2.9s rather than at the ~3.1s
+full-settle time of the slowest lane.
+
 Environment caveats for this run: Brave was quota-exhausted for the entire
 session (`brave=0` in every sample, matching live `rate-limited` statuses), and
 the Google lane never settled inside the 2.9s budget in this bench context
