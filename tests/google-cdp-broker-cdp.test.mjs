@@ -15,6 +15,16 @@ import {
 } from "../bin/google-cdp-broker.mjs";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+/** Poll until fn() is truthy or timeout — deterministic replacement for
+ * fixed sleeps when awaiting async broker cleanup under load. */
+async function waitFor(fn, timeoutMs = 2000) {
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		if (fn()) return true;
+		await sleep(10);
+	}
+	return false;
+}
 
 class FakeSocket extends EventEmitter {
 	constructor(url, behavior = {}) {
@@ -133,21 +143,33 @@ function respondToSearch(behavior = {}) {
 		) {
 			result = { result: { value: currentLocation } };
 		} else if (message.method === "Runtime.evaluate") {
-			const next = behavior.evaluationResults?.[evaluationCount++];
-			result = {
-				result: {
-					value: next || {
-						ready: true,
-						results: [
-							{
-								title: "Example result",
-								url: "https://example.test/result",
-								snippet: "Example snippet",
-							},
-						],
+			// Readiness-probe expressions carry the `h3:` marker from
+			// GOOGLE_SEARCH_READINESS_SCRIPT; serve them from a dedicated queue
+			// so tests can pin each gate branch independently of full-script
+			// responses. Absent queue => empty result => broker falls back to
+			// forceFull (the pre-gate behavior all older tests rely on).
+			if (message.params?.expression?.includes("h3:")) {
+				const next = behavior.readinessResults?.[behavior._readinessCount ?? 0];
+				behavior._readinessCount = (behavior._readinessCount ?? 0) + 1;
+				result = next == null ? {} : { result: { value: next } };
+			} else {
+				behavior._fullEvalCount = (behavior._fullEvalCount ?? 0) + 1;
+				const next = behavior.evaluationResults?.[evaluationCount++];
+				result = {
+					result: {
+						value: next || {
+							ready: true,
+							results: [
+								{
+									title: "Example result",
+									url: "https://example.test/result",
+									snippet: "Example snippet",
+								},
+							],
+						},
 					},
-				},
-			};
+				};
+			}
 		} else result = {};
 		setImmediate(() =>
 			socket.respond({ id: message.id, sessionId: message.sessionId, result }),
@@ -592,14 +614,13 @@ test("broker-owned search navigates canonically, extracts results, resets, and r
 		// Search phase timings are additive on the envelope, numeric, and
 		// non-negative on a successful fake-CDP search.
 		assert.ok(result.timings, "search envelope carries timings");
-		// Reset is deferred post-response: give the async release a moment
-		// before asserting the registry drained.
-		await sleep(25);
+		// resetMs is intentionally absent from the wire: the target reset is
+		// deferred post-response, so it can never serialize truthfully.
+		assert.equal(result.timings.resetMs, undefined, "resetMs not on the wire");
 		for (const key of [
 			"targetSetupMs",
 			"navigationMs",
 			"extractionMs",
-			"resetMs",
 		]) {
 			assert.equal(
 				typeof result.timings[key],
@@ -609,7 +630,12 @@ test("broker-owned search navigates canonically, extracts results, resets, and r
 			assert.ok(Number.isFinite(result.timings[key]), `timings.${key} is finite`);
 			assert.ok(result.timings[key] >= 0, `timings.${key} is non-negative`);
 		}
-		assert.equal(setup.broker.registry.snapshot().active, 0);
+			// Deferred reset: poll (not sleep) for the async release to settle.
+			assert.ok(
+						await waitFor(() => setup.broker.registry.snapshot().active === 0),
+						"lease released asynchronously",
+			);
+			assert.equal(setup.broker.registry.snapshot().active, 0);
 		assert.equal(setup.broker.registry.snapshot().targets, 1);
 		const searchNavigation = setup.fake.socket.sent.find(
 			(message) =>
@@ -698,8 +724,11 @@ test("pagination navigates ?start=10 and merges a second SERP page end-to-end", 
 			"a page-2 navigation with ?start=10 was issued",
 		);
 		assert.equal(result.degraded, undefined, "full SERP: degraded flag unset");
-		// Deferred reset: allow the async release to settle first.
-		await sleep(25);
+		// Deferred reset: poll for the async release to settle.
+		assert.ok(
+			await waitFor(() => setup.broker.registry.snapshot().active === 0),
+			"lease released asynchronously",
+		);
 		assert.equal(setup.broker.registry.snapshot().active, 0);
 	} finally {
 		await teardown(setup);
@@ -806,7 +835,9 @@ test("navigation failures dirty and close the target; reset failures clean up as
 	// Navigation failure: still propagates as a rejection (response never
 	// returned), and the target is dirtied + closed.
 	{
-		const setup = await setupBroker({ onCommand: respondToSearch({ navigationError: "net::ERR_FAILED" }) });
+		const setup = await setupBroker({
+			onCommand: respondToSearch({ navigationError: "net::ERR_FAILED" }),
+		});
 		try {
 			await assert.rejects(
 				setup.client.request("search", {
@@ -814,8 +845,7 @@ test("navigation failures dirty and close the target; reset failures clean up as
 					query: "dirty target",
 					maxResults: 1,
 				}),
-				(error) =>
-					["cdp_error", "navigation_failed"].includes(error.code),
+				(error) => ["cdp_error", "navigation_failed"].includes(error.code),
 			);
 			await sleep(5);
 			assert.equal(setup.broker.registry.snapshot().active, 0);
@@ -826,10 +856,12 @@ test("navigation failures dirty and close the target; reset failures clean up as
 		}
 	}
 	// Reset failure: the response already returned successfully (reset is
-		// deferred post-response), but the failed release must still retire the
-		// lease and close the target asynchronously.
+	// deferred post-response), but the failed release must still retire the
+	// lease and close the target asynchronously.
 	{
-		const setup = await setupBroker({ onCommand: respondToSearch({ resetError: "net::ERR_RESET" }) });
+		const setup = await setupBroker({
+			onCommand: respondToSearch({ resetError: "net::ERR_RESET" }),
+		});
 		try {
 			const result = await setup.client.request("search", {
 				provider: "google-search",
@@ -837,7 +869,10 @@ test("navigation failures dirty and close the target; reset failures clean up as
 				maxResults: 1,
 			});
 			assert.ok(result.results.length > 0, "search succeeded despite reset flake");
-			await sleep(25);
+			assert.ok(
+				await waitFor(() => setup.broker.registry.snapshot().active === 0),
+				"failed async release still retires the lease",
+			);
 			assert.equal(setup.broker.registry.snapshot().active, 0);
 			assert.equal(setup.broker.registry.snapshot().targets, 0);
 			assert.equal(setup.fake.socket.sent.at(-1).method, "Target.closeTarget");
@@ -1046,3 +1081,99 @@ test("startup sweep survives close failures and skips non-marker targets", async
 });
 
 assert.equal(CdpTransportError.prototype instanceof Error, true);
+
+// ── Readiness-gate branch coverage (P2-2) ──────────────────────────────
+// The cheap h3/consent probe is the hottest new path in the lane; these
+// tests pin each gate branch via the fake transport's readinessResults queue.
+
+test("readiness gate happy path: ready page runs the full script exactly once", async () => {
+	const behavior = {
+		readinessResults: [{ h3: 5, consent: false }],
+	};
+	const setup = await setupBroker({ onCommand: respondToSearch(behavior) });
+	try {
+		const result = await setup.client.request("search", {
+			provider: "google-search",
+			query: "gate happy path",
+			maxResults: 1,
+		});
+		assert.equal(result.results.length > 0, true);
+		// One cheap probe said ready; the full script ran once and returned.
+		assert.equal(behavior._readinessCount, 1, "one readiness probe");
+		assert.equal(behavior._fullEvalCount, 1, "full script ran exactly once");
+	} finally {
+		await teardown(setup);
+	}
+});
+
+test("readiness gate polls cheaply while the SERP renders, then converges", async () => {
+	const mk = (i) => ({
+		title: "Result " + i,
+		url: "https://example.test/r" + i,
+		snippet: "Snippet " + i,
+	});
+	const behavior = {
+		readinessResults: [
+			{ h3: 0, consent: false },
+			{ h3: 1, consent: false },
+			{ h3: 4, consent: false },
+		],
+		evaluationResults: [{ ready: true, results: [mk(1), mk(2), mk(3)] }],
+	};
+	const setup = await setupBroker({ onCommand: respondToSearch(behavior) });
+	try {
+		const result = await setup.client.request("search", {
+			provider: "google-search",
+			query: "gate poll path",
+			maxResults: 3,
+		});
+		assert.equal(result.results.length, 3);
+		assert.equal(result.results.length > 0, true);
+		assert.ok(behavior._readinessCount >= 3, "cheap probes before full pass");
+		assert.equal(
+			behavior._fullEvalCount,
+			1,
+			"heavy script runs only after readiness",
+		);
+	} finally {
+		await teardown(setup);
+	}
+});
+
+test("readiness gate: consent forces the full extraction (click path)", async () => {
+	const behavior = {
+		readinessResults: [{ h3: 9, consent: true }],
+	};
+	const setup = await setupBroker({ onCommand: respondToSearch(behavior) });
+	try {
+		const result = await setup.client.request("search", {
+			provider: "google-search",
+			query: "gate consent path",
+			maxResults: 3,
+		});
+		assert.equal(result.results.length > 0, true);
+		assert.equal(behavior._readinessCount, 1, "single probe saw consent");
+		assert.equal(behavior._fullEvalCount >= 1, true, "full script dismissed it");
+	} finally {
+		await teardown(setup);
+	}
+});
+
+test("readiness gate: unrecognized probe shape falls back to full passes", async () => {
+	// No readinessResults queue => probe returns an empty CDP result =>
+	// broker must fall back to forceFull instead of spinning.
+	const behavior = {};
+	const setup = await setupBroker({ onCommand: respondToSearch(behavior) });
+	try {
+		const result = await setup.client.request("search", {
+			provider: "google-search",
+			query: "gate fallback path",
+			maxResults: 3,
+		});
+		assert.equal(result.results.length > 0, true);
+		assert.ok(behavior._readinessCount >= 1, "probe was issued");
+		assert.ok(behavior._fullEvalCount >= 1, "fallback reached a full pass");
+	} finally {
+		await teardown(setup);
+	}
+});

@@ -77,7 +77,10 @@ export interface BrokerSearchTimings {
 	targetSetupMs: number;
 	navigationMs: number;
 	extractionMs: number;
-	resetMs: number;
+	/** Absent on the broker wire — the target reset is deferred post-response,
+	 * so it can never be serialized truthfully. The settled value is logged to
+	 * stderr when PI_WEBAIO_DEBUG=1. */
+	resetMs?: number;
 	/** Per-SERP-page phase breakdown (additive, broker path only).
 	 * Page 1 carries no navigationMs — the top-level navigationMs owns it.
 	 * Failed page attempts carry `error` instead of `results`. */
@@ -677,9 +680,18 @@ function safeBrokerTimings(value: unknown): BrokerSearchTimings | undefined {
 	const timings = {} as BrokerSearchTimings;
 	for (const name of names) {
 		const number = source[name];
+		// resetMs is deferred post-response and absent from the broker wire.
+		if (name === "resetMs" && number === undefined) continue;
 		if (typeof number !== "number" || !Number.isFinite(number) || number < 0)
 			return undefined;
 		timings[name] = Math.min(number, 86_400_000);
+	}
+	// Per-page envelope passthrough (shape-validated, additive).
+	if (Array.isArray(source.pages)) {
+		const pages = source.pages.filter(
+			(page) => page && typeof page === "object" && typeof page.start === "number",
+		);
+		if (pages.length) timings.pages = pages as BrokerSearchTimings["pages"];
 	}
 	return timings;
 }

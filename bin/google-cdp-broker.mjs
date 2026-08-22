@@ -1536,6 +1536,10 @@ export class GoogleCdpBroker {
 					}
 				}
 			}
+			// Any entry into a full pass stays on full passes for the remainder
+			// of this extraction (consent click / partial-filter edge cases live
+			// there) — implements the documented stay-full invariant.
+			forceFull = true;
 			const evaluation = await this.cdpSend(
 				"Runtime.evaluate",
 				{
@@ -1742,7 +1746,6 @@ export class GoogleCdpBroker {
 			targetSetupMs: 0,
 			navigationMs: 0,
 			extractionMs: 0,
-			resetMs: 0,
 		};
 		const timePhase = async (phase, action) => {
 			const started = performance.now();
@@ -1801,10 +1804,11 @@ export class GoogleCdpBroker {
 			if (pages?.length) timings.pages = pages;
 			checkSignal(signal);
 			// Deferred reset (#perf): lease release + target reset no longer gate
-			// the response (~30-55ms). resetMs is recorded into the envelope
-			// asynchronously once the release settles; a consumer reading the
-			// envelope immediately may see it still in flight (resetMs 0). A
-			// failed release is best-effort — registry GC cleans up stale leases.
+			// the response (~30-55ms). The wire envelope intentionally omits
+			// resetMs — it would always serialize as a false 0 before the deferred
+			// chain settles. The settled value is emitted to stderr when
+			// PI_WEBAIO_DEBUG=1; a failed release preserves dirty-target semantics
+			// asynchronously (retire + closeTarget) without failing the response.
 			const resetStarted = performance.now();
 			void Promise.resolve()
 				.then(() => this.resetCdpTarget(target, request, signal))
@@ -1824,10 +1828,15 @@ export class GoogleCdpBroker {
 					}
 				})
 				.finally(() => {
-					timings.resetMs = Math.max(
+					const resetMs = Math.max(
 						0,
 						Math.round(performance.now() - resetStarted),
 					);
+					if (process.env.PI_WEBAIO_DEBUG === "1") {
+						process.stderr.write(
+							`[pi-webaio:google-broker] resetMs=${resetMs}\n`,
+						);
+					}
 				});
 			return {
 				query,

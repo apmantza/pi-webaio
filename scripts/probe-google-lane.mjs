@@ -44,10 +44,10 @@ async function timedSearch(label) {
 		const t = g.timings;
 		let phaseNote = "";
 		if (t) {
-			phaseNote =
-				` | target=${t.targetSetupMs} nav=${t.navigationMs} extract=${t.extractionMs} reset=${t.resetMs}`;
+			phaseNote = ` | target=${t.targetSetupMs} nav=${t.navigationMs} extract=${t.extractionMs} reset=${t.resetMs ?? "deferred"}`;
 			for (const p of t.pages ?? []) {
-				phaseNote += ` | p${p.start / 10 + 1}:` +
+				phaseNote +=
+					` | p${p.start / 10 + 1}:` +
 					(p.error ? ` ${p.error}` : ` extract=${p.extractionMs}ms n=${p.results}`) +
 					(p.navigationMs != null ? ` nav=${p.navigationMs}ms` : "");
 			}
