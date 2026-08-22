@@ -123,12 +123,12 @@ const lazyTools: LazyTool[] = [
 		label: "Web Search",
 		needsCache: true,
 		description:
-			"Search the web; returns deduped, cross-engine ranked results with title, url, snippet, and sourceType (official-docs/repo/academic/maintainer-blog/website/community/news/social). No API keys — runs DDG, Brave, Yahoo, and Bing in parallel, capped at ~7s (returns deterministic partial results at the deadline). Google is enabled by default when Chrome CDP is available; Reddit is an automatic CDP companion whenever CDP is available, including when google:false. Common: query, max. Situational: compact:true for URL-scouting (one line per result — title + url + sourceType, no snippet), goggles to rerank additively (presets: docs-first, research, news-balanced, or custom rules), prefetch to warm the cache with the top hits, google:false to skip Google only.",
+			"Search the web; returns deduped, cross-engine ranked results with title, url, snippet, and sourceType (official-docs/repo/academic/maintainer-blog/website/community/news/social). No API keys — runs DDG, Brave, Yahoo, and Bing in parallel, capped at ~7s (returns deterministic partial results at the deadline). Google is enabled by default when Chrome CDP is available. Reddit is OFF by default — opt in per call with reddit:true (requires Chrome CDP). Common: query, max. Situational: compact:true for URL-scouting (one line per result — title + url + sourceType, no snippet), goggles to rerank additively (presets: docs-first, research, news-balanced, or custom rules), prefetch to warm the cache with the top hits, google:false to skip Google only.",
 		promptSnippet: "Search the web for current information or references",
 		promptGuidelines: [
 			"Use aio-websearch when the user asks a question that requires current or external information not in your training data.",
 			"After getting search results, use aio-webfetch or aio-webpull to retrieve the full content of the most relevant result.",
-			"Runs DDG/Brave/Yahoo/Bing in parallel. Google requires headless Chrome (auto-launched) and is enabled by default. Reddit is also automatic when Chrome CDP is available; google: false skips Google but does not disable Reddit. Set google: false to skip Google.",
+			"Runs DDG/Brave/Yahoo/Bing in parallel. Google requires headless Chrome (auto-launched) and is enabled by default. Reddit is OFF by default; pass reddit:true to include it (also needs Chrome CDP). Set google: false to skip Google.",
 			"Set compact: true for URL scouting — one line per result (title + URL + sourceType, no snippet) to minimize token waste.",
 		],
 		parameters: schema(
@@ -136,6 +136,10 @@ const lazyTools: LazyTool[] = [
 				query: string("Search query (e.g. 'React Server Components RFC')."),
 				max: number("Max results to request from each engine.", { default: 15 }),
 				google: boolean("Also search Google via Chrome CDP.", { default: true }),
+				reddit: boolean(
+					"Also search Reddit via Chrome CDP (off by default).",
+					{ default: false },
+				),
 				compact: boolean("Return one compact line per result.", { default: false }),
 				prefetch: {
 					anyOf: [boolean(), number()],

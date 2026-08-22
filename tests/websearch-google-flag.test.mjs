@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { registerWebsearchTool } from "../src/tools/websearch.ts";
 import { buildEngineStatusMap } from "../src/search.ts";
 
-test("websearch google:false skips Google while preserving Reddit", async () => {
+test("websearch google:false skips Google; Reddit only runs when requested", async () => {
 	let googleCalls = 0;
 	let redditCalls = 0;
 	const registered = [];
@@ -66,11 +66,23 @@ test("websearch google:false skips Google while preserving Reddit", async () => 
 	});
 
 	assert.equal(googleCalls, 0);
-	assert.equal(redditCalls, 1);
+	// v1.0.1: Reddit is opt-in — without reddit:true the companion must not run.
+	assert.equal(redditCalls, 0);
 	assert.equal(result.details.googleCount, 0);
-	assert.equal(result.details.redditCount, 1);
+	assert.equal(result.details.redditCount, 0);
 	assert.doesNotMatch(result.content[0].text, /Google:/);
-	assert.match(result.content[0].text, /Reddit:1/);
+	assert.doesNotMatch(result.content[0].text, /Reddit:1/);
+
+	// Opting in via reddit:true runs the Reddit lane even with google:false.
+	const result2 = await tool.execute("test-call-2", {
+		query: "google-flag-regression",
+		google: false,
+		reddit: true,
+		max: 10,
+	});
+	assert.equal(redditCalls, 1);
+	assert.equal(result2.details.redditCount, 1);
+	assert.match(result2.content[0].text, /Reddit:1/);
 });
 
 test("websearch returns at the response target and marks late Reddit as timeout", async () => {
@@ -133,6 +145,7 @@ test("websearch returns at the response target and marks late Reddit as timeout"
 	const started = Date.now();
 	const result = await registered[0].execute("test-call", {
 		query: "response-target-reddit-timeout",
+			reddit: true,
 		google: true,
 		max: 10,
 	});
@@ -261,6 +274,7 @@ test("websearch classifies searchReddit's own response-budget miss as timeout, n
 
 	const result = await registered[0].execute("test-call", {
 		query: "reddit-budget-miss-classification",
+			reddit: true,
 		google: true,
 		max: 10,
 	});
@@ -323,6 +337,7 @@ test("websearch serializes Reddit CDP after Google when both lanes are enabled",
 
 	const result = await registered[0].execute("test-call", {
 		query: "cdp-lane-ordering",
+			reddit: true,
 		google: true,
 		max: 10,
 	});

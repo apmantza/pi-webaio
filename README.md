@@ -11,7 +11,7 @@ extract, map, cache, chunk, and render web content for AI agents.
 
 pi-webaio registers eight pi tools:
 
-- `aio-websearch` — search DuckDuckGo, Brave, Yahoo, and Bing in parallel, with default Google (via a local CDP broker) and automatic Reddit CDP companions when Chrome is available. Returns in ~2.9s with live per-provider TUI progress (spinner rows, result counts with latency, an elapsed-vs-target bar) and a stable final view showing every engine's count and timing
+- `aio-websearch` — search DuckDuckGo, Brave, Yahoo, and Bing in parallel, with default Google (via a local CDP broker) and an opt-in Reddit CDP companion (`reddit: true`, requires Chrome). Returns in ~2.9s with live per-provider TUI progress (spinner rows, result counts with latency, an elapsed-vs-target bar) and a stable final view showing every engine's count and timing
 - `aio-webfetch` — fetch one or many URLs into markdown or structured formats, with an opt-in heading outline, query-focused answer mode, and multi-source cited answers
 - `aio-webcontent` — retrieve cached content by URL (with opt-in section-level diff)
 - `aio-webresult` — retrieve cached results by response ID

@@ -1828,14 +1828,9 @@ export class GoogleCdpBroker {
 					}
 				})
 				.finally(() => {
-					const resetMs = Math.max(
-						0,
-						Math.round(performance.now() - resetStarted),
-					);
+					const resetMs = Math.max(0, Math.round(performance.now() - resetStarted));
 					if (process.env.PI_WEBAIO_DEBUG === "1") {
-						process.stderr.write(
-							`[pi-webaio:google-broker] resetMs=${resetMs}\n`,
-						);
+						process.stderr.write(`[pi-webaio:google-broker] resetMs=${resetMs}\n`);
 					}
 				});
 			return {

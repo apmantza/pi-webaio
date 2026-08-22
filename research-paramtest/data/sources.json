@@ -1,0 +1,915 @@
+{
+  "version": 1,
+  "sources": [
+    {
+      "id": "S1",
+      "url": "https://pi.dev/docs/latest/extensions",
+      "title": "Extensions · Documentation · Pi",
+      "domain": "pi.dev",
+      "snippet": "pi can create extensions. Ask it to build one for your use case. Extensions are TypeScript modules that extend pi's behavior. They can subscribe to lifecycle events, register custom tools callable by the LLM, add commands, and more.",
+      "engines": [
+        "ddg",
+        "yahoo"
+      ],
+      "queries": [
+        "how does the pi extension API register tools",
+        "pi extension registerTool signature",
+        "pi extension lifecycle events"
+      ],
+      "bestRank": 1,
+      "score": 3.5,
+      "primary": false,
+      "fetched": true,
+      "fetchOk": true,
+      "reachability": "ok",
+      "file": "sources/01-pi-coding-agent.md"
+    },
+    {
+      "id": "S2",
+      "url": "https://pi.ubitools.com/extensions/",
+      "title": "Extensions | Pi Documentation",
+      "domain": "pi.ubitools.com",
+      "snippet": "Extensions are TypeScript modules that extend pi's behavior. They can subscribe to lifecycle events, register custom tools callable by the LLM, add…",
+      "engines": [
+        "ddg",
+        "yahoo"
+      ],
+      "queries": [
+        "how does the pi extension API register tools",
+        "pi extension registerTool signature"
+      ],
+      "bestRank": 1,
+      "score": 1.7,
+      "primary": false,
+      "fetched": true,
+      "fetchOk": true,
+      "reachability": "ok",
+      "file": "sources/02-extensions.md"
+    },
+    {
+      "id": "S3",
+      "url": "https://hochej.github.io/pi-mono/coding-agent/extensions/",
+      "title": "Extensions - pi",
+      "domain": "hochej.github.io",
+      "snippet": "Extensions are TypeScript modules that extend pi's behavior. They can subscribe to lifecycle events, register custom tools callable by the LLM, add commands, and more.",
+      "engines": [
+        "ddg",
+        "yahoo"
+      ],
+      "queries": [
+        "how does the pi extension API register tools",
+        "pi extension registerTool signature",
+        "pi extension lifecycle events"
+      ],
+      "bestRank": 4,
+      "score": 1.493,
+      "primary": false,
+      "fetched": true,
+      "fetchOk": true,
+      "reachability": "ok",
+      "file": "sources/03-extensions-pi.md"
+    },
+    {
+      "id": "S4",
+      "url": "https://pidocs.seepine.com/en/extensions",
+      "title": "pidocs.seepine.comhttps://pidocs.seepine.com › en › extensionsExtensions | Pi",
+      "domain": "pidocs.seepine.com",
+      "snippet": "Extensions are TypeScript modules that extend pi's behavior. They can subscribe to lifecycle events, register custom tools callable by the LLM, add commands, and more.",
+      "engines": [
+        "yahoo"
+      ],
+      "queries": [
+        "how does the pi extension API register tools",
+        "pi extension registerTool signature"
+      ],
+      "bestRank": 6,
+      "score": 0.833,
+      "primary": false,
+      "fetched": true,
+      "fetchOk": true,
+      "reachability": "ok",
+      "file": "sources/04-extensions-pi.md"
+    },
+    {
+      "id": "S5",
+      "url": "https://deepwiki.com/davis7dotsh/my-pi-setup/2.1-extension-api-and-registration-model",
+      "title": "Extension API and Registration Model | davis7dotsh/my-pi-setup - DeepWiki",
+      "domain": "deepwiki.com",
+      "snippet": "The Extension API is the primary mechanism for extending the capabilities of the pi-coding-agent. It provides a structured interface for developers to register new tools that the AI can use, commands that users can execute in the terminal, and hooks into the agent's lifecycle events. This model ensures that extensions remain decoupled from the core agent logic while maintaining deep access to ...",
+      "engines": [
+        "ddg",
+        "yahoo"
+      ],
+      "queries": [
+        "how does the pi extension API register tools",
+        "pi extension registerTool signature"
+      ],
+      "bestRank": 8,
+      "score": 0.716,
+      "primary": false,
+      "fetched": false,
+      "fetchOk": null,
+      "reachability": "unknown"
+    },
+    {
+      "id": "S6",
+      "url": "https://minepi.com/",
+      "title": "Pi Blockchain, Community & Developer Platform | Pi Network",
+      "domain": "minepi.com",
+      "snippet": "Pi is a network of tens of millions of humans mining Pi cryptocurrency to use and build the Web3 app ecosystem.",
+      "engines": [
+        "bing"
+      ],
+      "queries": [
+        "pi extension registerTool signature",
+        "pi extension lifecycle events"
+      ],
+      "bestRank": 11,
+      "score": 0.674,
+      "primary": false,
+      "fetched": false,
+      "fetchOk": null,
+      "reachability": "unknown"
+    },
+    {
+      "id": "S7",
+      "url": "https://www.mathsisfun.com/numbers/pi.html",
+      "title": "Pi (π) - Math is Fun",
+      "domain": "www.mathsisfun.com",
+      "snippet": "Then the circumference (all the way around the circle) is 3.14159265... a number known as Pi Pi (pronounced like \"pie\") is often …",
+      "engines": [
+        "bing"
+      ],
+      "queries": [
+        "pi extension registerTool signature",
+        "pi extension lifecycle events"
+      ],
+      "bestRank": 12,
+      "score": 0.655,
+      "primary": false,
+      "fetched": false,
+      "fetchOk": null,
+      "reachability": "unknown"
+    },
+    {
+      "id": "S8",
+      "url": "https://www.piday.org/million/",
+      "title": "One Million Digits of Pi On One Page!- [Plus Guides And Information ...",
+      "domain": "www.piday.org",
+      "snippet": "The first million digits of pi (π) are below. Why not calculate the circumference of a circle using pi here. Or simply learn about pi here. …",
+      "engines": [
+        "bing"
+      ],
+      "queries": [
+        "pi extension registerTool signature",
+        "pi extension lifecycle events"
+      ],
+      "bestRank": 13,
+      "score": 0.654,
+      "primary": false,
+      "fetched": false,
+      "fetchOk": null,
+      "reachability": "unknown"
+    },
+    {
+      "id": "S9",
+      "url": "https://pi.dev/packages",
+      "title": "Package Catalog · Pi",
+      "domain": "pi.dev",
+      "snippet": "Package Catalog Extensions, skills, prompt templates, and themes published to npm. Install with pi install npm:<package>. See the package docs for details. Recently published",
+      "engines": [
+        "ddg",
+        "yahoo"
+      ],
+      "queries": [
+        "pi extension registerTool signature",
+        "pi extension lifecycle events"
+      ],
+      "bestRank": 10,
+      "score": 0.648,
+      "primary": false,
+      "fetched": false,
+      "fetchOk": null,
+      "reachability": "unknown"
+    },
+    {
+      "id": "S10",
+      "url": "http://www.geom.uiuc.edu/~huberty/math5337/groupe/digits.html",
+      "title": "100,000 Digits of Pi",
+      "domain": "www.geom.uiuc.edu",
+      "snippet": "100,000 Digits of Pi 3.141592653589793238462643383279502884197169399375105820974944592307816406286 ...",
+      "engines": [
+        "bing"
+      ],
+      "queries": [
+        "pi extension registerTool signature",
+        "pi extension lifecycle events"
+      ],
+      "bestRank": 14,
+      "score": 0.638,
+      "primary": true,
+      "fetched": false,
+      "fetchOk": null,
+      "reachability": "unknown"
+    },
+    {
+      "id": "S11",
+      "url": "https://en.wikipedia.org/wiki/Pi",
+      "title": "Pi - Wikipedia",
+      "domain": "en.wikipedia.org",
+      "snippet": "The number π (/ paɪ / ⓘ; spelled out as pi) is a mathematical constant, approximately equal to 3.14159, that is the ratio of a circle 's …",
+      "engines": [
+        "bing"
+      ],
+      "queries": [
+        "pi extension registerTool signature",
+        "pi extension lifecycle events"
+      ],
+      "bestRank": 15,
+      "score": 0.629,
+      "primary": false,
+      "fetched": false,
+      "fetchOk": null,
+      "reachability": "unknown"
+    },
+    {
+      "id": "S12",
+      "url": "https://wumbo.net/symbols/pi/",
+      "title": "Pi Symbol (π)",
+      "domain": "wumbo.net",
+      "snippet": "The Greek small letter π (pi) is used in trigonometry as a constant to represent a half-rotation around a circle in radians. The value of …",
+      "engines": [
+        "bing"
+      ],
+      "queries": [
+        "pi extension registerTool signature",
+        "pi extension lifecycle events"
+      ],
+      "bestRank": 16,
+      "score": 0.621,
+      "primary": false,
+      "fetched": false,
+      "fetchOk": null,
+      "reachability": "unknown"
+    },
+    {
+      "id": "S13",
+      "url": "https://vi.wikipedia.org/wiki/Pi",
+      "title": "Pi – Wikipedia tiếng Việt",
+      "domain": "vi.wikipedia.org",
+      "snippet": "Số pi (ký hiệu: π), còn gọi là hằng số Archimedes, là một hằng số toán học có giá trị bằng tỷ số giữa chu vi của một đường tròn với …",
+      "engines": [
+        "bing"
+      ],
+      "queries": [
+        "pi extension registerTool signature",
+        "pi extension lifecycle events"
+      ],
+      "bestRank": 17,
+      "score": 0.614,
+      "primary": false,
+      "fetched": false,
+      "fetchOk": null,
+      "reachability": "unknown"
+    },
+    {
+      "id": "S14",
+      "url": "https://www.britannica.com/science/pi-mathematics",
+      "title": "Pi | Definition, Symbol, Number, History, Applications, & Facts ...",
+      "domain": "www.britannica.com",
+      "snippet": "Jul 20, 1998 · pi (π), in mathematics, the ratio of the circumference of a circle to its diameter. The Greek letter π was first used by …",
+      "engines": [
+        "bing"
+      ],
+      "queries": [
+        "pi extension registerTool signature",
+        "pi extension lifecycle events"
+      ],
+      "bestRank": 18,
+      "score": 0.608,
+      "primary": false,
+      "fetched": false,
+      "fetchOk": null,
+      "reachability": "unknown"
+    },
+    {
+      "id": "S15",
+      "url": "https://simple.wikipedia.org/wiki/Pi",
+      "title": "Pi - Simple English Wikipedia, the free encyclopedia",
+      "domain": "simple.wikipedia.org",
+      "snippet": "Pi Day was started in 1988 by physicist Larry Shaw at the San Francisco Exploratorium. On March 11, 2009, almost 21 years later, …",
+      "engines": [
+        "bing"
+      ],
+      "queries": [
+        "pi extension registerTool signature",
+        "pi extension lifecycle events"
+      ],
+      "bestRank": 19,
+      "score": 0.603,
+      "primary": false,
+      "fetched": false,
+      "fetchOk": null,
+      "reachability": "unknown"
+    },
+    {
+      "id": "S16",
+      "url": "https://www.youtube.com/watch?v=qAiivspEHmU",
+      "title": "28:11YouTubePi Extensible Workflows: Full Guide3 weeks ago3.5K Views",
+      "domain": "www.youtube.com",
+      "snippet": "28:11",
+      "engines": [
+        "yahoo"
+      ],
+      "queries": [
+        "how does the pi extension API register tools",
+        "pi extension lifecycle events"
+      ],
+      "bestRank": 20,
+      "score": 0.595,
+      "primary": false,
+      "fetched": false,
+      "fetchOk": null,
+      "reachability": "unknown"
+    },
+    {
+      "id": "S17",
+      "url": "https://github.com/earendil-works/pi/issues/1720",
+      "title": "Support dynamic tool registration after session initialization",
+      "domain": "github.com",
+      "snippet": "What do you want to change? Currently, when an extension calls pi.registerTool () after session initialization (e.g., in event handlers like session_start), the tool is added to the extension's internal tools map but never becomes visible...",
+      "engines": [
+        "ddg",
+        "yahoo"
+      ],
+      "queries": [
+        "pi extension registerTool signature"
+      ],
+      "bestRank": 2,
+      "score": 0.5,
+      "primary": true,
+      "fetched": false,
+      "fetchOk": null,
+      "reachability": "unknown"
+    },
+    {
+      "id": "S18",
+      "url": "https://github.com/open-gsd/gsd-pi/blob/main/docs/dev/extending-pi/06-the-extension-lifecycle.md",
+      "title": "gsd-pi/docs/dev/extending-pi/06-the-extension-lifecycle.md at main ...",
+      "domain": "github.com",
+      "snippet": "The Extension Lifecycle ... Critical insight: The event system is your primary mechanism for interacting with pi. Every meaningful thing that happens emits an event, and most events let you modify or block the behavior.",
+      "engines": [
+        "ddg",
+        "yahoo"
+      ],
+      "queries": [
+        "pi extension lifecycle events"
+      ],
+      "bestRank": 2,
+      "score": 0.5,
+      "primary": true,
+      "fetched": false,
+      "fetchOk": null,
+      "reachability": "unknown"
+    },
+    {
+      "id": "S19",
+      "url": "https://pi.dev/docs/latest",
+      "title": "Pi Documentation · Documentation · Pi",
+      "domain": "pi.dev",
+      "snippet": "Reference Environment variables - Pi process configuration and session metadata available to bash tools. Session format - JSONL session file format, entry types, and SessionManager API.",
+      "engines": [
+        "ddg"
+      ],
+      "queries": [
+        "how does the pi extension API register tools"
+      ],
+      "bestRank": 3,
+      "score": 0.333,
+      "primary": false,
+      "fetched": false,
+      "fetchOk": null,
+      "reachability": "unknown"
+    },
+    {
+      "id": "S20",
+      "url": "https://github.com/BEOKS/pi-mono/blob/main/packages/coding-agent/docs/extensions.md",
+      "title": "pi-mono/packages/coding-agent/docs/extensions.md at main - GitHub",
+      "domain": "github.com",
+      "snippet": "Custom tools - Register tools the LLM can call via pi.registerTool () Event interception - Block or modify tool calls, inject context, customize compaction User interaction - Prompt users via ctx.ui (select, confirm, input, notify) Custom UI components - Full TUI components with keyboard input via ctx.ui.custom () for complex interactions",
+      "engines": [
+        "ddg",
+        "yahoo"
+      ],
+      "queries": [
+        "pi extension registerTool signature"
+      ],
+      "bestRank": 3,
+      "score": 0.333,
+      "primary": true,
+      "fetched": false,
+      "fetchOk": null,
+      "reachability": "unknown"
+    },
+    {
+      "id": "S21",
+      "url": "https://docs.rs/pi_agent_rust/latest/pi/extensions/fn.is_lifecycle_event.html",
+      "title": "is_lifecycle_event in pi::extensions - Rust - Docs.rs",
+      "domain": "docs.rs",
+      "snippet": "Returns `true` for agent lifecycle events that are dispatched directly by the agent loop via [`AgentSession::dispatch_extension_lifecycle_event`].",
+      "engines": [
+        "ddg"
+      ],
+      "queries": [
+        "pi extension lifecycle events"
+      ],
+      "bestRank": 3,
+      "score": 0.333,
+      "primary": true,
+      "fetched": false,
+      "fetchOk": null,
+      "reachability": "unknown"
+    },
+    {
+      "id": "S22",
+      "url": "https://pi-doc.com/docs/latest/extensions.html",
+      "title": "Extensions（扩展） - Pi 中文文档",
+      "domain": "pi-doc.com",
+      "snippet": "本页面是 Pi 官方文档 的中文翻译。 仅供学习参考。 Extensions 是 TypeScript 模块，用于扩展 Pi 的行为。 扩展可以订阅生命周期事件、注册 LLM 可调用的自定义工具、添加命令等。",
+      "engines": [
+        "ddg"
+      ],
+      "queries": [
+        "pi extension registerTool signature"
+      ],
+      "bestRank": 4,
+      "score": 0.25,
+      "primary": false,
+      "fetched": false,
+      "fetchOk": null,
+      "reachability": "unknown"
+    },
+    {
+      "id": "S23",
+      "url": "https://deepwiki.com/earendil-works/pi/6.1-extension-api-and-lifecycle-events",
+      "title": "Extension API and Lifecycle Events | earendil-works/pi | DeepWiki",
+      "domain": "deepwiki.com",
+      "snippet": "Extension API and Lifecycle Events Relevant source files Extensions in pi are TypeScript modules that allow developers to intercept agent behavior, register custom tools, and create interactive UI components.",
+      "engines": [
+        "ddg",
+        "yahoo"
+      ],
+      "queries": [
+        "pi extension lifecycle events"
+      ],
+      "bestRank": 4,
+      "score": 0.25,
+      "primary": false,
+      "fetched": false,
+      "fetchOk": null,
+      "reachability": "unknown"
+    },
+    {
+      "id": "S24",
+      "url": "https://github.com/nicholaswagner/pi-extensions",
+      "title": "GitHub - nicholaswagner/pi-extensions: the pi.dev extensions i'm ...",
+      "domain": "github.com",
+      "snippet": "These extensions use the pi extension API to: Register tools (pi.registerTool) — give the LLM new capabilities like todo or questionnaire Register commands (pi.registerCommand) — expose user-facing slash commands like /plan or /todos Register shortcuts (pi.registerShortcut) — bind key combinations like Ctrl+Alt+P Subscribe to events (pi.on) — hook into the session lifecycle (session ...",
+      "engines": [
+        "ddg"
+      ],
+      "queries": [
+        "how does the pi extension API register tools"
+      ],
+      "bestRank": 5,
+      "score": 0.2,
+      "primary": true,
+      "fetched": false,
+      "fetchOk": null,
+      "reachability": "unknown"
+    },
+    {
+      "id": "S25",
+      "url": "https://deepwiki.com/agentic-dev-io/pi-agent/5.1-extension-api-and-lifecycle-events",
+      "title": "Extension API and Lifecycle Events | agentic-dev-io/pi-agent | DeepWiki",
+      "domain": "deepwiki.com",
+      "snippet": "The Extension API allows developers to extend the agent's behavior by subscribing to lifecycle events, registering custom LLM-callable tools, adding slash commands, and creating interactive UI components.",
+      "engines": [
+        "ddg",
+        "yahoo"
+      ],
+      "queries": [
+        "pi extension lifecycle events"
+      ],
+      "bestRank": 5,
+      "score": 0.2,
+      "primary": false,
+      "fetched": false,
+      "fetchOk": null,
+      "reachability": "unknown"
+    },
+    {
+      "id": "S26",
+      "url": "https://pi.dev/docs/latest/sdk",
+      "title": "SDK · Documentation · Pi",
+      "domain": "pi.dev",
+      "snippet": "The session manages agent lifecycle, message history, model state, compaction, and event streaming. ... Session replacement APIs such as new-session, resume, fork, and import live on AgentSessionRuntime, not on AgentSession.",
+      "engines": [
+        "ddg"
+      ],
+      "queries": [
+        "pi extension lifecycle events"
+      ],
+      "bestRank": 6,
+      "score": 0.167,
+      "primary": false,
+      "fetched": false,
+      "fetchOk": null,
+      "reachability": "unknown"
+    },
+    {
+      "id": "S27",
+      "url": "https://github.com/brglng/pi-packages/blob/main/packages/pi-permission-system/docs/cross-extension-api.md",
+      "title": "pi-packages/packages/pi-permission-system/docs/cross-extension-api.md ...",
+      "domain": "github.com",
+      "snippet": "Register a custom preview formatter for a specific tool name. Permission ask-prompts call your formatter while building the prompt text, so you can show a human-readable summary of a tool call instead of the default truncated JSON.",
+      "engines": [
+        "ddg",
+        "yahoo"
+      ],
+      "queries": [
+        "how does the pi extension API register tools"
+      ],
+      "bestRank": 7,
+      "score": 0.143,
+      "primary": true,
+      "fetched": false,
+      "fetchOk": null,
+      "reachability": "unknown"
+    },
+    {
+      "id": "S28",
+      "url": "https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md",
+      "title": "pi/packages/coding-agent/docs/extensions.md at main - GitHub",
+      "domain": "github.com",
+      "snippet": "They can subscribe to lifecycle events, register custom tools callable by the LLM, add commands, and more. Placement for /reload: Put extensions in ~/.pi/agent/extensions/ (global) or .pi/extensions/ (project-local) for auto-discovery.",
+      "engines": [
+        "ddg"
+      ],
+      "queries": [
+        "pi extension lifecycle events"
+      ],
+      "bestRank": 7,
+      "score": 0.143,
+      "primary": true,
+      "fetched": false,
+      "fetchOk": null,
+      "reachability": "unknown"
+    },
+    {
+      "id": "S29",
+      "url": "https://thinkpeace.github.io/pi-agent-for-java-devs/chapter-10-extension-system",
+      "title": "第十章：扩展系统 -- Extension API | 深入理解 Pi Agent",
+      "domain": "thinkpeace.github.io",
+      "snippet": "★ Insight ───────────────────────────────────── ExtensionContext 是一个只读的运行时快照。 它让你\"看到\"当前状态，但不能直接修改 Agent 的内部状态。修改需要通过 ExtensionAPI 的方法（如 registerTool 、 sendMessage）。这种设计防止了扩展意外破坏 Agent 的内部 ...",
+      "engines": [
+        "ddg"
+      ],
+      "queries": [
+        "pi extension registerTool signature"
+      ],
+      "bestRank": 8,
+      "score": 0.125,
+      "primary": false,
+      "fetched": false,
+      "fetchOk": null,
+      "reachability": "unknown"
+    },
+    {
+      "id": "S30",
+      "url": "https://skills.rest/skill/pi-extension-lifecycle",
+      "title": "pi-extension-lifecycle: Master Pi agent lifecycle and extension timing ...",
+      "domain": "skills.rest",
+      "snippet": "What problem does it solve? Provides a reference for the Pi coding agent's turn and tool execution model and extension event lifecycle, enabling teams to design timings, intercepts, and messages with a clear lifecycle diagram and documented capabilities.",
+      "engines": [
+        "ddg",
+        "yahoo"
+      ],
+      "queries": [
+        "pi extension lifecycle events"
+      ],
+      "bestRank": 8,
+      "score": 0.125,
+      "primary": false,
+      "fetched": false,
+      "fetchOk": null,
+      "reachability": "unknown"
+    },
+    {
+      "id": "S31",
+      "url": "https://deepwiki.com/varunisrani/Pi-coding-agent-/5.3-writing-extensions",
+      "title": "Writing Extensions | varunisrani/Pi-coding-agent- | DeepWiki",
+      "domain": "deepwiki.com",
+      "snippet": "This page provides a practical guide to creating Pi extensions. It covers the basic structure, common patterns for tool registration and event handling, UI customization, and testing strategies. For architectural details about how extensions are loaded and executed, see Extension Architecture. For a complete API reference, see Extension API Reference.",
+      "engines": [
+        "ddg",
+        "yahoo"
+      ],
+      "queries": [
+        "how does the pi extension API register tools"
+      ],
+      "bestRank": 9,
+      "score": 0.111,
+      "primary": false,
+      "fetched": false,
+      "fetchOk": null,
+      "reachability": "unknown"
+    },
+    {
+      "id": "S32",
+      "url": "https://deepwiki.com/earendil-works/pi/6.3-extension-examples-and-patterns",
+      "title": "Extension Examples and Patterns | earendil-works/pi | DeepWiki",
+      "domain": "deepwiki.com",
+      "snippet": "The simplest extension example is hello.ts, which shows how to define and register a tool using pi.registerTool (). It uses TypeBox schemas for parameters and provides an execute () method.",
+      "engines": [
+        "ddg"
+      ],
+      "queries": [
+        "pi extension registerTool signature"
+      ],
+      "bestRank": 9,
+      "score": 0.111,
+      "primary": false,
+      "fetched": false,
+      "fetchOk": null,
+      "reachability": "unknown"
+    },
+    {
+      "id": "S33",
+      "url": "https://skillsmp.com/creators/gotgenes/pi-autoformat/pi-skills-pi-extension-lifecycle",
+      "title": "pi-extension-lifecycle | Agent Skill | SkillsMP",
+      "domain": "skillsmp.com",
+      "snippet": "Reference for the Pi coding agent's turn/tool execution model and extension event lifecycle. Use when designing extension timing (when to flush, notify, or intercept), understanding event sequencing, or reasoning about what the agent sees between turns. Includes the verified lifecycle diagram, event handler capabilities, message delivery mechanics, and empirical session-data patterns. Jump to ...",
+      "engines": [
+        "ddg",
+        "yahoo"
+      ],
+      "queries": [
+        "pi extension lifecycle events"
+      ],
+      "bestRank": 9,
+      "score": 0.111,
+      "primary": false,
+      "fetched": false,
+      "fetchOk": null,
+      "reachability": "unknown"
+    },
+    {
+      "id": "S34",
+      "url": "https://www.aibuilderclub.com/blog/pi-agent-extensions-guide",
+      "title": "Pi Agent Extensions: Change the Harness, Not Just the Prompt (2026)",
+      "domain": "www.aibuilderclub.com",
+      "snippet": "Pi Agent Extensions: Change the Harness, Not Just the Prompt (2026) Pi ships 4 tools and nothing else. Everything past that is an extension - in-process TypeScript that can register tools, rewrite context, and redraw the UI. Here's what that buys you over hooks, and the one thing I got wrong about hooks.",
+      "engines": [
+        "ddg"
+      ],
+      "queries": [
+        "how does the pi extension API register tools"
+      ],
+      "bestRank": 10,
+      "score": 0.1,
+      "primary": false,
+      "fetched": false,
+      "fetchOk": null,
+      "reachability": "unknown"
+    },
+    {
+      "id": "S35",
+      "url": "https://piex.dev/en/blogs/pi-extension-mechanism/",
+      "title": "Pi Extension Mechanism & Internals — PieX",
+      "domain": "piex.dev",
+      "snippet": "Pi's Extension API design philosophy, tool registration, the hook system, and the full load → bind → dispatch pipeline.",
+      "engines": [
+        "ddg"
+      ],
+      "queries": [
+        "how does the pi extension API register tools"
+      ],
+      "bestRank": 11,
+      "score": 0.091,
+      "primary": false,
+      "fetched": false,
+      "fetchOk": null,
+      "reachability": "unknown"
+    },
+    {
+      "id": "S36",
+      "url": "https://myctm.comparethemarket.com/?AFFCLIE=QUERY_PARAM(SRC%2CEI32)",
+      "title": "Sign in - myctm.comparethemarket.com",
+      "domain": "myctm.comparethemarket.com",
+      "snippet": "Let's start by checking if you have an account, then you can sign in or register. What's your email? Compare the Market is a trading …",
+      "engines": [
+        "bing"
+      ],
+      "queries": [
+        "how does the pi extension API register tools"
+      ],
+      "bestRank": 12,
+      "score": 0.083,
+      "primary": false,
+      "fetched": false,
+      "fetchOk": null,
+      "reachability": "unknown"
+    },
+    {
+      "id": "S37",
+      "url": "https://www.comparethemarket.com/",
+      "title": "Compare the Market | The simples way to save",
+      "domain": "www.comparethemarket.com",
+      "snippet": "Use Compare the Market to find a better deal on your insurance, household bills and finances. Plus, get a year of fantastic rewards, …",
+      "engines": [
+        "bing"
+      ],
+      "queries": [
+        "how does the pi extension API register tools"
+      ],
+      "bestRank": 13,
+      "score": 0.077,
+      "primary": false,
+      "fetched": false,
+      "fetchOk": null,
+      "reachability": "unknown"
+    },
+    {
+      "id": "S38",
+      "url": "https://www.comparethemarket.com/car-insurance/",
+      "title": "Compare cheap car insurance quotes - Compare the Market",
+      "domain": "www.comparethemarket.com",
+      "snippet": "Aug 5, 2026 · Compare car insurance from 187 providers with the UK’s preferred price comparison site. Choose car cover from …",
+      "engines": [
+        "bing"
+      ],
+      "queries": [
+        "how does the pi extension API register tools"
+      ],
+      "bestRank": 14,
+      "score": 0.071,
+      "primary": false,
+      "fetched": false,
+      "fetchOk": null,
+      "reachability": "unknown"
+    },
+    {
+      "id": "S39",
+      "url": "https://www.moneysupermarket.com/?msockid=3f7bfb41a6946fce176decf8a7106ecf",
+      "title": "MoneySuperMarket | Where better off begins",
+      "domain": "www.moneysupermarket.com",
+      "snippet": "1 day ago · One of the best ways to get the lowest prices and best deals on your household bills is to compare quotes from different …",
+      "engines": [
+        "bing"
+      ],
+      "queries": [
+        "how does the pi extension API register tools"
+      ],
+      "bestRank": 15,
+      "score": 0.067,
+      "primary": false,
+      "fetched": false,
+      "fetchOk": null,
+      "reachability": "unknown"
+    },
+    {
+      "id": "S40",
+      "url": "https://www.gocompare.com/",
+      "title": "Go.Compare™ Official Site | Quick and Easy Quotes in Minutes",
+      "domain": "www.gocompare.com",
+      "snippet": "We help people find and compare car, home, pet and travel insurance, broadband, loans, energy and more. For almost 20 years, …",
+      "engines": [
+        "bing"
+      ],
+      "queries": [
+        "how does the pi extension API register tools"
+      ],
+      "bestRank": 16,
+      "score": 0.063,
+      "primary": false,
+      "fetched": false,
+      "fetchOk": null,
+      "reachability": "unknown"
+    },
+    {
+      "id": "S41",
+      "url": "https://www.moneysupermarket.com/gas-and-electricity/?msockid=3f7bfb41a6946fce176decf8a7106ecf",
+      "title": "Compare Energy Prices - August 2026 - MoneySuperMarket",
+      "domain": "www.moneysupermarket.com",
+      "snippet": "1 day ago · One of the best ways to get the lowest prices and best deals is to compare quotes from different companies. We do the …",
+      "engines": [
+        "bing"
+      ],
+      "queries": [
+        "how does the pi extension API register tools"
+      ],
+      "bestRank": 17,
+      "score": 0.059,
+      "primary": false,
+      "fetched": false,
+      "fetchOk": null,
+      "reachability": "unknown"
+    },
+    {
+      "id": "S42",
+      "url": "https://cdn2.comparethemarket.com/market/cms/static-homepage/index.html",
+      "title": "Compare the Market | Keep Life Simples",
+      "domain": "cdn2.comparethemarket.com",
+      "snippet": "We will be back up and running very shortly, but for now, why not sign in to your account or compare and obtain quotes for our …",
+      "engines": [
+        "bing"
+      ],
+      "queries": [
+        "how does the pi extension API register tools"
+      ],
+      "bestRank": 18,
+      "score": 0.056,
+      "primary": false,
+      "fetched": false,
+      "fetchOk": null,
+      "reachability": "unknown"
+    },
+    {
+      "id": "S43",
+      "url": "https://www.confused.com/",
+      "title": "Confused.com - Get that great feeling when you've just used …",
+      "domain": "www.confused.com",
+      "snippet": "We're not just a comparison website - we stand up for you. And as the first ever comparison site we've learnt a lot over the years. We …",
+      "engines": [
+        "bing"
+      ],
+      "queries": [
+        "how does the pi extension API register tools"
+      ],
+      "bestRank": 19,
+      "score": 0.053,
+      "primary": false,
+      "fetched": false,
+      "fetchOk": null,
+      "reachability": "unknown"
+    },
+    {
+      "id": "S44",
+      "url": "https://www.comparethemarkat.com/",
+      "title": "Compare the Markat",
+      "domain": "www.comparethemarkat.com",
+      "snippet": "UK Price Comparison Giants: A Head-to-Head Look Compare the Market Core Comparisons Insurance Wide range of products. …",
+      "engines": [
+        "bing"
+      ],
+      "queries": [
+        "how does the pi extension API register tools"
+      ],
+      "bestRank": 20,
+      "score": 0.05,
+      "primary": false,
+      "fetched": false,
+      "fetchOk": null,
+      "reachability": "unknown"
+    },
+    {
+      "id": "S45",
+      "url": "https://motorbreakdown.comparethemarket.com/user/login",
+      "title": "Retrieve An Existing Insurance Quote | Comparethemarket",
+      "domain": "motorbreakdown.comparethemarket.com",
+      "snippet": "Not got an i-Wonder breakdown account? Enjoy 2 for 1 cinema tickets: Tuesdays or Wednesdays. Participating cinemas. 2 standard …",
+      "engines": [
+        "bing"
+      ],
+      "queries": [
+        "how does the pi extension API register tools"
+      ],
+      "bestRank": 21,
+      "score": 0.048,
+      "primary": false,
+      "fetched": false,
+      "fetchOk": null,
+      "reachability": "unknown"
+    },
+    {
+      "id": "S46",
+      "url": "https://deepwiki.com/michaelliv/pi-dynamic-workflows/2.1-pi-extension-integration",
+      "title": "deepwiki.comhttps://deepwiki.com › 2Pi Extension Integration | michaelliv/pi-dynamic-workflows ...",
+      "domain": "deepwiki.com",
+      "snippet": "May 31, 2026 ·   The pi-dynamic-workflows package integrates with the Pi ecosystem by implementing the ExtensionAPI contract. This integration allows the host environment to discover the workflow orchestration capabilities, register the necessary tools, and ensure that the workflow engine is available for every session via lifecycle hooks.",
+      "engines": [
+        "yahoo"
+      ],
+      "queries": [
+        "pi extension registerTool signature"
+      ],
+      "bestRank": 21,
+      "score": 0.048,
+      "primary": false,
+      "fetched": false,
+      "fetchOk": null,
+      "reachability": "unknown"
+    }
+  ]
+}

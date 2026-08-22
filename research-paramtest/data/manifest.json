@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "tool": "aio-webresearch",
+  "query": "how does the pi extension API register tools",
+  "queries": [
+    "how does the pi extension API register tools",
+    "pi extension registerTool signature",
+    "pi extension lifecycle events"
+  ],
+  "startedAt": "2026-08-18T06:33:02.078Z",
+  "finishedAt": "2026-08-18T06:33:10.112Z",
+  "durationMs": 8034,
+  "maxSources": 4,
+  "stopReason": "single_round_complete",
+  "bundleDir": "C:\\Users\\apman\\OneDrive\\Desktop\\pi-webaio\\research-paramtest",
+  "counts": {
+    "sourcesConsulted": 46,
+    "sourcesFetched": 4,
+    "sourcesOk": 4,
+    "sourcesSkipped": 0,
+    "sourcesDead": 0,
+    "primarySources": 0,
+    "stanceVerdict": "likely_false",
+    "supportingSources": 0,
+    "conflictingSources": 4,
+    "neutralSources": 0
+  },
+  "citationAudit": {
+    "checked": 4,
+    "ok": 4,
+    "skipped": 0,
+    "dead": 0,
+    "details": [
+      {
+        "id": "S1",
+        "url": "https://pi.dev/docs/latest/extensions",
+        "classification": "ok"
+      },
+      {
+        "id": "S2",
+        "url": "https://pi.ubitools.com/extensions/",
+        "classification": "ok"
+      },
+      {
+        "id": "S3",
+        "url": "https://hochej.github.io/pi-mono/coding-agent/extensions/",
+        "classification": "ok"
+      },
+      {
+        "id": "S4",
+        "url": "https://pidocs.seepine.com/en/extensions",
+        "classification": "ok"
+      }
+    ]
+  }
+}

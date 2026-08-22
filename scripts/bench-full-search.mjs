@@ -245,9 +245,15 @@ for (let i = 0; i < samples; i++) {
 			`total=${row.total} ddg=${row.ddg} brave=${row.brave} yahoo=${row.yahoo} bing=${row.bing} ` +
 			`google=${row.googleStatus} reddit=${row.redditStatus}${row.responseBudgetCut ? " [response-budget-cut]" : ""} ` +
 			`actual-settle=${row.trueSettleMs}ms` +
-			(row.laneSettleMs?.http != null ? ` (http ${row.laneSettleMs.http}ms)` : "") +
-			(row.laneSettleMs?.google != null ? ` (google ${row.laneSettleMs.google}ms)` : "") +
-			(row.laneSettleMs?.reddit != null ? ` (reddit ${row.laneSettleMs.reddit}ms)` : ""),
+			(row.laneSettleMs?.http == null
+				? ""
+				: ` (http ${row.laneSettleMs.http}ms)`) +
+			(row.laneSettleMs?.google == null
+				? ""
+				: ` (google ${row.laneSettleMs.google}ms)`) +
+			(row.laneSettleMs?.reddit == null
+				? ""
+				: ` (reddit ${row.laneSettleMs.reddit}ms)`),
 	);
 	if (spacingMs > 0 && i < samples - 1) {
 		await new Promise((resolve) => setTimeout(resolve, spacingMs));
@@ -277,9 +283,13 @@ const settleLatencies = rows.map((r) => r.trueSettleMs).sort((a, b) => a - b);
 const sP50 = settleLatencies[Math.floor(settleLatencies.length * 0.5)];
 const sP95 =
 	settleLatencies[
-		Math.min(settleLatencies.length - 1, Math.floor(settleLatencies.length * 0.95))
+		Math.min(
+			settleLatencies.length - 1,
+			Math.floor(settleLatencies.length * 0.95),
+		)
 	];
-const sAvg = settleLatencies.reduce((a, b) => a + b, 0) / settleLatencies.length;
+const sAvg =
+	settleLatencies.reduce((a, b) => a + b, 0) / settleLatencies.length;
 console.log(
 	`  actual full-settle (lanes truly done): p50=${sP50}ms  p95=${sP95}ms  avg=${Math.round(sAvg)}ms`,
 );

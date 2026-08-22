@@ -146,6 +146,7 @@ export function registerWebsearchTool(
 			setSearchContext(query);
 			const max = params.max ?? 15;
 			const useGoogle = params.google ?? true;
+			const useReddit = params.reddit === true;
 			const compact = params.compact === true;
 			const startedAt = Date.now();
 			const searchDeadlineAt = startedAt + searchDeadlineMs;
@@ -163,7 +164,9 @@ export function registerWebsearchTool(
 
 			// Chrome cold-start can take up to 30s; fire it in parallel, but never
 			// let startup or a CDP provider extend the documented response deadline.
+			// Reddit is opt-in (v1.0.1): only runs when reddit:true is passed.
 			const redditEnabled = shouldRunReddit(
+				useReddit,
 				cdpAvailableImpl(),
 				providerAvailableImpl("reddit"),
 			);
@@ -189,7 +192,8 @@ export function registerWebsearchTool(
 						}).catch(() => null)
 					: null;
 			let redditStatus: string;
-			if (!cdpAvailableImpl())
+			if (!useReddit) redditStatus = "disabled (reddit not requested)";
+			else if (!cdpAvailableImpl())
 				redditStatus = "unavailable (Chrome CDP not present)";
 			else if (providerAvailableImpl("reddit")) redditStatus = "pending";
 			else

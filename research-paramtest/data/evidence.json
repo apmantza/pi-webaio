@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "evidence": [
+    {
+      "sourceId": "S1",
+      "url": "https://pi.dev/docs/latest/extensions",
+      "title": "Pi Coding Agent",
+      "quote": "builtin for built-in tools\nsdk for tools passed via createAgentSession({ customTools })\nextension source metadata for tools registered by extensions\n\npi.setModel(model)\n        \n        \n          \n          \n          Copied\n        \n        \nSet the current model. Returns false if no API key is available for the model. See models.md for configuring custom models.\nconst \"claude-sonnet-4-5\");\nif (model) {\n  const pi.setModel(model);\n  if (!success) {\n    ctx.ui.notify(\"No API key for this model\", \"error\");\n  }\n}\n\npi.getThinkingLevel() / pi.setThinkingLevel(level)\n        \n        \n          \n          \n          Copied\n        \n        \nGet or set the thinking level. Level is clamped to mode",
+      "score": 6.059
+    },
+    {
+      "sourceId": "S2",
+      "url": "https://pi.ubitools.com/extensions/",
+      "title": "Extensions",
+      "quote": "builtin for built-in tools\nsdk for tools passed via createAgentSession({ customTools })\nextension source metadata for tools registered by extensions\n\npi.setModel(model)Section titled “pi.setModel(model)”\nSet the current model. Returns false if no API key is available for the model. See models.md for configuring custom models.\nconst model = ctx.modelRegistry.find(\"anthropic\", \"claude-sonnet-4-5\");if (model) {const success = await pi.setModel(model);if (!success) {ctx.ui.notify(\"No API key for this model\", \"error\");}}\npi.getThinkingLevel() / pi.setThinkingLevel(level)Section titled “pi.getThinkingLevel() / pi.setThinkingLevel(level)”\nGet or set the thinking level. Level is clamped to model cap",
+      "score": 6.856
+    },
+    {
+      "sourceId": "S3",
+      "url": "https://hochej.github.io/pi-mono/coding-agent/extensions/",
+      "title": "Extensions - pi",
+      "heading": "Extension's read tool replaces built-in read",
+      "quote": "Important: Use StringEnum from @mariozechner/pi-ai for string enums. Type.Union/Type.Literal doesn't work with Google's API.\nOverriding Built-in Tools¶\nExtensions can override built-in tools (read, bash, edit, write, grep, find, ls) by registering a tool with the same name. Interactive mode displays a warning when this happens.\n# Extension's read tool replaces built-in read\npi-e./tool-override.ts\n\nAlternatively, use --no-tools to start without any built-in tools:\n# No built-in tools, only extension tools\npi--no-tools-e./my-extension.ts",
+      "score": 6.019
+    },
+    {
+      "sourceId": "S4",
+      "url": "https://pidocs.seepine.com/en/extensions",
+      "title": "Extensions | Pi",
+      "quote": "Returns false if no API key is available for the model. See models.md for configuring custom models.const model = ctx.modelRegistry.find('anthropic', 'claude-sonnet-4-5')\nif (model) {\n  const success = await pi.setModel(model)\n  if (!success) {\n    ctx.ui.notify('No API key for this model', 'error')\n  }\n}\npi.getThinkingLevel() / pi.setThinkingLevel(level)Get or set the thinking level. Level is clamped to model capabilities (non-reasoning models always use \"off\"). Changes emit thinking_level_select.const current = pi.getThinkingLevel() // \"off\" | \"minimal\" | \"low\" | \"medium\" | \"high\" | \"xhigh\"\npi.setThinkingLevel('high')\npi.eventsShared event bus for communication between extensions:pi.events",
+      "score": 6.069
+    }
+  ]
+}

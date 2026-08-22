@@ -1,0 +1,74 @@
+{
+  "version": 1,
+  "caveat": "Stance is keyword/pattern-based, not semantic entailment — verify before treating as fact.",
+  "query": "how does the pi extension API register tools",
+  "verdict": "likely_false",
+  "supportScore": 0,
+  "conflictScore": 4.8,
+  "counts": {
+    "supporting": 0,
+    "conflicting": 4,
+    "neutral": 0
+  },
+  "sources": [
+    {
+      "sourceId": "S1",
+      "url": "https://pi.dev/docs/latest/extensions",
+      "title": "Pi Coding Agent",
+      "label": "conflicting",
+      "keywordOverlap": 1,
+      "conflictMarkerCount": 22,
+      "conflictMarkersMatched": [
+        "false",
+        "invalidated"
+      ],
+      "primary": false,
+      "freshness": 0.5,
+      "evidenceStrength": -1.2
+    },
+    {
+      "sourceId": "S2",
+      "url": "https://pi.ubitools.com/extensions/",
+      "title": "Extensions",
+      "label": "conflicting",
+      "keywordOverlap": 1,
+      "conflictMarkerCount": 14,
+      "conflictMarkersMatched": [
+        "false",
+        "invalidated"
+      ],
+      "primary": false,
+      "freshness": 0.5,
+      "evidenceStrength": -1.2
+    },
+    {
+      "sourceId": "S3",
+      "url": "https://hochej.github.io/pi-mono/coding-agent/extensions/",
+      "title": "Extensions - pi",
+      "label": "conflicting",
+      "keywordOverlap": 1,
+      "conflictMarkerCount": 11,
+      "conflictMarkersMatched": [
+        "false"
+      ],
+      "primary": false,
+      "freshness": 0.5,
+      "evidenceStrength": -1.2
+    },
+    {
+      "sourceId": "S4",
+      "url": "https://pidocs.seepine.com/en/extensions",
+      "title": "Extensions | Pi",
+      "label": "conflicting",
+      "keywordOverlap": 1,
+      "conflictMarkerCount": 13,
+      "conflictMarkersMatched": [
+        "false",
+        "invalidated"
+      ],
+      "primary": false,
+      "freshness": 0.5,
+      "evidenceStrength": -1.2
+    }
+  ]
+}

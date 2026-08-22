@@ -52,10 +52,11 @@ test("collectProviderResults returns partial results at the deadline", async () 
 	}
 });
 
-test("shouldRunReddit requires both CDP and provider availability", () => {
-	assert.equal(shouldRunReddit(true, true), true);
-	assert.equal(shouldRunReddit(false, true), false);
-	assert.equal(shouldRunReddit(true, false), false);
+test("shouldRunReddit requires opt-in, CDP, and provider availability", () => {
+	assert.equal(shouldRunReddit(true, true, true), true);
+	assert.equal(shouldRunReddit(false, true, true), false, "not requested");
+	assert.equal(shouldRunReddit(true, false, true), false, "no CDP");
+	assert.equal(shouldRunReddit(true, true, false), false, "provider cooled down");
 });
 
 test("shouldRunGoogle requires the flag, CDP, and provider availability", () => {

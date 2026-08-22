@@ -142,7 +142,7 @@ pi-webaio/
 - Parameters: `query` (string), `max` (number, default 15), `google` (boolean, default true), `goggles` (optional rerank preset/rules), `prefetch` (opt-in speculative cache warm of top hits)
 - Returns deduplicated, cross-engine-scored results with title, URL, snippet, domain, sources, and a per-result `sourceType` (official-docs, repo, academic, maintainer-blog, website, community, news, social)
 - TUI: polished call/progress/result rendering with engine counts and per-result expand
-- Google can be skipped with `google: false`; Reddit is independent and remains automatic when CDP is available. When Google is requested but empty, the result carries a `googleStatus` field and a note instead of silently dropping Google (v0.7.3)
+- Google can be skipped with `google: false`. Reddit is opt-in since v1.0.1: pass `reddit: true` to include the Reddit CDP lane (default off). When Google is requested but empty, the result carries a `googleStatus` field and a note instead of silently dropping Google (v0.7.3)
 
 ### 2. `aio-webfetch`
 
