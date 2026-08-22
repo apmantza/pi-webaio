@@ -216,3 +216,23 @@ This is the decisive reliability win for concurrent pi sessions.
   real usage.
 - Sample sizes are small (n=10–20 per stable variant); treat as indicative,
   not conclusive, per issue #97's acceptance criteria.
+
+### Validating the CDP extraction optimizations (2026-08-22 evening)
+
+Interleaved-process A/B against a pinned pre-change baseline (`git worktree`
+at `f7c8f12`, before the phase envelope / readiness gate / 9-fast / deferred
+reset). Each side ran the same probe in its own process, minutes apart, under
+actively throttled Google conditions (same-day evening window):
+
+| Side | Warm totals (ms) | p50 |
+| --- | --- | ---: |
+| BASELINE (`f7c8f12`) | 3680 / 3712 / 4735 / 4963 / 3813 | ≈3,813 ms |
+| NEW (HEAD, `f45862a`+) | 813 / 878 / 893 / 1376 / 507 | ≈878 ms |
+
+Envelope evidence from the NEW side: `extract` floors near 330 ms when the
+SERP needs rendering, drops to **31 ms** on an already-rendered page
+(readiness gate skipping redundant heavy evaluates), 9-fast returned a
+9-result page-1 without a page-2 chase (911 ms total), and the deferred reset
+shows as `reset=deferred`. Method note: an earlier single-process interleaved
+harness (two module instances fighting over one broker daemon) produced
+confounded numbers and was discarded in favor of separate processes per side.
