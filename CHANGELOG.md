@@ -6,6 +6,14 @@ All notable changes to pi-webaio will be documented in this file.
 
 ### Added
 
+### Changed
+
+### Fixed
+
+## [1.0.0] - 2026-08-22
+
+### Added
+
 - **Live per-provider TUI progress for `aio-websearch`** — the tool renders one row per provider (DDG, Brave, Yahoo, Bing, Google, Reddit) with a status glyph (spinner while running, ✓/✗/⏱/∅/– when settled), live result counts with measured latency, and an elapsed-vs-response-target bar that turns red past the 2.9s budget, re-emitted via ~100ms `onUpdate` ticks in flight. The final view keeps the exact same schema — full bar plus every engine's count and timing on its own stable row — so the layout never jumps mid-search; expanded adds ranked rows with `[sourceType]` tags, domain, multi-engine agreement, URL, and snippet. New module `src/tools/search-render.ts` stays off the `@earendil-works/pi-coding-agent` runtime graph so websearch still registers and renders without the optional pi-tui peer; agent-facing text output is byte-identical. 27 new offline render tests.
 
 ### Changed
@@ -13,6 +21,8 @@ All notable changes to pi-webaio will be documented in this file.
 - **Full `aio-websearch` now has an approximately 3s public response target** (#97). The 7s hard safety deadline still bounds child/browser work, but the tool returns the HTTP/Google/Reddit providers that settled by the 2.9s target and marks late providers as explicit timeouts instead of letting slow HTTP/Reddit tails hold a healthy warm search at ~4.5–7s. The public tool path gives HTTP engines a 2.7s per-engine budget so timeout statuses usually arrive before the provider collector cuts the response, disables search-engine transport retries and browser/cookie fallback ladders so late 429/5xx retry loops or detached Playwright jobs do not linger after return, keeps the Google lane capped under 3s, and surfaces `responseBudgetMs` in details. `scripts/bench-full-search.mjs` now mirrors this orchestration, including serialized Reddit-after-Google behavior, and the recorded broker n=10 run in `speed.md` reached p50 2,876ms / p95 2,906ms.
 
 ### Fixed
+
+- **Search TUI renders one themed run per line** (final hardening, pi-lens-style) — multi-segment styled lines (glyph + label + status each in its own `theme.fg()` run) silently lose content after the first segment in some terminal environments, showing only engine names. Every rendered line — provider rows, elapsed bar, summary, header, expanded result rows — is now a single themed wrap under pi's default Box (plain `Text`, no self-painted backgrounds), with settled rows colored by lane status and counts promoted to readable contrast (`muted` measured ~1.6:1 on colored tool backgrounds). Same layout, glyphs, and width degradation as originally shipped.
 
 - **Stopped vendoring host-provided `typebox` and `@earendil-works/pi-tui`** (#108, same shape as pi-lens#1928). `typebox` is removed outright: nothing in `src/` imports it, and pi's own `@earendil-works/pi-coding-agent` subtree already carries the copy it needs. `@earendil-works/pi-tui` is genuinely used, lazily, in `src/tools/websearch.ts` and `src/tools/render-result.ts`. It moves to an optional peer dependency plus a devDependency, and pi resolves the bare specifier from its own runtime, as it already does for the `@earendil-works/pi-coding-agent` peer. A production install (`npm install --omit=dev`) no longer vendors either package.
 
