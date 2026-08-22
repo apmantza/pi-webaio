@@ -434,6 +434,14 @@ const SEARCH_FORBIDDEN_FIELDS = new Set([
 // This is intentionally a broker-owned expression. Search callers provide no
 // selector, script, URL, or CDP method; the only variable data is validated by
 // the broker before it is used to build the canonical navigation URL.
+// Cheap readiness probe polled while the SERP renders: a tiny h3 count plus a
+// consent-presence flag. The full extraction script runs only once this says
+// the page is ready (or when consent needs dismissing) — avoids re-running the
+// heavy full-DOM scan on every 150ms poll during the render window.
+const GOOGLE_SEARCH_READINESS_SCRIPT = String.raw`(() => ({
+	h3: document.querySelectorAll('a[href^="http"] h3').length,
+	consent: !!document.querySelector('button#L2AGLb, button[aria-label="Accept all"], button[aria-label="I agree"], form[action*="consent"] button'),
+}))()`;
 const GOOGLE_SEARCH_EXTRACTION_SCRIPT = String.raw`(() => {
 	const consentSelectors = [
 		"button#L2AGLb",
@@ -1492,8 +1500,42 @@ export class GoogleCdpBroker {
 		// the deadline rather than throwing.
 		const minResults = Math.min(Math.max(maxResults ?? 3, 1), 3);
 		let lastResults = [];
+		// Once a full extraction pass has run, stay on full passes (the consent
+		// click / partial-filter edge cases live there); until then, gate the
+		// heavy script behind the cheap readiness probe.
+		let forceFull = false;
 		while (Date.now() < deadlineAt) {
 			checkSignal(signal);
+			if (!forceFull) {
+				const readyCheck = await this.cdpSend(
+					"Runtime.evaluate",
+					{
+						expression: GOOGLE_SEARCH_READINESS_SCRIPT,
+						returnByValue: true,
+					},
+					request,
+					signal,
+					sessionId,
+				);
+				if (readyCheck?.exceptionDetails) {
+					// Readiness probe itself failed — fall back to full passes.
+					forceFull = true;
+				} else {
+					const rv = searchEvaluationValue(readyCheck);
+					if (!rv || typeof rv.h3 !== "number") {
+						// Unrecognized page/transport shape — use full passes.
+						forceFull = true;
+					} else if (rv.consent === true) {
+						// Consent UI present: only the full script can dismiss it.
+						forceFull = true;
+					} else if ((rv?.h3 ?? 0) < minResults) {
+						// SERP still rendering — wait and re-probe cheaply.
+						if (Date.now() >= deadlineAt) break;
+						await waitForSearchPoll(signal, deadlineAt);
+						continue;
+					}
+				}
+			}
 			const evaluation = await this.cdpSend(
 				"Runtime.evaluate",
 				{
@@ -1541,13 +1583,19 @@ export class GoogleCdpBroker {
 	// Google ignores `num` and renders only ~8-10 organics per SERP page, so
 	// a single navigation can never satisfy maxResults > page size. This
 	// paginates through ?start=10, ?start=20, … (the same mechanism Google's
-	// own "Next" links use), merging and URL-deduping pages until maxResults
-	// is reached, the SERP runs out of new organics, or the search deadline
-	// is exhausted. Every extra page is budget-fenced: a page is only
-	// attempted when at least GOOGLE_PAGE_BUDGET_FLOOR_MS of deadline remains,
-	// and each page's extraction is individually bounded so a sparse last
-	// page cannot burn the whole search. Page 1 is assumed already navigated
-	// (searchGoogle's navigationMs phase); only pages >= 2 are navigated here.
+	// own "Next" links use), merging and URL-deduping pages until the
+	// ACCEPT threshold is reached, the SERP runs out of new organics, or the
+	// search deadline is exhausted. Every extra page is budget-fenced: a page
+	// is only attempted when at least GOOGLE_PAGE_BUDGET_FLOOR_MS of deadline
+	// remains, and each page's extraction is individually bounded so a sparse
+	// last page cannot burn the whole search. Page 1 is assumed already
+	// navigated (searchGoogle's navigationMs phase); only pages >= 2 are
+	// navigated here.
+	//
+	// "9-fast" acceptance (maintainer decision, 2026-08-22): the final page
+	// may stop one result short of maxResults (for maxResults >= 10) instead
+	// of paying ~450–560ms to chase 1–2 stragglers across another SERP page.
+	// Small maxResults values keep exact-count behavior.
 	//
 	// Failure semantics: page-1 errors propagate (a genuine total failure —
 	// no results were ever observed). A page-2+ failure (navigation error,
@@ -1565,6 +1613,9 @@ export class GoogleCdpBroker {
 		const sessionId = target.cdpSessionId;
 		const deadlineAt =
 			request.deadlineAt || Date.now() + DEFAULT_SEARCH_TIMEOUT_MS;
+		// "9-fast": stop one short of maxResults when maxResults >= 10; exact
+		// count otherwise.
+		const acceptAt = Math.max(maxResults - 1, Math.ceil(maxResults * 0.9));
 		const merged = [];
 		const seenUrls = new Set();
 		let degraded = false;
@@ -1663,7 +1714,7 @@ export class GoogleCdpBroker {
 				added++;
 				if (merged.length >= maxResults) break;
 			}
-			if (merged.length >= maxResults) break;
+			if (merged.length >= acceptAt) break;
 			// A page that yielded zero NEW organics means the SERP is exhausted
 			// (or a duplicate/redirected page) — do not keep spinning pages.
 			if (added === 0) break;
@@ -1749,11 +1800,35 @@ export class GoogleCdpBroker {
 			);
 			if (pages?.length) timings.pages = pages;
 			checkSignal(signal);
-			await timePhase("resetMs", async () => {
-				await this.resetCdpTarget(target, request, signal);
-				checkSignal(signal);
-				this.registry.release({ ...identity, leaseId: lease.leaseId });
-			});
+			// Deferred reset (#perf): lease release + target reset no longer gate
+			// the response (~30-55ms). resetMs is recorded into the envelope
+			// asynchronously once the release settles; a consumer reading the
+			// envelope immediately may see it still in flight (resetMs 0). A
+			// failed release is best-effort — registry GC cleans up stale leases.
+			const resetStarted = performance.now();
+			void Promise.resolve()
+				.then(() => this.resetCdpTarget(target, request, signal))
+				.then(() => {
+					this.registry.release({ ...identity, leaseId: lease.leaseId });
+				})
+				.catch(async () => {
+					// Preserve the dirty-target semantics of the old awaited path:
+					// a failed reset retires the lease and closes the target, just
+					// without failing the already-returned response.
+					try {
+						if (this.registry.leases.has(lease.leaseId))
+							this.registry.retireLease(lease, true);
+						await this.closeCdpTarget(target, request);
+					} catch {
+						// Best-effort — registry GC cleans up stale leases.
+					}
+				})
+				.finally(() => {
+					timings.resetMs = Math.max(
+						0,
+						Math.round(performance.now() - resetStarted),
+					);
+				});
 			return {
 				query,
 				url: canonicalUrl,

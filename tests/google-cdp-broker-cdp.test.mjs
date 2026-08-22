@@ -592,6 +592,9 @@ test("broker-owned search navigates canonically, extracts results, resets, and r
 		// Search phase timings are additive on the envelope, numeric, and
 		// non-negative on a successful fake-CDP search.
 		assert.ok(result.timings, "search envelope carries timings");
+		// Reset is deferred post-response: give the async release a moment
+		// before asserting the registry drained.
+		await sleep(25);
 		for (const key of [
 			"targetSetupMs",
 			"navigationMs",
@@ -695,6 +698,8 @@ test("pagination navigates ?start=10 and merges a second SERP page end-to-end", 
 			"a page-2 navigation with ?start=10 was issued",
 		);
 		assert.equal(result.degraded, undefined, "full SERP: degraded flag unset");
+		// Deferred reset: allow the async release to settle first.
+		await sleep(25);
 		assert.equal(setup.broker.registry.snapshot().active, 0);
 	} finally {
 		await teardown(setup);
@@ -797,12 +802,11 @@ test("search deadline and cancellation quarantine the private target", async () 
 	}
 });
 
-test("navigation and reset failures dirty and close the target", async () => {
-	for (const behavior of [
-		{ navigationError: "net::ERR_FAILED" },
-		{ resetError: "net::ERR_RESET" },
-	]) {
-		const setup = await setupBroker({ onCommand: respondToSearch(behavior) });
+test("navigation failures dirty and close the target; reset failures clean up asynchronously", async () => {
+	// Navigation failure: still propagates as a rejection (response never
+	// returned), and the target is dirtied + closed.
+	{
+		const setup = await setupBroker({ onCommand: respondToSearch({ navigationError: "net::ERR_FAILED" }) });
 		try {
 			await assert.rejects(
 				setup.client.request("search", {
@@ -811,9 +815,29 @@ test("navigation and reset failures dirty and close the target", async () => {
 					maxResults: 1,
 				}),
 				(error) =>
-					["cdp_error", "navigation_failed", "reset_failed"].includes(error.code),
+					["cdp_error", "navigation_failed"].includes(error.code),
 			);
 			await sleep(5);
+			assert.equal(setup.broker.registry.snapshot().active, 0);
+			assert.equal(setup.broker.registry.snapshot().targets, 0);
+			assert.equal(setup.fake.socket.sent.at(-1).method, "Target.closeTarget");
+		} finally {
+			await teardown(setup);
+		}
+	}
+	// Reset failure: the response already returned successfully (reset is
+		// deferred post-response), but the failed release must still retire the
+		// lease and close the target asynchronously.
+	{
+		const setup = await setupBroker({ onCommand: respondToSearch({ resetError: "net::ERR_RESET" }) });
+		try {
+			const result = await setup.client.request("search", {
+				provider: "google-search",
+				query: "reset flake",
+				maxResults: 1,
+			});
+			assert.ok(result.results.length > 0, "search succeeded despite reset flake");
+			await sleep(25);
 			assert.equal(setup.broker.registry.snapshot().active, 0);
 			assert.equal(setup.broker.registry.snapshot().targets, 0);
 			assert.equal(setup.fake.socket.sent.at(-1).method, "Target.closeTarget");
