@@ -255,7 +255,10 @@ function renderProviderRow(
 	// Single styled run for the entire row (pi-lens-style): glyph, label and
 	// status share one color so the line never splits into multiple ANSI
 	// segments — multi-run lines are what breaks in some environments.
-	return theme.fg(rowTextColor(provider.status), `${plainGlyph(provider.status, spinnerTick)} ${labelPlain} ${chosen}`);
+	return theme.fg(
+		rowTextColor(provider.status),
+		`${plainGlyph(provider.status, spinnerTick)} ${labelPlain} ${chosen}`,
+	);
 }
 
 /** Plain (unstyled) glyph character for width math. */
