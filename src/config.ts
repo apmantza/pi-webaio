@@ -10,11 +10,15 @@
  *   {
  *     "tinyfish": {
  *       "apiKey": "sk-tinyfish-..."
+ *     },
+ *     "firecrawl": {
+ *       "apiKey": "fc-..."
  *     }
  *   }
  *
  * .env format (~/.piwebaio/.env):
  *   TINYFISH_API_KEY=sk-tinyfish-...
+ *   FIRECRAWL_API_KEY=fc-...
  */
 
 import { accessSync, constants, readFileSync } from "node:fs";
@@ -42,6 +46,9 @@ function configDir(): string {
 
 interface UserConfig {
 	tinyfish?: {
+		apiKey?: string;
+	};
+	firecrawl?: {
 		apiKey?: string;
 	};
 }
@@ -141,4 +148,18 @@ export function resolveTinyfishConfigKey(): string | null {
 	const fromEnv = loadDotEnv();
 	if (fromEnv.TINYFISH_API_KEY) return fromEnv.TINYFISH_API_KEY;
 	return process.env.TINYFISH_API_KEY ?? null;
+}
+
+/**
+ * Resolve the FireCrawl API key, checked in order:
+ *   1. `~/.piwebaio/config` JSON (`firecrawl.apiKey`)
+ *   2. `~/.piwebaio/.env` (`FIRECRAWL_API_KEY=...`)
+ *   3. `FIRECRAWL_API_KEY` environment variable
+ */
+export function resolveFirecrawlConfigKey(): string | null {
+	const fromJson = getConfig<string>("firecrawl.apiKey");
+	if (fromJson) return fromJson;
+	const fromEnv = loadDotEnv();
+	if (fromEnv.FIRECRAWL_API_KEY) return fromEnv.FIRECRAWL_API_KEY;
+	return process.env.FIRECRAWL_API_KEY ?? null;
 }
