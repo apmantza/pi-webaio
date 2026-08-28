@@ -10,6 +10,8 @@ import {
 	formatChunksText,
 	type Chunk,
 } from "../chunker.ts";
+import { fetchTinyfish } from "../tinyfish.ts";
+import { resolveTinyfishConfigKey } from "../config.ts";
 import { DEFAULT_OS, getLatestChromeProfile, smartFetch } from "../fetch.ts";
 import {
 	aiSummaryAvailable,
@@ -1110,18 +1112,48 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 									}
 								}
 							}
-
 							let result: Awaited<ReturnType<typeof pullPageEnhanced>>;
-							try {
-								result = await pullPageEnhanced(url.href, {
-									browser,
-									os,
-									proxy,
-									mode,
-									wreqSession,
-									bypass,
-									bypassStrategies: bypassStrategies as any,
+
+							// ── TinyFish Fetch API path ────────────────────────────
+							// When the user passes tinyfish: true and an API key is
+							// configured, delegate the URL to TinyFish's Fetch API.
+							// It handles JS rendering + anti-bot server-side and
+							// returns clean extracted content in the requested format.
+							const useTinyfish = params.tinyfish === true && resolveTinyfishConfigKey();
+							if (useTinyfish) {
+								const tfFormat = (params.format as string) === "markdown" || (params.format as string) === "html" || (params.format as string) === "json"
+									? (params.format as "markdown" | "html" | "json")
+									: "markdown";
+								const tfResult = await fetchTinyfish([url.href], {
+									format: tfFormat,
+									ttl: 0,
 								});
+								if (tfResult?.results?.[0]) {
+									const r = tfResult.results[0];
+									result = {
+										ok: true,
+										url: r.finalUrl ?? r.url,
+										title: r.title,
+										description: r.description ?? undefined,
+										language: r.language,
+										content: r.text,
+										rawHtml: (params.format as string) === "html" ? r.text : undefined,
+									};
+								} else {
+									const tfErr = tfResult?.errors?.[0]?.error ?? "TinyFish fetch returned no results";
+									result = { ok: false, url: url.href, error: tfErr };
+								}
+							} else {
+								try {
+									result = await pullPageEnhanced(url.href, {
+										browser,
+										os,
+										proxy,
+										mode,
+										wreqSession,
+										bypass,
+										bypassStrategies: bypassStrategies as any,
+									});
 							} catch (thrown) {
 								// A thrown FetchError (e.g. blocked_ssrf from the SSRF guard)
 								// must not reject runInBatches' bare Promise.all and abort the
@@ -1143,6 +1175,7 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 									suggestedTimeoutMs: suggestRetryTimeoutMs(fe),
 									url: url.href,
 								};
+							}
 							}
 							if (!result.ok) {
 								const shouldRetryBrowser =
