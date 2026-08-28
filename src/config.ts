@@ -90,8 +90,10 @@ function loadDotEnv(): Record<string, string> {
 			const key = trimmed.slice(0, eqIdx).trim();
 			let val = trimmed.slice(eqIdx + 1).trim();
 			// Strip surrounding quotes
-			if ((val.startsWith('"') && val.endsWith('"')) ||
-				(val.startsWith("'") && val.endsWith("'"))) {
+			if (
+				(val.startsWith('"') && val.endsWith('"')) ||
+				(val.startsWith("'") && val.endsWith("'"))
+			) {
 				val = val.slice(1, -1);
 			}
 			if (key) values[key] = val;
@@ -114,7 +116,11 @@ export function getConfig<T>(key: string, fallback?: T): T | undefined {
 	const parts = key.split(".");
 	let val: unknown = config;
 	for (const part of parts) {
-		if (val && typeof val === "object" && part in (val as Record<string, unknown>)) {
+		if (
+			val &&
+			typeof val === "object" &&
+			part in (val as Record<string, unknown>)
+		) {
 			val = (val as Record<string, unknown>)[part];
 		} else {
 			return fallback;

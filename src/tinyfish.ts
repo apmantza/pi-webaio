@@ -24,7 +24,7 @@ import { resolveTinyfishConfigKey } from "./config.ts";
  *   3. `TINYFISH_API_KEY` environment variable
  */
 export function resolveTinyfishApiKey(override?: string): string | null {
-	return override ?? resolveTinyfishConfigKey();
+  return override ?? resolveTinyfishConfigKey();
 }
 
 /** True when a TinyFish API key is available. */
