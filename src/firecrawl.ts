@@ -29,7 +29,10 @@ export function isFirecrawlRateLimited(): boolean {
 /** Record a rate-limit hit with the server's retry-after (or 10min default). */
 function recordRateLimit(retryAfterSeconds = 600): void {
 	rateLimitedUntil = Date.now() + retryAfterSeconds * 1000;
-	debug("firecrawl", `rate-limited for ${retryAfterSeconds}s (until ${new Date(rateLimitedUntil).toISOString()})`);
+	debug(
+		"firecrawl",
+		`rate-limited for ${retryAfterSeconds}s (until ${new Date(rateLimitedUntil).toISOString()})`,
+	);
 }
 
 // ─── API key resolution ────────────────────────────────────────────
@@ -88,7 +91,9 @@ export async function searchFirecrawl(
 			try {
 				const body = (await res.json()) as { retry_after_seconds?: number };
 				if (body.retry_after_seconds) retryAfter = body.retry_after_seconds;
-			} catch { /* ignore parse error */ }
+			} catch {
+				/* ignore parse error */
+			}
 			recordRateLimit(retryAfter);
 			return { results: [], latencyMs };
 		}
@@ -116,16 +121,22 @@ export async function searchFirecrawl(
 			.map((r) => ({
 				title: (r.title ?? "").trim(),
 				url: (r.url ?? "").trim(),
-				snippet: ((r.description ?? "").trim().slice(0, 300)),
+				snippet: (r.description ?? "").trim().slice(0, 300),
 				domain: extractDomain(r.url ?? ""),
 			}))
 			.filter((r) => r.title && r.url);
 
-		debug("firecrawl", `search returned ${results.length} results in ${latencyMs}ms`);
+		debug(
+			"firecrawl",
+			`search returned ${results.length} results in ${latencyMs}ms`,
+		);
 		return { results, latencyMs };
 	} catch (err) {
 		const latencyMs = Date.now() - start;
-		debug("firecrawl", `search error: ${String(err instanceof Error ? err.message : err)}`);
+		debug(
+			"firecrawl",
+			`search error: ${String(err instanceof Error ? err.message : err)}`,
+		);
 		return { results: [], latencyMs };
 	}
 }
@@ -170,7 +181,9 @@ export async function fetchFirecrawl(
 			try {
 				const body = (await res.json()) as { retry_after_seconds?: number };
 				if (body.retry_after_seconds) retryAfter = body.retry_after_seconds;
-			} catch { /* ignore parse error */ }
+			} catch {
+				/* ignore parse error */
+			}
 			recordRateLimit(retryAfter);
 			return null;
 		}
@@ -207,7 +220,10 @@ export async function fetchFirecrawl(
 			language: body.data.metadata?.language,
 		};
 	} catch (err) {
-		debug("firecrawl", `scrape error: ${String(err instanceof Error ? err.message : err)}`);
+		debug(
+			"firecrawl",
+			`scrape error: ${String(err instanceof Error ? err.message : err)}`,
+		);
 		return null;
 	}
 }
