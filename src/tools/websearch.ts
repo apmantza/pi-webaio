@@ -899,8 +899,10 @@ export function registerWebsearchTool(
 			}
 			if (googleResults.length) engineLabel.push(`Google:${googleResults.length}`);
 			if (redditResults.length) engineLabel.push(`Reddit:${redditResults.length}`);
-			if (tinyfishResults.length) engineLabel.push(`TinyFish:${tinyfishResults.length}`);
-			if (firecrawlResults.length) engineLabel.push(`FireCrawl:${firecrawlResults.length}`);
+			if (tinyfishResults.length)
+				engineLabel.push(`TinyFish:${tinyfishResults.length}`);
+			if (firecrawlResults.length)
+				engineLabel.push(`FireCrawl:${firecrawlResults.length}`);
 			if (!engineLabel.length) engineLabel.push("HTTP");
 
 			// Trigger speculative prefetch of top-N result URLs in the background.

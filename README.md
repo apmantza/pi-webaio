@@ -29,10 +29,12 @@ without API keys.
 ### Extra Providers
 
 **FireCrawl Keyless** (free, 1k credits/month, **no API key needed**):
+
 - Search: works out of the box as a search provider
 - Fetch: `firecrawl: true` on `aio-webfetch` — delegates to FireCrawl Scrape API
 
 **TinyFish** (free, requires API key in `~/.piwebaio/config` or `~/.piwebaio/.env`):
+
 - Search: unlimited free search results
 - Fetch: `tinyfish: true` on `aio-webfetch` — delegates to TinyFish Fetch API
 

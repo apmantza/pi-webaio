@@ -121,14 +121,14 @@ export function backfillMissingResults<T extends BatchResultSlot>(
 	const out: T[] = [];
 	for (let i = 0; i < targets.length; i++) {
 		const r = results[i];
-		if (r != null) {
-			out.push(r);
-		} else {
+		if (r == null) {
 			out.push({
 				ok: false,
 				url: targets[i],
 				error: "no result recorded (internal error)",
 			} as T);
+		} else {
+			out.push(r);
 		}
 	}
 	return out;
@@ -1136,7 +1136,9 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 									result = {
 										ok: false,
 										url: url.href,
-										error: fcResult ? "Firecrawl returned no content" : "Firecrawl scrape failed",
+										error: fcResult
+											? "Firecrawl returned no content"
+											: "Firecrawl scrape failed",
 									};
 								}
 							} else {
@@ -1177,39 +1179,39 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 								} else {
 									try {
 										result = await pullPageEnhanced(url.href, {
-										browser,
-										os,
-										proxy,
-										mode,
-										wreqSession,
-										bypass,
-										bypassStrategies: bypassStrategies as any,
-									});
-								} catch (thrown) {
-									// A thrown FetchError (e.g. blocked_ssrf from the SSRF guard)
-									// must not reject runInBatches' bare Promise.all and abort the
-									// WHOLE batch — record it as this URL's error and let the other
-									// targets proceed. Mirrors the single-fetch throw handler below.
-									const fe: FetchError = isFetchError(thrown)
-										? thrown
-										: classifyError(thrown, { url: url.href });
-									const userErrorSummary = buildUserFacingFetchErrorSummary(fe);
-									markItemError(idx, userErrorSummary, startedAt);
-									return {
-										ok: false,
-										error: fe.message,
-										errorInfo: fetchErrorInfoFromUnknown(thrown, {
-											url: url.href,
-										}),
-										userErrorSummary,
-										fetchError: fe,
-											suggestedTimeoutMs: suggestRetryTimeoutMs(fe),
+											browser,
+											os,
+											proxy,
+											mode,
+											wreqSession,
+											bypass,
+											bypassStrategies: bypassStrategies as any,
+										});
+									} catch (thrown) {
+										// A thrown FetchError (e.g. blocked_ssrf from the SSRF guard)
+										// must not reject runInBatches' bare Promise.all and abort the
+										// WHOLE batch — record it as this URL's error and let the other
+										// targets proceed. Mirrors the single-fetch throw handler below.
+										const fe: FetchError = isFetchError(thrown)
+											? thrown
+											: classifyError(thrown, { url: url.href });
+										const userErrorSummary = buildUserFacingFetchErrorSummary(fe);
+										markItemError(idx, userErrorSummary, startedAt);
+										return {
+											ok: false,
+											error: fe.message,
+											errorInfo: fetchErrorInfoFromUnknown(thrown, {
 												url: url.href,
-											};
-										}
+											}),
+											userErrorSummary,
+											fetchError: fe,
+											suggestedTimeoutMs: suggestRetryTimeoutMs(fe),
+											url: url.href,
+										};
 									}
 								}
-								if (!result.ok) {
+							}
+							if (!result.ok) {
 								const shouldRetryBrowser =
 									mode !== "browser" &&
 									(result.errorInfo?.retryable || result.errorInfo?.code === "blocked");
@@ -1721,13 +1723,13 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 						}
 					}
 
-					const compactJsonPreview = !summarized
-						? buildCompactJsonPreview(preview, {
+					const compactJsonPreview = summarized
+						? null
+						: buildCompactJsonPreview(preview, {
 								outPath: r.outPath,
 								responseId,
 								length: preview.length,
-							})
-						: null;
+							});
 
 					if (outlineMode) {
 						// UX1: return ONLY the heading outline, not the body. Full
