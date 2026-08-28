@@ -3,6 +3,7 @@ import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { Text } from "./tui-compat.ts";
 import { setSearchContext } from "../session-store.ts";
 import { resolveTinyfishConfigKey } from "../config.ts";
+import { searchTinyfish } from "../tinyfish.ts";
 import {
 	searchWeb,
 	ENGINE_WEIGHTS,
@@ -225,6 +226,12 @@ export function registerWebsearchTool(
 					status: redditEnabled ? "running" : "skipped",
 					detail: redditEnabled ? undefined : "disabled",
 				},
+				{
+					id: "tinyfish",
+					label: "TinyFish",
+					status: resolveTinyfishConfigKey() ? "running" : "skipped",
+					detail: resolveTinyfishConfigKey() ? undefined : "no API key",
+				},
 			];
 			const renderDetails = {
 				query,
@@ -317,7 +324,6 @@ export function registerWebsearchTool(
 							yahoo: r.yahooCount,
 							bing: r.bingCount,
 							reddit: r.redditCount,
-							tinyfish: r.tinyfishCount,
 						},
 						engineStatus: r.engineStatus as EngineStatusMap | undefined,
 					};
@@ -345,7 +351,6 @@ export function registerWebsearchTool(
 							yahoo: 0,
 							bing: 0,
 							reddit: 0,
-							tinyfish: 0,
 						},
 						engineStatus: buildEngineStatusMap(httpErrorOutcomes),
 					};
@@ -542,6 +547,43 @@ export function registerWebsearchTool(
 				});
 			}
 
+			// TinyFish search API (HTTP, no browser needed)
+			const tinyfishEnabled = resolveTinyfishConfigKey() !== null;
+			let tinyfishPromise: Promise<{
+				source: "tinyfish";
+				results: SearchResult[];
+			}>;
+			if (tinyfishEnabled) {
+				tinyfishPromise = (async () => {
+					try {
+						const r = await searchTinyfish(query, { maxResults: 15 });
+						const results = (r?.results ?? []).map((item) => ({
+							title: item.title,
+							url: item.url,
+							snippet: item.snippet,
+							domain: item.domain,
+						}));
+						return { source: "tinyfish" as const, results };
+					} catch {
+						return { source: "tinyfish" as const, results: [] };
+					}
+				})();
+				// Live TUI: reflect the TinyFish row as soon as it settles
+				void tinyfishPromise.then((res) => {
+					setProvider("tinyfish", {
+						status: res.results.length > 0 ? "ok" : "empty",
+						count: res.results.length,
+						latencyMs: 0,
+						detail: res.results.length > 0 ? undefined : "0 results",
+					});
+				});
+			} else {
+				tinyfishPromise = Promise.resolve({
+					source: "tinyfish" as const,
+					results: [],
+				});
+			}
+
 			// This is a hard response deadline. Providers are observed as they settle;
 			// after timeout we use only the values already available and detach from
 			// late CDP completion. Do not replace this with allSettled: Reddit can
@@ -550,6 +592,7 @@ export function registerWebsearchTool(
 				[
 					["http", httpPromise],
 					["reddit", redditPromise],
+					["tinyfish", tinyfishPromise],
 				],
 				Math.max(Math.min(responseDeadlineAt, searchDeadlineAt) - Date.now(), 1),
 			);
@@ -594,13 +637,13 @@ export function registerWebsearchTool(
 			let httpResults: SearchResult[] = [];
 			let googleResults: SearchResult[] = [];
 			let redditResults: SearchResult[] = [];
+			let tinyfishResults: SearchResult[] = [];
 			let httpCounts = {
 				ddg: 0,
 				brave: 0,
 				yahoo: 0,
 				bing: 0,
 				reddit: 0,
-				tinyfish: 0,
 			};
 			let engineStatus: EngineStatusMap | undefined;
 
@@ -617,6 +660,9 @@ export function registerWebsearchTool(
 			const redditResult = result.reddit as
 				| { results: SearchResult[]; latencyMs: number }
 				| undefined;
+			const tinyfishResult = result.tinyfish as
+				| { results: SearchResult[] }
+				| undefined;
 			if (httpResult) {
 				httpResults = httpResult.results;
 				httpCounts = httpResult.httpCounts ?? httpCounts;
@@ -624,6 +670,7 @@ export function registerWebsearchTool(
 			}
 			if (googleResult) googleResults = googleResult.results;
 			if (redditResult) redditResults = redditResult.results;
+			if (tinyfishResult) tinyfishResults = tinyfishResult.results;
 
 			if (collected.timedOut) {
 				if (googleEnabled && !googleResult)
@@ -666,6 +713,15 @@ export function registerWebsearchTool(
 				});
 				buckets.set(r.url, list);
 			}
+			for (const r of tinyfishResults) {
+				const list = buckets.get(r.url) || [];
+				list.push({
+					result: r,
+					engine: "tinyfish",
+					weight: ENGINE_WEIGHTS.tinyfish,
+				});
+				buckets.set(r.url, list);
+			}
 
 			// Keep Reddit's count/status in the same engine map as the HTTP
 			// providers. This is the source of truth for notes and TUI output.
@@ -678,6 +734,21 @@ export function registerWebsearchTool(
 							? classifyRedditStatus(redditStatus, redditResults.length)
 							: "timeout",
 						latencyMs: redditResult?.latencyMs ?? responseTargetMs,
+					},
+				};
+			}
+			// Keep TinyFish's count/status in the same engine map.
+			if (engineStatus && tinyfishEnabled) {
+				engineStatus = {
+					...engineStatus,
+					tinyfish: {
+						count: tinyfishResults.length,
+						status: tinyfishResult
+							? tinyfishResults.length > 0
+								? "ok"
+								: "empty"
+							: "timeout",
+						latencyMs: 0,
 					},
 				};
 			}
@@ -697,6 +768,7 @@ export function registerWebsearchTool(
 			for (const id of ["ddg", "brave", "yahoo", "bing"]) markUnsettled(id);
 			if (!googleResult) markUnsettled("google");
 			if (!redditResult) markUnsettled("reddit");
+			if (!tinyfishResult) markUnsettled("tinyfish");
 			renderDetails.elapsedMs = Date.now() - startedAt;
 
 			const resultDetails = {
@@ -708,6 +780,7 @@ export function registerWebsearchTool(
 				googleStatus,
 				redditCount: redditResults.length,
 				redditStatus,
+				tinyfishCount: tinyfishResults.length,
 				durationMs: Date.now() - startedAt,
 				deadlineMs: searchDeadlineMs,
 				responseBudgetMs: responseTargetMs,
@@ -749,6 +822,7 @@ export function registerWebsearchTool(
 			}
 			if (googleResults.length) engineLabel.push(`Google:${googleResults.length}`);
 			if (redditResults.length) engineLabel.push(`Reddit:${redditResults.length}`);
+			if (tinyfishResults.length) engineLabel.push(`TinyFish:${tinyfishResults.length}`);
 			if (!engineLabel.length) engineLabel.push("HTTP");
 
 			// Trigger speculative prefetch of top-N result URLs in the background.

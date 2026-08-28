@@ -1119,11 +1119,15 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 							// configured, delegate the URL to TinyFish's Fetch API.
 							// It handles JS rendering + anti-bot server-side and
 							// returns clean extracted content in the requested format.
-							const useTinyfish = params.tinyfish === true && resolveTinyfishConfigKey();
+							const useTinyfish =
+								params.tinyfish === true && resolveTinyfishConfigKey();
 							if (useTinyfish) {
-								const tfFormat = (params.format as string) === "markdown" || (params.format as string) === "html" || (params.format as string) === "json"
-									? (params.format as "markdown" | "html" | "json")
-									: "markdown";
+								const tfFormat =
+									(params.format as string) === "markdown" ||
+									(params.format as string) === "html" ||
+									(params.format as string) === "json"
+										? (params.format as "markdown" | "html" | "json")
+										: "markdown";
 								const tfResult = await fetchTinyfish([url.href], {
 									format: tfFormat,
 									ttl: 0,
@@ -1140,7 +1144,8 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 										rawHtml: (params.format as string) === "html" ? r.text : undefined,
 									};
 								} else {
-									const tfErr = tfResult?.errors?.[0]?.error ?? "TinyFish fetch returned no results";
+									const tfErr =
+										tfResult?.errors?.[0]?.error ?? "TinyFish fetch returned no results";
 									result = { ok: false, url: url.href, error: tfErr };
 								}
 							} else {
@@ -1154,28 +1159,28 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 										bypass,
 										bypassStrategies: bypassStrategies as any,
 									});
-							} catch (thrown) {
-								// A thrown FetchError (e.g. blocked_ssrf from the SSRF guard)
-								// must not reject runInBatches' bare Promise.all and abort the
-								// WHOLE batch — record it as this URL's error and let the other
-								// targets proceed. Mirrors the single-fetch throw handler below.
-								const fe: FetchError = isFetchError(thrown)
-									? thrown
-									: classifyError(thrown, { url: url.href });
-								const userErrorSummary = buildUserFacingFetchErrorSummary(fe);
-								markItemError(idx, userErrorSummary, startedAt);
-								return {
-									ok: false,
-									error: fe.message,
-									errorInfo: fetchErrorInfoFromUnknown(thrown, {
+								} catch (thrown) {
+									// A thrown FetchError (e.g. blocked_ssrf from the SSRF guard)
+									// must not reject runInBatches' bare Promise.all and abort the
+									// WHOLE batch — record it as this URL's error and let the other
+									// targets proceed. Mirrors the single-fetch throw handler below.
+									const fe: FetchError = isFetchError(thrown)
+										? thrown
+										: classifyError(thrown, { url: url.href });
+									const userErrorSummary = buildUserFacingFetchErrorSummary(fe);
+									markItemError(idx, userErrorSummary, startedAt);
+									return {
+										ok: false,
+										error: fe.message,
+										errorInfo: fetchErrorInfoFromUnknown(thrown, {
+											url: url.href,
+										}),
+										userErrorSummary,
+										fetchError: fe,
+										suggestedTimeoutMs: suggestRetryTimeoutMs(fe),
 										url: url.href,
-									}),
-									userErrorSummary,
-									fetchError: fe,
-									suggestedTimeoutMs: suggestRetryTimeoutMs(fe),
-									url: url.href,
-								};
-							}
+									};
+								}
 							}
 							if (!result.ok) {
 								const shouldRetryBrowser =

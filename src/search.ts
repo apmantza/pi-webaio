@@ -19,8 +19,6 @@ import type {
 import { computeGogglesBonus, type GogglesProfile } from "./goggles.ts";
 import { createBM25Scorer } from "./bm25.ts";
 import { debug } from "./debug.ts";
-import { searchTinyfish } from "./tinyfish.ts";
-import { resolveTinyfishConfigKey } from "./config.ts";
 
 // ─── Engine health tracking ────────────────────────────────────────
 
@@ -608,6 +606,8 @@ function domainMatchesPreferred(domain: string, preferred: string[]): boolean {
 
 export const ENGINE_WEIGHTS: Record<string, number> = {
 	google: 5,
+	// TinyFish is a high-quality API-based search; weight it just below Google.
+	tinyfish: 4,
 	// Reddit is an automatic synthetic/community companion, not a primary
 	// general-web authority; keep it below Bing in cross-engine ranking.
 	reddit: 2,
@@ -972,7 +972,6 @@ export async function searchWeb(
 	yahooCount: number;
 	bingCount: number;
 	redditCount: number;
-	tinyfishCount: number;
 	engineStatus: EngineStatusMap;
 }> {
 	const cached = getCachedSearch(query);
@@ -984,7 +983,6 @@ export async function searchWeb(
 			yahooCount: 0,
 			bingCount: 0,
 			redditCount: 0,
-			tinyfishCount: 0,
 			// Served from cache: no engines actually ran this round. Attribute
 			// the cached results to DDG (mirroring ddgCount above) and mark the
 			// rest as not-attempted so no misleading notes are rendered.
@@ -1177,33 +1175,6 @@ export async function searchWeb(
 		}
 	}
 
-	// TinyFish Search API (runs after the HTML engines, merges into the same pool)
-	const tinyfishApiKey = resolveTinyfishConfigKey();
-	if (tinyfishApiKey) {
-		const tfResult = await searchTinyfish(query, {
-			maxResults: 15,
-			apiKey: tinyfishApiKey,
-		});
-		if (tfResult?.results && tfResult.results.length > 0) {
-			counts.tinyfish = tfResult.results.length;
-			outcomes.push({
-				id: "tinyfish",
-				httpStatus: 200,
-				count: tfResult.results.length,
-				latencyMs: tfResult.latencyMs,
-			});
-			for (const r of tfResult.results) {
-				const list = engineResults.get(r.url) || [];
-				list.push({
-					result: r,
-					engine: "tinyfish",
-					weight: 0.9,
-				});
-				engineResults.set(r.url, list);
-			}
-		}
-	}
-
 	const scored = scoreAndRankResults(engineResults, query, goggles);
 	const merged = scored.map((s) => s.result);
 
@@ -1217,7 +1188,6 @@ export async function searchWeb(
 		yahooCount: counts.yahoo ?? 0,
 		bingCount: counts.bing ?? 0,
 		redditCount: counts.reddit ?? 0,
-		tinyfishCount: counts.tinyfish ?? 0,
 		engineStatus: buildEngineStatusMap(outcomes),
 	};
 }
