@@ -10,6 +10,16 @@ All notable changes to pi-webaio will be documented in this file.
 
 ### Fixed
 
+## [1.0.2] - 2026-08-22
+
+### Fixed
+
+- **Google search result extraction fixed for Google's new SERP link format** (`extractors/google-search.mjs`, `bin/google-cdp-broker.mjs`, `src/tools/websearch.ts`) — Google changed result heading links from direct `https://` URLs to encoded `/goto?url=CAES...` redirect URLs. The selector `a[href^="http"] h3` matched zero elements, breaking both the legacy extractor (15s wait → "No search results found") and the CDP broker (polled forever on `h3: 0` → 15s timeout).
+
+  - **Legacy extractor**: selector changed from `a[href^="http"] h3` to `.MjjYud a h3` in `waitForResults` and `extractResults`; Google host filter now allows `/goto` and `/url` pathnames
+  - **CDP broker**: same fix in `GOOGLE_SEARCH_READINESS_SCRIPT` and `GOOGLE_SEARCH_EXTRACTION_SCRIPT` — broker went from 15s timeout to ~500-950ms response
+  - **Search tool**: `GOOGLE_LANE_MAX_MS` increased from 2900 to 5000; Google results now get a grace window after the response deadline so they aren't lost when Chrome cold-start pushes them just past the 2.8s budget
+
 ## [1.0.1] - 2026-08-22
 
 ### Changed
