@@ -19,6 +19,8 @@ import type {
 import { computeGogglesBonus, type GogglesProfile } from "./goggles.ts";
 import { createBM25Scorer } from "./bm25.ts";
 import { debug } from "./debug.ts";
+import { searchTinyfish } from "./tinyfish.ts";
+import { resolveTinyfishConfigKey } from "./config.ts";
 
 // ─── Engine health tracking ────────────────────────────────────────
 
@@ -769,7 +771,7 @@ export function buildResultBuckets(
 // already-measured latency, P5) so callers can surface a compact note instead
 // of a silent zero.
 
-type EngineId = "ddg" | "brave" | "yahoo" | "bing" | "reddit";
+type EngineId = "ddg" | "brave" | "yahoo" | "bing" | "reddit" | "tinyfish";
 
 /**
  * Outcome of a single engine in one search round. `http_<code>` covers any
@@ -801,6 +803,7 @@ const ENGINE_DISPLAY_NAMES: Record<EngineId, string> = {
 	yahoo: "Yahoo",
 	bing: "Bing",
 	reddit: "Reddit",
+	tinyfish: "TinyFish",
 };
 
 const ENGINE_IDS: readonly EngineId[] = [
@@ -809,6 +812,7 @@ const ENGINE_IDS: readonly EngineId[] = [
 	"yahoo",
 	"bing",
 	"reddit",
+	"tinyfish",
 ];
 
 /**
@@ -968,6 +972,7 @@ export async function searchWeb(
 	yahooCount: number;
 	bingCount: number;
 	redditCount: number;
+	tinyfishCount: number;
 	engineStatus: EngineStatusMap;
 }> {
 	const cached = getCachedSearch(query);
@@ -979,6 +984,7 @@ export async function searchWeb(
 			yahooCount: 0,
 			bingCount: 0,
 			redditCount: 0,
+			tinyfishCount: 0,
 			// Served from cache: no engines actually ran this round. Attribute
 			// the cached results to DDG (mirroring ddgCount above) and mark the
 			// rest as not-attempted so no misleading notes are rendered.
@@ -1110,7 +1116,13 @@ export async function searchWeb(
 
 	const settled = await Promise.all(promises);
 
-	const counts = { ddg: 0, brave: 0, yahoo: 0, bing: 0, reddit: 0 };
+	const counts: Record<string, number> = {
+		ddg: 0,
+		brave: 0,
+		yahoo: 0,
+		bing: 0,
+		reddit: 0,
+	};
 	const engineResults = new Map<string, EngineSource[]>();
 	const outcomes: EngineOutcome[] = [];
 
@@ -1165,6 +1177,33 @@ export async function searchWeb(
 		}
 	}
 
+	// TinyFish Search API (runs after the HTML engines, merges into the same pool)
+	const tinyfishApiKey = resolveTinyfishConfigKey();
+	if (tinyfishApiKey) {
+		const tfResult = await searchTinyfish(query, {
+			maxResults: 15,
+			apiKey: tinyfishApiKey,
+		});
+		if (tfResult?.results && tfResult.results.length > 0) {
+			counts.tinyfish = tfResult.results.length;
+			outcomes.push({
+				id: "tinyfish",
+				httpStatus: 200,
+				count: tfResult.results.length,
+				latencyMs: tfResult.latencyMs,
+			});
+			for (const r of tfResult.results) {
+				const list = engineResults.get(r.url) || [];
+				list.push({
+					result: r,
+					engine: "tinyfish",
+					weight: 0.9,
+				});
+				engineResults.set(r.url, list);
+			}
+		}
+	}
+
 	const scored = scoreAndRankResults(engineResults, query, goggles);
 	const merged = scored.map((s) => s.result);
 
@@ -1173,11 +1212,12 @@ export async function searchWeb(
 	}
 	return {
 		results: merged,
-		ddgCount: counts.ddg,
-		braveCount: counts.brave,
-		yahooCount: counts.yahoo,
-		bingCount: counts.bing,
-		redditCount: counts.reddit,
+		ddgCount: counts.ddg ?? 0,
+		braveCount: counts.brave ?? 0,
+		yahooCount: counts.yahoo ?? 0,
+		bingCount: counts.bing ?? 0,
+		redditCount: counts.reddit ?? 0,
+		tinyfishCount: counts.tinyfish ?? 0,
 		engineStatus: buildEngineStatusMap(outcomes),
 	};
 }

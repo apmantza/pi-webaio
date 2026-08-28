@@ -2,6 +2,7 @@ import { TOOL_METADATA } from "./lazy.ts";
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { Text } from "./tui-compat.ts";
 import { setSearchContext } from "../session-store.ts";
+import { resolveTinyfishConfigKey } from "../config.ts";
 import {
 	searchWeb,
 	ENGINE_WEIGHTS,
@@ -199,6 +200,7 @@ export function registerWebsearchTool(
 			else
 				redditStatus = "unavailable (provider cooled down after recent failures)";
 			const engineNames = ["DDG", "Brave", "Yahoo", "Bing"];
+			if (resolveTinyfishConfigKey()) engineNames.push("TinyFish");
 			if (useGoogle) engineNames.push("Google");
 			if (redditEnabled) engineNames.push("Reddit");
 
@@ -315,6 +317,7 @@ export function registerWebsearchTool(
 							yahoo: r.yahooCount,
 							bing: r.bingCount,
 							reddit: r.redditCount,
+							tinyfish: r.tinyfishCount,
 						},
 						engineStatus: r.engineStatus as EngineStatusMap | undefined,
 					};
@@ -336,7 +339,14 @@ export function registerWebsearchTool(
 					return {
 						source: "http" as const,
 						results: [] as SearchResult[],
-						httpCounts: { ddg: 0, brave: 0, yahoo: 0, bing: 0, reddit: 0 },
+						httpCounts: {
+							ddg: 0,
+							brave: 0,
+							yahoo: 0,
+							bing: 0,
+							reddit: 0,
+							tinyfish: 0,
+						},
 						engineStatus: buildEngineStatusMap(httpErrorOutcomes),
 					};
 				},
@@ -584,7 +594,14 @@ export function registerWebsearchTool(
 			let httpResults: SearchResult[] = [];
 			let googleResults: SearchResult[] = [];
 			let redditResults: SearchResult[] = [];
-			let httpCounts = { ddg: 0, brave: 0, yahoo: 0, bing: 0, reddit: 0 };
+			let httpCounts = {
+				ddg: 0,
+				brave: 0,
+				yahoo: 0,
+				bing: 0,
+				reddit: 0,
+				tinyfish: 0,
+			};
 			let engineStatus: EngineStatusMap | undefined;
 
 			const httpResult = result.http as
