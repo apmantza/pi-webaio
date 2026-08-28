@@ -774,7 +774,14 @@ export function buildResultBuckets(
 // already-measured latency, P5) so callers can surface a compact note instead
 // of a silent zero.
 
-type EngineId = "ddg" | "brave" | "yahoo" | "bing" | "reddit" | "tinyfish" | "firecrawl";
+type EngineId =
+	| "ddg"
+	| "brave"
+	| "yahoo"
+	| "bing"
+	| "reddit"
+	| "tinyfish"
+	| "firecrawl";
 
 /**
  * Outcome of a single engine in one search round. `http_<code>` covers any

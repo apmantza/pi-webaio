@@ -10,6 +10,19 @@ All notable changes to pi-webaio will be documented in this file.
 
 ### Fixed
 
+## [1.0.3] - 2026-08-22
+
+### Added
+
+- **TinyFish Search & Fetch integration** (`src/tinyfish.ts`, `src/config.ts`, `src/search.ts`, `src/tools/websearch.ts`, `src/tools/webfetch.ts`) — TinyFish provides free Search and Fetch APIs. The API key is resolved from `~/.piwebaio/config` (JSON), `~/.piwebaio/.env` (key=value), or `TINYFISH_API_KEY` env var. TinyFish runs as a parallel search provider (like Google) and can be used for fetch via `tinyfish: true` on `aio-webfetch`.
+
+- **FireCrawl Keyless Search & Scrape integration** (`src/firecrawl.ts`, `src/tools/websearch.ts`, `src/tools/webfetch.ts`) — FireCrawl Keyless works without any API key (1k free credits/month). FireCrawl runs as a parallel search provider and can be used for fetch via `firecrawl: true` on `aio-webfetch`.
+
+### Changed
+
+- **Search providers reorganized** — TinyFish and FireCrawl now run as parallel promises alongside the HTTP engines, preventing them from being blocked by HTML engine timeouts.
+- **Docs updated** — README and docs/tools.md updated to document the new providers.
+
 ## [1.0.2] - 2026-08-22
 
 ### Fixed
