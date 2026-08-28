@@ -16,7 +16,6 @@ import { resolveTinyfishConfigKey } from "../config.ts";
 import { DEFAULT_OS, getLatestChromeProfile, smartFetch } from "../fetch.ts";
 import {
 	aiSummaryAvailable,
-	cdpAvailable as cdpAvailableGA,
 	ensureChrome,
 	summarizeUrl,
 } from "../google-ai.ts";

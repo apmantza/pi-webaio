@@ -11,7 +11,7 @@ extract, map, cache, chunk, and render web content for AI agents.
 
 pi-webaio registers eight pi tools:
 
-- `aio-websearch` — search DuckDuckGo, Brave, Yahoo, and Bing in parallel, with default Google (via a local CDP broker) and an opt-in Reddit CDP companion (`reddit: true`, requires Chrome). Returns in ~2.9s with live per-provider TUI progress (spinner rows, result counts with latency, an elapsed-vs-target bar) and a stable final view showing every engine's count and timing
+- `aio-websearch` — search DuckDuckGo, Brave, Yahoo, Bing, **TinyFish**, and **FireCrawl** in parallel, with default Google (via a local CDP broker) and an opt-in Reddit CDP companion (`reddit: true`, requires Chrome). Returns in ~2.9s with live per-provider TUI progress (spinner rows, result counts with latency, an elapsed-vs-target bar) and a stable final view showing every engine's count and timing
 - `aio-webfetch` — fetch one or many URLs into markdown or structured formats, with an opt-in heading outline, query-focused answer mode, and multi-source cited answers
 - `aio-webcontent` — retrieve cached content by URL (with opt-in section-level diff)
 - `aio-webresult` — retrieve cached results by response ID
@@ -23,7 +23,21 @@ pi-webaio registers eight pi tools:
 It includes anti-bot TLS fingerprinting, browser fallback, 21 API-first
 extractors (GitHub, YouTube, npm/PyPI and other package registries, Context7,
 DeepWiki, and more), RAG chunking, TUI progress rendering, phase-aware errors,
-and opt-in paywall bypass support.
+opt-in paywall bypass support, and **keyless providers** (TinyFish + FireCrawl)
+that work without API keys.
+
+### Keyless Providers
+
+**TinyFish** (free, requires API key in `~/.piwebaio/config` or `~/.piwebaio/.env`):
+- Search: unlimited free search results
+- Fetch: `tinyfish: true` on `aio-webfetch` — delegates to TinyFish Fetch API
+
+**FireCrawl Keyless** (free, 1k credits/month, **no API key needed**):
+- Search: works out of the box as a search provider
+- Fetch: `firecrawl: true` on `aio-webfetch` — delegates to FireCrawl Scrape API
+
+Both providers run in parallel with the HTTP engines during search.
+For fetch, the recommended chain is FireCrawl → TinyFish → normal pipeline.
 
 Google Search uses the local CDP broker by default (faster cold start, tighter
 p95, 100% Google success under concurrency — see `speed.md`). Google ignores the
