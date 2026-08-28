@@ -23,18 +23,18 @@ pi-webaio registers eight pi tools:
 It includes anti-bot TLS fingerprinting, browser fallback, 21 API-first
 extractors (GitHub, YouTube, npm/PyPI and other package registries, Context7,
 DeepWiki, and more), RAG chunking, TUI progress rendering, phase-aware errors,
-opt-in paywall bypass support, and **keyless providers** (TinyFish + FireCrawl)
-that work without API keys.
+opt-in paywall bypass support, and **keyless providers** (FireCrawl) that work
+without API keys.
 
-### Keyless Providers
-
-**TinyFish** (free, requires API key in `~/.piwebaio/config` or `~/.piwebaio/.env`):
-- Search: unlimited free search results
-- Fetch: `tinyfish: true` on `aio-webfetch` — delegates to TinyFish Fetch API
+### Extra Providers
 
 **FireCrawl Keyless** (free, 1k credits/month, **no API key needed**):
 - Search: works out of the box as a search provider
 - Fetch: `firecrawl: true` on `aio-webfetch` — delegates to FireCrawl Scrape API
+
+**TinyFish** (free, requires API key in `~/.piwebaio/config` or `~/.piwebaio/.env`):
+- Search: unlimited free search results
+- Fetch: `tinyfish: true` on `aio-webfetch` — delegates to TinyFish Fetch API
 
 Both providers run in parallel with the HTTP engines during search.
 For fetch, the recommended chain is FireCrawl → TinyFish → normal pipeline.
