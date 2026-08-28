@@ -608,6 +608,9 @@ export const ENGINE_WEIGHTS: Record<string, number> = {
 	google: 5,
 	// TinyFish is a high-quality API-based search; weight it just below Google.
 	tinyfish: 4,
+	// Firecrawl Keyless is a general-purpose web search; weight it on par with
+	// Bing as a secondary search engine.
+	firecrawl: 3,
 	// Reddit is an automatic synthetic/community companion, not a primary
 	// general-web authority; keep it below Bing in cross-engine ranking.
 	reddit: 2,
@@ -771,7 +774,7 @@ export function buildResultBuckets(
 // already-measured latency, P5) so callers can surface a compact note instead
 // of a silent zero.
 
-type EngineId = "ddg" | "brave" | "yahoo" | "bing" | "reddit" | "tinyfish";
+type EngineId = "ddg" | "brave" | "yahoo" | "bing" | "reddit" | "tinyfish" | "firecrawl";
 
 /**
  * Outcome of a single engine in one search round. `http_<code>` covers any
@@ -804,6 +807,7 @@ const ENGINE_DISPLAY_NAMES: Record<EngineId, string> = {
 	bing: "Bing",
 	reddit: "Reddit",
 	tinyfish: "TinyFish",
+	firecrawl: "FireCrawl",
 };
 
 const ENGINE_IDS: readonly EngineId[] = [
@@ -813,6 +817,7 @@ const ENGINE_IDS: readonly EngineId[] = [
 	"bing",
 	"reddit",
 	"tinyfish",
+	"firecrawl",
 ];
 
 /**

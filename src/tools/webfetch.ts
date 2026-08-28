@@ -11,6 +11,7 @@ import {
 	type Chunk,
 } from "../chunker.ts";
 import { fetchTinyfish } from "../tinyfish.ts";
+import { fetchFirecrawl } from "../firecrawl.ts";
 import { resolveTinyfishConfigKey } from "../config.ts";
 import { DEFAULT_OS, getLatestChromeProfile, smartFetch } from "../fetch.ts";
 import {
@@ -1114,43 +1115,69 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 							}
 							let result: Awaited<ReturnType<typeof pullPageEnhanced>>;
 
-							// ── TinyFish Fetch API path ────────────────────────────
-							// When the user passes tinyfish: true and an API key is
-							// configured, delegate the URL to TinyFish's Fetch API.
-							// It handles JS rendering + anti-bot server-side and
-							// returns clean extracted content in the requested format.
-							const useTinyfish =
-								params.tinyfish === true && resolveTinyfishConfigKey();
-							if (useTinyfish) {
-								const tfFormat =
-									(params.format as string) === "markdown" ||
-									(params.format as string) === "html" ||
-									(params.format as string) === "json"
-										? (params.format as "markdown" | "html" | "json")
-										: "markdown";
-								const tfResult = await fetchTinyfish([url.href], {
-									format: tfFormat,
-									ttl: 0,
+							// ── Firecrawl Keyless Scrape API path ───────────────────
+							// When the user passes firecrawl: true, delegate the URL to
+							// Firecrawl's Keyless Scrape API. No API key needed — works
+							// out of the box. Free tier: 1,000 credits/month.
+							const useFirecrawl = params.firecrawl === true;
+							if (useFirecrawl) {
+								const fcResult = await fetchFirecrawl(url.href, {
+									formats: [(params.format as string) === "html" ? "html" : "markdown"],
 								});
-								if (tfResult?.results?.[0]) {
-									const r = tfResult.results[0];
+								if (fcResult && fcResult.markdown) {
 									result = {
 										ok: true,
-										url: r.finalUrl ?? r.url,
-										title: r.title,
-										description: r.description ?? undefined,
-										language: r.language,
-										content: r.text,
-										rawHtml: (params.format as string) === "html" ? r.text : undefined,
+										url: fcResult.url,
+										title: fcResult.title,
+										description: fcResult.description,
+										language: fcResult.language,
+										content: fcResult.markdown,
 									};
 								} else {
-									const tfErr =
-										tfResult?.errors?.[0]?.error ?? "TinyFish fetch returned no results";
-									result = { ok: false, url: url.href, error: tfErr };
+									result = {
+										ok: false,
+										url: url.href,
+										error: fcResult ? "Firecrawl returned no content" : "Firecrawl scrape failed",
+									};
 								}
 							} else {
-								try {
-									result = await pullPageEnhanced(url.href, {
+								// ── TinyFish Fetch API path ────────────────────────────
+								// When the user passes tinyfish: true and an API key is
+								// configured, delegate the URL to TinyFish's Fetch API.
+								// It handles JS rendering + anti-bot server-side and
+								// returns clean extracted content in the requested format.
+								const useTinyfish =
+									params.tinyfish === true && resolveTinyfishConfigKey();
+								if (useTinyfish) {
+									const tfFormat =
+										(params.format as string) === "markdown" ||
+										(params.format as string) === "html" ||
+										(params.format as string) === "json"
+											? (params.format as "markdown" | "html" | "json")
+											: "markdown";
+									const tfResult = await fetchTinyfish([url.href], {
+										format: tfFormat,
+										ttl: 0,
+									});
+									if (tfResult?.results?.[0]) {
+										const r = tfResult.results[0];
+										result = {
+											ok: true,
+											url: r.finalUrl ?? r.url,
+											title: r.title,
+											description: r.description ?? undefined,
+											language: r.language,
+											content: r.text,
+											rawHtml: (params.format as string) === "html" ? r.text : undefined,
+										};
+									} else {
+										const tfErr =
+											tfResult?.errors?.[0]?.error ?? "TinyFish fetch returned no results";
+										result = { ok: false, url: url.href, error: tfErr };
+									}
+								} else {
+									try {
+										result = await pullPageEnhanced(url.href, {
 										browser,
 										os,
 										proxy,
@@ -1177,12 +1204,13 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 										}),
 										userErrorSummary,
 										fetchError: fe,
-										suggestedTimeoutMs: suggestRetryTimeoutMs(fe),
-										url: url.href,
-									};
+											suggestedTimeoutMs: suggestRetryTimeoutMs(fe),
+												url: url.href,
+											};
+										}
+									}
 								}
-							}
-							if (!result.ok) {
+								if (!result.ok) {
 								const shouldRetryBrowser =
 									mode !== "browser" &&
 									(result.errorInfo?.retryable || result.errorInfo?.code === "blocked");

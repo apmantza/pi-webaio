@@ -260,6 +260,9 @@ const lazyTools: LazyTool[] = [
 			tinyfish: boolean(
 				"Use TinyFish Fetch API instead of the normal extraction pipeline. Requires TINYFISH_API_KEY in ~/.piwebaio/config, ~/.piwebaio/.env, or env var. TinyFish handles JS rendering and anti-bot protection server-side. Format maps: markdown (default), html, json.",
 			),
+			firecrawl: boolean(
+				"Use Firecrawl Keyless Scrape API instead of the normal extraction pipeline. No API key needed — works out of the box. Free tier: 1,000 credits/month. Format maps: markdown (default), html.",
+			),
 		}),
 		load: async () => ({
 			register: (await import("./webfetch.ts")).registerWebfetchTool,

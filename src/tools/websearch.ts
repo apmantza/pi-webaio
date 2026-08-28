@@ -4,6 +4,7 @@ import { Text } from "./tui-compat.ts";
 import { setSearchContext } from "../session-store.ts";
 import { resolveTinyfishConfigKey } from "../config.ts";
 import { searchTinyfish } from "../tinyfish.ts";
+import { searchFirecrawl } from "../firecrawl.ts";
 import {
 	searchWeb,
 	ENGINE_WEIGHTS,
@@ -202,6 +203,7 @@ export function registerWebsearchTool(
 				redditStatus = "unavailable (provider cooled down after recent failures)";
 			const engineNames = ["DDG", "Brave", "Yahoo", "Bing"];
 			if (resolveTinyfishConfigKey()) engineNames.push("TinyFish");
+			engineNames.push("FireCrawl");
 			if (useGoogle) engineNames.push("Google");
 			if (redditEnabled) engineNames.push("Reddit");
 
@@ -231,6 +233,11 @@ export function registerWebsearchTool(
 					label: "TinyFish",
 					status: resolveTinyfishConfigKey() ? "running" : "skipped",
 					detail: resolveTinyfishConfigKey() ? undefined : "no API key",
+				},
+				{
+					id: "firecrawl",
+					label: "FireCrawl",
+					status: "running",
 				},
 			];
 			const renderDetails = {
@@ -547,6 +554,43 @@ export function registerWebsearchTool(
 				});
 			}
 
+			// Firecrawl search API (Keyless, no API key needed)
+			const firecrawlEnabled = true;
+			let firecrawlPromise: Promise<{
+				source: "firecrawl";
+				results: SearchResult[];
+			}>;
+			if (firecrawlEnabled) {
+				firecrawlPromise = (async () => {
+					try {
+						const r = await searchFirecrawl(query, { maxResults: 15 });
+						const results = (r?.results ?? []).map((item) => ({
+							title: item.title,
+							url: item.url,
+							snippet: item.snippet,
+							domain: item.domain,
+						}));
+						return { source: "firecrawl" as const, results };
+					} catch {
+						return { source: "firecrawl" as const, results: [] };
+					}
+				})();
+				// Live TUI: reflect the FireCrawl row as soon as it settles
+				void firecrawlPromise.then((res) => {
+					setProvider("firecrawl", {
+						status: res.results.length > 0 ? "ok" : "empty",
+						count: res.results.length,
+						latencyMs: 0,
+						detail: res.results.length > 0 ? undefined : "0 results",
+					});
+				});
+			} else {
+				firecrawlPromise = Promise.resolve({
+					source: "firecrawl" as const,
+					results: [],
+				});
+			}
+
 			// TinyFish search API (HTTP, no browser needed)
 			const tinyfishEnabled = resolveTinyfishConfigKey() !== null;
 			let tinyfishPromise: Promise<{
@@ -593,6 +637,7 @@ export function registerWebsearchTool(
 					["http", httpPromise],
 					["reddit", redditPromise],
 					["tinyfish", tinyfishPromise],
+					["firecrawl", firecrawlPromise],
 				],
 				Math.max(Math.min(responseDeadlineAt, searchDeadlineAt) - Date.now(), 1),
 			);
@@ -638,6 +683,7 @@ export function registerWebsearchTool(
 			let googleResults: SearchResult[] = [];
 			let redditResults: SearchResult[] = [];
 			let tinyfishResults: SearchResult[] = [];
+			let firecrawlResults: SearchResult[] = [];
 			let httpCounts = {
 				ddg: 0,
 				brave: 0,
@@ -663,6 +709,9 @@ export function registerWebsearchTool(
 			const tinyfishResult = result.tinyfish as
 				| { results: SearchResult[] }
 				| undefined;
+			const firecrawlResult = result.firecrawl as
+				| { results: SearchResult[] }
+				| undefined;
 			if (httpResult) {
 				httpResults = httpResult.results;
 				httpCounts = httpResult.httpCounts ?? httpCounts;
@@ -671,6 +720,7 @@ export function registerWebsearchTool(
 			if (googleResult) googleResults = googleResult.results;
 			if (redditResult) redditResults = redditResult.results;
 			if (tinyfishResult) tinyfishResults = tinyfishResult.results;
+			if (firecrawlResult) firecrawlResults = firecrawlResult.results;
 
 			if (collected.timedOut) {
 				if (googleEnabled && !googleResult)
@@ -722,6 +772,15 @@ export function registerWebsearchTool(
 				});
 				buckets.set(r.url, list);
 			}
+			for (const r of firecrawlResults) {
+				const list = buckets.get(r.url) || [];
+				list.push({
+					result: r,
+					engine: "firecrawl",
+					weight: ENGINE_WEIGHTS.firecrawl,
+				});
+				buckets.set(r.url, list);
+			}
 
 			// Keep Reddit's count/status in the same engine map as the HTTP
 			// providers. This is the source of truth for notes and TUI output.
@@ -737,6 +796,22 @@ export function registerWebsearchTool(
 					},
 				};
 			}
+			// Keep FireCrawl's count/status in the same engine map.
+			if (engineStatus && firecrawlEnabled) {
+				engineStatus = {
+					...engineStatus,
+					firecrawl: {
+						count: firecrawlResults.length,
+						status: firecrawlResult
+							? firecrawlResults.length > 0
+								? "ok"
+								: "empty"
+							: "timeout",
+						latencyMs: 0,
+					},
+				};
+			}
+
 			// Keep TinyFish's count/status in the same engine map.
 			if (engineStatus && tinyfishEnabled) {
 				engineStatus = {
@@ -769,6 +844,7 @@ export function registerWebsearchTool(
 			if (!googleResult) markUnsettled("google");
 			if (!redditResult) markUnsettled("reddit");
 			if (!tinyfishResult) markUnsettled("tinyfish");
+			if (!firecrawlResult) markUnsettled("firecrawl");
 			renderDetails.elapsedMs = Date.now() - startedAt;
 
 			const resultDetails = {
@@ -781,6 +857,7 @@ export function registerWebsearchTool(
 				redditCount: redditResults.length,
 				redditStatus,
 				tinyfishCount: tinyfishResults.length,
+				firecrawlCount: firecrawlResults.length,
 				durationMs: Date.now() - startedAt,
 				deadlineMs: searchDeadlineMs,
 				responseBudgetMs: responseTargetMs,
@@ -823,6 +900,7 @@ export function registerWebsearchTool(
 			if (googleResults.length) engineLabel.push(`Google:${googleResults.length}`);
 			if (redditResults.length) engineLabel.push(`Reddit:${redditResults.length}`);
 			if (tinyfishResults.length) engineLabel.push(`TinyFish:${tinyfishResults.length}`);
+			if (firecrawlResults.length) engineLabel.push(`FireCrawl:${firecrawlResults.length}`);
 			if (!engineLabel.length) engineLabel.push("HTTP");
 
 			// Trigger speculative prefetch of top-N result URLs in the background.
