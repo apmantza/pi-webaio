@@ -57,7 +57,7 @@ const HTTP_ENGINE_RESPONSE_DEADLINE_MS = 2700;
 // budget-fencing (2s page floor, per-page 3.5s cap) fits inside this window:
 // a hot broker returns ~1s for max 15, and even a slow sparse tail page can
 // never burn more than this. The overall tool deadline stays 7s.
-const GOOGLE_LANE_MAX_MS = 2900;
+const GOOGLE_LANE_MAX_MS = 5000;
 
 type WebsearchDependencies = {
 	loadGoggles?: typeof loadGoggles;
@@ -539,12 +539,42 @@ export function registerWebsearchTool(
 			const collected = await collectProviderResults<string, unknown>(
 				[
 					["http", httpPromise],
-					["google", googlePromise],
 					["reddit", redditPromise],
 				],
 				Math.max(Math.min(responseDeadlineAt, searchDeadlineAt) - Date.now(), 1),
 			);
 			const result = collected.values;
+
+			// Give Google a grace window beyond the response target — the broker
+			// is fast (~1.5s) but Chrome cold-start can push past the 2.8s
+			// response deadline. Await it separately up to its lane max so we
+			// don't lose Google results when they're just slightly delayed.
+			const googleGracePromise = googleEnabled
+				? googlePromise.catch(() => ({
+						source: "google" as const,
+						results: [],
+					}))
+				: Promise.resolve({ source: "google" as const, results: [] });
+			const googleGraceDeadline = Math.min(
+				searchDeadlineAt,
+				Date.now() +
+					Math.max(0, startedAt + responseTargetMs + googleLaneMaxMs - Date.now()),
+			);
+			const graceRemaining = Math.max(0, googleGraceDeadline - Date.now());
+			if (graceRemaining > 0 && googleEnabled) {
+				const graceResult = await Promise.race([
+					googleGracePromise,
+					new Promise<null>((r) => setTimeout(r, graceRemaining)).then(() => null),
+				]);
+				if (graceResult) {
+					result.google = graceResult;
+					if (graceResult.results.length > 0) {
+						googleStatus = "ok";
+					} else if (!googleStatus.startsWith("error")) {
+						googleStatus = "empty (Google returned 0 results)";
+					}
+				}
+			}
 
 			// The response content is now determined: freeze the live TUI state
 			// IMMEDIATELY so a throw during final rendering cannot leave the

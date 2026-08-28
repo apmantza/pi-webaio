@@ -180,7 +180,7 @@ async function extractResults(tab, maxResults = 10) {
     (function() {
       var results = [];
       // Strategy: find all h3 headings inside links, then find their container for snippet
-      var headings = document.querySelectorAll('a[href^="http"] h3');
+      var headings = document.querySelectorAll('.MjjYud a h3');
       var seen = new Set();
       
       for (var i = 0; i < headings.length && results.length < ${maxResults}; i++) {
@@ -190,7 +190,10 @@ async function extractResults(tab, maxResults = 10) {
         
         var url = a.href;
         // Skip google.com internal links (check hostname not raw substring)
-        try { var u2 = new URL(url); var isGoogleHost = u2.hostname === 'google.com' || u2.hostname.endsWith('.google.com'); if (isGoogleHost && !u2.pathname.startsWith('/search')) continue; } catch(e) {}
+        // Google SERP ~2025 uses /goto?url=CAES... encoded redirect URLs instead of
+        // direct http:// links for result headings. The resolved href is
+        // https://www.google.com/goto?url=CAES... which redirects to the real page.
+        try { var u2 = new URL(url); var isGoogleHost = u2.hostname === 'google.com' || u2.hostname.endsWith('.google.com'); if (isGoogleHost && !u2.pathname.startsWith('/search') && !u2.pathname.startsWith('/goto') && !u2.pathname.startsWith('/url')) continue; } catch(e) {}
         if (seen.has(url)) continue;
         seen.add(url);
         
@@ -299,7 +302,7 @@ export async function waitForResults(tab, timeoutMs = 15000) {
 	const count = await waitForCondition(
 		async (probeTimeoutMs) => {
 			const found = await cdp(
-				["eval", tab, "document.querySelectorAll('a[href^=\"http\"] h3').length"],
+				["eval", tab, "document.querySelectorAll('.MjjYud a h3').length"],
 				probeTimeoutMs,
 			).catch(() => "0");
 			lastCount = parseInt(found, 10) || 0;

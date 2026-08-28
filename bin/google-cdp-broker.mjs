@@ -439,7 +439,7 @@ const SEARCH_FORBIDDEN_FIELDS = new Set([
 // the page is ready (or when consent needs dismissing) — avoids re-running the
 // heavy full-DOM scan on every 150ms poll during the render window.
 const GOOGLE_SEARCH_READINESS_SCRIPT = String.raw`(() => ({
-	h3: document.querySelectorAll('a[href^="http"] h3').length,
+	h3: document.querySelectorAll('.MjjYud a h3').length,
 	consent: !!document.querySelector('button#L2AGLb, button[aria-label="Accept all"], button[aria-label="I agree"], form[action*="consent"] button'),
 }))()`;
 const GOOGLE_SEARCH_EXTRACTION_SCRIPT = String.raw`(() => {
@@ -460,7 +460,7 @@ const GOOGLE_SEARCH_EXTRACTION_SCRIPT = String.raw`(() => {
 	}
 	const results = [];
 	const seen = new Set();
-	const headings = document.querySelectorAll("a[href^=\"http\"] h3");
+	const headings = document.querySelectorAll(".MjjYud a h3");
 	for (const heading of headings) {
 		if (results.length >= 25) break;
 		const anchor = heading.closest("a");
@@ -469,7 +469,7 @@ const GOOGLE_SEARCH_EXTRACTION_SCRIPT = String.raw`(() => {
 		try {
 			const parsed = new URL(url);
 			const googleHost = parsed.hostname === "google.com" || parsed.hostname.endsWith(".google.com");
-			if (googleHost && !parsed.pathname.startsWith("/search")) continue;
+			if (googleHost && !parsed.pathname.startsWith("/search") && !parsed.pathname.startsWith("/goto") && !parsed.pathname.startsWith("/url")) continue;
 		} catch {
 			continue;
 		}
