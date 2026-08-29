@@ -20,6 +20,8 @@ import net from "node:net";
 import { platform, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import http from "node:http";
+import WebSocket from "ws";
 import { BrowserCdpTransport } from "./cdp-browser-transport.mjs";
 
 export const MAX_FRAME_BYTES = 64 * 1024;
@@ -1364,12 +1366,12 @@ export class GoogleCdpBroker {
 		}
 	}
 
-	async verifyCdpLocation(target, expected, request, signal, description) {
+	async verifyCdpLocation(target, expected, request, signal, description, _cdpSend) {
 		const deadlineAt =
 			request?.deadlineAt ?? Date.now() + DEFAULT_SEARCH_TIMEOUT_MS;
 		while (Date.now() < deadlineAt) {
 			checkSignal(signal);
-			const evaluation = await this.cdpSend(
+			const evaluation = await (_cdpSend ?? this.cdpSend)(
 				"Runtime.evaluate",
 				{ expression: "location.href", returnByValue: true },
 				{ ...request, deadlineAt },
@@ -1503,6 +1505,7 @@ export class GoogleCdpBroker {
 		maxResults,
 		signal,
 		pageDeadlineAt,
+		_cdpSend,
 	) {
 		const deadlineAt =
 			pageDeadlineAt ||
@@ -1522,7 +1525,7 @@ export class GoogleCdpBroker {
 		while (Date.now() < deadlineAt) {
 			checkSignal(signal);
 			if (!forceFull) {
-				const readyCheck = await this.cdpSend(
+				const readyCheck = await (_cdpSend ?? this.cdpSend)(
 					"Runtime.evaluate",
 					{
 						expression: GOOGLE_SEARCH_READINESS_SCRIPT,
@@ -1555,7 +1558,7 @@ export class GoogleCdpBroker {
 			// of this extraction (consent click / partial-filter edge cases live
 			// there) — implements the documented stay-full invariant.
 			forceFull = true;
-			const evaluation = await this.cdpSend(
+			const evaluation = await (_cdpSend ?? this.cdpSend)(
 				"Runtime.evaluate",
 				{
 					expression: GOOGLE_SEARCH_EXTRACTION_SCRIPT,
@@ -1628,6 +1631,7 @@ export class GoogleCdpBroker {
 		query,
 		maxResults,
 		signal,
+		_cdpSend,
 	) {
 		const sessionId = target.cdpSessionId;
 		const deadlineAt =
@@ -1653,7 +1657,7 @@ export class GoogleCdpBroker {
 				const pageUrl = canonicalGoogleSearchUrl(query, maxResults, start);
 				const navStarted = performance.now();
 				try {
-					const navigation = await this.cdpSend(
+					const navigation = await (_cdpSend ?? this.cdpSend)(
 						"Page.navigate",
 						{ url: pageUrl },
 						request,
@@ -1671,6 +1675,7 @@ export class GoogleCdpBroker {
 						request,
 						signal,
 						`Google search page ${start / GOOGLE_PAGE_STRIDE + 1}`,
+						_cdpSend,
 					);
 					pageNavigationMs = Math.max(0, Math.round(performance.now() - navStarted));
 				} catch {
@@ -1699,6 +1704,7 @@ export class GoogleCdpBroker {
 					start === 0
 						? undefined
 						: Math.min(deadlineAt, Date.now() + GOOGLE_PAGE_EXTRACT_BUDGET_MS),
+					_cdpSend,
 				);
 			} catch (error) {
 				// Page 1 extraction failure is a genuine total failure — propagate.
@@ -1743,7 +1749,7 @@ export class GoogleCdpBroker {
 		return { results: merged, degraded, pages };
 	}
 
-	async searchGoogle(request, identity, signal) {
+	async searchGoogle(request, _identity, signal) {
 		const { query, maxResults } = validateSearchRequest(request);
 		if (!this.cdp.explicit)
 			throw new BrokerError(
@@ -1752,11 +1758,6 @@ export class GoogleCdpBroker {
 			);
 		checkSignal(signal);
 		const canonicalUrl = canonicalGoogleSearchUrl(query, maxResults);
-		// Best-effort phase instrumentation. Boundaries: lease/target
-		// acquisition -> Page.navigate start -> navigation confirmed ->
-		// extraction complete -> reset/release. Each phase records its
-		// elapsed time as it settles (even when it throws), and the
-		// successful envelope exposes the totals additively as `timings`.
 		const timings = {
 			targetSetupMs: 0,
 			navigationMs: 0,
@@ -1770,84 +1771,197 @@ export class GoogleCdpBroker {
 				timings[phase] = Math.max(0, performance.now() - started);
 			}
 		};
-		let lease;
-		let target;
+
+		let ws;
+		let targetInfo;
+		let cdpCall;
+
 		try {
 			await timePhase("targetSetupMs", async () => {
-				lease = await this.registry.lease({
-					...identity,
-					provider: "google-search",
-					signal,
+				// Create a dedicated target via Chrome's REST API
+				const port = this.cdpTransport.port;
+				targetInfo = await new Promise((resolve, reject) => {
+					const req = http.request(
+						{
+							hostname: "127.0.0.1",
+							port,
+							method: "PUT",
+							path: "/json/new?url=about:blank",
+						},
+						(res) => {
+							let body = "";
+							res.on("data", (chunk) => {
+								body += chunk;
+							});
+							res.on("end", () => {
+								try {
+									const info = JSON.parse(body);
+									if (!info.id || !info.webSocketDebuggerUrl)
+										reject(
+											new BrokerError(
+												"cdp_protocol",
+												"Target creation response missing id or webSocketDebuggerUrl",
+											),
+										);
+									resolve(info);
+								} catch (e) {
+									reject(
+										new BrokerError(
+											"cdp_protocol",
+											`Failed to parse target creation response: ${e.message}`,
+										),
+									);
+								}
+							});
+						},
+					);
+					req.on("error", (e) =>
+						reject(
+							new BrokerError(
+								"cdp_protocol",
+								`Target creation failed: ${e.message}`,
+							),
+						),
+					);
+					req.end();
 				});
-				const internalLease = this.registry.leases.get(lease.leaseId);
-				target = internalLease && this.registry.targets.get(internalLease.targetId);
-				if (!internalLease || !target)
-					throw new BrokerError("target_unavailable", "Lease target is unavailable");
-				await this.acquireCdpLease(lease, request, signal);
 				checkSignal(signal);
+
+				// Open a dedicated WebSocket to the new target
+				ws = new WebSocket(targetInfo.webSocketDebuggerUrl);
+				await new Promise((resolve, reject) => {
+					const onOpen = () => {
+						cleanup();
+						resolve();
+					};
+					const onError = (e) => {
+						cleanup();
+						reject(
+							new BrokerError(
+								"cdp_protocol",
+								`WebSocket connection failed: ${e.message}`,
+							),
+						);
+					};
+					const onClose = () => {
+						cleanup();
+						ws.removeEventListener("close", onClose);
+						reject(
+							new BrokerError(
+								"cdp_protocol",
+								"WebSocket closed before connecting",
+							),
+						);
+					};
+					const cleanup = () => {
+						ws.removeEventListener("open", onOpen);
+						ws.removeEventListener("error", onError);
+					};
+					ws.addEventListener("open", onOpen);
+					ws.addEventListener("error", onError);
+					ws.addEventListener("close", onClose);
+				});
+				checkSignal(signal);
+
+				// Create cdpCall helper that sends CDP commands over the dedicated WebSocket
+				const pending = new Map();
+				ws.addEventListener("message", (event) => {
+					let msg;
+					try {
+						msg = JSON.parse(event.data.toString());
+					} catch {
+						return;
+					}
+					if (msg.id !== undefined && pending.has(msg.id)) {
+						const { resolve, timer } = pending.get(msg.id);
+						clearTimeout(timer);
+						pending.delete(msg.id);
+						if (msg.error) resolve({ error: msg.error });
+						else resolve(msg.result);
+					}
+				});
+
+				let callId = 0;
+
+				cdpCall = (method, params, timeoutMs = 15000) => {
+					return new Promise((resolve, reject) => {
+						const id = ++callId;
+						const timer = setTimeout(() => {
+							pending.delete(id);
+							reject(
+								new BrokerError(
+									"cdp_timeout",
+									`CDP call ${method} timed out after ${timeoutMs}ms`,
+								),
+							);
+						}, timeoutMs);
+						pending.set(id, { resolve, timer });
+						try {
+							ws.send(JSON.stringify({ id, method, params }));
+						} catch (e) {
+							clearTimeout(timer);
+							pending.delete(id);
+							reject(
+								new BrokerError(
+									"cdp_protocol",
+									`CDP send failed: ${e.message}`,
+								),
+							);
+						}
+					});
+				};
 			});
+
 			await timePhase("navigationMs", async () => {
-				const navigation = await this.cdpSend(
-					"Page.navigate",
-					{ url: canonicalUrl },
-					request,
-					signal,
-					target.cdpSessionId,
-				);
+				const navigation = await cdpCall("Page.navigate", { url: canonicalUrl });
 				if (navigation?.errorText)
 					throw new BrokerError(
 						"navigation_failed",
 						`Google navigation failed: ${navigation.errorText}`,
 					);
-				await this.verifyCdpLocation(
-					target,
-					(value) => isGoogleSearchLocation(value, canonicalUrl),
-					request,
-					signal,
-					"Google search",
+				// Poll for the search results page
+				const deadlineAt =
+					request?.deadlineAt ?? Date.now() + DEFAULT_SEARCH_TIMEOUT_MS;
+				while (Date.now() < deadlineAt) {
+					checkSignal(signal);
+					const evaluation = await cdpCall("Runtime.evaluate", {
+						expression: "location.href",
+						returnByValue: true,
+					});
+					if (evaluation?.exceptionDetails)
+						throw new BrokerError(
+							"cdp_protocol",
+							"Google search location check failed",
+						);
+					const currentUrl =
+						typeof evaluation?.result?.value === "string"
+							? evaluation.result.value
+							: undefined;
+					if (isGoogleSearchLocation(currentUrl, canonicalUrl)) return;
+					await new Promise((r) => setTimeout(r, 200));
+				}
+				throw new BrokerError(
+					"navigation_failed",
+					"Google search did not reach the expected location",
 				);
 			});
+
+			const cdpSendOverridden = async (method, params, ..._args) => cdpCall(method, params);
+
 			const { results, degraded, pages } = await timePhase("extractionMs", () =>
 				this.extractGoogleSearchResultsPaginated(
 					request,
-					target,
+					{ cdpSessionId: "dedicated-ws" },
 					query,
 					maxResults,
 					signal,
+					cdpSendOverridden,
 				),
 			);
+
 			if (pages?.length) timings.pages = pages;
 			checkSignal(signal);
-			// Deferred reset (#perf): lease release + target reset no longer gate
-			// the response (~30-55ms). The wire envelope intentionally omits
-			// resetMs — it would always serialize as a false 0 before the deferred
-			// chain settles. The settled value is emitted to stderr when
-			// PI_WEBAIO_DEBUG=1; a failed release preserves dirty-target semantics
-			// asynchronously (retire + closeTarget) without failing the response.
-			const resetStarted = performance.now();
-			void Promise.resolve()
-				.then(() => this.resetCdpTarget(target, request, signal))
-				.then(() => {
-					this.registry.release({ ...identity, leaseId: lease.leaseId });
-				})
-				.catch(async () => {
-					// Preserve the dirty-target semantics of the old awaited path:
-					// a failed reset retires the lease and closes the target, just
-					// without failing the already-returned response.
-					try {
-						if (this.registry.leases.has(lease.leaseId))
-							this.registry.retireLease(lease, true);
-						await this.closeCdpTarget(target, request);
-					} catch {
-						// Best-effort — registry GC cleans up stale leases.
-					}
-				})
-				.finally(() => {
-					const resetMs = Math.max(0, Math.round(performance.now() - resetStarted));
-					if (process.env.PI_WEBAIO_DEBUG === "1") {
-						process.stderr.write(`[pi-webaio:google-broker] resetMs=${resetMs}\n`);
-					}
-				});
+
 			return {
 				query,
 				url: canonicalUrl,
@@ -1855,11 +1969,38 @@ export class GoogleCdpBroker {
 				degraded: degraded || undefined,
 				timings,
 			};
-		} catch (error) {
-			if (lease && this.registry.leases.has(lease.leaseId))
-				this.registry.retireLease(lease, true);
-			if (target) await this.closeCdpTarget(target, request);
-			throw error;
+		} finally {
+			// Cleanup: close WebSocket and close target via REST API
+			if (ws) {
+				try {
+					ws.close();
+				} catch {
+					/* best-effort */
+				}
+			}
+			if (targetInfo?.id) {
+				const port = this.cdpTransport.port;
+				try {
+					await new Promise((resolve, reject) => {
+						const req = http.request(
+							{
+								hostname: "127.0.0.1",
+								port,
+								method: "GET",
+								path: `/json/close/${targetInfo.id}`,
+							},
+							(res) => {
+								res.resume();
+								res.on("end", resolve);
+							},
+						);
+						req.on("error", reject);
+						req.end();
+					});
+				} catch {
+					/* best-effort */
+				}
+			}
 		}
 	}
 
