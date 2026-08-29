@@ -29,7 +29,7 @@ export const MAX_REQUEST_ID_HISTORY = 1024;
 export const DEFAULT_LEASE_TTL_MS = 30_000;
 export const DEFAULT_ORPHAN_TTL_MS = 15_000;
 export const DEFAULT_PROVIDER_CAPS = Object.freeze({
-	"google-search": 2,
+	"google-search": 5,
 	"google-ai": 1,
 	reddit: 1,
 });
@@ -634,7 +634,7 @@ function waitForSearchPoll(signal, deadlineAt) {
 
 export class LeaseRegistry {
 	constructor(options = {}) {
-		this.globalCap = asPositiveInt(options.globalCap, 4, 64);
+		this.globalCap = asPositiveInt(options.globalCap, 5, 64);
 		this.providerCaps = {
 			...DEFAULT_PROVIDER_CAPS,
 			...(options.providerCaps || {}),
@@ -746,7 +746,12 @@ export class LeaseRegistry {
 		provider = asString(provider, "provider");
 		this.validateProvider(provider);
 		const key = targetKey(sessionId, provider);
-		if (this.activeByKey.has(key))
+		// Allow concurrent leases for the same key up to the provider cap.
+		// Previously, any active key would enqueue the request — this serialized
+		// concurrent searches from the same session. Now each concurrent search
+		// gets its own CDP target (tab) up to the cap.
+		const keyActiveCount = this.activeByKey.get(key)?.size ?? 0;
+		if (keyActiveCount >= this.providerCaps[provider])
 			return this.enqueue(
 				key,
 				{ clientId, sessionId, capability, provider, ttlMs, signal },
@@ -865,7 +870,9 @@ export class LeaseRegistry {
 				Math.min(Math.max(Number(ttlMs) || this.ttlMs, 1), 10 * 60_000),
 		};
 		this.leases.set(lease.leaseId, lease);
-		this.activeByKey.set(key, lease.leaseId);
+		const keySet = this.activeByKey.get(key) ?? new Set();
+		keySet.add(lease.leaseId);
+		this.activeByKey.set(key, keySet);
 		return this.publicLease(lease);
 	}
 
@@ -969,8 +976,11 @@ export class LeaseRegistry {
 
 	retireLease(lease, dirty = false) {
 		this.leases.delete(lease.leaseId);
-		if (this.activeByKey.get(lease.key) === lease.leaseId)
-			this.activeByKey.delete(lease.key);
+		const keySet = this.activeByKey.get(lease.key);
+		if (keySet) {
+			keySet.delete(lease.leaseId);
+			if (keySet.size === 0) this.activeByKey.delete(lease.key);
+		}
 		const target = this.targets.get(lease.targetId);
 		if (target) {
 			target.busy = false;
@@ -987,7 +997,12 @@ export class LeaseRegistry {
 	}
 
 	drain(key) {
-		if (this.activeByKey.has(key)) return;
+		const keySet = this.activeByKey.get(key);
+		const activeCount = keySet?.size ?? 0;
+		// Extract the provider from the key (format: sessionId\0provider)
+		const provider = key.split("\0").pop() ?? "";
+		const cap = this.providerCaps[provider] ?? 1;
+		if (activeCount >= cap) return;
 		const queue = this.waiters.get(key);
 		if (!queue?.length) return;
 		const waiter = queue.shift();

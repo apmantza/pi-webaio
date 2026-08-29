@@ -390,13 +390,14 @@ test("same session/provider serializes while different sessions can use separate
 	const b = await registeredClient(setup.broker, "serial-b", "serial-other");
 	try {
 		const first = await a.send("lease", { provider: "google-search" });
-		const queued = a.send("lease", { provider: "google-search", waitMs: 500 });
-		await sleep(20);
+		// Same session can now lease concurrently (up to the provider cap of 5)
+		const second = await a.send("lease", { provider: "google-search" });
+		assert.notEqual(second.targetId, first.targetId);
+		// Different session also gets its own target
 		const different = await b.send("lease", { provider: "google-search" });
 		assert.notEqual(different.targetId, first.targetId);
+		assert.notEqual(different.targetId, second.targetId);
 		await a.send("release", first);
-		const second = await queued;
-		assert.equal(second.targetId, first.targetId);
 		await a.send("release", second);
 		await b.send("release", different);
 	} finally {
@@ -409,7 +410,11 @@ test("in-flight and bounded request-ID limits are enforced", async () => {
 	const setup = await makeBroker({ maxInFlight: 1, maxIdHistory: 20 });
 	const client = await registeredClient(setup.broker, "bounds");
 	try {
-		const first = await client.send("lease", { provider: "google-search" });
+		// Fill all 5 provider slots so the 6th lease is queued
+		const slots = [];
+		for (let i = 0; i < 5; i++) {
+			slots.push(await client.send("lease", { provider: "google-search" }));
+		}
 		const queued = client.request({
 			id: "queued",
 			op: "lease",
@@ -423,13 +428,15 @@ test("in-flight and bounded request-ID limits are enforced", async () => {
 			client.request({ id: "third", op: "health" }),
 			(error) => error.code === "in_flight_limit",
 		);
-		setup.broker.registry.release({
-			clientId: client.clientId,
-			sessionId: client.sessionId,
-			capability: client.capability,
-			...first,
-			generation: first.generation,
-		});
+		for (const slot of slots) {
+			setup.broker.registry.release({
+				clientId: client.clientId,
+				sessionId: client.sessionId,
+				capability: client.capability,
+				...slot,
+				generation: slot.generation,
+			});
+		}
 		await queued;
 	} finally {
 		await closeClients(client);
@@ -454,7 +461,11 @@ test("deadline and cancellation fence queued requests without mutating the regis
 	const setup = await makeBroker();
 	const client = await registeredClient(setup.broker, "fence");
 	try {
-		const first = await client.send("lease", { provider: "google-search" });
+		// Fill all 5 provider slots so the 6th is queued
+		const slots = [];
+		for (let i = 0; i < 5; i++) {
+			slots.push(await client.send("lease", { provider: "google-search" }));
+		}
 		const pending = client.request({
 			id: "wait",
 			op: "lease",
@@ -474,8 +485,11 @@ test("deadline and cancellation fence queued requests without mutating the regis
 		});
 		assert.equal(cancel.cancelled, true);
 		await assert.rejects(pending, (error) => error.code === "request_fenced");
-		assert.equal(setup.broker.registry.snapshot().active, 1);
-		await client.send("release", first);
+		assert.equal(setup.broker.registry.snapshot().active, 5);
+		// Release all 5 slots
+		for (const slot of slots) {
+			await client.send("release", slot);
+		}
 		await assert.rejects(
 			client.request({
 				id: "expired",
