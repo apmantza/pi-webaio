@@ -141,6 +141,27 @@ test("renderProviderGlyph: running advances spinner frames with tick", () => {
 	assert.strictEqual(strip(renderProviderGlyph("running", 10, theme)), f0);
 });
 
+test("renderProviderGlyph + statusText: blocked renders ⊘ with warning color, not a spinner", () => {
+	const theme = makeTheme();
+	// Issue #111 review fix 1: the blocked state must render as a settled,
+	// explained row — never a frozen "searching…" spinner.
+	assert.match(renderProviderGlyph("blocked", 0, theme), /⊘/);
+	assert.ok(theme.colorLog.some((c) => c.startsWith("warning:")));
+	const row = strip(
+		renderProviderStatusText(
+			{
+				id: "google",
+				label: "Google",
+				status: "blocked",
+				detail: "blocked (Google CAPTCHA /sorry/ — failing fast)",
+			},
+			theme,
+		),
+	);
+	assert.match(row, /blocked/);
+	assert.doesNotMatch(row, /searching/);
+});
+
 // ─── renderProviderStatusText ───────────────────────────────────────
 
 test("renderProviderStatusText: running/pending show progress text", () => {

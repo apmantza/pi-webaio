@@ -134,7 +134,7 @@ const lazyTools: LazyTool[] = [
 		parameters: schema(
 			{
 				query: string("Search query (e.g. 'React Server Components RFC')."),
-				max: number("Max results to request from each engine.", { default: 15 }),
+				max: number("Max results to request from each engine.", { default: 8 }),
 				google: boolean("Also search Google via Chrome CDP.", { default: true }),
 				reddit: boolean("Also search Reddit via Chrome CDP (off by default).", {
 					default: false,

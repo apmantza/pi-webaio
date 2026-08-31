@@ -443,6 +443,7 @@ const SEARCH_FORBIDDEN_FIELDS = new Set([
 const GOOGLE_SEARCH_READINESS_SCRIPT = String.raw`(() => ({
 	h3: document.querySelectorAll('.MjjYud a h3').length,
 	consent: !!document.querySelector('button#L2AGLb, button[aria-label="Accept all"], button[aria-label="I agree"], form[action*="consent"] button'),
+	href: location.href,
 }))()`;
 const GOOGLE_SEARCH_EXTRACTION_SCRIPT = String.raw`(() => {
 	const consentSelectors = [
@@ -528,6 +529,24 @@ export function isGoogleSearchLocation(value, expected) {
 			actual.pathname === "/search" &&
 			actual.searchParams.get("q") === wanted.searchParams.get("q") &&
 			actual.searchParams.get("num") === wanted.searchParams.get("num")
+		);
+	} catch {
+		return false;
+	}
+}
+
+// Google soft-blocks automated traffic by redirecting the tab to /sorry/ with a
+// CAPTCHA (issue #111). Polling such a page for results can never succeed — it
+// only burns the whole search deadline — so the search flow detects it and
+// fails fast with a dedicated code callers can act on.
+export function isGoogleCaptchaLocation(value) {
+	if (typeof value !== "string") return false;
+	try {
+		const parsed = new URL(value);
+		return (
+			(parsed.hostname === "google.com" ||
+				parsed.hostname.endsWith(".google.com")) &&
+			parsed.pathname.startsWith("/sorry/")
 		);
 	} catch {
 		return false;
@@ -1366,7 +1385,14 @@ export class GoogleCdpBroker {
 		}
 	}
 
-	async verifyCdpLocation(target, expected, request, signal, description, _cdpSend) {
+	async verifyCdpLocation(
+		target,
+		expected,
+		request,
+		signal,
+		description,
+		_cdpSend,
+	) {
 		const deadlineAt =
 			request?.deadlineAt ?? Date.now() + DEFAULT_SEARCH_TIMEOUT_MS;
 		while (Date.now() < deadlineAt) {
@@ -1382,6 +1408,13 @@ export class GoogleCdpBroker {
 				throw new BrokerError(
 					"cdp_protocol",
 					`${description} location check failed`,
+				);
+			// Also fires for SERP page 2+ so a captcha mid-pagination degrades to
+			// the pages already collected instead of polling a dead page.
+			if (isGoogleCaptchaLocation(evaluationString(evaluation)))
+				throw new BrokerError(
+					"captcha_blocked",
+					`${description} hit a Google CAPTCHA page (/sorry/)`,
 				);
 			if (expected(evaluationString(evaluation))) return;
 			await waitForSearchPoll(signal, deadlineAt);
@@ -1546,6 +1579,15 @@ export class GoogleCdpBroker {
 					} else if (rv.consent === true) {
 						// Consent UI present: only the full script can dismiss it.
 						forceFull = true;
+					} else if (isGoogleCaptchaLocation(rv.href)) {
+						// Google redirected the tab to /sorry/ mid-extraction (a real
+						// soft-throttle pattern after the SERP verified OK). Results
+						// can never appear — fail fast instead of polling to the
+						// deadline and falling back into the same block (issue #111).
+						throw new BrokerError(
+							"captcha_blocked",
+							"Google redirected the search to a CAPTCHA page (/sorry/) mid-extraction",
+						);
 					} else if ((rv?.h3 ?? 0) < minResults) {
 						// SERP still rendering — wait and re-probe cheaply.
 						if (Date.now() >= deadlineAt) break;
@@ -1678,13 +1720,16 @@ export class GoogleCdpBroker {
 						_cdpSend,
 					);
 					pageNavigationMs = Math.max(0, Math.round(performance.now() - navStarted));
-				} catch {
+				} catch (pageError) {
 					// A page-2+ navigation/verification failure must not abort the
 					// search: keep the merged results collected so far.
 					pages.push({
 						start,
 						navigationMs: Math.max(0, Math.round(performance.now() - navStarted)),
-						error: "navigation_failed",
+						error:
+							pageError?.code === "captcha_blocked"
+								? "captcha_blocked"
+								: "navigation_failed",
 					});
 					degraded = true;
 					break;
@@ -1817,10 +1862,7 @@ export class GoogleCdpBroker {
 					);
 					req.on("error", (e) =>
 						reject(
-							new BrokerError(
-								"cdp_protocol",
-								`Target creation failed: ${e.message}`,
-							),
+							new BrokerError("cdp_protocol", `Target creation failed: ${e.message}`),
 						),
 					);
 					req.end();
@@ -1847,10 +1889,7 @@ export class GoogleCdpBroker {
 						cleanup();
 						ws.removeEventListener("close", onClose);
 						reject(
-							new BrokerError(
-								"cdp_protocol",
-								"WebSocket closed before connecting",
-							),
+							new BrokerError("cdp_protocol", "WebSocket closed before connecting"),
 						);
 					};
 					const cleanup = () => {
@@ -1901,12 +1940,7 @@ export class GoogleCdpBroker {
 						} catch (e) {
 							clearTimeout(timer);
 							pending.delete(id);
-							reject(
-								new BrokerError(
-									"cdp_protocol",
-									`CDP send failed: ${e.message}`,
-								),
-							);
+							reject(new BrokerError("cdp_protocol", `CDP send failed: ${e.message}`));
 						}
 					});
 				};
@@ -1938,6 +1972,14 @@ export class GoogleCdpBroker {
 							? evaluation.result.value
 							: undefined;
 					if (isGoogleSearchLocation(currentUrl, canonicalUrl)) return;
+					// A /sorry/ redirect can never render results — polling it would
+					// burn the whole search deadline (issue #111). Fail fast with a
+					// code callers can use to cool the lane down.
+					if (isGoogleCaptchaLocation(currentUrl))
+						throw new BrokerError(
+							"captcha_blocked",
+							"Google redirected the search to a CAPTCHA page (/sorry/)",
+						);
 					await new Promise((r) => setTimeout(r, 200));
 				}
 				throw new BrokerError(
@@ -1946,7 +1988,8 @@ export class GoogleCdpBroker {
 				);
 			});
 
-			const cdpSendOverridden = async (method, params, ..._args) => cdpCall(method, params);
+			const cdpSendOverridden = async (method, params, ..._args) =>
+				cdpCall(method, params);
 
 			const { results, degraded, pages } = await timePhase("extractionMs", () =>
 				this.extractGoogleSearchResultsPaginated(

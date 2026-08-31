@@ -4,11 +4,13 @@ All notable changes to pi-webaio will be documented in this file.
 
 ## [Unreleased]
 
-### Added
-
 ### Changed
 
+- **`aio-websearch` `max` default 15 → 8 (issue #111 follow-up)** — the largest default that avoids the Google broker's SERP pagination whenever Google renders a full first page (~8–10 organics; requesting more always paginates). Halves Google-side request volume per search and removes the page-2 latency tail, so concurrent default searches no longer stack two navigations + two extractions on Chrome. Sparse SERPs may still fetch one extra page. Callers can pass an explicit larger `max`.
+
 ### Fixed
+
+- **Google CAPTCHA fail-fast + lane status (issue #111)** — under sustained concurrent search load Google soft-blocks the client by redirecting the tab to `/sorry/` (CAPTCHA). The broker previously polled that page blindly until the 5s Google-lane cap burned, surfacing as `deadline_expired`/`cdp_disconnected`. The broker's navigation/location checks and the extraction readiness probe now detect `/sorry/` and fail fast with a dedicated `captcha_blocked` code (page-1 throws; page-2+ degrades to the pages already collected with the envelope labeled). `googleSearchWithDependencies` treats `captcha_blocked` as a safety fence — no legacy-path fallback, which would deterministically hit the same IP-level block. `aio-websearch` surfaces `googleStatus: "blocked (Google CAPTCHA /sorry/ …)"` and a new `blocked` live-TUI provider state instead of a generic timeout.
 
 ## [1.0.3] - 2026-08-22
 

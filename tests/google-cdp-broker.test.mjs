@@ -825,3 +825,187 @@ test("page-1 extraction failure still propagates (genuine total failure)", async
 		/not ready/,
 	);
 });
+test("isGoogleCaptchaLocation detects /sorry/ redirects on Google hosts only", async () => {
+	const { isGoogleCaptchaLocation } = await import(
+		"../bin/google-cdp-broker.mjs"
+	);
+	assert.equal(
+		isGoogleCaptchaLocation(
+			"https://www.google.com/sorry/index?continue=https%3A%2F%2Fwww.google.com%2Fsearch%3Fq%3Dx",
+		),
+		true,
+	);
+	assert.equal(isGoogleCaptchaLocation("https://google.com/sorry/"), true);
+	assert.equal(
+		isGoogleCaptchaLocation("https://www.google.co.uk/sorry/index?c=x"),
+		false,
+		"regional hosts do not match (broker navigates google.com)",
+	);
+	assert.equal(
+		isGoogleCaptchaLocation("https://www.google.com/search?q=x"),
+		false,
+	);
+	assert.equal(isGoogleCaptchaLocation("https://evil.com/sorry/index"), false);
+	assert.equal(isGoogleCaptchaLocation("about:blank"), false);
+	assert.equal(isGoogleCaptchaLocation(undefined), false);
+	assert.equal(isGoogleCaptchaLocation(42), false);
+});
+
+test("captcha redirect during page-1 navigation polling fails fast with captcha_blocked", async () => {
+	// Issue #111: Google redirects the tab to /sorry/; polling it burns the
+	// whole search deadline. verifyCdpLocation — the shared location poll used
+	// by SERP pages 2+ — must throw captcha_blocked immediately instead.
+	// (Page 1 has a duplicated inline poll in searchGoogle; see the comment
+	// there. Its check mirrors this one.)
+	const { GoogleCdpBroker } = await import("../bin/google-cdp-broker.mjs");
+	const broker = new GoogleCdpBroker({
+		profileDir: `captcha-nav-${Math.random().toString(36).slice(2)}`,
+	});
+	let evaluates = 0;
+	broker.cdpSend = async (_method, params) => {
+		if (params?.expression === "location.href") {
+			evaluates++;
+			return {
+				result: {
+					value:
+						"https://www.google.com/sorry/index?continue=https%3A%2F%2Fwww.google.com%2Fsearch",
+				},
+			};
+		}
+		return {};
+	};
+	const started = Date.now();
+	await assert.rejects(
+		broker.verifyCdpLocation(
+			{ cdpSessionId: "s" },
+			(value) => isGoogleSearchLocationShim(value),
+			{ deadlineAt: Date.now() + 15_000 },
+			undefined,
+			"Google search",
+		),
+		(error) => error?.code === "captcha_blocked",
+	);
+	assert.ok(
+		Date.now() - started < 5_000,
+		"fails fast instead of polling to the deadline",
+	);
+	assert.ok(evaluates >= 1, "location was actually probed");
+});
+
+function isGoogleSearchLocationShim(_value) {
+	// Never satisfied: the /sorry/ URL must be caught by the captcha check
+	// before the expected-location check matters.
+	return false;
+}
+
+test("captcha mid-pagination degrades to collected pages and labels the envelope", async () => {
+	const broker = new GoogleCdpBroker({
+		profileDir: `captcha-page2-${Math.random().toString(36).slice(2)}`,
+	});
+	broker.extractGoogleSearchResults = async () => [
+		{ title: "r1", url: "https://example.com/1", snippet: "s" },
+	];
+	// Page-1 location verifies (inside searchGoogle, not exercised here);
+	// page-2's location check lands on /sorry/ and throws captcha_blocked.
+	// verifyCdpLocation is only invoked for SERP pages ≥ 2, so throwing
+	// unconditionally is deterministic.
+	broker.cdpSend = async (_method, _params) => ({});
+	broker.verifyCdpLocation = async () => {
+		const error = new Error("captcha");
+		error.code = "captcha_blocked";
+		throw error;
+	};
+	const { results, degraded, pages } =
+		await broker.extractGoogleSearchResultsPaginated(
+			{ maxResults: 15, deadlineAt: Date.now() + 60_000 },
+			{ cdpSessionId: "s", targetId: "t" },
+			"query",
+			15,
+			undefined,
+		);
+	assert.equal(results.length, 1, "page-1 results kept");
+	assert.equal(degraded, true);
+	assert.equal(pages.length, 2);
+	assert.equal(
+		pages[1].error,
+		"captcha_blocked",
+		"envelope labels the captcha page",
+	);
+});
+
+test("captcha_blocked skips legacy fallback in googleSearchWithDependencies", async () => {
+	// The legacy path deterministically hits the same IP-level block — falling
+	// back would hammer Google one more time and waste the remaining budget.
+	const { googleSearchWithDependencies } = await import("../src/google-ai.ts");
+	let legacyCalls = 0;
+	let brokerSearches = 0;
+	await assert.rejects(
+		googleSearchWithDependencies(
+			"captcha fallback gate",
+			{
+				maxResults: 8,
+				timeoutMs: 15_000,
+			},
+			{
+				ensureChrome: async () => ({ running: true, ready: true }),
+				connectBroker: async () => ({
+					connected: true,
+					async search() {
+						brokerSearches++;
+						const error = new Error(
+							"Google redirected the search to a CAPTCHA page (/sorry/)",
+						);
+						error.code = "captcha_blocked";
+						throw error;
+					},
+					async close() {},
+				}),
+				legacySearch: async () => {
+					legacyCalls++;
+					return {
+						results: [{ title: "legacy", url: "https://example.com/", snippet: "s" }],
+						timings: {},
+					};
+				},
+				cleanupBroker: async () => {},
+			},
+		),
+		(error) => error?.code === "captcha_blocked",
+	);
+	assert.equal(brokerSearches, 1);
+	assert.equal(legacyCalls, 0, "legacy path must not run for captcha_blocked");
+});
+
+test("captcha redirect mid-extraction fails fast via the readiness probe", async () => {
+	// Google can redirect to /sorry/ AFTER the SERP verified OK — the
+	// extraction loop's readiness probe must catch the redirect (rv.href)
+	// and throw captcha_blocked instead of polling a dead page to the
+	// deadline and then falling back into the same block (review fix 2).
+	const broker = new GoogleCdpBroker({
+		profileDir: `captcha-midextract-${Math.random().toString(36).slice(2)}`,
+	});
+	broker.cdpSend = async (_method, params) =>
+		params?.expression?.includes("h3:")
+			? {
+					result: {
+						value: {
+							h3: 0,
+							consent: false,
+							href: "https://www.google.com/sorry/index?continue=x",
+						},
+					},
+				}
+			: {};
+	const started = Date.now();
+	await assert.rejects(
+		broker.extractGoogleSearchResults(
+			{ deadlineAt: Date.now() + 15_000 },
+			"session",
+			8,
+			undefined,
+			undefined,
+		),
+		(error) => error?.code === "captcha_blocked",
+	);
+	assert.ok(Date.now() - started < 5_000, "fails fast instead of grinding");
+});

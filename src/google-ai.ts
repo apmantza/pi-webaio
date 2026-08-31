@@ -3087,6 +3087,15 @@ export async function googleSearchWithDependencies(
 			emitFailure(error, "skipped", "shared_active");
 			throw error;
 		}
+		// A Google CAPTCHA block is IP-level, not transport-level: the legacy
+		// path opens a fresh tab against the same site and deterministically hits
+		// the same /sorry/ page while hammering Google with one more request
+		// (issue #111). Treat it like a safety fence — surface the code so the
+		// tool layer can cool the lane down instead of retrying through it.
+		if (errorCode(error) === "captcha_blocked") {
+			emitFailure(error, "skipped", "not_applicable");
+			throw error;
+		}
 		if (isBrokerCancellation(error, options.signal)) {
 			emitFailure(error, "skipped", "aborted");
 			throw error;

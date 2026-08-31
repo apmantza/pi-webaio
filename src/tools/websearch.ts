@@ -41,6 +41,7 @@ import {
 	providerFromEngineStatus,
 	SPINNER_INTERVAL_MS,
 	type SearchProviderProgress,
+	type SearchProviderStatus,
 } from "./search-render.ts";
 
 const SEARCH_DEADLINE_MS = 7000;
@@ -147,7 +148,12 @@ export function registerWebsearchTool(
 		async execute(_toolCallId, params, signal, onUpdate) {
 			const query = params.query;
 			setSearchContext(query);
-			const max = params.max ?? 15;
+			// Default 8 (issue #111): the largest default that avoids the broker's
+			// SERP pagination whenever Google renders a full first page (~8–10
+			// organics; requesting more always paginates). Halves Google-side
+			// request volume per search; sparse SERPs may still fetch one extra
+			// page. Callers can pass an explicit larger max.
+			const max = params.max ?? 8;
 			const useGoogle = params.google ?? true;
 			const useReddit = params.reddit === true;
 			const compact = params.compact === true;
@@ -403,27 +409,34 @@ export function registerWebsearchTool(
 							err && typeof err === "object" && "code" in err
 								? (err as { code?: unknown }).code
 								: undefined;
-						googleStatus =
-							errorCode === "deadline_expired"
-								? `timeout (Google lane cap ${googleLaneMaxMs}ms; hard deadline ${searchDeadlineMs}ms)`
-								: `error (${String(err).slice(0, 120)})`;
+						if (errorCode === "captcha_blocked") {
+							googleStatus =
+								"blocked (Google CAPTCHA /sorry/ — failing fast, other providers unaffected)";
+						} else if (errorCode === "deadline_expired") {
+							googleStatus = `timeout (Google lane cap ${googleLaneMaxMs}ms; hard deadline ${searchDeadlineMs}ms)`;
+						} else {
+							googleStatus = `error (${String(err).slice(0, 120)})`;
+						}
 						return { source: "google" as const, results: [] };
 					}
 				})();
 				// Live TUI: reflect the Google row as soon as the lane settles.
 				void googlePromise.then((res) => {
-					setProvider("google", {
-						status:
-							res.results.length > 0
-								? "ok"
-								: googleStatus.startsWith("empty")
-									? "empty"
-									: googleStatus.startsWith("timeout")
-										? "timeout"
+					const status: SearchProviderStatus =
+						res.results.length > 0
+							? "ok"
+							: googleStatus.startsWith("empty")
+								? "empty"
+								: googleStatus.startsWith("timeout")
+									? "timeout"
+									: googleStatus.startsWith("blocked")
+										? "blocked"
 										: googleStatus.startsWith("disabled") ||
 												googleStatus.startsWith("unavailable")
 											? "skipped"
-											: "error",
+											: "error";
+					setProvider("google", {
+						status,
 						count: res.results.length,
 						latencyMs: Date.now() - startedAt,
 						detail: res.results.length > 0 ? undefined : googleStatus.slice(0, 60),
@@ -668,7 +681,10 @@ export function registerWebsearchTool(
 					result.google = graceResult;
 					if (graceResult.results.length > 0) {
 						googleStatus = "ok";
-					} else if (!googleStatus.startsWith("error")) {
+					} else if (
+						!googleStatus.startsWith("error") &&
+						!googleStatus.startsWith("blocked")
+					) {
 						googleStatus = "empty (Google returned 0 results)";
 					}
 				}

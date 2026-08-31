@@ -41,6 +41,7 @@ export type SearchProviderStatus =
 	| "empty"
 	| "error"
 	| "timeout"
+	| "blocked"
 	| "skipped";
 
 /** One provider's live/final state for the progress + result views. */
@@ -134,6 +135,8 @@ export function renderProviderGlyph(
 			return theme.fg("error", "✗");
 		case "timeout":
 			return theme.fg("warning", "⏱");
+		case "blocked":
+			return theme.fg("warning", "⊘");
 		case "empty":
 			return theme.fg("muted", "∅");
 		case "skipped":
@@ -167,6 +170,8 @@ export function renderProviderStatusText(
 			return theme.fg("error", provider.detail ?? "error");
 		case "timeout":
 			return theme.fg("warning", provider.detail ?? "timed out");
+		case "blocked":
+			return theme.fg("warning", provider.detail ?? "blocked");
 		case "skipped":
 			return theme.fg("muted", provider.detail ?? "disabled");
 	}
@@ -245,6 +250,9 @@ function renderProviderRow(
 		case "skipped":
 			candidates.push(provider.detail ?? "disabled", "–");
 			break;
+		case "blocked":
+			candidates.push(provider.detail ?? "blocked", "blocked", "⊘");
+			break;
 		default:
 			candidates.push("searching…");
 	}
@@ -270,6 +278,8 @@ function plainGlyph(status: SearchProviderStatus, spinnerTick: number): string {
 			return "✗";
 		case "timeout":
 			return "⏱";
+		case "blocked":
+			return "⊘";
 		case "empty":
 			return "∅";
 		case "skipped":
@@ -287,6 +297,7 @@ function rowTextColor(status: SearchProviderStatus): string {
 		case "error":
 			return "error";
 		case "timeout":
+		case "blocked":
 			return "warning";
 		case "running":
 			return "accent";

@@ -24,7 +24,7 @@ Registered pi tools and parameters provided by pi-webaio.
 | Parameter | Type      | Default | Description                                                                       |
 | --------- | --------- | ------- | --------------------------------------------------------------------------------- |
 | `query`   | `string`  | —       | Search query (e.g. 'React Server Components RFC')                                 |
-| `max`     | `number`  | `15`    | Max results per engine. Up to 25 total after dedup across all engines.            |
+| `max`     | `number`  | `8`     | Max results per engine. Up to 25 total after dedup across all engines. Values above ~10 make the Google broker paginate the SERP (slower; avoids CAPTCHA exposure — see issue #111). |
 | `google`  | `boolean` | `true`  | Also search Google via headless Chrome CDP. Set to `false` to skip Google. |
 | `reddit`  | `boolean` | `false` | Also search Reddit via headless Chrome CDP. Opt-in since v1.0.1 — pass `reddit: true` to include the Reddit lane. |
 | `compact` | `boolean` | `false` | One line per result (`title — url [sourceType]`), no snippet. For URL scouting.   |

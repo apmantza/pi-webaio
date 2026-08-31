@@ -139,7 +139,7 @@ pi-webaio/
 - Google uses headless Chrome via CDP (auto-launched)
 - 7-second cap — returns whatever is ready
 - 10-minute cache (persisted to disk)
-- Parameters: `query` (string), `max` (number, default 15), `google` (boolean, default true), `goggles` (optional rerank preset/rules), `prefetch` (opt-in speculative cache warm of top hits)
+- Parameters: `query` (string), `max` (number, default 8), `google` (boolean, default true), `goggles` (optional rerank preset/rules), `prefetch` (opt-in speculative cache warm of top hits)
 - Returns deduplicated, cross-engine-scored results with title, URL, snippet, domain, sources, and a per-result `sourceType` (official-docs, repo, academic, maintainer-blog, website, community, news, social)
 - TUI: polished call/progress/result rendering with engine counts and per-result expand
 - Google can be skipped with `google: false`. Reddit is opt-in since v1.0.1: pass `reddit: true` to include the Reddit CDP lane (default off). When Google is requested but empty, the result carries a `googleStatus` field and a note instead of silently dropping Google (v0.7.3)
