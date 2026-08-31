@@ -9,6 +9,47 @@ Harness: `scripts/bench-full-search.mjs` (rotates distinct queries per sample
 to avoid the 10-min search cache; shares one `chromeReady` between the Google
 and Reddit lanes exactly like the tool).
 
+## Post-#111 concurrency smoke: cold/warm × single/concurrent (2026-08-29)
+
+After the CAPTCHA fail-fast + `max` default 15→8 fix, a targeted smoke of the
+**Google lane** (`googleSearchWithDependencies`, the real client path, max=8 —
+the new tool default, which never paginates on a full first SERP page).
+Harness: `scripts/smoke-concurrency.mjs` (real-world queries — Google serves
+genuine zero-result pages for obscure strings, which the extraction gate then
+treats as a deadline grind, so the harness deliberately avoids them).
+
+Environment: Windows dev laptop, Node 24, Chrome 151 headless CDP, broker
+per-session. "Cold" = Chrome + broker processes killed before the run.
+
+| Phase | Run 1 (cold session) | Run 2 (warm session) |
+| --- | ---: | ---: |
+| cold single (Chrome launch + broker spawn + search) | **2,018 ms** | — |
+| warm single #1 | 442 ms | 1,380 ms |
+| warm single #2 | 744 ms | 1,379 ms |
+| concurrent ×2 (wall) | **801 ms** | 2,173 ms |
+| concurrent ×2 round 2 (wall) | 1,114 ms | 1,536 ms |
+| concurrent per-search (range) | 437–1,114 ms | 995–2,173 ms |
+| success | 10/10 searches, 8 results each | 8/8 searches, 8 results each |
+
+Phase breakdown (broker `timings`): `targetSetup` 26–332 ms, `nav` 135–320 ms,
+`extract` 27–1,262 ms. The extract phase is the only one that balloons under
+concurrency (Chrome CPU contention + SERP render wait) and it stays well inside
+the 5s lane cap. Post-run Chrome state: **zero leftover search tabs, zero
+/sorry/ redirects** across all three sessions.
+
+Reading: **concurrency is now effectively free** — two simultaneous searches
+complete in the wall time of one warm single (801 ms wall vs 442–744 ms solo in
+the cold session), versus the pre-fix pattern where concurrent paginated
+searches stacked two navigations + two extractions and lost 3–4 of 12 searches
+to `deadline_expired`. The 2026-08-22 progressive-throttling window (below) is
+the same server-side behavior this fix now fails fast on.
+
+Caveats: single machine, single IP, small n; the cold single in run 1 benefited
+from a warm OS file cache (Chrome binary already paged in) — a true first-ever
+cold start is slower (see the 2026-08-16 cold-start table: ~3.0 s broker).
+Google-side throttling remains load/IP-dependent; `captcha_blocked` now caps
+its cost at ~a poll interval instead of a 5s lane burn.
+
 ## Full-tool cold/warm, 3s spacing (2026-08-22)
 
 Usage: `node --experimental-strip-types scripts/bench-full-search.mjs
