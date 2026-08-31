@@ -4,6 +4,14 @@ All notable changes to pi-webaio will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+### Changed
+
+### Fixed
+
+## [1.0.4] - 2026-08-31
+
 ### Changed
 
 - **`aio-websearch` `max` default 15 → 8 (issue #111 follow-up)** — the largest default that avoids the Google broker's SERP pagination whenever Google renders a full first page (~8–10 organics; requesting more always paginates). Halves Google-side request volume per search and removes the page-2 latency tail, so concurrent default searches no longer stack two navigations + two extractions on Chrome. Sparse SERPs may still fetch one extra page. Callers can pass an explicit larger `max`.
