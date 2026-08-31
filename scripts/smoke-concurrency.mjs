@@ -19,7 +19,10 @@ import { googleSearchWithDependencies } from "../src/google-ai.ts";
 const cold = process.argv.includes("--cold");
 const unique = Date.now();
 const queries = [
-	["what is the broker pattern in distributed systems", "node.js stream backpressure explained"],
+	[
+		"what is the broker pattern in distributed systems",
+		"node.js stream backpressure explained",
+	],
 	["typescript const type parameters", "react server components hydration"],
 	["sqlite performance tuning pragmas", "rust tokio runtime architecture"],
 ];
@@ -47,9 +50,7 @@ const timed = (q, maxResults = 8, timeoutMs = 30000) => {
 
 const show = (label, r) => {
 	if (r.ok)
-		console.log(
-			`${label}: OK ${r.ms}ms n=${r.n} pages=${r.pages} ${r.phases}`,
-		);
+		console.log(`${label}: OK ${r.ms}ms n=${r.n} pages=${r.pages} ${r.phases}`);
 	else console.log(`${label}: FAIL ${r.ms}ms code=${r.code} ${r.msg}`);
 };
 
@@ -67,10 +68,7 @@ show("warm single 2", await timed(queries[0][1]));
 
 console.log("=== phase 3: WARM concurrent x2 (Promise.all, stagger 0) ===");
 const t0 = Date.now();
-const [a, b] = await Promise.all([
-	timed(queries[1][0]),
-	timed(queries[1][1]),
-]);
+const [a, b] = await Promise.all([timed(queries[1][0]), timed(queries[1][1])]);
 show("conc A", a);
 show("conc B", b);
 console.log(`conc wall: ${Date.now() - t0}ms`);
