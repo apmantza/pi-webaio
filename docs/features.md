@@ -8,7 +8,7 @@ Detailed feature reference for pi-webaio.
 
 **pi-webaio** is a pi extension that gives your agent eyes on the web. It registers eight tools that let pi search, fetch, discover, and archive web content — all without API keys or paid services.
 
-When you search, pi-webaio queries four HTTP engines (DuckDuckGo, Brave, Yahoo, and Bing) plus Google by default and an opt-in Reddit CDP companion (`reddit: true`, requires Chrome). Results that show up across multiple engines rank higher — consensus is a signal of quality. When you fetch a page, it tries 14 different extraction backends in order, stripping cookie banners and anti-bot noise along the way, so you get clean markdown instead of raw HTML soup. Paywalled news sites (NYT, WaPo, FT, WSJ, etc.) can be bypassed on opt-in with a strategy chain that tries archive.org, bot-UA impersonation, and Playwright with paywall-script blocking.
+When you search, pi-webaio queries four HTTP engines (DuckDuckGo, Brave, Yahoo, and Bing) plus Google by default and an opt-in Reddit CDP companion (`reddit: true`, requires Chrome). Two bonus providers join the same parallel fan-out: **FireCrawl Keyless** (no API key, 1k free credits/month) and **TinyFish** (free with an API key in `~/.piwebaio/config` or `~/.piwebaio/.env`). Results that show up across multiple engines rank higher — consensus is a signal of quality. When you fetch a page, it tries 14 different extraction backends in order, stripping cookie banners and anti-bot noise along the way, so you get clean markdown instead of raw HTML soup. Paywalled news sites (NYT, WaPo, FT, WSJ, etc.) can be bypassed on opt-in with a strategy chain that tries archive.org, bot-UA impersonation, and Playwright with paywall-script blocking.
 
 Long pages are **not** auto-summarized by default — instead you get a frugal, lossless preview (a heading outline plus the single largest content section), and the full content is always saved to disk. Pass `summarize: true` to opt in to an AI summary via Google AI Mode (headless Chrome). For sites with API-first extractors (GitHub, YouTube, npm, PyPI, crates.io, RubyGems, Packagist, pub.dev, Go, NuGet, Reddit, Hacker News, arXiv, Stack Exchange, Wikipedia, Open Library, DEV.to, SonarCloud, docs sites, Context7, DeepWiki), pi-webaio bypasses HTML scraping entirely and pulls structured data directly.
 
@@ -23,7 +23,7 @@ It's built for agents that need to:
 - **Bypass** — opt-in paywall bypass for news sites that block non-subscribers
 - **Chunk for RAG** — split fetched markdown into pre-sized chunks with optional overlap
 
-No API keys. No subscriptions. No brittle scraping scripts. Just `pi install npm:pi-webaio` and go.
+No subscriptions. No brittle scraping scripts. FireCrawl works with zero setup; everything else is keyless too (TinyFish needs one free API key). Just `pi install npm:pi-webaio` and go.
 
 ## Reading long pages: outline, frugal preview, and opt-in summary
 
@@ -181,7 +181,7 @@ Non-markdown formats stay in-memory and never touch disk — useful for piping i
 
 `aio-webfetch` accepts a `chunks` parameter that splits the fetched markdown into paragraph-bounded chunks for RAG pipelines:
 
-```
+```text
 aio-webfetch url: https://en.wikipedia.org/wiki/Node.js
             chunks: true
             maxTokens: 512

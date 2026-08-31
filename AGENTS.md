@@ -20,6 +20,9 @@ pi-webaio/
 ├── pi-entry.mjs              ← pi.extensions entry. Prefers compiled dist/index.js (built by prepare on npm AND git installs), falls back to index.ts for unbuilt source checkouts.
 ├── src/
 │   ├── google-ai.ts          ← TypeScript wrapper — spawns CDP child processes
+│   ├── tinyfish.ts           ← TinyFish Search & Fetch API client (API key) (v1.0.2)
+│   ├── firecrawl.ts          ← FireCrawl Keyless search/scrape client (no key) (v1.0.2)
+│   ├── config.ts             ← TinyFish API key resolution (v1.0.2)
 │   ├── search.ts             ← HTTP search (DDG, Brave, Yahoo, Bing) + engine health, caching, dedup, source-type ranking, goggles
 │   ├── discovery.ts          ← Sitemap parsing, nav link extraction, crawling (fan-out capped)
 │   ├── bot-detection.ts      ← Structured bot-block detection (Cloudflare, Anubis, etc.)
@@ -135,11 +138,11 @@ pi-webaio/
 
 ### 1. `aio-websearch`
 
-- Searches DuckDuckGo, Brave, Yahoo, and Bing plus Google and Reddit CDP companions when Chrome is available
+- Searches DuckDuckGo, Brave, Yahoo, and Bing plus Google and Reddit CDP companions when Chrome is available; TinyFish (API key) and FireCrawl Keyless (no key) run as parallel bonus providers
 - Google uses headless Chrome via CDP (auto-launched)
-- 7-second cap — returns whatever is ready
+- ~2.9s response target with a 7-second hard cap — returns whatever is ready
 - 10-minute cache (persisted to disk)
-- Parameters: `query` (string), `max` (number, default 8), `google` (boolean, default true), `goggles` (optional rerank preset/rules), `prefetch` (opt-in speculative cache warm of top hits)
+- Parameters: `query` (string), `max` (number, default 8), `google` (boolean, default true), `reddit` (boolean, default false), `compact` (boolean), `goggles` (optional rerank preset/rules), `prefetch` (opt-in speculative cache warm of top hits)
 - Returns deduplicated, cross-engine-scored results with title, URL, snippet, domain, sources, and a per-result `sourceType` (official-docs, repo, academic, maintainer-blog, website, community, news, social)
 - TUI: polished call/progress/result rendering with engine counts and per-result expand
 - Google can be skipped with `google: false`. Reddit is opt-in since v1.0.1: pass `reddit: true` to include the Reddit CDP lane (default off). When Google is requested but empty, the result carries a `googleStatus` field and a note instead of silently dropping Google (v0.7.3)
@@ -272,8 +275,11 @@ pi-webaio/
 | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `src/tools/webquery.ts` + `src/webquery-index.ts` | `aio-webquery`: offline BM25 search over an `aio-webpull` corpus. The index builder serializes per-chunk metadata to JSON alongside the pulled markdown; `resolveCorpusDir` fixes `dir` resolution against the temp base (v0.7.3). |
 | `src/research.ts` + `src/tools/webresearch.ts` | `aio-webresearch`: single-round research bundle orchestrator (search fan-out, source ranking, fetch, BM25 index, auditable bundle) plus a deterministic claim-stance classifier. Per-source fetch guard added in v0.7.3. |
-| `src/search.ts` | Source-type classification + preferred-domain boost folded into cross-engine ranking; `sourceType` exposed on results (v0.7.1). |
+| `src/search.ts` | Source-type classification + preferred-domain boost folded into cross-engine ranking; `sourceType` exposed on results (v0.7.1). TinyFish/FireCrawl run as parallel providers alongside the HTTP engines (v1.0.2). |
 | `src/goggles.ts` | Search rerank presets (`docs-first`, `research`, `news-balanced`) or custom rules, added as a purely additive ranking term (v0.7.1). |
+| `src/tinyfish.ts` | TinyFish Search & Fetch API client; key resolved from `~/.piwebaio/config`, `~/.piwebaio/.env`, or `TINYFISH_API_KEY` (v1.0.2). |
+| `src/firecrawl.ts` | FireCrawl Keyless search/scrape client (no key, 1k credits/month) with API-key support and 429 rate-limit cooldown (v1.0.2/1.0.3). |
+| `src/config.ts` | TinyFish API key resolution (config JSON / .env / env var) (v1.0.2). |
 | `src/cookie-cache.ts` | Bounded (LRU 50) + short-TTL per-origin cookie cache bridging Playwright harvests across fetch calls; consulted by `smartFetch` before escalating to a browser (v0.7.1). |
 | `src/strategy-memory.ts` | Per-domain memory of which fetch-ladder rung worked, LRU-capped (500) with 7-day expiry and periodic cheaper-strategy re-probe (v0.7.0). |
 | `src/prefetch.ts` | Opt-in speculative prefetch of top search hits into the content cache (v0.7.0). |

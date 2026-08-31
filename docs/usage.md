@@ -24,6 +24,13 @@ Scout URLs with minimal tokens — one line per result, no snippet:
 Use aio-websearch to find the Vite docs (compact: true)
 ```
 
+TinyFish and FireCrawl run automatically as parallel bonus providers (FireCrawl needs no key; TinyFish needs `TINYFISH_API_KEY` in `~/.piwebaio/config` or `~/.piwebaio/.env`). For fetching a specific URL through one of them instead of the normal pipeline, pass a flag:
+
+```
+Use aio-webfetch with firecrawl: true to download https://example.com/page
+Use aio-webfetch with tinyfish: true to download https://example.com/page
+```
+
 ### Fetch a single URL
 
 ```
