@@ -178,16 +178,27 @@ export interface RankedSource {
 	primary: boolean;
 }
 
+const _dedupeCache = new Map<string, string>();
+const _DEDUPE_CACHE_MAX = 512;
+
 function normalizeUrlForDedupe(url: string): string {
+	const cached = _dedupeCache.get(url);
+	if (cached !== undefined) return cached;
+	let normalized: string;
 	try {
 		const u = new URL(url);
 		u.hash = "";
-		// Strip a trailing slash for dedupe purposes only (display uses original url).
 		const p = u.pathname.replace(/\/$/, "");
-		return `${u.origin}${p}${u.search}`;
+		normalized = `${u.origin}${p}${u.search}`;
 	} catch {
-		return url;
+		normalized = url;
 	}
+	if (_dedupeCache.size >= _DEDUPE_CACHE_MAX) {
+		const oldest = _dedupeCache.keys().next().value as string | undefined;
+		if (oldest !== undefined) _dedupeCache.delete(oldest);
+	}
+	_dedupeCache.set(url, normalized);
+	return normalized;
 }
 
 /**

@@ -8,7 +8,10 @@ import { shortHash, hashesEqual } from "../content-hash.ts";
 // Per-URL prune result cache — same url+budget+query → same pruned output
 // until content changes (key includes contentHash). Life-depends: avoids
 // re-running BM25 + prune on 116k pi.dev doc per webcontent call.
-const _pruneCache = new Map<string, { contentHash: string | undefined; result: string }>();
+const _pruneCache = new Map<
+	string,
+	{ contentHash: string | undefined; result: string }
+>();
 const _PRUNE_CACHE_MAX = 64;
 
 export function registerWebcontentTool(pi: ExtensionAPI): void {
@@ -90,21 +93,29 @@ export function registerWebcontentTool(pi: ExtensionAPI): void {
 			const budgetTokens = params.budgetTokens as number | undefined;
 			const query = params.query as string | undefined;
 			let displayContent: string;
-			if (!budgetTokens) {
-				displayContent = stored.content;
-			} else {
+			if (budgetTokens) {
 				const cacheKey = `${stored.url}\x00${budgetTokens}\x00${query ?? ""}\x00${stored.contentHash ?? ""}`;
 				const hit = _pruneCache.get(cacheKey);
 				if (hit && hit.contentHash === stored.contentHash) {
 					displayContent = hit.result;
 				} else {
-					displayContent = applyTokenBudget(stored.content, budgetTokens, query, stored.url);
+					displayContent = applyTokenBudget(
+						stored.content,
+						budgetTokens,
+						query,
+						stored.url,
+					);
 					if (_pruneCache.size >= _PRUNE_CACHE_MAX) {
 						const oldest = _pruneCache.keys().next().value as string | undefined;
 						if (oldest !== undefined) _pruneCache.delete(oldest);
 					}
-					_pruneCache.set(cacheKey, { contentHash: stored.contentHash, result: displayContent });
+					_pruneCache.set(cacheKey, {
+						contentHash: stored.contentHash,
+						result: displayContent,
+					});
 				}
+			} else {
+				displayContent = stored.content;
 			}
 			const text = [
 				`Retrieved content for ${stored.url}`,

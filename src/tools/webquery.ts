@@ -72,7 +72,10 @@ export function registerWebqueryTool(pi: ExtensionAPI): void {
 			// Check query cache — same query+dir+topK+builtAt → hit
 			const cacheKey = `${dir}\x00${query}\x00${topK}\x00${index.builtAt}`;
 			const cached = _queryCache.get(cacheKey) as
-				| { builtAt: string; result: { content: { type: string; text: string }[]; details: unknown } }
+				| {
+						builtAt: string;
+						result: { content: { type: string; text: string }[]; details: unknown };
+				  }
 				| undefined;
 			if (cached && cached.builtAt === index.builtAt) {
 				return cached.result;
@@ -117,9 +120,7 @@ export function registerWebqueryTool(pi: ExtensionAPI): void {
 			for (let i = 0; i < ranked.length; i++) {
 				const { score, chunk } = ranked[i]!;
 				const heading = chunk.heading ? ` › ${chunk.heading}` : "";
-				lines.push(
-					`--- [${i + 1}/${ranked.length}] score=${score.toFixed(3)} ---`,
-				);
+				lines.push(`--- [${i + 1}/${ranked.length}] score=${score.toFixed(3)} ---`);
 				lines.push(`File: ${chunk.file}${heading}`);
 				if (chunk.url) lines.push(`URL: ${chunk.url}`);
 				lines.push("");

@@ -378,54 +378,57 @@ export function registerWebsearchTool(
 				const _gCacheKey = `${query}\x00${max}`;
 				const _gHit = _googleCache.get(_gCacheKey);
 				if (_gHit && Date.now() - _gHit.at < _GOOGLE_CACHE_TTL_MS) {
-				googleStatus = "ok (cached)";
-				googlePromise = Promise.resolve({ source: "google" as const, results: _gHit.results });
+					googleStatus = "ok (cached)";
+					googlePromise = Promise.resolve({
+						source: "google" as const,
+						results: _gHit.results,
+					});
 				} else {
-				googlePromise = (async () => {
-					try {
-						await chromeReady;
-						// Cap the lane at GOOGLE_LANE_MAX_MS measured from when the
-						// search actually starts (after chromeReady), never exceeding
-						// the overall tool deadline.
-						const googleDeadlineAt = Math.min(
-							searchDeadlineAt,
-							Date.now() + googleLaneMaxMs,
-						);
-						const g = await googleSearchImpl(query, {
-							timeoutMs: Math.min(searchDeadlineMs, googleLaneMaxMs),
-							maxResults: max,
-							signal,
-							deadlineAt: googleDeadlineAt,
-						});
-						const results = g.results.map((r) => ({
-							title: r.title,
-							url: r.url,
-							snippet: r.snippet,
-							domain: extractDomain(r.url),
-						}));
-						googleStatus = results.length
-							? g.degraded
-								? "ok (an extra SERP page failed; results degraded to the pages collected)"
-								: "ok"
-							: "empty (Google returned 0 results)";
-						return { source: "google" as const, results };
-					} catch (err) {
-						recordProviderNetworkFailure("google", String(err));
-						const errorCode =
-							err && typeof err === "object" && "code" in err
-								? (err as { code?: unknown }).code
-								: undefined;
-						if (errorCode === "captcha_blocked") {
-							googleStatus =
-								"blocked (Google CAPTCHA /sorry/ — failing fast, other providers unaffected)";
-						} else if (errorCode === "deadline_expired") {
-							googleStatus = `timeout (Google lane cap ${googleLaneMaxMs}ms; hard deadline ${searchDeadlineMs}ms)`;
-						} else {
-							googleStatus = `error (${String(err).slice(0, 120)})`;
+					googlePromise = (async () => {
+						try {
+							await chromeReady;
+							// Cap the lane at GOOGLE_LANE_MAX_MS measured from when the
+							// search actually starts (after chromeReady), never exceeding
+							// the overall tool deadline.
+							const googleDeadlineAt = Math.min(
+								searchDeadlineAt,
+								Date.now() + googleLaneMaxMs,
+							);
+							const g = await googleSearchImpl(query, {
+								timeoutMs: Math.min(searchDeadlineMs, googleLaneMaxMs),
+								maxResults: max,
+								signal,
+								deadlineAt: googleDeadlineAt,
+							});
+							const results = g.results.map((r) => ({
+								title: r.title,
+								url: r.url,
+								snippet: r.snippet,
+								domain: extractDomain(r.url),
+							}));
+							googleStatus = results.length
+								? g.degraded
+									? "ok (an extra SERP page failed; results degraded to the pages collected)"
+									: "ok"
+								: "empty (Google returned 0 results)";
+							return { source: "google" as const, results };
+						} catch (err) {
+							recordProviderNetworkFailure("google", String(err));
+							const errorCode =
+								err && typeof err === "object" && "code" in err
+									? (err as { code?: unknown }).code
+									: undefined;
+							if (errorCode === "captcha_blocked") {
+								googleStatus =
+									"blocked (Google CAPTCHA /sorry/ — failing fast, other providers unaffected)";
+							} else if (errorCode === "deadline_expired") {
+								googleStatus = `timeout (Google lane cap ${googleLaneMaxMs}ms; hard deadline ${searchDeadlineMs}ms)`;
+							} else {
+								googleStatus = `error (${String(err).slice(0, 120)})`;
+							}
+							return { source: "google" as const, results: [] };
 						}
-						return { source: "google" as const, results: [] };
-					}
-				})();
+					})();
 					// Cache successful Google results for 90s (life-depends p50 <2.0s on repeat)
 					void googlePromise.then((r) => {
 						if (r.results.length > 0) {
