@@ -196,14 +196,26 @@ const ALL_NOISE_SELECTORS = `${NOISE_SELECTORS},${CONSENT_SELECTORS}`;
 // ─── HTML cleaning ─────────────────────────────────────────────────
 
 export function preCleanHtml(html: string): string {
+	const res = preCleanHtmlWithDocument(html);
+	return res ? res.html : html;
+}
+
+/** Single-parse variant: returns both cleaned HTML and its Document to avoid double parseHTML. */
+function preCleanHtmlWithDocument(
+	html: string,
+): { html: string; document: Document } | null {
 	try {
 		const { document } = parseHTML(html);
 		document
 			.querySelectorAll(ALL_NOISE_SELECTORS)
 			.forEach((el: Element) => el.remove());
-		return document.documentElement.outerHTML;
+		return {
+			html: document.documentElement.outerHTML,
+			// SAFETY: linkedom's Document implements the DOM Document surface required by Readability
+			document: document as unknown as Document,
+		};
 	} catch {
-		return html;
+		return null;
 	}
 }
 
@@ -375,7 +387,18 @@ export function extractReadability(
 ): { title: string; content: string } | null {
 	try {
 		const { document } = parseHTML(html);
-		// SAFETY: linkedom's document implements the DOM Document surface required by Readability.
+		// SAFETY: linkedom's Document implements the DOM Document surface required by Readability
+		return extractReadabilityFromDocument(document as unknown as Document);
+	} catch {
+		return null;
+	}
+}
+
+function extractReadabilityFromDocument(
+	document: Document,
+): { title: string; content: string } | null {
+	try {
+		// SAFETY: caller guarantees Document is a linkedom Document compatible with Readability
 		const reader = new Readability(document as unknown as Document);
 		const article = reader.parse();
 		if (!article || (article.textContent?.length ?? 0) < 200) return null;
@@ -838,15 +861,25 @@ export async function runHtmlPipeline(
 		headers: {},
 		html: text,
 	});
-	let cleaned = preCleanHtml(hookedText);
-	cleaned = compressHtml(cleaned);
+	// Single-parse optimisation: preClean once and reuse its Document for
+	// Readability, avoiding a second parseHTML. Falls back to string path
+	// if cleaning fails.
+	const preCleaned = preCleanHtmlWithDocument(hookedText);
+	let cleaned: string;
+	let preCleanDoc: Document | null = null;
+	if (preCleaned) {
+		cleaned = compressHtml(preCleaned.html);
+		preCleanDoc = preCleaned.document;
+	} else {
+		cleaned = compressHtml(preCleanHtml(hookedText));
+	}
 	const rawHtml = hookedText;
 
 	// Local extraction first (Readability → RSC → Defuddle → fallback) on
 	// the HTML we already downloaded. The Jina proxy reader re-fetches the
 	// same page server-side, so it is a *fallback* for genuinely JS-heavy
 	// pages that yield too few words locally — not the first step.
-	const local = await runLocalExtraction(cleaned, hookedText, finalUrl, rawHtml);
+	const local = await runLocalExtraction(cleaned, hookedText, finalUrl, rawHtml, preCleanDoc);
 
 	let chosen = local;
 	const localWords = wordCount(local.content || "");
@@ -880,8 +913,12 @@ async function runLocalExtraction(
 	hookedText: string,
 	finalUrl: string,
 	rawHtml: string,
+	preCleanDoc?: Document | null,
 ): Promise<PullResult> {
-	const readability = extractReadability(cleaned, finalUrl);
+	// Reuse the Document from the single preClean parse when available
+	const readability = preCleanDoc
+		? extractReadabilityFromDocument(preCleanDoc)
+		: extractReadability(cleaned, finalUrl);
 	if (readability) {
 		// Accept Readability whenever it produced a usable article, or when
 		// the ratio heuristic did not flag it as boilerplate. This resolves

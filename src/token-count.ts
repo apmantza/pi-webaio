@@ -12,8 +12,18 @@
  * Correlates ~95% with tiktoken cl100k_base for English text.
  * For non-English (CJK, etc.), characters are counted individually.
  */
+const _tokenCache = new Map<string, number>();
+const _TOKEN_CACHE_MAX = 512;
+
 export function estimateTokens(text: string): number {
 	if (!text) return 0;
+	const cached = _tokenCache.get(text);
+	if (cached !== undefined) {
+		// LRU touch — move to end
+		_tokenCache.delete(text);
+		_tokenCache.set(text, cached);
+		return cached;
+	}
 
 	let tokens = 0;
 	// Split on whitespace and punctuation boundaries for word-level counting
@@ -53,7 +63,13 @@ export function estimateTokens(text: string): number {
 	}
 
 	// Add a small overhead for whitespace/formatting
-	return Math.max(1, tokens);
+	const result = Math.max(1, tokens);
+	if (_tokenCache.size >= _TOKEN_CACHE_MAX) {
+		const oldest = _tokenCache.keys().next().value as string | undefined;
+		if (oldest !== undefined) _tokenCache.delete(oldest);
+	}
+	_tokenCache.set(text, result);
+	return result;
 }
 
 /**
