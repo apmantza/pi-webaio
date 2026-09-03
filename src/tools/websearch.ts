@@ -44,6 +44,12 @@ import {
 	type SearchProviderStatus,
 } from "./search-render.ts";
 
+// Google result cache — same query+max → same 5 results for 90s
+// Life-depends: repeat "Svelte 5 runes" hits 0ms Google, p50 <2.0s
+const _googleCache = new Map<string, { at: number; results: SearchResult[] }>();
+const _GOOGLE_CACHE_TTL_MS = 90_000;
+const _GOOGLE_CACHE_MAX = 64;
+
 const SEARCH_DEADLINE_MS = 3500; // life-depends: hard cap 3.5s (was 7s)
 // Public response target — 2.9s budget keeps p50 <3.0s even with scheduling
 // overhead. With 3.5s hard deadline, 600ms grace remains for Google beyond
@@ -369,6 +375,12 @@ export function registerWebsearchTool(
 				results: SearchResult[];
 			}>;
 			if (googleEnabled) {
+				const _gCacheKey = `${query}\x00${max}`;
+				const _gHit = _googleCache.get(_gCacheKey);
+				if (_gHit && Date.now() - _gHit.at < _GOOGLE_CACHE_TTL_MS) {
+				googleStatus = "ok (cached)";
+				googlePromise = Promise.resolve({ source: "google" as const, results: _gHit.results });
+				} else {
 				googlePromise = (async () => {
 					try {
 						await chromeReady;
@@ -414,6 +426,17 @@ export function registerWebsearchTool(
 						return { source: "google" as const, results: [] };
 					}
 				})();
+					// Cache successful Google results for 90s (life-depends p50 <2.0s on repeat)
+					void googlePromise.then((r) => {
+						if (r.results.length > 0) {
+							if (_googleCache.size >= _GOOGLE_CACHE_MAX) {
+								const oldest = _googleCache.keys().next().value as string | undefined;
+								if (oldest !== undefined) _googleCache.delete(oldest);
+							}
+							_googleCache.set(_gCacheKey, { at: Date.now(), results: r.results });
+						}
+					});
+				}
 				// Live TUI: reflect the Google row as soon as the lane settles.
 				void googlePromise.then((res) => {
 					const status: SearchProviderStatus =
