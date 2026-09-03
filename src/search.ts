@@ -627,14 +627,25 @@ const PREFERRED_DOMAIN_RULES: PreferredDomainRule[] = [
 /** Boost applied to results whose domain matches an inferred preferred domain. */
 const PREFERRED_DOMAIN_BONUS = 8;
 
+const _preferredDomainCache = new Map<string, string[]>();
+const _PREFERRED_CACHE_MAX = 256;
+
 /** Infer canonical official domains implied by keywords in the query. */
 export function inferPreferredDomains(query: string): string[] {
 	const normalized = query.toLowerCase();
+	const cached = _preferredDomainCache.get(normalized);
+	if (cached) return cached;
 	const matches: string[] = [];
 	for (const rule of PREFERRED_DOMAIN_RULES) {
 		if (rule.pattern.test(normalized)) matches.push(...rule.domains);
 	}
-	return [...new Set(matches)];
+	const result = [...new Set(matches)];
+	if (_preferredDomainCache.size >= _PREFERRED_CACHE_MAX) {
+		const oldest = _preferredDomainCache.keys().next().value as string | undefined;
+		if (oldest !== undefined) _preferredDomainCache.delete(oldest);
+	}
+	_preferredDomainCache.set(normalized, result);
+	return result;
 }
 
 function domainMatchesPreferred(domain: string, preferred: string[]): boolean {

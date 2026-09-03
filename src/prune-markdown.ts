@@ -140,9 +140,13 @@ function scoreSection(
 	else if (contentLen > 200) score += 2;
 	else if (contentLen > MIN_SECTION_CHARS) score += 1;
 
-	// High-value keyword bonus
+	// High-value keyword bonus — sample first 2k chars of content to avoid
+	// toLowerCase on 10k+ sections (heading is short, so check fully).
 	const headingLower = section.heading.toLowerCase();
-	const contentLower = section.content.toLowerCase();
+	const contentSample =
+		section.content.length > 2000
+			? section.content.slice(0, 2000).toLowerCase()
+			: section.content.toLowerCase();
 	const highValueKeywords = [
 		"abstract",
 		"summary",
@@ -160,7 +164,7 @@ function scoreSection(
 	];
 	for (const kw of highValueKeywords) {
 		if (headingLower.includes(kw)) score += 2;
-		if (contentLower.includes(kw)) score += 0.5;
+		if (contentSample.includes(kw)) score += 0.5;
 	}
 
 	// Penalty for code blocks (often examples, not core content)
