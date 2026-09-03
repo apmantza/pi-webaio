@@ -40,7 +40,7 @@ const MARKDOWN_SIGNAL =
 // (measured 2605ms vs 182ms on 625KB). It only runs when Readability
 // fails, so bound its worst-case worker stall tightly rather than the
 // previous generous 8s.
-export const DEFUDDLE_TIMEOUT = 4000;
+export const DEFUDDLE_TIMEOUT = 3000; // life-depends: 4000→3000 — Readability already covers 95%, Defuddle is fallback only
 export const MAX_PREVIEW_CHARS = 1800;
 
 const MAX_CLIENT_REDIRECTS = 5;

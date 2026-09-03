@@ -218,6 +218,9 @@ function buildTermFreq(tokens: string[]): Map<string, number> {
 	return freq;
 }
 
+const _queryTermsCache = new Map<string, string[]>();
+const _QUERY_CACHE_MAX = 128;
+
 /**
  * Create a BM25 scorer for a given query.
  *
@@ -235,7 +238,19 @@ export function createBM25Scorer(
 		stopWords = DEFAULT_STOP_WORDS,
 	} = options;
 
-	const queryTerms = tokenize(query, minTermLen, stopWords);
+	const cacheKey = `${query}\x00${minTermLen}`;
+	const cachedTerms = _queryTermsCache.get(cacheKey);
+	let queryTerms: string[];
+	if (cachedTerms !== undefined) {
+		queryTerms = cachedTerms;
+	} else {
+		queryTerms = tokenize(query, minTermLen, stopWords);
+		if (_queryTermsCache.size >= _QUERY_CACHE_MAX) {
+			const oldest = _queryTermsCache.keys().next().value as string | undefined;
+			if (oldest !== undefined) _queryTermsCache.delete(oldest);
+		}
+		_queryTermsCache.set(cacheKey, queryTerms);
+	}
 
 	// If query is empty or has no meaningful terms, return a no-op scorer
 	if (queryTerms.length === 0) {
