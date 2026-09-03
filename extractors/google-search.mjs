@@ -351,6 +351,37 @@ async function main() {
 		tab = await getOrOpenTab(tabPrefix);
 		markPhase("setup");
 
+		// Google-first fast-path: warm tab can often hit search URL directly,
+		// saving ~600ms typing + navigation verification. Cold tab falls back
+		// to full homepage→type→submit flow below.
+		if (!tabPrefix) {
+			try {
+				await cdp(
+					["nav", tab, `https://www.google.com/search?q=${encodeURIComponent(query)}`],
+					8000,
+				);
+				const directCount = await waitForResults(tab, 2500).catch(() => 0);
+				if (directCount >= 3) {
+					markPhase("homepageLoad");
+					markPhase("consent");
+					markPhase("inputWait");
+					const directResults = await extractPaginatedResults(tab, query, maxResults);
+					if (directResults.length > 0) {
+						const finalUrl = await cdp(["eval", tab, "document.location.href"]).catch(
+							() => `https://www.google.com/search?q=${encodeURIComponent(query)}`,
+						);
+						markPhase("resultsLoad");
+						markPhase("extraction");
+						outputJson({ query, url: finalUrl, results: directResults });
+						if (tabPrefix === undefined && tab) await closeTarget(tab).catch(() => {});
+						return;
+					}
+				}
+			} catch {
+				// fast-path missed — fall through to full flow
+			}
+		}
+
 		// Navigate to google.com — 20s is plenty for warm Chrome; 35s was a cold-start relic.
 		await cdp(["nav", tab, "https://www.google.com"], 20000);
 		markPhase("homepageLoad");

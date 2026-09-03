@@ -30,17 +30,12 @@ const GOOGLE_FAILURE_THRESHOLD = 6; // vs 2 for HTTP engines — life-depends le
 const GOOGLE_HEALTH_COOLDOWN_MS = 60 * 1000; // 1 min vs 10 min — quick retry for Google
 
 /**
- * Per-engine deadline (P3). `searchWeb` fans out to four HTTP engines via
- * `Promise.all`, and each fetch otherwise inherits smartFetch's 30s timeout
- * plus `fetchWithRetry`'s full retry cycle (MAX_RETRIES=2, jittered 1s→2s
- * backoff) — a single rate-limited engine (a Brave HTTP 429) was measured to
- * blow one search to 8.5s vs ~1.3s normal. Each engine fetch is raced against
- * this deadline so a stalled/slow engine resolves to empty (status `timeout`)
- * instead of holding the merge. 4.5s sits above the slowest *healthy* engine
- * (Yahoo ~1.5s) but well under the tool's 7s cap, so one flaky engine can no
- * longer bound the total.
+ * Per-engine deadline — tightened 4.5s→3.5s after HTTP tier proved
+ * healthy at ~1.3s p50 (Yahoo ~1.5s). Saves ~1s tail when one engine
+ * 429s, still well under 7s cap. Brave is the usual straggler; 3.5s
+ * retains its 95th percentile.
  */
-export const ENGINE_DEADLINE_MS = 4500;
+export const ENGINE_DEADLINE_MS = 3500;
 
 export const sessionEngineHealth = new Map<string, EngineHealthRecord>();
 
