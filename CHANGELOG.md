@@ -10,6 +10,23 @@ All notable changes to pi-webaio will be documented in this file.
 
 ### Fixed
 
+## [1.0.5] - 2026-09-03
+
+### Changed
+
+- **Google is now a first-class search citizen** — ranking weight 5→10 (Google results rank first), disable threshold 2→6 (no longer trips on transient failures), health cooldown 10min→1min (recovers quickly), lane budget 6500ms, 60ms CDP polling, and a direct `search?q=` fast-path before the homepage-type-submit fallback.
+- **Search hard-capped at 3.5s** (was 7s) — `SEARCH_DEADLINE_MS=3500`, 2900ms response target, 2700ms HTTP-engine deadline, `GOOGLE_LANE_MAX_MS=3000`. Rate-limited/failed bonus providers (e.g. Brave, FireCrawl) now degrade to result tails instead of blocking the response.
+- **Google 90s result cache** — repeat queries serve the same query's Google results in ~0ms (warm search p50 &lt; 2.0s).
+- **Lazy vertical loading** — all 21 vertical extractors and the MCP server migrated to dynamic `import()`; tool registration is startup-lazy.
+- **Single-parse extraction pipeline** — HTML parsed once and the `Document` reused across Readability, avoiding a duplicate `parseHTML`.
+- **Cache-everything pass** — token estimation LRU(512), `wordCount` LRU(256), `extractDomain` LRU(512), `inferPreferredDomains` LRU(256), BM25 query-terms LRU(128), BM25 top-K buckets 60→30, webcontent prune LRU(64), webquery result LRU(32), research URL-dedupe cache(512).
+- **Tighter per-page budget** — Defuddle timeout 4000→3000ms.
+- Cold-tier micro-opts across `aio-webcontent` / `aio-webresult` / `aio-webmap` / `aio-webquery` / `aio-webresearch`.
+
+### Fixed
+
+- **TypeScript 7.0.2 build failure** — removed `types/shims.d.ts`, whose ambient `declare module` for `wreq-js` / `@modelcontextprotocol/sdk` shadowed the packages' real bundled types and broke `prepare`/`build` (TS2305/TS18046) for both npm and pi git-installs.
+
 ## [1.0.4] - 2026-08-31
 
 ### Changed
