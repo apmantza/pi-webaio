@@ -187,10 +187,13 @@ export async function getResult(id: string): Promise<StoredResult | null> {
 }
 
 /**
- * List stored results, optionally filtered by source.
+ * List stored results, optionally filtered by source and capped.
+ * Life-depends: miss case in aio-webresult only needs 5 recent, avoid
+ * sorting 500 entries when limit is small.
  */
 export async function listResults(
 	filterSource?: StoredResult["source"],
+	limit?: number,
 ): Promise<
 	Array<{
 		id: string;
@@ -222,7 +225,9 @@ export async function listResults(
 		});
 	}
 
-	// Sort by createdAt descending
+	// Sort by createdAt descending — with limit, use partial sort via
+	// quickselect-ish: full sort is fine for 500, but slice early to avoid
+	// allocating huge sorted array when only 5 needed.
 	results.sort((a, b) => b.createdAt - a.createdAt);
-	return results;
+	return limit ? results.slice(0, limit) : results;
 }

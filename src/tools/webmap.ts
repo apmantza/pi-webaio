@@ -50,21 +50,26 @@ export function registerWebmapTool(pi: ExtensionAPI): void {
 				}
 			}
 
-			// ── Generic web discovery ─────────────────────────────────────
-			const urls = await discover(url.href, max, fetchOpts);
-
-			let llmsUrls: string[] = [];
-			try {
-				const llmsRes = await smartFetch(`${url.origin}/llms.txt`, fetchOpts);
-				if (llmsRes && llmsRes.status < 400) {
-					llmsUrls = llmsRes.text
-						.split(/\n/)
-						.filter((l) => /^https?:\/\//i.test(l.trim()))
-						.map((l) => l.trim());
-				}
-			} catch {
-				/* ignore */
-			}
+			// ── Generic web discovery — parallel llms.txt (life-depends)
+			// discover() can take 1-2s for sitemaps; llms.txt is ~200ms and
+			// independent, so race them together instead of sequential.
+			const [urls, llmsUrls] = await Promise.all([
+				discover(url.href, max, fetchOpts),
+				(async (): Promise<string[]> => {
+					try {
+						const llmsRes = await smartFetch(`${url.origin}/llms.txt`, fetchOpts);
+						if (llmsRes && llmsRes.status < 400) {
+							return llmsRes.text
+								.split(/\n/)
+								.filter((l) => /^https?:\/\//i.test(l.trim()))
+								.map((l) => l.trim());
+						}
+					} catch {
+						/* ignore */
+					}
+					return [];
+				})(),
+			]);
 
 			// Build sources map for the generic path
 			const sources: Record<string, string[]> = {};

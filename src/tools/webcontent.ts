@@ -5,6 +5,12 @@ import { applyTokenBudget } from "../prune-markdown.ts";
 import { diffContent } from "../content-diff.ts";
 import { shortHash, hashesEqual } from "../content-hash.ts";
 
+// Per-URL prune result cache — same url+budget+query → same pruned output
+// until content changes (key includes contentHash). Life-depends: avoids
+// re-running BM25 + prune on 116k pi.dev doc per webcontent call.
+const _pruneCache = new Map<string, { contentHash: string | undefined; result: string }>();
+const _PRUNE_CACHE_MAX = 64;
+
 export function registerWebcontentTool(pi: ExtensionAPI): void {
 	pi.registerTool({
 		...TOOL_METADATA["aio-webcontent"],
@@ -80,12 +86,26 @@ export function registerWebcontentTool(pi: ExtensionAPI): void {
 				};
 			}
 
-			// ── Default retrieval (unchanged behavior) ────────────────────
+			// ── Default retrieval — with prune cache (life-depends) ───────
 			const budgetTokens = params.budgetTokens as number | undefined;
 			const query = params.query as string | undefined;
-			const displayContent = budgetTokens
-				? applyTokenBudget(stored.content, budgetTokens, query, stored.url)
-				: stored.content;
+			let displayContent: string;
+			if (!budgetTokens) {
+				displayContent = stored.content;
+			} else {
+				const cacheKey = `${stored.url}\x00${budgetTokens}\x00${query ?? ""}\x00${stored.contentHash ?? ""}`;
+				const hit = _pruneCache.get(cacheKey);
+				if (hit && hit.contentHash === stored.contentHash) {
+					displayContent = hit.result;
+				} else {
+					displayContent = applyTokenBudget(stored.content, budgetTokens, query, stored.url);
+					if (_pruneCache.size >= _PRUNE_CACHE_MAX) {
+						const oldest = _pruneCache.keys().next().value as string | undefined;
+						if (oldest !== undefined) _pruneCache.delete(oldest);
+					}
+					_pruneCache.set(cacheKey, { contentHash: stored.contentHash, result: displayContent });
+				}
+			}
 			const text = [
 				`Retrieved content for ${stored.url}`,
 				stored.title ? `Title: ${stored.title}` : "",

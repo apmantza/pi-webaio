@@ -1,6 +1,6 @@
 import { TOOL_METADATA } from "./lazy.ts";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { storeResult, getResult, listResults } from "../storage.ts";
+import { getResult, listResults } from "../storage.ts";
 
 export function registerWebresultTool(pi: ExtensionAPI): void {
 	pi.registerTool({
@@ -8,7 +8,7 @@ export function registerWebresultTool(pi: ExtensionAPI): void {
 		async execute(_toolCallId: string, params: any): Promise<any> {
 			const stored = await getResult(params.id);
 			if (!stored) {
-				const recent = (await listResults()).slice(0, 5);
+				const recent = await listResults(undefined, 5);
 				return {
 					content: [
 						{

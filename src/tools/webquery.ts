@@ -5,6 +5,11 @@ import { tmpdir } from "node:os";
 import { createBM25Scorer } from "../bm25.ts";
 import { loadIndex } from "../webquery-index.ts";
 
+// Query result cache — same query+dir+topK → same ranked output until index changes
+// Life-depends: avoids re-scoring 500 chunks via BM25 on repeated queries.
+const _queryCache = new Map<string, { builtAt: string; result: unknown }>();
+const _QUERY_CACHE_MAX = 32;
+
 /** Default output directory matches webpull's default: <os-temp>/pi-webaio/<hostname> */
 const DEFAULT_BASE = join(tmpdir(), "pi-webaio");
 
@@ -64,6 +69,15 @@ export function registerWebqueryTool(pi: ExtensionAPI): void {
 				};
 			}
 
+			// Check query cache — same query+dir+topK+builtAt → hit
+			const cacheKey = `${dir}\x00${query}\x00${topK}\x00${index.builtAt}`;
+			const cached = _queryCache.get(cacheKey) as
+				| { builtAt: string; result: { content: { type: string; text: string }[]; details: unknown } }
+				| undefined;
+			if (cached && cached.builtAt === index.builtAt) {
+				return cached.result;
+			}
+
 			// Score all chunks with BM25
 			const scorer = createBM25Scorer(query);
 			const texts = chunks.map((c) => c.text);
@@ -113,7 +127,7 @@ export function registerWebqueryTool(pi: ExtensionAPI): void {
 				lines.push("");
 			}
 
-			return {
+			const result = {
 				content: [{ type: "text", text: lines.join("\n") }],
 				details: {
 					found: true,
@@ -130,6 +144,12 @@ export function registerWebqueryTool(pi: ExtensionAPI): void {
 					})),
 				},
 			};
+			if (_queryCache.size >= _QUERY_CACHE_MAX) {
+				const oldest = _queryCache.keys().next().value as string | undefined;
+				if (oldest !== undefined) _queryCache.delete(oldest);
+			}
+			_queryCache.set(cacheKey, { builtAt: index.builtAt, result });
+			return result;
 		},
 	});
 }
