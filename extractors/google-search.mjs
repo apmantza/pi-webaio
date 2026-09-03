@@ -70,7 +70,7 @@ export async function waitForCondition(
 	probe,
 	{
 		timeoutMs = 15000,
-		intervalMs = 100,
+		intervalMs = 60, // Google-first: 40% faster polling for first-class citizen
 		sleepFn = sleep,
 		nowFn = Date.now,
 	} = {},

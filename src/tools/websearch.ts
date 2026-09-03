@@ -56,12 +56,12 @@ const SEARCH_RESPONSE_TARGET_MS = 2900;
 // statuses can be parsed and included in the returned engineStatus map instead
 // of racing the outer provider collector at the exact same millisecond.
 const HTTP_ENGINE_RESPONSE_DEADLINE_MS = 2700;
-// Hard upper bound for the Google lane itself (measured from when the lane's
-// search actually starts, after chromeReady). The broker's pagination
-// budget-fencing (2s page floor, per-page 3.5s cap) fits inside this window:
-// a hot broker returns ~1s for max 15, and even a slow sparse tail page can
-// never burn more than this. The overall tool deadline stays 7s.
-const GOOGLE_LANE_MAX_MS = 5000;
+// Google is first-class citizen — hard upper bound for the Google lane
+// itself (measured from when the lane's search actually starts, after
+// chromeReady). Increased to 6500 so Google never starves to HTTP tail;
+// broker pagination (2s page floor, per-page 3.5s cap) still fits. Overall
+// tool deadline stays 7s, but Google gets dedicated grace up to deadline.
+const GOOGLE_LANE_MAX_MS = 6500;
 
 type WebsearchDependencies = {
 	loadGoggles?: typeof loadGoggles;

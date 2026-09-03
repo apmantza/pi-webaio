@@ -25,9 +25,9 @@ import { debug } from "./debug.ts";
 const ENGINE_HEALTH_COOLDOWN_MS = 10 * 60 * 1000; // 10 min cooldown
 const ENGINE_FAILURE_THRESHOLD = 2; // consecutive failures before cooldown
 
-// Google is the most valuable provider — be more lenient before disabling it.
-const GOOGLE_FAILURE_THRESHOLD = 4; // vs 2 for HTTP engines
-const GOOGLE_HEALTH_COOLDOWN_MS = 2 * 60 * 1000; // 2 min vs 10 min
+// Google is the first-class citizen — be extra lenient before disabling it.
+const GOOGLE_FAILURE_THRESHOLD = 6; // vs 2 for HTTP engines — life-depends leniency
+const GOOGLE_HEALTH_COOLDOWN_MS = 60 * 1000; // 1 min vs 10 min — quick retry for Google
 
 /**
  * Per-engine deadline (P3). `searchWeb` fans out to four HTTP engines via
@@ -641,7 +641,9 @@ export function inferPreferredDomains(query: string): string[] {
 	}
 	const result = [...new Set(matches)];
 	if (_preferredDomainCache.size >= _PREFERRED_CACHE_MAX) {
-		const oldest = _preferredDomainCache.keys().next().value as string | undefined;
+		const oldest = _preferredDomainCache.keys().next().value as
+			| string
+			| undefined;
 		if (oldest !== undefined) _preferredDomainCache.delete(oldest);
 	}
 	_preferredDomainCache.set(normalized, result);
@@ -656,7 +658,7 @@ function domainMatchesPreferred(domain: string, preferred: string[]): boolean {
 // ─── Cross-engine result scoring ───────────────────────────────────
 
 export const ENGINE_WEIGHTS: Record<string, number> = {
-	google: 5,
+	google: 10, // first-class citizen — double weight, life-depends priority
 	// TinyFish is a high-quality API-based search; weight it just below Google.
 	tinyfish: 4,
 	// Firecrawl Keyless is a general-purpose web search; weight it on par with
