@@ -351,13 +351,12 @@ async function main() {
 		tab = await getOrOpenTab(tabPrefix);
 		markPhase("setup");
 
-		// Navigate to google.com. The input condition below replaces the old
-		// unconditional post-navigation sleep; slow pages remain bounded.
-		await cdp(["nav", tab, "https://www.google.com"], 35000);
+		// Navigate to google.com — 20s is plenty for warm Chrome; 35s was a cold-start relic.
+		await cdp(["nav", tab, "https://www.google.com"], 20000);
 		markPhase("homepageLoad");
-		await dismissConsent(tab, cdp);
-		markPhase("consent");
-
+		// Consent and search-box appear concurrently — race them instead of
+		// sequential dismiss→wait (saves ~300ms when no consent dialog).
+		const consentPromise = dismissConsent(tab, cdp).catch(() => {});
 		const ready = await waitForCondition(
 			async (probeTimeoutMs) => {
 				const found = await cdp(
@@ -370,11 +369,13 @@ async function main() {
 				).catch(() => "false");
 				return found === "true";
 			},
-			{ timeoutMs: 15000, intervalMs: 100 },
+			{ timeoutMs: 10000, intervalMs: 60 },
 		);
+		await consentPromise;
+		markPhase("consent");
 		markPhase("inputWait");
 		if (!ready)
-			throw new Error("Google search box did not appear within 15000ms");
+			throw new Error("Google search box did not appear within 10000ms");
 
 		// Type query and submit. Verify the value instead of sleeping for a fixed
 		// post-type interval, preserving a bounded fallback for slow hydration.
@@ -391,7 +392,7 @@ async function main() {
 				).catch(() => "false");
 				return value === "true";
 			},
-			{ timeoutMs: 3000, intervalMs: 100 },
+			{ timeoutMs: 2000, intervalMs: 60 },
 		);
 		markPhase("typing");
 		if (!typed) throw new Error("Google search box did not accept the query");
@@ -413,15 +414,15 @@ async function main() {
 				).catch(() => "false");
 				return state === "true";
 			},
-			{ timeoutMs: 15000, intervalMs: 100 },
+			{ timeoutMs: 10000, intervalMs: 60 },
 		);
 		if (!navigated)
 			throw new Error(
 				"Google search navigation did not reach the requested query",
 			);
 
-		// Wait for results with immediate, condition-driven probes.
-		const count = await waitForResults(tab, 15000);
+		// Wait for results — 8s is plenty for first SERP page (was 15s, CDP first-class).
+		const count = await waitForResults(tab, 8000);
 		markPhase("resultsLoad");
 
 		// Extract results. Google renders only ~8-10 organics per SERP page
