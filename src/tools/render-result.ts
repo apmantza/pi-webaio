@@ -174,12 +174,16 @@ export function markdownToText(md: string): string {
 	s = s.replace(/~~(.*?)~~/g, "$1");
 	// Raw HTML tags — strip tags without crossing nested `<` boundaries,
 	// and repeat until stable so nested/overlapping tags (e.g.
-	// `<<script>script>`) cannot survive sanitization.
+	// `<<script>script>`) cannot survive sanitization. Capped at 3
+	// iterations: 2 passes cover the `<<tag>tag>` re-introduction class
+	// (CodeQL js/incomplete-multi-character-sanitization), 3 is a safety
+	// margin — avoids O(n*passes) on large docs with many tags.
 	let previous: string;
+	let iter = 0;
 	do {
 		previous = s;
 		s = s.replace(/<[^<>]*>/g, "");
-	} while (s !== previous);
+	} while (s !== previous && ++iter < 3);
 	// Collapse 3+ newlines to 2
 	s = s.replace(/\n{3,}/g, "\n\n");
 	// Trim trailing whitespace on each line

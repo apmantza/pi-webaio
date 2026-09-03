@@ -173,6 +173,11 @@ export async function submitSearch(tab, cdpFn = cdp) {
 // ─── Extract results ────────────────────────────────────────────────
 
 async function extractResults(tab, maxResults = 10) {
+	// Clamp to safe integer range — prevents CodeQL js/bad-code-sanitization
+	// (code construction from unsanitized value). maxResults is only ever a
+	// numeric literal in the generated browser JS, never arbitrary code.
+	const safeMax = Math.max(1, Math.min(100, Math.floor(Number(maxResults) || 10)));
+	const maxLiteral = String(safeMax); // /^[0-9]+$/ — safe for interpolation
 	const raw = await cdp([
 		"eval",
 		tab,
@@ -183,7 +188,7 @@ async function extractResults(tab, maxResults = 10) {
       var headings = document.querySelectorAll('.MjjYud a h3');
       var seen = new Set();
       
-      for (var i = 0; i < headings.length && results.length < ${maxResults}; i++) {
+      for (var i = 0; i < headings.length && results.length < ${maxLiteral}; i++) {
         var h3 = headings[i];
         var a = h3.closest('a');
         if (!a) continue;

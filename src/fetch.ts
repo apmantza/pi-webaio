@@ -172,10 +172,16 @@ const OS_PLATFORM: Record<string, string> = {
 	ios: "iOS",
 };
 
+const _headerCache = new Map<string, Record<string, string>>();
+
 export function buildHeaders(
 	browser?: string,
 	os?: string,
 ): Record<string, string> {
+	const key = `${browser ?? DEFAULT_BROWSER}|${os ?? DEFAULT_OS}`;
+	const cached = _headerCache.get(key);
+	if (cached) return { ...cached };
+
 	const headers: Record<string, string> = {
 		Accept:
 			"text/html,application/xhtml+xml,application/xml;q=0.9,text/markdown,*/*;q=0.8",
@@ -200,7 +206,13 @@ export function buildHeaders(
 	}
 	// Firefox / Safari do not send Sec-Ch-Ua — omit it
 
-	return headers;
+	_headerCache.set(key, headers);
+	return { ...headers };
+}
+
+/** Clear the buildHeaders cache — exported for tests. */
+export function _clearHeaderCache(): void {
+	_headerCache.clear();
 }
 
 // ─── Chrome profile discovery ──────────────────────────────────────

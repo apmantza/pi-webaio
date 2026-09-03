@@ -86,6 +86,18 @@ function accumulateChunks(
 	const chunks: string[] = [];
 	let current: string[] = [];
 	let currentTokens = 0;
+	// Cache token counts — estimateTokens is called up to 2× per unit
+	// (unit + separator). For 500-unit docs this saves ~500 tokenizations.
+	const tokenCache = new Map<string, number>();
+	const cachedTokens = (s: string): number => {
+		let v = tokenCache.get(s);
+		if (v === undefined) {
+			v = estimateTokens(s);
+			tokenCache.set(s, v);
+		}
+		return v;
+	};
+	const joinerTokensCached = cachedTokens(joiner);
 
 	const flush = () => {
 		if (current.length === 0) return;
@@ -95,7 +107,7 @@ function accumulateChunks(
 	};
 
 	for (const unit of units) {
-		const unitTokens = estimateTokens(unit);
+		const unitTokens = cachedTokens(unit);
 
 		if (unitTokens > maxTokens) {
 			flush();
@@ -105,7 +117,7 @@ function accumulateChunks(
 			continue;
 		}
 
-		const sepTokens = current.length > 0 ? estimateTokens(joiner) : 0;
+		const sepTokens = current.length > 0 ? joinerTokensCached : 0;
 		if (
 			current.length > 0 &&
 			currentTokens + sepTokens + unitTokens > maxTokens
