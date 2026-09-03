@@ -184,12 +184,24 @@ export function extractDdgUrl(href: string): string {
 	return href;
 }
 
+const _domainCache = new Map<string, string | undefined>();
+const _DOMAIN_CACHE_MAX = 512;
+
 export function extractDomain(url: string): string | undefined {
+	const cached = _domainCache.get(url);
+	if (cached !== undefined || _domainCache.has(url)) return cached;
+	let domain: string | undefined;
 	try {
-		return new URL(url).hostname;
+		domain = new URL(url).hostname;
 	} catch {
-		return undefined;
+		domain = undefined;
 	}
+	if (_domainCache.size >= _DOMAIN_CACHE_MAX) {
+		const oldest = _domainCache.keys().next().value as string | undefined;
+		if (oldest !== undefined) _domainCache.delete(oldest);
+	}
+	_domainCache.set(url, domain);
+	return domain;
 }
 
 // ─── Search result parsers ─────────────────────────────────────────

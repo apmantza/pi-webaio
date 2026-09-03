@@ -786,8 +786,19 @@ async function downloadToTemp(
 
 // ─── Word count helper ──────────────────────────────────────────────
 
+const _wordCountCache = new Map<string, number>();
+const _WORD_COUNT_CACHE_MAX = 256;
+
 export function wordCount(text: string): number {
-	return text.trim().split(/\s+/).filter(Boolean).length;
+	const cached = _wordCountCache.get(text);
+	if (cached !== undefined) return cached;
+	const count = text.trim().split(/\s+/).filter(Boolean).length;
+	if (_wordCountCache.size >= _WORD_COUNT_CACHE_MAX) {
+		const oldest = _wordCountCache.keys().next().value as string | undefined;
+		if (oldest !== undefined) _wordCountCache.delete(oldest);
+	}
+	_wordCountCache.set(text, count);
+	return count;
 }
 
 // ─── HTML content pipeline (shared by normal + browser-mode paths) ─
@@ -879,7 +890,13 @@ export async function runHtmlPipeline(
 	// the HTML we already downloaded. The Jina proxy reader re-fetches the
 	// same page server-side, so it is a *fallback* for genuinely JS-heavy
 	// pages that yield too few words locally — not the first step.
-	const local = await runLocalExtraction(cleaned, hookedText, finalUrl, rawHtml, preCleanDoc);
+	const local = await runLocalExtraction(
+		cleaned,
+		hookedText,
+		finalUrl,
+		rawHtml,
+		preCleanDoc,
+	);
 
 	let chosen = local;
 	const localWords = wordCount(local.content || "");

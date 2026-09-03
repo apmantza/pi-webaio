@@ -35,8 +35,7 @@ export function estimateTokens(text: string): number {
 		// CJK / non-Latin characters → count individually
 		// (most CJK chars are 1-2 tokens in cl100k_base)
 		const cjkCount = (
-			word.match(/[\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]/g) ||
-			[]
+			word.match(/[\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]/g) || []
 		).length;
 		if (cjkCount > len * 0.5) {
 			// Predominantly CJK — count chars individually
