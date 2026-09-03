@@ -202,8 +202,7 @@ export function registerWebpullTool(pi: ExtensionAPI): void {
 					seedAlreadyCompleted = queue
 						.snapshot()
 						.some(
-							(entry) =>
-								entry.url === seedQueueUrl && entry.status === "completed",
+							(entry) => entry.url === seedQueueUrl && entry.status === "completed",
 						);
 					const s = queue.stats();
 					priorCompleted = s.completed;

@@ -54,7 +54,10 @@ export function parseLocs(xml: string): string[] {
 
 type SitemapBudget = { remaining: number };
 
-function isApprovedSitemapUrl(raw: string, allowedOrigins: Set<string>): boolean {
+function isApprovedSitemapUrl(
+	raw: string,
+	allowedOrigins: Set<string>,
+): boolean {
 	try {
 		const url = new URL(raw);
 		return (
@@ -377,12 +380,7 @@ export async function discover(
 		for (const bp of basePaths) {
 			for (const name of ["sitemap.xml", "sitemap_index.xml", "sitemap-0.xml"]) {
 				strategies.push(
-					fetchSitemap(
-						`${o}${bp}${name}`,
-						0,
-						allowedSitemapOrigins,
-						sitemapBudget,
-					),
+					fetchSitemap(`${o}${bp}${name}`, 0, allowedSitemapOrigins, sitemapBudget),
 				);
 			}
 		}

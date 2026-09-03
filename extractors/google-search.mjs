@@ -176,7 +176,10 @@ async function extractResults(tab, maxResults = 10) {
 	// Clamp to safe integer range — prevents CodeQL js/bad-code-sanitization
 	// (code construction from unsanitized value). maxResults is only ever a
 	// numeric literal in the generated browser JS, never arbitrary code.
-	const safeMax = Math.max(1, Math.min(100, Math.floor(Number(maxResults) || 10)));
+	const safeMax = Math.max(
+		1,
+		Math.min(100, Math.floor(Number(maxResults) || 10)),
+	);
 	const maxLiteral = String(safeMax); // /^[0-9]+$/ — safe for interpolation
 	const raw = await cdp([
 		"eval",

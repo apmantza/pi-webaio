@@ -81,9 +81,7 @@ export async function extractWikipedia(
 					typeof page.thumbnail === "object" &&
 					(page.thumbnail as Record<string, unknown>).source
 				) {
-					thumbnail = String(
-						(page.thumbnail as Record<string, unknown>).source,
-					);
+					thumbnail = String((page.thumbnail as Record<string, unknown>).source);
 				}
 				break;
 			}

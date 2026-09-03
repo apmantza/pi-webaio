@@ -25,6 +25,10 @@ import { debug } from "./debug.ts";
 const ENGINE_HEALTH_COOLDOWN_MS = 10 * 60 * 1000; // 10 min cooldown
 const ENGINE_FAILURE_THRESHOLD = 2; // consecutive failures before cooldown
 
+// Google is the most valuable provider — be more lenient before disabling it.
+const GOOGLE_FAILURE_THRESHOLD = 4; // vs 2 for HTTP engines
+const GOOGLE_HEALTH_COOLDOWN_MS = 2 * 60 * 1000; // 2 min vs 10 min
+
 /**
  * Per-engine deadline (P3). `searchWeb` fans out to four HTTP engines via
  * `Promise.all`, and each fetch otherwise inherits smartFetch's 30s timeout
@@ -90,7 +94,10 @@ function isEngineAvailable(engine: string): boolean {
 		record.consecutiveFailures = 0;
 		return true;
 	}
-	return record.consecutiveFailures >= ENGINE_FAILURE_THRESHOLD;
+	// Google is more lenient — require more failures before considered unavailable
+	const threshold =
+		engine === "google" ? GOOGLE_FAILURE_THRESHOLD : ENGINE_FAILURE_THRESHOLD;
+	return record.consecutiveFailures < threshold;
 }
 
 // Backward-compatible aliases
@@ -108,6 +115,22 @@ function recordProviderCooldown(
 	record.consecutiveFailures += 1;
 	record.lastFailureAt = Date.now();
 	record.lastFailureReason = reason;
+	// Google is more lenient — only cool down after threshold, and for shorter duration
+	if (provider === "google") {
+		if (record.consecutiveFailures >= GOOGLE_FAILURE_THRESHOLD) {
+			record.coolDownUntil = Date.now() + GOOGLE_HEALTH_COOLDOWN_MS;
+			debug(
+				"search",
+				`${provider} cooled down for ${GOOGLE_HEALTH_COOLDOWN_MS}ms after ${record.consecutiveFailures} consecutive failures (${reason})`,
+			);
+		} else {
+			debug(
+				"search",
+				`${provider} failure ${record.consecutiveFailures}/${GOOGLE_FAILURE_THRESHOLD} (not yet cooled down): ${reason}`,
+			);
+		}
+		return;
+	}
 	record.coolDownUntil = Date.now() + ttlMs;
 	debug("search", `${provider} cooled down for ${ttlMs}ms (${reason})`);
 }
@@ -126,11 +149,16 @@ export function recordProviderNetworkFailure(
 		lower.includes("fetch failed") ||
 		lower.includes("enotfound") ||
 		lower.includes("getaddrinfo");
-	recordProviderCooldown(
-		provider,
-		msg,
-		isConnFailure ? 2 * 60 * 1000 : 10 * 60 * 1000,
-	);
+	// Google gets a shorter cooldown and is threshold-gated in recordProviderCooldown
+	let ttlMs: number;
+	if (provider === "google") {
+		ttlMs = GOOGLE_HEALTH_COOLDOWN_MS;
+	} else if (isConnFailure) {
+		ttlMs = 2 * 60 * 1000;
+	} else {
+		ttlMs = 10 * 60 * 1000;
+	}
+	recordProviderCooldown(provider, msg, ttlMs);
 }
 
 function isQuotaError(status: number, body: string): boolean {
