@@ -576,9 +576,7 @@ export function summarizeStance(
 	query: string,
 	sources: SourceStance[],
 ): StanceSummary {
-	const supportingCount = sources.filter(
-		(s) => s.label === "supporting",
-	).length;
+	const supportingCount = sources.filter((s) => s.label === "supporting").length;
 	const conflictingCount = sources.filter(
 		(s) => s.label === "conflicting",
 	).length;
