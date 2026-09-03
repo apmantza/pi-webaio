@@ -178,7 +178,8 @@ export async function startMcpServer(): Promise<void> {
 	}));
 
 	// tools/call — dispatch to the matching tool's execute function.
-	server.setRequestHandler(CallToolRequestSchema, async (request) => {
+	// biome-ignore lint/suspicious/noExplicitAny: MCP SDK request type not re-exported as named type
+	server.setRequestHandler(CallToolRequestSchema, async (request: any) => {
 		const name = request.params.name;
 		const tool = toolMap.get(name);
 		if (!tool) {

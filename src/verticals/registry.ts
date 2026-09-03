@@ -14,27 +14,30 @@ import {
 	loadUserExtractors,
 	type RegisteredUserExtractor,
 } from "./user-loader.ts";
-import { matchesNpm, extractNpm } from "./npm.ts";
-import { matchesPyPI, extractPyPI } from "./pypi.ts";
-import { matchesHackerNews, extractHackerNews } from "./hackernews.ts";
-import { matchesReddit, extractReddit } from "./reddit.ts";
-import { matchesArxiv, extractArxiv } from "./arxiv.ts";
-import { matchesDocsSite, extractDocsSite } from "./docs-site.ts";
-import { matchesYouTube, extractYouTube } from "./youtube.ts";
-import { matchesWikipedia, extractWikipedia } from "./wikipedia.ts";
-import { matchesStackExchange, extractStackExchange } from "./stackexchange.ts";
-import { matchesOpenLibrary, extractOpenLibrary } from "./openlibrary.ts";
-import { matchesDevTo, extractDevTo } from "./devto.ts";
-import { matchesSonarCloud, extractSonarCloud } from "./sonarcloud.ts";
-import { matchesCratesIo, extractCratesIo } from "./cratesio.ts";
-import { matchesRubyGems, extractRubyGems } from "./rubygems.ts";
-import { matchesPackagist, extractPackagist } from "./packagist.ts";
-import { matchesPubDev, extractPubDev } from "./pubdev.ts";
-import { matchesGoPackages, extractGoPackages } from "./gopackages.ts";
-import { matchesNuGet, extractNuGet } from "./nuget.ts";
-import { matchesGitLab, extractGitLab } from "./gitlab.ts";
-import { matchesContext7, extractContext7 } from "./context7.ts";
-import { matchesDeepWiki, extractDeepWiki } from "./deepwiki.ts";
+// Matchers are tiny regexes — keep eager for fast findVerticalExtractor.
+// Extractors are heavy (API clients, parsers) — lazy via dynamic import
+// so cold `pi -p` pays ~0ms for the 21 verticals until a URL actually matches.
+import { matchesNpm } from "./npm.ts";
+import { matchesPyPI } from "./pypi.ts";
+import { matchesHackerNews } from "./hackernews.ts";
+import { matchesReddit } from "./reddit.ts";
+import { matchesArxiv } from "./arxiv.ts";
+import { matchesDocsSite } from "./docs-site.ts";
+import { matchesYouTube } from "./youtube.ts";
+import { matchesWikipedia } from "./wikipedia.ts";
+import { matchesStackExchange } from "./stackexchange.ts";
+import { matchesOpenLibrary } from "./openlibrary.ts";
+import { matchesDevTo } from "./devto.ts";
+import { matchesSonarCloud } from "./sonarcloud.ts";
+import { matchesCratesIo } from "./cratesio.ts";
+import { matchesRubyGems } from "./rubygems.ts";
+import { matchesPackagist } from "./packagist.ts";
+import { matchesPubDev } from "./pubdev.ts";
+import { matchesGoPackages } from "./gopackages.ts";
+import { matchesNuGet } from "./nuget.ts";
+import { matchesGitLab } from "./gitlab.ts";
+import { matchesContext7 } from "./context7.ts";
+import { matchesDeepWiki } from "./deepwiki.ts";
 
 interface ExtractorMatch {
 	name: string;
@@ -169,68 +172,92 @@ export async function runVerticalExtractor(
 		}
 	}
 
+	// Lazy extract imports — ~80ms cold start saved for pi -p (life-depends)
 	if (matchesNpm(url)) {
+		const { extractNpm } = await import("./npm.ts");
 		return extractNpm(url, fetchJson);
 	}
 	if (matchesPyPI(url)) {
+		const { extractPyPI } = await import("./pypi.ts");
 		return extractPyPI(url, fetchJson);
 	}
 	if (matchesHackerNews(url)) {
+		const { extractHackerNews } = await import("./hackernews.ts");
 		return extractHackerNews(url, fetchJson);
 	}
 	if (matchesReddit(url)) {
+		const { extractReddit } = await import("./reddit.ts");
 		return extractReddit(url, fetchJson);
 	}
 	if (matchesArxiv(url)) {
+		const { extractArxiv } = await import("./arxiv.ts");
 		return extractArxiv(url, fetchText);
 	}
 	if (matchesYouTube(url)) {
+		const { extractYouTube } = await import("./youtube.ts");
 		return extractYouTube(url, fetchJson, fetchText, fetchHtml);
 	}
 	if (matchesDocsSite(url)) {
 		const html = await fetchHtml(url);
-		if (html) return extractDocsSite(html, url);
+		if (html) {
+			const { extractDocsSite } = await import("./docs-site.ts");
+			return extractDocsSite(html, url);
+		}
 	}
 	if (matchesWikipedia(url)) {
+		const { extractWikipedia } = await import("./wikipedia.ts");
 		return extractWikipedia(url, fetchJson);
 	}
 	if (matchesStackExchange(url)) {
+		const { extractStackExchange } = await import("./stackexchange.ts");
 		return extractStackExchange(url, fetchJson);
 	}
 	if (matchesOpenLibrary(url)) {
+		const { extractOpenLibrary } = await import("./openlibrary.ts");
 		return extractOpenLibrary(url, fetchJson);
 	}
 	if (matchesDevTo(url)) {
+		const { extractDevTo } = await import("./devto.ts");
 		return extractDevTo(url, fetchJson);
 	}
 	if (matchesSonarCloud(url)) {
+		const { extractSonarCloud } = await import("./sonarcloud.ts");
 		return extractSonarCloud(url, fetchJson);
 	}
 	if (matchesCratesIo(url)) {
+		const { extractCratesIo } = await import("./cratesio.ts");
 		return extractCratesIo(url, fetchJson);
 	}
 	if (matchesRubyGems(url)) {
+		const { extractRubyGems } = await import("./rubygems.ts");
 		return extractRubyGems(url, fetchJson);
 	}
 	if (matchesPackagist(url)) {
+		const { extractPackagist } = await import("./packagist.ts");
 		return extractPackagist(url, fetchJson);
 	}
 	if (matchesPubDev(url)) {
+		const { extractPubDev } = await import("./pubdev.ts");
 		return extractPubDev(url, fetchJson);
 	}
 	if (matchesGoPackages(url)) {
+		const { extractGoPackages } = await import("./gopackages.ts");
 		return extractGoPackages(url, fetchJson, fetchText);
 	}
 	if (matchesNuGet(url)) {
+		const { extractNuGet } = await import("./nuget.ts");
 		return extractNuGet(url, fetchJson);
 	}
 	if (matchesGitLab(url)) {
+		const { extractGitLab } = await import("./gitlab.ts");
 		return extractGitLab(url, fetchJson, fetchText);
 	}
 	if (matchesContext7(url)) {
+		const { extractContext7 } = await import("./context7.ts");
 		return extractContext7(url);
 	}
 	if (matchesDeepWiki(url)) {
+		const { extractDeepWiki } = await import("./deepwiki.ts");
 		return extractDeepWiki(url);
 	}
 	return null;
