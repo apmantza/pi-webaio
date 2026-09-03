@@ -751,16 +751,35 @@ export function scoreAndRankResults(
 		scored.push({ result, score, sources });
 	}
 
-	// F5: fold in BM25 query-relevance over title+snippet. A single scorer
-	// shares IDF across the whole result set; an empty query is a no-op (the
-	// scorer returns 0 for every document).
-	if (query) {
+	// F5: BM25 query-relevance over title+snippet — life-depends: top-K
+	// scoring for 60 buckets. BM25 tokenization + IDF is ~50% of scoring
+	// cost; bottom 30 by engine weight rarely make final top 25, so score
+	// only top 30 and leave tail at engine-weight score.
+	if (query && scored.length > 0) {
+		const BM25_TOP_K = 30;
+		let bm25Targets = scored;
+		let bm25IndexMap: number[] | null = null;
+		if (scored.length > BM25_TOP_K) {
+			// Partial sort by interim score to pick top-K for BM25
+			const topK = [...scored]
+				.sort((a, b) => b.score - a.score)
+				.slice(0, BM25_TOP_K);
+			bm25Targets = topK;
+			bm25IndexMap = topK.map((t) => scored.indexOf(t));
+		}
 		const scorer = createBM25Scorer(query);
 		const relevance = scorer.scoreAll(
-			scored.map((s) => `${s.result.title} ${s.result.snippet}`),
+			bm25Targets.map((s) => `${s.result.title} ${s.result.snippet}`),
 		);
-		for (let i = 0; i < scored.length; i++) {
-			scored[i]!.score += RELEVANCE_WEIGHT * (relevance[i] ?? 0);
+		if (bm25IndexMap) {
+			for (let i = 0; i < bm25Targets.length; i++) {
+				const idx = bm25IndexMap[i]!;
+				scored[idx]!.score += RELEVANCE_WEIGHT * (relevance[i] ?? 0);
+			}
+		} else {
+			for (let i = 0; i < scored.length; i++) {
+				scored[i]!.score += RELEVANCE_WEIGHT * (relevance[i] ?? 0);
+			}
 		}
 	}
 
