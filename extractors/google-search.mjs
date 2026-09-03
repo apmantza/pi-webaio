@@ -357,7 +357,11 @@ async function main() {
 		if (!tabPrefix) {
 			try {
 				await cdp(
-					["nav", tab, `https://www.google.com/search?q=${encodeURIComponent(query)}`],
+					[
+						"nav",
+						tab,
+						`https://www.google.com/search?q=${encodeURIComponent(query)}`,
+					],
 					8000,
 				);
 				const directCount = await waitForResults(tab, 2500).catch(() => 0);
@@ -365,7 +369,11 @@ async function main() {
 					markPhase("homepageLoad");
 					markPhase("consent");
 					markPhase("inputWait");
-					const directResults = await extractPaginatedResults(tab, query, maxResults);
+					const directResults = await extractPaginatedResults(
+						tab,
+						query,
+						maxResults,
+					);
 					if (directResults.length > 0) {
 						const finalUrl = await cdp(["eval", tab, "document.location.href"]).catch(
 							() => `https://www.google.com/search?q=${encodeURIComponent(query)}`,
@@ -373,7 +381,8 @@ async function main() {
 						markPhase("resultsLoad");
 						markPhase("extraction");
 						outputJson({ query, url: finalUrl, results: directResults });
-						if (tabPrefix === undefined && tab) await closeTarget(tab).catch(() => {});
+						if (tabPrefix === undefined && tab)
+							await closeTarget(tab).catch(() => {});
 						return;
 					}
 				}

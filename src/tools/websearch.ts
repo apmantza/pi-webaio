@@ -44,24 +44,18 @@ import {
 	type SearchProviderStatus,
 } from "./search-render.ts";
 
-const SEARCH_DEADLINE_MS = 7000;
-// Public response target for the full aio-websearch orchestration (#97). The
-// 7s hard deadline is still passed to child/browser work as a safety ceiling,
-// but the tool returns the providers that settled by this soft budget so slow
-// Reddit/HTTP tails cannot hold a healthy warm search at ~4.5-7s. Keep the
-// timer just under 3s so normal scheduling overhead still lands below the
-// p50<=3.0s release target.
+const SEARCH_DEADLINE_MS = 3500; // life-depends: hard cap 3.5s (was 7s)
+// Public response target — 2.9s budget keeps p50 <3.0s even with scheduling
+// overhead. With 3.5s hard deadline, 600ms grace remains for Google beyond
+// response target.
 const SEARCH_RESPONSE_TARGET_MS = 2900;
-// HTTP engines get a small cushion before the response target so their timeout
-// statuses can be parsed and included in the returned engineStatus map instead
-// of racing the outer provider collector at the exact same millisecond.
+// HTTP engines get a small cushion before response target so timeout statuses
+// are parsed instead of racing the provider collector at same ms.
 const HTTP_ENGINE_RESPONSE_DEADLINE_MS = 2700;
-// Google is first-class citizen — hard upper bound for the Google lane
-// itself (measured from when the lane's search actually starts, after
-// chromeReady). Increased to 6500 so Google never starves to HTTP tail;
-// broker pagination (2s page floor, per-page 3.5s cap) still fits. Overall
-// tool deadline stays 7s, but Google gets dedicated grace up to deadline.
-const GOOGLE_LANE_MAX_MS = 6500;
+// Google is first-class citizen — hard upper bound for Google lane itself
+// (measured after chromeReady). 3000ms fits inside 3.5s hard deadline while
+// still covering broker pagination (2s floor + 2.5s page). Tight p95, life-depends.
+const GOOGLE_LANE_MAX_MS = 3000;
 
 type WebsearchDependencies = {
 	loadGoggles?: typeof loadGoggles;

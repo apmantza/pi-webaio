@@ -10,10 +10,16 @@ declare module "wreq-js" {
 }
 
 declare module "@modelcontextprotocol/sdk/server/index.js" {
-  export class Server {}
+  export class Server {
+    constructor(info: unknown, capabilities: unknown);
+    setRequestHandler(schema: unknown, handler: unknown): void;
+    connect(transport: unknown): Promise<void>;
+  }
 }
 declare module "@modelcontextprotocol/sdk/server/stdio.js" {
-  export class StdioServerTransport {}
+  export class StdioServerTransport {
+    constructor();
+  }
 }
 declare module "@modelcontextprotocol/sdk/types.js" {
   export const ListToolsRequestSchema: unknown;
