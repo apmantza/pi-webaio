@@ -10,6 +10,7 @@ All notable changes to pi-webaio will be documented in this file.
 
 ### Fixed
 
+- **Tool registration crash when the `@earendil-works/pi-coding-agent` peer is unresolvable** — `src/tools/render-result.ts` statically value-imported `getMarkdownTheme` from the peer, which aborted `aio-webfetch`/`aio-webpull` registration at load time on installs where the peer is not hoisted into the extension's resolution path (e.g. `pi install npm:pi-webaio` copies under `~/.pi/agent/npm/node_modules/` on Linux). The theme now resolves via a lazy dynamic import cached at module load with an unstyled identity-theme fallback, so registration and rendering succeed regardless of peer availability; when the peer resolves, behavior is unchanged. Also fixed lint blockers in the same file (nested ternaries in the progress-bar background lookup, inverted negation ternary in the outline word-count line).
 ## [1.0.5] - 2026-09-03
 
 ### Changed

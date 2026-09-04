@@ -14,7 +14,6 @@
  * `onUpdate` to push fresh state to the TUI.
  */
 
-import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import {
 	Container,
 	Markdown,
@@ -24,6 +23,57 @@ import {
 } from "./tui-compat.ts";
 import { redactSecrets } from "../redact.ts";
 import type { OutlineHeading } from "../outline.ts";
+
+/**
+ * Markdown theme resolution.
+ *
+ * A static value import of `getMarkdownTheme` from
+ * `@earendil-works/pi-coding-agent` would crash this module at load time in
+ * environments where the peer package is not resolvable from the extension's
+ * install location (e.g. npm-installed extensions under `~/.pi/agent/npm/
+ * node_modules/` on Linux, where the peer is hoisted elsewhere). That made
+ * the entire webfetch/webpull tool registration fail even though the theme
+ * is purely cosmetic. Resolve it lazily instead: kick off a dynamic import
+ * at module load, cache the result, and fall back to an unstyled identity
+ * theme until/unless it resolves.
+ */
+const identity = (text: string): string => text;
+
+/** Unstyled fallback used when pi's theme cannot be resolved. */
+const FALLBACK_MARKDOWN_THEME: MarkdownTheme = {
+	heading: identity,
+	link: identity,
+	linkUrl: identity,
+	code: identity,
+	codeBlock: identity,
+	codeBlockBorder: identity,
+	quote: identity,
+	quoteBorder: identity,
+	hr: identity,
+	listBullet: identity,
+	bold: identity,
+	italic: identity,
+	strikethrough: identity,
+	underline: identity,
+};
+
+let cachedMarkdownTheme: MarkdownTheme | undefined;
+
+void import("@earendil-works/pi-coding-agent")
+	.then((mod) => {
+		cachedMarkdownTheme = mod.getMarkdownTheme();
+	})
+	.catch(() => {
+		// Peer not resolvable from this install location — keep the fallback.
+	});
+
+/**
+ * Best-effort synchronous theme getter: returns pi's markdown theme once the
+ * lazy import has resolved, otherwise the unstyled fallback.
+ */
+export function getWebaioMarkdownTheme(): MarkdownTheme {
+	return cachedMarkdownTheme ?? FALLBACK_MARKDOWN_THEME;
+}
 
 /** Spinner frames for the in-flight progress glyph. */
 export const SPINNER_FRAMES = [
@@ -380,14 +430,12 @@ function renderProgressBar(
 		Math.min(innerWidth, Math.round(progress * innerWidth)),
 	);
 
-	const barBg =
-		status === "error"
-			? "toolErrorBg"
-			: status === "done"
-				? "toolSuccessBg"
-				: status === "queued"
-					? "toolPendingBg"
-					: "selectedBg";
+	const BAR_BG: Partial<Record<FetchStatus, string>> = {
+		error: "toolErrorBg",
+		done: "toolSuccessBg",
+		queued: "toolPendingBg",
+	};
+	const barBg = BAR_BG[status] ?? "selectedBg";
 
 	const label = status;
 	const centered = (() => {
@@ -662,7 +710,7 @@ function buildOutlineLines(
 	}
 	for (const h of headings) {
 		const indent = "  ".repeat(Math.max(0, h.level - 1));
-		const wc = h.words !== undefined ? theme.fg("muted", ` (${h.words})`) : "";
+		const wc = h.words === undefined ? "" : theme.fg("muted", ` (${h.words})`);
 		lines.push(`${indent}- ${theme.fg("text", h.text)}${wc}`);
 	}
 	return lines;
@@ -700,7 +748,7 @@ export function createResultComponent(
 	details: WebfetchDetails,
 	expanded: boolean,
 	theme: ThemeLike,
-	markdownTheme: MarkdownTheme = getMarkdownTheme(),
+	markdownTheme: MarkdownTheme = getWebaioMarkdownTheme(),
 ) {
 	const container = new Container();
 
