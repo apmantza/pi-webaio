@@ -83,6 +83,54 @@ Or from git:
 pi install git:github.com/apmantza/pi-webaio
 ```
 
+## Static Fetch API
+
+Use `pi-webaio/webfetch` when an integration needs local extraction without
+registering the eight `aio-*` tools:
+
+```js
+import { fetch } from "pi-webaio/webfetch";
+
+const abortController = new AbortController();
+const result = await fetch("https://example.com/article", {
+  format: "markdown",
+  maxChars: 50_000,
+  signal: abortController.signal,
+});
+
+if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`);
+console.log(result.content);
+```
+
+The entrypoint uses `wreq-js` TLS fingerprinting and local Defuddle extraction.
+It does not start a browser, call a remote reader, register pi tools, or write a
+content cache. HTTP and literal client-side redirects are followed manually.
+For direct requests, each destination is checked by the public-network guard
+and pinned into the `wreq-js` transport before connection. Cross-origin
+redirects retain only `Accept`, `Accept-Language`, and `User-Agent` from the
+request headers.
+
+The default call budget is 15 seconds, including bounded cleanup. The call can
+download up to 10 MiB across all retry attempts and redirect responses, then
+return up to 50,000 characters. It follows at most ten redirects and retries a
+failed hop at most twice. The input cap cannot exceed 10 MiB.
+
+Header names and values are validated before a request. Transport-controlled
+framing headers such as `Host` and `Content-Length` are rejected.
+
+`format` accepts `markdown`, `html`, `text`, `json`, or `raw`. `html` requires
+an HTML response and returns Defuddle's cleaned HTML. `json` requires a JSON
+response and returns pretty-printed JSON text. `text` removes markup from HTML
+and XML. `raw` returns the decoded textual response before extraction; binary
+responses are rejected. HTML extraction accepts `removeImages` and
+`includeReplies`.
+
+A configured proxy is checked and pinned before connection. HTTP(S) forward
+proxies and `socks5h` proxies can resolve the target independently, so target
+pinning cannot be enforced through those modes. Use them only with a proxy
+whose destination policy you trust. Successful results report
+`targetPinning: "proxy-dependent"` when a proxy is configured.
+
 ## Documentation
 
 - [Features](docs/features.md) — overview, extraction pipeline, GitHub/YouTube

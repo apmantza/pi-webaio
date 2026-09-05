@@ -516,7 +516,7 @@ const defaultDnsResolver: DnsResolver = async (host) => {
 	return records.map((r) => ({ address: r.address, family: r.family }));
 };
 
-interface SsrfValidation {
+export interface SsrfValidation {
 	/** True when the URL must be blocked. */
 	dangerous: boolean;
 	/** Machine-readable reason when dangerous (e.g. "cloud-metadata"). */
