@@ -19,24 +19,31 @@ const BLOCKED_HOSTS = new Set([
 function isPrivateIPv4(ip: string): boolean {
 	const parts = ip.split(".").map((x) => Number(x));
 	if (parts.length !== 4 || parts.some((x) => Number.isNaN(x))) return true;
-	const [a, b] = parts as [number, number];
+	const [a, b, c, d] = parts as [number, number, number, number];
+	// RFC 7723 and RFC 8155 carve two globally reachable anycast hosts out
+	// of the otherwise non-public 192.0.0.0/24 protocol-assignment block.
+	if (a === 192 && b === 0 && c === 0 && (d === 9 || d === 10)) return false;
 	return (
+		a === 0 || // "this" network
 		a === 10 || // RFC 1918
 		a === 127 || // loopback
-		(a === 172 && b >= 16 && b <= 31) || // RFC 1918
-		(a === 192 && b === 168) || // RFC 1918
+		(a === 100 && b >= 64 && b <= 127) || // shared address space (RFC 6598)
 		(a === 169 && b === 254) || // link-local
-		(a === 100 && b >= 64 && b <= 127) || // CGN (RFC 6598)
+		(a === 172 && b >= 16 && b <= 31) || // RFC 1918
+		(a === 192 && b === 0 && c === 0) || // IETF protocol assignments
+		(a === 192 && b === 0 && c === 2) || // TEST-NET-1
+		(a === 192 && b === 88 && c === 99) || // deprecated 6to4 relay anycast
+		(a === 192 && b === 168) || // RFC 1918
 		(a === 198 && (b === 18 || b === 19)) || // benchmarking (RFC 2544)
-		a === 0 // "this" network
+		(a === 198 && b === 51 && c === 100) || // TEST-NET-2
+		(a === 203 && b === 0 && c === 113) || // TEST-NET-3
+		a >= 224 // multicast and reserved
 	);
 }
 
 function isPrivateIPv6(ip: string): boolean {
 	const n = ip.toLowerCase();
 	if (n === "::1" || n === "::") return true;
-	if (n.startsWith("fc") || n.startsWith("fd") || n.startsWith("fe80"))
-		return true;
 
 	const v4Mapped = n.match(/^::ffff:([\d.]+)$/);
 	if (v4Mapped) return isPrivateIPv4(v4Mapped[1]!);
@@ -50,17 +57,96 @@ function isPrivateIPv6(ip: string): boolean {
 	// approach as the 6to4 / Teredo string checks below).
 	const bytes = ipv6ToBytes(n);
 	if (bytes) {
-		// NAT64 (RFC 6052 64:ff9b::/96 and RFC 8215 64:ff9b:1::/48): the
-		// embedded IPv4 lives in the final 32 bits.
+		// Unique-local fc00::/7, link-local fe80::/10, and multicast ff00::/8.
+		if ((bytes[0]! & 0xfe) === 0xfc) return true;
+		if (bytes[0] === 0xfe && (bytes[1]! & 0xc0) === 0x80) return true;
+		if (bytes[0] === 0xff) return true;
+
+		// 64:ff9b:1::/48 is the local-use translation prefix and is not
+		// globally reachable. 64:ff9b::/96 is globally reachable, so permit it
+		// only when its embedded IPv4 destination is public.
 		const nat64Prefix =
 			bytes[0] === 0x00 &&
 			bytes[1] === 0x64 &&
 			bytes[2] === 0xff &&
 			bytes[3] === 0x9b;
-		const nat64_96 = nat64Prefix && bytes.subarray(4, 12).every((b) => b === 0);
 		const nat64_48 = nat64Prefix && bytes[4] === 0x00 && bytes[5] === 0x01;
-		if (nat64_96 || nat64_48) {
+		if (nat64_48) return true;
+		const nat64_96 = nat64Prefix && bytes.subarray(4, 12).every((b) => b === 0);
+		if (nat64_96) {
 			return isPrivateIPv4(`${bytes[12]}.${bytes[13]}.${bytes[14]}.${bytes[15]}`);
+		}
+
+		// 6to4 embeds the destination IPv4 address in bits 16–48. Teredo
+		// stores the client's IPv4 address, one's-complemented, in the final
+		// 32 bits. Use bytes so compressed IPv6 spellings cannot bypass the
+		// embedded-address checks.
+		if (bytes[0] === 0x20 && bytes[1] === 0x02) {
+			return isPrivateIPv4(`${bytes[2]}.${bytes[3]}.${bytes[4]}.${bytes[5]}`);
+		}
+		if (
+			bytes[0] === 0x20 &&
+			bytes[1] === 0x01 &&
+			bytes[2] === 0x00 &&
+			bytes[3] === 0x00
+		) {
+			return isPrivateIPv4(
+				`${bytes[12]! ^ 0xff}.${bytes[13]! ^ 0xff}.${bytes[14]! ^ 0xff}.${bytes[15]! ^ 0xff}`,
+			);
+		}
+
+		// The IANA IPv6 special-purpose registry marks these ranges as not
+		// globally reachable.
+		if (
+			bytes[0] === 0x01 &&
+			bytes[1] === 0x00 &&
+			bytes[2] === 0x00 &&
+			bytes[3] === 0x00 &&
+			bytes[4] === 0x00 &&
+			bytes[5] === 0x00 &&
+			bytes[6] === 0x00 &&
+			bytes[7] === 0x01
+		)
+			return true; // 100:0:0:1::/64 dummy prefix
+		if (
+			bytes[0] === 0x20 &&
+			bytes[1] === 0x01 &&
+			bytes[2] === 0x0d &&
+			bytes[3] === 0xb8
+		)
+			return true; // 2001:db8::/32 documentation
+		if (
+			bytes[0] === 0x3f &&
+			bytes[1] === 0xff &&
+			(bytes[2]! & 0xf0) === 0
+		)
+			return true; // 3fff::/20 documentation
+		if (bytes[0] === 0x5f && bytes[1] === 0x00) return true; // SRv6 SIDs
+
+		// 2001::/23 is non-public except for six globally reachable ranges.
+		// Teredo was handled by the embedded-address check above.
+		const inIetfAssignments =
+			bytes[0] === 0x20 && bytes[1] === 0x01 && (bytes[2]! & 0xfe) === 0;
+		if (inIetfAssignments) {
+			const isAnycast =
+				bytes[2] === 0 &&
+				bytes[3] === 1 &&
+				bytes.subarray(4, 15).every((b) => b === 0) &&
+				(bytes[15] === 1 || bytes[15] === 2 || bytes[15] === 3);
+			const isAmt = bytes[2] === 0 && bytes[3] === 3;
+			const isAs112 =
+				bytes[2] === 0 && bytes[3] === 4 && bytes[4] === 1 && bytes[5] === 0x12;
+			const isOrchidV2 =
+				bytes[2] === 0 && (bytes[3]! & 0xf0) === 0x20;
+			const isDroneDet = bytes[2] === 0 && (bytes[3]! & 0xf0) === 0x30;
+			if (
+				!isAnycast &&
+				!isAmt &&
+				!isAs112 &&
+				!isOrchidV2 &&
+				!isDroneDet
+			)
+				return true;
 		}
 		// IPv4-mapped hex form ::ffff:XXYY:ZZWW (the dotted-quad form is
 		// handled by the regex above; this catches the hex spelling).
@@ -68,35 +154,10 @@ function isPrivateIPv6(ip: string): boolean {
 			bytes.subarray(0, 10).every((b) => b === 0) &&
 			bytes[10] === 0xff &&
 			bytes[11] === 0xff;
-		if (mappedHex) {
+		const compatibleHex = bytes.subarray(0, 12).every((b) => b === 0);
+		if (mappedHex || compatibleHex) {
 			return isPrivateIPv4(`${bytes[12]}.${bytes[13]}.${bytes[14]}.${bytes[15]}`);
 		}
-	}
-
-	const sixTo4 = n.match(
-		/^2002:([0-9a-f]{2})([0-9a-f]{2}):([0-9a-f]{2})([0-9a-f]{2})/i,
-	);
-	if (sixTo4) {
-		const v4 = [
-			parseInt(sixTo4[1]!, 16),
-			parseInt(sixTo4[2]!, 16),
-			parseInt(sixTo4[3]!, 16),
-			parseInt(sixTo4[4]!, 16),
-		].join(".");
-		return isPrivateIPv4(v4);
-	}
-
-	const teredo = n.match(
-		/^2001:0(?:000)?:.*?:([0-9a-f]{2})([0-9a-f]{2}):([0-9a-f]{2})([0-9a-f]{2})$/i,
-	);
-	if (teredo) {
-		const v4 = [
-			parseInt(teredo[1]!, 16) ^ 0xff,
-			parseInt(teredo[2]!, 16) ^ 0xff,
-			parseInt(teredo[3]!, 16) ^ 0xff,
-			parseInt(teredo[4]!, 16) ^ 0xff,
-		].join(".");
-		return isPrivateIPv4(v4);
 	}
 
 	return false;
@@ -140,26 +201,64 @@ export function isCloudMetadataIp(ip: string): boolean {
 	if (version === 6) {
 		const n = ip.toLowerCase();
 		if (METADATA_IPV6.has(n)) return true;
-		// IPv4-mapped (::ffff:a.b.c.d) / IPv4-compatible (::a.b.c.d) forms
-		// embedding a metadata IPv4 address.
-		const embedded = n.match(/^::(?:ffff:)?([\d.]+)$/);
-		if (embedded) return METADATA_IPV4.has(embedded[1]!);
-		// Hex-spelled IPv4-mapped/compatible forms (e.g. ::ffff:a9fe:a9fe =
-		// 169.254.169.254). Resolve via bytes so the metadata floor cannot be
-		// bypassed by choosing the hex encoding of a mapped metadata address.
-		const bytes = ipv6ToBytes(n);
-		if (bytes) {
-			const allZeroHigh = bytes.subarray(0, 10).every((b) => b === 0);
-			const mapped = allZeroHigh && bytes[10] === 0xff && bytes[11] === 0xff;
-			const compat = allZeroHigh && bytes[10] === 0x00 && bytes[11] === 0x00;
-			if (mapped || compat) {
-				const v4 = `${bytes[12]}.${bytes[13]}.${bytes[14]}.${bytes[15]}`;
-				if (METADATA_IPV4.has(v4)) return true;
-			}
-		}
-		return false;
+		return embeddedIpv4Candidates(n).some((v4) => METADATA_IPV4.has(v4));
 	}
 	return false;
+}
+
+/**
+ * Decode IPv4 destinations carried by mapped, compatible, NAT64, 6to4, and
+ * Teredo IPv6 addresses. Multiple NAT64 local-prefix layouts are returned
+ * because RFC 6052 permits several prefix lengths under 64:ff9b:1::/48.
+ */
+function embeddedIpv4Candidates(ip: string): string[] {
+	const bytes = ipv6ToBytes(ip.toLowerCase());
+	if (!bytes) return [];
+	const out: string[] = [];
+	const add = (a: number, b: number, c: number, d: number): void => {
+		const candidate = `${a}.${b}.${c}.${d}`;
+		if (!out.includes(candidate)) out.push(candidate);
+	};
+
+	const mapped =
+		bytes.subarray(0, 10).every((b) => b === 0) &&
+		bytes[10] === 0xff &&
+		bytes[11] === 0xff;
+	const compatible = bytes.subarray(0, 12).every((b) => b === 0);
+	if (mapped || compatible) add(bytes[12]!, bytes[13]!, bytes[14]!, bytes[15]!);
+
+	const nat64Prefix =
+		bytes[0] === 0x00 &&
+		bytes[1] === 0x64 &&
+		bytes[2] === 0xff &&
+		bytes[3] === 0x9b;
+	if (nat64Prefix && bytes.subarray(4, 12).every((b) => b === 0)) {
+		add(bytes[12]!, bytes[13]!, bytes[14]!, bytes[15]!); // /96
+	}
+	if (nat64Prefix && bytes[4] === 0 && bytes[5] === 1) {
+		add(bytes[6]!, bytes[7]!, bytes[9]!, bytes[10]!); // /48
+		add(bytes[7]!, bytes[9]!, bytes[10]!, bytes[11]!); // /56
+		add(bytes[9]!, bytes[10]!, bytes[11]!, bytes[12]!); // /64
+		add(bytes[12]!, bytes[13]!, bytes[14]!, bytes[15]!); // defensive
+	}
+
+	if (bytes[0] === 0x20 && bytes[1] === 0x02) {
+		add(bytes[2]!, bytes[3]!, bytes[4]!, bytes[5]!);
+	}
+	if (
+		bytes[0] === 0x20 &&
+		bytes[1] === 0x01 &&
+		bytes[2] === 0x00 &&
+		bytes[3] === 0x00
+	) {
+		add(
+			bytes[12]! ^ 0xff,
+			bytes[13]! ^ 0xff,
+			bytes[14]! ^ 0xff,
+			bytes[15]! ^ 0xff,
+		);
+	}
+	return out;
 }
 
 // ─── SSRF allow-list (CIDR ranges) ─────────────────────────────────
@@ -343,7 +442,12 @@ function getAllowRanges(): ParsedCidr[] {
 /** Returns true if `ip` is permitted by the configured allow-list. */
 function isAllowed(ip: string, ranges: ParsedCidr[]): boolean {
 	if (ranges.length === 0) return false;
-	return ranges.some((r) => ipMatchesCidr(ip, r));
+	if (ranges.some((r) => ipMatchesCidr(ip, r))) return true;
+	// IPv4-compatible IPv6 literals are canonicalized to hex by URL parsing.
+	// Let an explicit IPv4 allow-range apply to the same embedded destination.
+	return embeddedIpv4Candidates(ip).some((v4) =>
+		ranges.some((r) => ipMatchesCidr(v4, r)),
+	);
 }
 
 /**

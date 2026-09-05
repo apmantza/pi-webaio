@@ -61,6 +61,19 @@ test("isCloudMetadataIp: IPv4-compatible ::169.254.169.254 is metadata", () => {
 	assert.equal(isCloudMetadataIp("::169.254.169.254"), true);
 });
 
+test("isCloudMetadataIp: transition encodings of metadata stay on the floor", () => {
+	for (const ip of [
+		"64:ff9b::a9fe:a9fe",
+		"64:ff9b:1:a9fe:a9:fe00::",
+		"64:ff9b:1:aba9:fe:a9fe::",
+		"64:ff9b:1:abcd:a9:fea9:fe00:0",
+		"2002:a9fe:a9fe::",
+		"2001:0:4136:e378:8000:63bf:5601:5601",
+	]) {
+		assert.equal(isCloudMetadataIp(ip), true, ip);
+	}
+});
+
 test("isCloudMetadataIp: public IP is not metadata", () => {
 	assert.equal(isCloudMetadataIp("8.8.8.8"), false);
 	assert.equal(isCloudMetadataIp("93.184.216.34"), false);
@@ -71,6 +84,157 @@ test("isCloudMetadataIp: other link-local IP is not metadata (floor is specific)
 	// floor must not over-match, or it would shadow the allow-list for the
 	// whole 169.254/16 range.
 	assert.equal(isCloudMetadataIp("169.254.1.1"), false);
+});
+
+// ─── Non-public address coverage ────────────────────────────────────
+
+for (const [label, url] of [
+	["IPv4 protocol-assignment range", "http://192.0.0.8/"],
+	["IPv4 documentation range TEST-NET-1", "http://192.0.2.1/"],
+	["IPv4 deprecated 6to4 relay range", "http://192.88.99.1/"],
+	["IPv4 6a44-relay anycast", "http://192.88.99.2/"],
+	["IPv4 documentation range TEST-NET-2", "http://198.51.100.1/"],
+	["IPv4 documentation range TEST-NET-3", "http://203.0.113.1/"],
+	["IPv4 multicast", "http://224.0.0.1/"],
+	["IPv4 reserved", "http://240.0.0.1/"],
+	["IPv6 local-use translation prefix", "http://[64:ff9b:1::808:808]/"],
+	["IPv6 translation of private IPv4", "http://[64:ff9b::a00:1]/"],
+	["IPv6 dummy prefix", "http://[100:0:0:1::1]/"],
+	["6to4 with compressed private IPv4 payload", "http://[2002:a00:1::]/"],
+	[
+		"Teredo with compressed private IPv4 payload",
+		"http://[2001:0:4136:e378:8000:63bf:f5ff:fffe]/",
+	],
+	["IPv6 benchmarking", "http://[2001:2::1]/"],
+	["IPv6 deprecated ORCHID", "http://[2001:10::1]/"],
+	["IPv6 documentation", "http://[2001:db8::1]/"],
+	["IPv6 documentation (3fff::/20)", "http://[3fff::1]/"],
+	["IPv6 segment-routing SIDs", "http://[5f00::1]/"],
+	["IPv6 link-local outside fe80::/16", "http://[febf::1]/"],
+	["IPv6 multicast", "http://[ff02::1]/"],
+]) {
+	test(`non-public ranges: ${label} is blocked`, async () => {
+		setSsrfAllowRangesForTest([]);
+		const r = await validateUrlForSsrf(url);
+		assert.equal(r.dangerous, true);
+		assert.equal(r.reason, "private-range");
+		assert.deepEqual(r.pinnedIps, []);
+	});
+}
+
+for (const [label, url] of [
+	["IPv4 PCP anycast exception", "http://192.0.0.9/"],
+	["IPv4 TURN anycast exception", "http://192.0.0.10/"],
+	["IPv4 address before protocol assignments", "http://191.255.255.255/"],
+	["IPv4 address after protocol assignments", "http://192.0.1.1/"],
+	["IPv4 address before benchmarking", "http://198.17.255.255/"],
+	["IPv4 address after benchmarking", "http://198.20.0.1/"],
+	["IPv4 unicast below multicast", "http://223.255.255.255/"],
+	["IPv6 well-known translation of public IPv4", "http://[64:ff9b::808:808]/"],
+	["6to4 with compressed public IPv4 payload", "http://[2002:808:808::]/"],
+	[
+		"Teredo with compressed public IPv4 payload",
+		"http://[2001:0:4136:e378:8000:63bf:f7f7:f7f7]/",
+	],
+	["IPv6 PCP anycast exception", "http://[2001:1::1]/"],
+	["IPv6 TURN anycast exception", "http://[2001:1::2]/"],
+	["IPv6 DNS-SD anycast exception", "http://[2001:1::3]/"],
+	["IPv6 AMT exception", "http://[2001:3::1]/"],
+	["IPv6 AS112 exception", "http://[2001:4:112::1]/"],
+	["IPv6 ORCHIDv2 first block", "http://[2001:20::1]/"],
+	["IPv6 ORCHIDv2 final block", "http://[2001:2f:ffff::1]/"],
+	["IPv6 Drone Remote ID first block", "http://[2001:30::1]/"],
+	["IPv6 Drone Remote ID final block", "http://[2001:3f:ffff::1]/"],
+	["IPv6 address after 3fff::/20 documentation", "http://[3fff:1000::1]/"],
+	["IPv6 address after 5f00::/16 SRv6 SIDs", "http://[5f01::1]/"],
+]) {
+	test(`public range exceptions: ${label} is allowed`, async () => {
+		setSsrfAllowRangesForTest([]);
+		const r = await validateUrlForSsrf(url);
+		assert.equal(r.dangerous, false);
+		assert.ok(r.pinnedIps.length > 0);
+	});
+}
+
+test("non-public ranges: expanded IPv6 documentation spelling is blocked", async () => {
+	setSsrfAllowRangesForTest([]);
+	const r = await validateUrlForSsrf(
+		"http://[2001:0db8:0000:0000:0000:0000:0000:0001]/",
+	);
+	assert.equal(r.dangerous, true);
+});
+
+test("non-public ranges: IPv4-mapped documentation address is blocked", async () => {
+	setSsrfAllowRangesForTest([]);
+	const r = await validateUrlForSsrf("http://[::ffff:192.0.2.1]/");
+	assert.equal(r.dangerous, true);
+});
+
+test("non-public ranges: canonical IPv4-compatible private forms are blocked", async () => {
+	setSsrfAllowRangesForTest([]);
+	for (const url of ["http://[::127.0.0.1]/", "http://[::10.0.0.1]/"]) {
+		const r = await validateUrlForSsrf(url);
+		assert.equal(r.dangerous, true, url);
+		assert.equal(r.reason, "private-range", url);
+	}
+});
+
+test("non-public ranges: mask boundaries classify both sides", async () => {
+	setSsrfAllowRangesForTest([]);
+	for (const url of [
+		"http://[100:0:0:1:ffff:ffff:ffff:ffff]/",
+		"http://[2001:1f:ffff:ffff:ffff:ffff:ffff:ffff]/",
+		"http://[3fff:fff:ffff:ffff:ffff:ffff:ffff:ffff]/",
+		"http://[5f00:ffff:ffff:ffff:ffff:ffff:ffff:ffff]/",
+	]) {
+		assert.equal((await validateUrlForSsrf(url)).dangerous, true, url);
+	}
+	for (const url of [
+		"http://[100:0:0:2::1]/",
+		"http://[3fff:1000::1]/",
+		"http://[5f01::1]/",
+	]) {
+		assert.equal((await validateUrlForSsrf(url)).dangerous, false, url);
+	}
+});
+
+test("non-public ranges: exact IPv6 exception boundaries do not widen", async () => {
+	setSsrfAllowRangesForTest([]);
+	for (const url of [
+		"http://[2001:1::4]/",
+		"http://[2001:2:ffff::1]/",
+		"http://[2001:4:111::1]/",
+		"http://[2001:4:113::1]/",
+	]) {
+		assert.equal((await validateUrlForSsrf(url)).dangerous, true, url);
+	}
+});
+
+test("non-public ranges: mixed DNS answer with documentation address is blocked", async () => {
+	setSsrfAllowRangesForTest([]);
+	const r = await validateUrlForSsrf(
+		"http://mixed.example/",
+		resolverReturning(["93.184.216.34", "203.0.113.1"]),
+	);
+	assert.equal(r.dangerous, true);
+	assert.deepEqual(r.pinnedIps, []);
+});
+
+test("non-public ranges: explicit CIDR allow-list permits configured ranges and compatible forms", async () => {
+	setSsrfAllowRangesForTest(
+		parseAllowRanges("10.0.0.0/8,203.0.113.0/24,3fff::/20"),
+	);
+	try {
+		for (const url of [
+			"http://203.0.113.1/",
+			"http://[3fff::1]/",
+			"http://[::10.0.0.1]/",
+		]) {
+			assert.equal((await validateUrlForSsrf(url)).dangerous, false, url);
+		}
+	} finally {
+		setSsrfAllowRangesForTest(null);
+	}
 });
 
 // ─── Metadata floor is non-overridable by the allow-list ────────────
@@ -117,6 +281,27 @@ test("metadata floor: resolved 169.254.169.254 blocked even when 169.254.0.0/16 
 		);
 		assert.equal(r.dangerous, true, "resolved metadata IP must hit the floor");
 		assert.equal(r.reason, "cloud-metadata");
+	} finally {
+		setSsrfAllowRangesForTest(null);
+	}
+});
+
+test("metadata floor: transition encodings stay blocked when their outer ranges are allowed", async () => {
+	setSsrfAllowRangesForTest(
+		parseAllowRanges("64:ff9b::/32,2002::/16,2001::/32"),
+	);
+	try {
+		for (const url of [
+			"http://[64:ff9b::a9fe:a9fe]/",
+			"http://[64:ff9b:1:a9fe:a9:fe00::]/",
+			"http://[64:ff9b:1:aba9:fe:a9fe::]/",
+			"http://[2002:a9fe:a9fe::]/",
+			"http://[2001:0:4136:e378:8000:63bf:5601:5601]/",
+		]) {
+			const r = await validateUrlForSsrf(url);
+			assert.equal(r.dangerous, true, url);
+			assert.equal(r.reason, "cloud-metadata", url);
+		}
 	} finally {
 		setSsrfAllowRangesForTest(null);
 	}
