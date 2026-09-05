@@ -235,12 +235,12 @@ test("a hanging Jina transport resolves to null within the timeout", async () =>
 
 // ─── P1: Defuddle timeout tightened ────────────────────────────────
 
-test("DEFUDDLE_TIMEOUT is tightened from the previous 8000ms", () => {
+test("DEFUDDLE_TIMEOUT matches the 3000ms extraction budget", () => {
 	assert.ok(
 		DEFUDDLE_TIMEOUT < 8000,
 		"Defuddle timeout should be tighter than the old 8s",
 	);
-	assert.strictEqual(DEFUDDLE_TIMEOUT, 4000);
+	assert.strictEqual(DEFUDDLE_TIMEOUT, 3000);
 });
 
 // ─── P1: Readability ratio heuristic ───────────────────────────────
