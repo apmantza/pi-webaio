@@ -118,6 +118,25 @@ failed hop at most twice. The input cap cannot exceed 10 MiB.
 Header names and values are validated before a request. Transport-controlled
 framing headers such as `Host` and `Content-Length` are rejected.
 
+### Errors
+
+A failed call returns `{ ok: false, error }` rather than throwing. The error
+uses pi-webaio's single shared taxonomy — the same `FetchErrorCode`,
+`FetchPhase`, and `FetchErrorCategory` the `aio-*` tools and the MCP server
+report — so one `switch` over codes works on every surface:
+
+```js
+if (!result.ok) {
+  const { code, phase, category, retryable, statusCode } = result.error;
+  // e.g. "parse_error" / "processing" / "processing" / false
+}
+```
+
+`retryable` defaults from the shared retry matrix, so it means "a later call
+may succeed" — not "this call will be retried" (retries within a single call
+are governed by `maxRetries`). Corrupt or undecodable content reports
+`parse_error` at phase `processing` and is never marked retryable.
+
 `format` accepts `markdown`, `html`, `text`, `json`, or `raw`. `html` requires
 an HTML response and returns Defuddle's cleaned HTML. `json` requires a JSON
 response and returns pretty-printed JSON text. `text` removes markup from HTML
