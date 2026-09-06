@@ -880,6 +880,24 @@ test("redacts secret-bearing URLs embedded in transport errors", async () => {
 	assert.doesNotMatch(result.error.message, /access_token=abc/);
 });
 
+test("a transport-creation failure is a connecting error, not an unknown download error", async () => {
+	// createTransport is awaited outside the request loop's try, so its
+	// rejection must go through classifyTransportError too — otherwise an
+	// unrecognized throw surfaces as the catch-all's "unknown" at phase
+	// "downloading", a phase that never even started.
+	const { fetchPage } = runtime({
+		createTransport: async () => {
+			throw new Error("quantum flux overflow");
+		},
+	});
+	const result = await fetchPage("https://example.test/");
+	assert.equal(result.ok, false);
+	assert.equal(result.error.code, "connect_error");
+	assert.equal(result.error.phase, "connecting");
+	assert.equal(result.error.category, "network");
+	assert.match(result.error.message, /quantum flux overflow/);
+});
+
 test("redacts secret-bearing URLs from validation failures", async () => {
 	const { fetchPage, calls } = runtime();
 	const result = await fetchPage("https://user:secret-value@example.test/path");

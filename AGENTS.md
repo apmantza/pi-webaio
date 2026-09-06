@@ -4,7 +4,7 @@
 
 pi-webaio is an **all-in-one web tools extension** for [pi](https://pi.dev) (the coding agent) that provides search, fetch, crawl, extraction, discovery, storage, compilation, RAG chunking, query-focused answer mode, offline corpus search, single-round research bundles, phase-aware error handling, TUI rendering, and (v0.4.1+) opt-in paywall bypass capabilities via 8 tools: `aio-websearch`, `aio-webfetch`, `aio-webcontent`, `aio-webresult`, `aio-webmap`, `aio-webpull`, `aio-webquery`, and `aio-webresearch`. It's published as `npm:pi-webaio` and installable via `pi install npm:pi-webaio`. The same eight tools are also exposed to non-pi MCP clients (Claude Code, Claude Desktop, etc.) through a stdio MCP server (`bin/pi-webaio-mcp.mjs`, `src/mcp-server.ts`).
 
-**Current version: 0.9.0** — Context7 + DeepWiki verticals (21 built-in extractors), multi-source **cited** answer mode (`urls`+`query`), outline mode + frugal default preview, opt-in AI summarization, compact search, per-engine search status/latency + ~4.5s deadline, Google-lane 3s cap, shared warm browser pool, lazy Jina extraction, CSS-cruft stripping (incl. `@media`) + heading-detection fallback, source trust-tier grading, content-hash dedup + `aio-webcontent` diff, local-knowledge pre-check, plus the SSRF/secret-redaction hardening from 0.7.3. 1480 tests / 65 wired suites.
+**Current version: 0.9.0** — Context7 + DeepWiki verticals (21 built-in extractors), multi-source **cited** answer mode (`urls`+`query`), outline mode + frugal default preview, opt-in AI summarization, compact search, per-engine search status/latency + ~4.5s deadline, Google-lane 3s cap, shared warm browser pool, lazy Jina extraction, CSS-cruft stripping (incl. `@media`) + heading-detection fallback, source trust-tier grading, content-hash dedup + `aio-webcontent` diff, local-knowledge pre-check, plus the SSRF/secret-redaction hardening from 0.7.3. 1482 tests / 65 wired suites.
 
 > **Internal-docs policy:** research / audit / inspiration notes — `docs/inspirations*.md`, `docs/pagemap-inspiration.md`, `docs/observability-gaps.md`, `docs/perf-improvements.md`, and root-level `inspiration7.md` — are **local-only working artifacts**. They are gitignored and must **never** be committed or shipped. Only user-facing docs (`README.md`, `docs/{features,tools,usage,architecture,custom-verticals,mcp}.md`) plus `ROADMAP.md` / `CHANGELOG.md` / `AGENTS.md` belong in the repo. When auditing or surveying, write findings to these local files, not to tracked docs.
 
@@ -63,7 +63,7 @@ pi-webaio/
 │   ├── source-trust.ts       ← Source trust-tier + evidence-quality grading (classifySourceProfile + caveat reasons) (post-0.7.3)
 │   ├── content-hash.ts       ← SHA-256 content hashing for dedup + diff baselines (post-0.7.3)
 │   ├── client-redirect.ts    ← Dependency-free client-side redirect detection (<meta refresh> + literal location assignments); shared by content.ts and webfetch-api.ts so the two cannot drift
-│   ├── http-text.ts          ← Dependency-free HTTP response text leaf: charset decode, content-type normalize/sniff, JSON/HTML/text predicates, binary + magic-byte detection, HTML → plain text
+│   ├── http-text.ts          ← Pipeline-free HTTP response text leaf (linkedom only, for HTML → text): charset decode, content-type normalize/sniff, JSON/HTML/text predicates, binary + magic-byte detection, HTML → plain text
 │   ├── webfetch-api.ts       ← Browser-free static fetch + local extraction engine behind the `pi-webaio/webfetch` entrypoint (DNS-pinned redirects, byte budget, cancellation, shared error taxonomy)
 │   ├── webfetch.ts           ← Public `pi-webaio/webfetch` surface: re-exports fetch/fetchPage + the shared FetchError types
 │   ├── debug.ts              ← Central PI_WEBAIO_DEBUG-gated debug() helper (stderr, MCP-safe) + strategy/cache/search tracing (post-0.7.3)
@@ -131,7 +131,7 @@ pi-webaio/
 ├── types/
 │   ├── pi-coding-agent.d.ts  ← Minimal ExtensionAPI type declaration
 │   └── playwright.d.ts       ← Playwright type stub (optional dep)
-├── tests/                    ← 65 suites wired into test:all (1480 tests) + standalone suites (mcp, etc.)
+├── tests/                    ← 65 suites wired into test:all (1482 tests) + standalone suites (mcp, etc.)
 ├── tsconfig.json             ← Lint config (noEmit, strict, ES2022)
 ├── tsconfig.dist.json        ← Build config (emits to dist/, includes types/**/*.d.ts)
 ├── package.json              ← type: "module", pi extension manifest, v0.7.3
@@ -287,7 +287,7 @@ pi-webaio/
 | `src/webfetch.ts` | Public `pi-webaio/webfetch` entrypoint — re-exports `fetch`/`fetchPage`, the option/result types, and the shared `FetchErrorCode`/`FetchPhase`/`FetchErrorCategory` types. |
 | `src/webfetch-api.ts` | The engine: manual redirect following with per-hop SSRF validation + DNS pinning, aggregate 10 MiB byte budget, `AbortSignal` propagation with bounded cleanup, five output formats, local Defuddle/PDF extraction, and credential redaction on returned URL metadata. |
 | `src/client-redirect.ts` | Dependency-free client-side redirect detection (`<meta http-equiv=refresh>` + literal `location` assignments). Moved out of `content.ts` and shared with `webfetch-api.ts` so the two paths cannot drift. |
-| `src/http-text.ts` | Dependency-free HTTP response text leaf: `cleanText`, `htmlToPlainText`, `normalizeContentType`, `sniffContentType`, `isJsonContentType`, `isLikelyJsonBody`, `isHtmlContentType`, `isTextualContentType`, `decodeResponseBody`, `binarySignature`, `looksBinary`. Consolidates helpers that `content.ts` and `webfetch-api.ts` each carried a copy of. |
+| `src/http-text.ts` | Pipeline-free HTTP response text leaf (no pipeline imports; linkedom only for HTML → text): `cleanText`, `htmlToPlainText`, `normalizeContentType`, `sniffContentType`, `isJsonContentType`, `isLikelyJsonBody`, `isHtmlContentType`, `isTextualContentType`, `decodeResponseBody`, `binarySignature`, `looksBinary`. Consolidates helpers that `content.ts` and `webfetch-api.ts` each carried a copy of. |
 | `scripts/test-static-webfetch-package.mjs` | Packs the tarball, installs it into an isolated consumer with `--omit=peer` and Playwright removed, then asserts `pi-webaio/webfetch` imports cleanly, leaks no handles, and writes nothing to disk. |
 
 ### New Modules (v0.7.0–v0.7.3)
@@ -413,7 +413,7 @@ The bypass flag is **opt-in** — a normal `aio-webfetch(url)` still gets the re
 
 - **`pi-webaio/webfetch`** — a supported browser-free fetch + local-extraction API for integrations that must not register tools, start a browser, contact a remote reader, or write a content cache. Follows HTTP and literal client-side redirects manually, validating and DNS-pinning every hop; caps aggregate retry + redirect input at 10 MiB; propagates `AbortSignal` with bounded cleanup.
 - **One error taxonomy** — the static API reports the canonical `FetchErrorCode` / `FetchPhase` / `FetchErrorCategory` from `src/tools/fetch-error.ts` instead of a parallel set. The union grew from 26 to 31 codes (`unsupported_protocol`, `invalid_option`, `too_many_redirects`, `unexpected_content_type`, `response_too_large`), all non-retryable; retryability now defaults from the shared matrix via `isRetryableCode`, and unexpected throws route through `classifyError` rather than degrading to a retryable `network_error`.
-- **Shared dependency-free leaves** — `src/client-redirect.ts` and `src/http-text.ts` replace the forked copies of client-side-redirect detection, whitespace cleaning, JSON/content-type predicates, charset decoding, and binary sniffing that `content.ts` and `webfetch-api.ts` each carried. `content.ts` re-exports the moved helpers, so its existing surface is unchanged.
+- **Shared pipeline-free leaves** — `src/client-redirect.ts` (zero imports) and `src/http-text.ts` (linkedom only) replace the forked copies of client-side-redirect detection, whitespace cleaning, JSON/content-type predicates, charset decoding, and binary sniffing that `content.ts` and `webfetch-api.ts` each carried. `content.ts` re-exports the moved helpers, so its existing surface is unchanged.
 - **Public-network guard coverage** — the SSRF guard denies non-public IPv4 and IPv6 special-purpose ranges by default, preserves the IANA globally reachable exceptions, handles canonical mapped/compatible/NAT64/6to4/Teredo encodings, and keeps transition-encoded cloud metadata addresses outside the CIDR allow-list.
 
 ### v0.7.3 — SSRF hardening, secret redaction, relatedness-gated summaries, TS7 build
@@ -476,8 +476,8 @@ TUI result rendering for all tools; phase-aware FetchError system; `format` para
 ## Testing
 
 - `npm test` → runs unit tests (`tests/unit.test.mjs`, 156 tests)
-- `npm run test:all` → runs all 65 wired suites (1480 tests total, 0 fail, 3 expected skips: a live-network Jina test that skips on external HTTP 403, and opt-in live TLS tests)
-- `npm run test:webfetch-api` → static fetch API suite (`tests/static-webfetch-api.test.mjs`, 40 tests: SSRF pinning per hop, byte budgets, cancellation, redaction, shared error taxonomy, shared-helper guards)
+- `npm run test:all` → runs all 65 wired suites (1482 tests total, 0 fail, 3 expected skips: a live-network Jina test that skips on external HTTP 403, and opt-in live TLS tests)
+- `npm run test:webfetch-api` → static fetch API suite (`tests/static-webfetch-api.test.mjs`, 41 tests: SSRF pinning per hop, byte budgets, cancellation, redaction, shared error taxonomy, shared-helper guards)
 - `npm run test:webfetch-package` → packs the tarball, installs it into an isolated consumer with peers and Playwright removed, and verifies `pi-webaio/webfetch` loads with no leaked handles and no disk writes
 - `npm run test:mcp` → MCP server tests (standalone, not in test:all)
 - Specialized suites (each `npm run test:<name>`): `new` (new-features, 31), `paywall` (65), `check` (github-check, 35), `render` (render-result, 40), `fetcherror` (fetch-error, 57), `fetchprogress` (9), `hardening` (16), `redact` (21), `ssrf` (ssrf-hardening, 30), `fingerprint` (14), `format` (18), `webfetch-summary` (13), `search-context` (20), `chunker` (31), `prune` (prune-markdown, 25), `github-map` (50), `reddit` (reddit-block, 7), `source-ranking` (16), `webresearch` (26), `stance` (24), `cookie-cache` (25), `title-extraction` (10), `integration` (5), `bench` (bench-harness, 35)

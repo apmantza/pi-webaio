@@ -988,7 +988,17 @@ async function download(
 				},
 				() => {},
 			);
-			const transport = await raceWithAbort(transportPromise, signal);
+			// A transport-creation failure is a connecting failure, not a download
+			// one: route it through the same classifier as request throws so an
+			// unrecognized error degrades to connect_error instead of the catch-all's
+			// phase-less unknown at phase "downloading".
+			let transport: StaticTransport;
+			try {
+				transport = await raceWithAbort(transportPromise, signal);
+			} catch (error) {
+				if (signal.aborted) throw abortException(signal);
+				throw classifyTransportError(error, current, redirects);
+			}
 			let retryMs: number | undefined;
 			try {
 				const requestPromise = dependencies.request(current, {
