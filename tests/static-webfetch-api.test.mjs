@@ -876,8 +876,26 @@ test("redacts secret-bearing URLs embedded in transport errors", async () => {
 	});
 	const result = await fetchPage("https://example.test/");
 	assert.equal(result.ok, false);
-	assert.equal(result.error.code, "network_error");
+	assert.equal(result.error.code, "connect_error");
 	assert.doesNotMatch(result.error.message, /access_token=abc/);
+});
+
+test("a transport-creation failure is a connecting error, not an unknown download error", async () => {
+	// createTransport is awaited outside the request loop's try, so its
+	// rejection must go through classifyTransportError too — otherwise an
+	// unrecognized throw surfaces as the catch-all's "unknown" at phase
+	// "downloading", a phase that never even started.
+	const { fetchPage } = runtime({
+		createTransport: async () => {
+			throw new Error("quantum flux overflow");
+		},
+	});
+	const result = await fetchPage("https://example.test/");
+	assert.equal(result.ok, false);
+	assert.equal(result.error.code, "connect_error");
+	assert.equal(result.error.phase, "connecting");
+	assert.equal(result.error.category, "network");
+	assert.match(result.error.message, /quantum flux overflow/);
 });
 
 test("redacts secret-bearing URLs from validation failures", async () => {
@@ -987,4 +1005,189 @@ test("the supported entrypoint has no browser, search, remote-reader, or storage
 		types: "./dist/src/webfetch.d.ts",
 		import: "./dist/src/webfetch.js",
 	});
+});
+
+// ─── Shared error taxonomy (src/tools/fetch-error.ts) ──────────────
+
+test("reports a corrupt PDF as a non-retryable parse_error, not a network error", async () => {
+	let destroyed = 0;
+	class BrokenPdfParser {
+		constructor() {}
+		async load() {
+			throw new Error("Invalid PDF structure");
+		}
+		async getText() {
+			return { text: "", total: 0 };
+		}
+		async destroy() {
+			destroyed += 1;
+		}
+	}
+	const { fetchPage } = runtime({
+		request: async (url) =>
+			response({
+				url,
+				headers: { "content-type": "application/pdf" },
+				body: encoder.encode("%PDF-1.4 not really a pdf"),
+			}),
+		loadPdfParser: async () => BrokenPdfParser,
+	});
+	const result = await fetchPage("https://example.test/broken.pdf", {
+		format: "markdown",
+	});
+	assert.equal(result.ok, false);
+	assert.equal(result.error.code, "parse_error");
+	assert.equal(result.error.phase, "processing");
+	assert.equal(result.error.category, "processing");
+	assert.equal(result.error.retryable, false);
+	assert.match(result.error.message, /Invalid PDF structure/);
+	// The parser is still destroyed on the failure path.
+	assert.equal(destroyed, 1);
+});
+
+test("reports a missing PDF parser as parse_error, not a network error", async () => {
+	const { fetchPage } = runtime({
+		request: async (url) =>
+			response({
+				url,
+				headers: { "content-type": "application/pdf" },
+				body: encoder.encode("%PDF-1.4 body"),
+			}),
+		loadPdfParser: async () => {
+			throw new Error("pdf-parse did not export PDFParse");
+		},
+	});
+	const result = await fetchPage("https://example.test/doc.pdf");
+	assert.equal(result.ok, false);
+	assert.equal(result.error.code, "parse_error");
+	assert.equal(result.error.phase, "processing");
+	assert.equal(result.error.retryable, false);
+});
+
+test("every failure carries a category from the shared taxonomy", async () => {
+	const { fetchErrorCategory } = await import("../src/tools/fetch-error.ts");
+	const cases = [
+		[runtime(), "file:///etc/passwd", undefined],
+		[
+			runtime({
+				validateUrl: async () => ({
+					dangerous: true,
+					reason: "private-range",
+					pinnedIps: [],
+				}),
+			}),
+			"http://127.0.0.1/",
+			undefined,
+		],
+		[runtime(), "https://example.test/", { format: "nope" }],
+		[
+			runtime({
+				request: async (url) =>
+					response({ url, status: 503, statusText: "Unavailable" }),
+			}),
+			"https://example.test/",
+			undefined,
+		],
+	];
+	for (const [harness, url, options] of cases) {
+		const result = await harness.fetchPage(url, options);
+		assert.equal(result.ok, false, url);
+		assert.equal(
+			result.error.category,
+			fetchErrorCategory(result.error.code),
+			`${result.error.code} should map to its canonical category`,
+		);
+	}
+});
+
+test("uses canonical phase names, never the retired 'loading' phase", async () => {
+	const { fetchPage } = runtime({
+		request: async (url) =>
+			response({ url, status: 503, statusText: "Service Unavailable" }),
+	});
+	const result = await fetchPage("https://example.test/");
+	assert.equal(result.ok, false);
+	assert.equal(result.error.code, "http_error");
+	assert.equal(result.error.phase, "headers");
+
+	const loop = runtime({
+		request: async () =>
+			response({
+				url: "https://a.example/one",
+				status: 302,
+				headers: { location: "https://a.example/two" },
+			}),
+	});
+	const loopResult = await loop.fetchPage("https://a.example/one", {
+		maxRedirects: 1,
+	});
+	assert.equal(loopResult.ok, false);
+	assert.equal(loopResult.error.code, "too_many_redirects");
+	assert.equal(loopResult.error.phase, "headers");
+
+	const oversized = runtime({
+		request: async (url) =>
+			response({
+				url,
+				headers: { "content-type": "text/plain", "content-length": "99999999" },
+				body: "small",
+			}),
+	});
+	const oversizedResult = await oversized.fetchPage("https://example.test/", {
+		maxResponseBytes: 1024,
+	});
+	assert.equal(oversizedResult.ok, false);
+	assert.equal(oversizedResult.error.code, "response_too_large");
+	assert.equal(oversizedResult.error.phase, "downloading");
+});
+
+// ─── Shared leaf helpers (no forked copies) ────────────────────────
+
+test("shares the client-redirect and text helpers with the extraction pipeline", async () => {
+	const api = await readFile(
+		new URL("../src/webfetch-api.ts", import.meta.url),
+		"utf8",
+	);
+	const content = await readFile(
+		new URL("../src/content.ts", import.meta.url),
+		"utf8",
+	);
+
+	// Both surfaces import the dependency-free leaves...
+	assert.match(api, /from "\.\/client-redirect\.ts"/);
+	assert.match(content, /from "\.\/client-redirect\.ts"/);
+	assert.match(api, /from "\.\/http-text\.ts"/);
+	assert.match(content, /from "\.\/http-text\.ts"/);
+
+	// ...and neither keeps a forked copy that could drift.
+	for (const forked of [
+		"function clientRedirectTarget(",
+		"function textFromHtml(",
+		"function decodeBody(",
+		"function contentTypeOf(",
+		"function binarySignature(",
+		"function looksBinary(",
+		"function isJson(",
+		"function isHtml(",
+		"function isText(",
+	]) {
+		assert.equal(api.includes(forked), false, `webfetch-api.ts still forks ${forked}`);
+	}
+	for (const forked of [
+		"function cleanText(",
+		"export function isJsonContentType(",
+		"export function isLikelyJsonBody(",
+		"export function extractClientSideRedirect(",
+	]) {
+		assert.equal(content.includes(forked), false, `content.ts still forks ${forked}`);
+	}
+});
+
+test("the shared client-redirect leaf has no pipeline imports", async () => {
+	const source = await readFile(
+		new URL("../src/client-redirect.ts", import.meta.url),
+		"utf8",
+	);
+	assert.doesNotMatch(source, /^import /m);
+	assert.doesNotMatch(source, /node:fs/);
 });

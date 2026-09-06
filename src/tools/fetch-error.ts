@@ -15,16 +15,19 @@
 
 import { redactSecrets } from "../redact.ts";
 
-// ─── Codes (26) ───────────────────────────────────────────────────
+// ─── Codes (31) ───────────────────────────────────────────────────
 
 /** A specific failure category. Independent of WHERE it happened. */
 export type FetchErrorCode =
 	// validation (input was bad before we even tried)
 	| "invalid_url"
+	| "unsupported_protocol"
+	| "invalid_option"
 	| "private_ip"
 	| "blocked_secret"
 	| "blocked_ssrf"
 	| "redirect_loop"
+	| "too_many_redirects"
 	// connect (couldn't establish a connection)
 	| "dns_error"
 	| "connect_error"
@@ -41,6 +44,8 @@ export type FetchErrorCode =
 	| "download_error"
 	| "empty_body"
 	| "binary_content"
+	| "unexpected_content_type"
+	| "response_too_large"
 	| "checksum_mismatch"
 	// process (body came back but we couldn't turn it into something)
 	| "parse_error"
@@ -149,12 +154,17 @@ type FetchErrorCategory =
 	| "processing"
 	| "unknown";
 
+export type { FetchErrorCategory };
+
 const CATEGORY_BY_CODE: Record<FetchErrorCode, FetchErrorCategory> = {
 	invalid_url: "validation",
+	unsupported_protocol: "validation",
+	invalid_option: "validation",
 	private_ip: "validation",
 	blocked_secret: "validation",
 	blocked_ssrf: "validation",
 	redirect_loop: "client",
+	too_many_redirects: "client",
 	dns_error: "network",
 	connect_error: "network",
 	tls_error: "network",
@@ -167,6 +177,8 @@ const CATEGORY_BY_CODE: Record<FetchErrorCode, FetchErrorCategory> = {
 	download_error: "network",
 	empty_body: "server",
 	binary_content: "client",
+	unexpected_content_type: "client",
+	response_too_large: "client",
 	checksum_mismatch: "network",
 	parse_error: "processing",
 	encoding_error: "processing",
@@ -198,6 +210,16 @@ const RETRYABLE_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
 
 export function isRetryableCode(code: FetchErrorCode): boolean {
 	return DEFAULT_RETRYABLE.has(code);
+}
+
+/**
+ * The coarse category bucket for a code. Exported so every surface that
+ * reports a {@link FetchErrorCode} — the pi tools, the MCP server, and
+ * the static fetch API — derives the category from one place instead of
+ * re-implementing the mapping.
+ */
+export function fetchErrorCategory(code: FetchErrorCode): FetchErrorCategory {
+	return CATEGORY_BY_CODE[code];
 }
 
 // ─── Constructor ──────────────────────────────────────────────────
@@ -401,6 +423,10 @@ function prefixFor(err: FetchError): string {
 	switch (c) {
 		case "invalid_url":
 			return `We couldn't understand the URL you provided.`;
+		case "unsupported_protocol":
+			return `That URL scheme isn't supported — only http and https.`;
+		case "invalid_option":
+			return `One of the request options was invalid.`;
 		case "private_ip":
 			return `Requests to private/internal addresses are blocked for safety.`;
 		case "blocked_secret":
@@ -409,6 +435,8 @@ function prefixFor(err: FetchError): string {
 			return `We blocked the request — it targeted a private/internal address.`;
 		case "redirect_loop":
 			return `The page kept redirecting in a loop and we gave up.`;
+		case "too_many_redirects":
+			return `The page redirected too many times and we gave up.`;
 		case "dns_error":
 			return `We couldn't resolve the hostname.`;
 		case "connect_error":
@@ -433,6 +461,10 @@ function prefixFor(err: FetchError): string {
 			return `The server returned an empty response.`;
 		case "binary_content":
 			return `The response is binary content (not text/markdown).`;
+		case "unexpected_content_type":
+			return `The response type doesn't match the requested output format.`;
+		case "response_too_large":
+			return `The response was larger than the configured input budget.`;
 		case "checksum_mismatch":
 			return `The downloaded content's checksum didn't match.`;
 		case "parse_error":
@@ -582,7 +614,7 @@ export function fetchErrorInfoFromUnknown(
 	return toFetchErrorInfo(fe);
 }
 
-// Legacy code mapping — collapses the 26-code union back to the 10
+// Legacy code mapping — collapses the 31-code union back to the 10
 // legacy codes. Best-effort; any new code maps to its category's
 // legacy code.
 function legacyCodeFromFetchErrorCode(
@@ -590,11 +622,15 @@ function legacyCodeFromFetchErrorCode(
 ): FetchErrorInfo["code"] {
 	switch (code) {
 		case "invalid_url":
+		case "unsupported_protocol":
+		case "invalid_option":
 		case "private_ip":
 		case "blocked_secret":
 		case "blocked_ssrf":
 		case "redirect_loop":
 			return "invalid_url";
+		case "too_many_redirects":
+			return "too_many_redirects";
 		case "dns_error":
 		case "connect_error":
 		case "tls_error":
@@ -611,9 +647,11 @@ function legacyCodeFromFetchErrorCode(
 			return "http_error";
 		case "download_error":
 		case "checksum_mismatch":
+		case "response_too_large":
 			return "download_error";
 		case "binary_content":
 			return "no_content";
+		case "unexpected_content_type":
 		case "parse_error":
 		case "encoding_error":
 		case "out_of_memory":

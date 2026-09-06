@@ -4,7 +4,7 @@
 
 pi-webaio is an **all-in-one web tools extension** for [pi](https://pi.dev) (the coding agent) that provides search, fetch, crawl, extraction, discovery, storage, compilation, RAG chunking, query-focused answer mode, offline corpus search, single-round research bundles, phase-aware error handling, TUI rendering, and (v0.4.1+) opt-in paywall bypass capabilities via 8 tools: `aio-websearch`, `aio-webfetch`, `aio-webcontent`, `aio-webresult`, `aio-webmap`, `aio-webpull`, `aio-webquery`, and `aio-webresearch`. It's published as `npm:pi-webaio` and installable via `pi install npm:pi-webaio`. The same eight tools are also exposed to non-pi MCP clients (Claude Code, Claude Desktop, etc.) through a stdio MCP server (`bin/pi-webaio-mcp.mjs`, `src/mcp-server.ts`).
 
-**Current version: 0.9.0** — Context7 + DeepWiki verticals (21 built-in extractors), multi-source **cited** answer mode (`urls`+`query`), outline mode + frugal default preview, opt-in AI summarization, compact search, per-engine search status/latency + ~4.5s deadline, Google-lane 3s cap, shared warm browser pool, lazy Jina extraction, CSS-cruft stripping (incl. `@media`) + heading-detection fallback, source trust-tier grading, content-hash dedup + `aio-webcontent` diff, local-knowledge pre-check, plus the SSRF/secret-redaction hardening from 0.7.3. 1334 tests / 68 suites.
+**Current version: 0.9.0** — Context7 + DeepWiki verticals (21 built-in extractors), multi-source **cited** answer mode (`urls`+`query`), outline mode + frugal default preview, opt-in AI summarization, compact search, per-engine search status/latency + ~4.5s deadline, Google-lane 3s cap, shared warm browser pool, lazy Jina extraction, CSS-cruft stripping (incl. `@media`) + heading-detection fallback, source trust-tier grading, content-hash dedup + `aio-webcontent` diff, local-knowledge pre-check, plus the SSRF/secret-redaction hardening from 0.7.3. 1482 tests / 65 wired suites.
 
 > **Internal-docs policy:** research / audit / inspiration notes — `docs/inspirations*.md`, `docs/pagemap-inspiration.md`, `docs/observability-gaps.md`, `docs/perf-improvements.md`, and root-level `inspiration7.md` — are **local-only working artifacts**. They are gitignored and must **never** be committed or shipped. Only user-facing docs (`README.md`, `docs/{features,tools,usage,architecture,custom-verticals,mcp}.md`) plus `ROADMAP.md` / `CHANGELOG.md` / `AGENTS.md` belong in the repo. When auditing or surveying, write findings to these local files, not to tracked docs.
 
@@ -62,6 +62,10 @@ pi-webaio/
 │   ├── research.ts           ← Single-round research bundle orchestrator + claim-stance classifier (v0.7.1)
 │   ├── source-trust.ts       ← Source trust-tier + evidence-quality grading (classifySourceProfile + caveat reasons) (post-0.7.3)
 │   ├── content-hash.ts       ← SHA-256 content hashing for dedup + diff baselines (post-0.7.3)
+│   ├── client-redirect.ts    ← Dependency-free client-side redirect detection (<meta refresh> + literal location assignments); shared by content.ts and webfetch-api.ts so the two cannot drift
+│   ├── http-text.ts          ← Pipeline-free HTTP response text leaf (linkedom only, for HTML → text): charset decode, content-type normalize/sniff, JSON/HTML/text predicates, binary + magic-byte detection, HTML → plain text
+│   ├── webfetch-api.ts       ← Browser-free static fetch + local extraction engine behind the `pi-webaio/webfetch` entrypoint (DNS-pinned redirects, byte budget, cancellation, shared error taxonomy)
+│   ├── webfetch.ts           ← Public `pi-webaio/webfetch` surface: re-exports fetch/fetchPage + the shared FetchError types
 │   ├── debug.ts              ← Central PI_WEBAIO_DEBUG-gated debug() helper (stderr, MCP-safe) + strategy/cache/search tracing (post-0.7.3)
 │   ├── webquery-index.ts     ← BM25 index builder/loader for the aio-webpull corpus (v0.7.0)
 │   ├── hooks.ts              ← User lifecycle hooks (afterFetch/afterExtract) loaded from ~/.pi/agent/webaio/hooks/ (v0.7.2)
@@ -94,7 +98,7 @@ pi-webaio/
 │   │   └── deepwiki.ts       ← DeepWiki repo-Q&A via MCP JSON-RPC (keyless) (post-0.7.3)
 │   └── tools/                ← Tool handlers
 │       ├── render-result.ts  ← TUI components (call/progress/result), markdownToText, applyFormat, secret redaction (v0.5.0)
-│       ├── fetch-error.ts    ← Phase-aware FetchError (26 codes × 10 phases × 7 categories) (v0.5.0, v0.7.3)
+│       ├── fetch-error.ts    ← Phase-aware FetchError (31 codes × 10 phases × 7 categories) — the single error taxonomy shared by the pi tools, the MCP server, and the static fetch API (v0.5.0, v0.7.3)
 │       ├── utils.ts          ← Shared helpers: frontmatter, runInBatches, safeResolveInBaseTemp
 │       ├── webfetch.ts       ← aio-webfetch registration + execute (answer mode, budgetTokens, diff, localCheck)
 │       ├── webcontent.ts     ← aio-webcontent registration (content-hash dedup, diff mode)
@@ -127,7 +131,7 @@ pi-webaio/
 ├── types/
 │   ├── pi-coding-agent.d.ts  ← Minimal ExtensionAPI type declaration
 │   └── playwright.d.ts       ← Playwright type stub (optional dep)
-├── tests/                    ← 68 suites wired into test:all (1334 tests) + standalone suites (mcp, etc.)
+├── tests/                    ← 65 suites wired into test:all (1482 tests) + standalone suites (mcp, etc.)
 ├── tsconfig.json             ← Lint config (noEmit, strict, ES2022)
 ├── tsconfig.dist.json        ← Build config (emits to dist/, includes types/**/*.d.ts)
 ├── package.json              ← type: "module", pi extension manifest, v0.7.3
@@ -158,7 +162,7 @@ pi-webaio/
 - **`prune`** (v0.6.2): score-based pruning to a token budget; query-aware when `query` is set. Both `prune` and `budgetTokens` share a unified truncation footer with an omitted-sections mini-TOC (v0.7.3).
 - **`diff`** (v0.7.0): returns only the sections changed since the cached copy (conditional revalidation via ETag/Last-Modified, 304 handling).
 - **TUI rendering** (v0.5.0): custom `renderCall` / `renderResult` components with progress, elapsed time, phase/category badges, retry hints
-- **Phase-aware FetchError** (v0.5.0): 26 codes × 10 phases × 7 categories with downloadedBytes, elapsedMs, contentLength for smart retry timeout suggestions
+- **Phase-aware FetchError** (v0.5.0): 31 codes × 10 phases × 7 categories with downloadedBytes, elapsedMs, contentLength for smart retry timeout suggestions. This is the project's single error taxonomy — the pi tools, the MCP server, and the `pi-webaio/webfetch` static API all report these codes, so a consumer's `switch` behaves identically on every surface.
 - **Pre-flight secret scan** (v0.5.0): blocks URLs with API keys/tokens before any fetch — returns clear "Request blocked: potential secret(s) detected in URL (GitHub PAT (classic), ...)" instead of generic "Could not reach server"
 - **Extraction pipeline** (tries in order, falls through):
   1. Vertical extractors (21 built-in patterns: npm, PyPI, etc., plus user-defined verticals)
@@ -239,6 +243,13 @@ pi-webaio/
 - Per-source fetches are guarded — one throwing source is recorded as `dead` and the run continues (v0.7.3)
 - Parameters: `query`, `queries` (sub-queries), `maxSources` (3-12, default 6), `outDir`, `writeBundle`, `goggles`
 
+### Static fetch API (`pi-webaio/webfetch`)
+
+- `src/webfetch.ts` is the public surface of a second, non-pi consumption path: a browser-free `fetch` / `fetchPage` for integrations that want fingerprinted HTTP + local extraction without registering the eight tools.
+- Like `src/mcp-server.ts`, it **shares** rather than forks: it reuses `src/security.ts` (SSRF + secrets), `src/redact.ts`, `src/bot-detection.ts`, `src/types.ts`, and the canonical `src/tools/fetch-error.ts` taxonomy. Pipeline-independent leaves live in `src/client-redirect.ts` and `src/http-text.ts` so `content.ts` and `webfetch-api.ts` cannot drift.
+- Boundary enforced in CI by `tests/static-webfetch-api.test.mjs`: no `./browser`, `./search`, `./fetch-jina`, `./session-store`, `./storage`, `./tools/webfetch`, and no `node:fs`.
+- Deliberate divergences from `aio-webfetch`: no vertical extractors, no GitHub pipeline, no Jina/remote reader, no browser escalation, no content cache, no prompt-injection tagging.
+
 ### MCP server
 
 - `bin/pi-webaio-mcp.mjs` (registered as the `pi-webaio-mcp` bin) starts a stdio MCP server (`src/mcp-server.ts`) exposing all eight `aio-*` tools to any MCP client (Claude Code, Claude Desktop, etc.) without the pi runtime. Tool logic is shared with the pi extension.
@@ -268,6 +279,16 @@ pi-webaio/
 - **`prepare` hook**: `scripts/prepare.mjs` runs on `npm install`. It locates `tsc` by resolving the always-exported `typescript/package.json` and joining `bin/tsc` (TypeScript 7's exports map no longer exposes `./bin/tsc`), then builds `dist/`. When typescript is absent (`npm install --omit=dev`, pi's git-install path), it fetches the pinned compiler transiently via npx (`typescript@7.0.2`) and builds from source rather than skipping — so git installs get a fresh `dist/` with zero per-boot transpile (v0.7.3, #100 fix). Any other resolution error fails loudly.
 - **MCP bin**: `bin/pi-webaio-mcp.mjs` ships in `files` and is declared under `bin`.
 - **Scripts**: `build`, `build:dist`, `prepare`, `lint` (`tsc --project tsconfig.json`), `watch`, `check:lockfile`, `bench`, `diagnose:fingerprint`, `diagnose:backends`, plus `changelog:*` release helpers.
+
+### New Modules (static fetch API)
+
+| Module | Role |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/webfetch.ts` | Public `pi-webaio/webfetch` entrypoint — re-exports `fetch`/`fetchPage`, the option/result types, and the shared `FetchErrorCode`/`FetchPhase`/`FetchErrorCategory` types. |
+| `src/webfetch-api.ts` | The engine: manual redirect following with per-hop SSRF validation + DNS pinning, aggregate 10 MiB byte budget, `AbortSignal` propagation with bounded cleanup, five output formats, local Defuddle/PDF extraction, and credential redaction on returned URL metadata. |
+| `src/client-redirect.ts` | Dependency-free client-side redirect detection (`<meta http-equiv=refresh>` + literal `location` assignments). Moved out of `content.ts` and shared with `webfetch-api.ts` so the two paths cannot drift. |
+| `src/http-text.ts` | Pipeline-free HTTP response text leaf (no pipeline imports; linkedom only for HTML → text): `cleanText`, `htmlToPlainText`, `normalizeContentType`, `sniffContentType`, `isJsonContentType`, `isLikelyJsonBody`, `isHtmlContentType`, `isTextualContentType`, `decodeResponseBody`, `binarySignature`, `looksBinary`. Consolidates helpers that `content.ts` and `webfetch-api.ts` each carried a copy of. |
+| `scripts/test-static-webfetch-package.mjs` | Packs the tarball, installs it into an isolated consumer with `--omit=peer` and Playwright removed, then asserts `pi-webaio/webfetch` imports cleanly, leaks no handles, and writes nothing to disk. |
 
 ### New Modules (v0.7.0–v0.7.3)
 
@@ -388,6 +409,13 @@ The bypass flag is **opt-in** — a normal `aio-webfetch(url)` still gets the re
 
 ## Recent Changes
 
+### Unreleased — static fetch API, shared error taxonomy, shared text leaves
+
+- **`pi-webaio/webfetch`** — a supported browser-free fetch + local-extraction API for integrations that must not register tools, start a browser, contact a remote reader, or write a content cache. Follows HTTP and literal client-side redirects manually, validating and DNS-pinning every hop; caps aggregate retry + redirect input at 10 MiB; propagates `AbortSignal` with bounded cleanup.
+- **One error taxonomy** — the static API reports the canonical `FetchErrorCode` / `FetchPhase` / `FetchErrorCategory` from `src/tools/fetch-error.ts` instead of a parallel set. The union grew from 26 to 31 codes (`unsupported_protocol`, `invalid_option`, `too_many_redirects`, `unexpected_content_type`, `response_too_large`), all non-retryable; retryability now defaults from the shared matrix via `isRetryableCode`, and unexpected throws route through `classifyError` rather than degrading to a retryable `network_error`.
+- **Shared pipeline-free leaves** — `src/client-redirect.ts` (zero imports) and `src/http-text.ts` (linkedom only) replace the forked copies of client-side-redirect detection, whitespace cleaning, JSON/content-type predicates, charset decoding, and binary sniffing that `content.ts` and `webfetch-api.ts` each carried. `content.ts` re-exports the moved helpers, so its existing surface is unchanged.
+- **Public-network guard coverage** — the SSRF guard denies non-public IPv4 and IPv6 special-purpose ranges by default, preserves the IANA globally reachable exceptions, handles canonical mapped/compatible/NAT64/6to4/Teredo encodings, and keeps transition-encoded cloud metadata addresses outside the CIDR allow-list.
+
 ### v0.7.3 — SSRF hardening, secret redaction, relatedness-gated summaries, TS7 build
 
 - **SSRF guard hardened** — DNS-pinning (`createPinnedLookup`/`validateUrlForSsrf`), fail-closed on any abnormal condition, and a non-overridable cloud-metadata floor evaluated before the CIDR allow-list. 30 new offline tests.
@@ -448,7 +476,9 @@ TUI result rendering for all tools; phase-aware FetchError system; `format` para
 ## Testing
 
 - `npm test` → runs unit tests (`tests/unit.test.mjs`, 156 tests)
-- `npm run test:all` → runs all 68 wired suites (1334 tests total, 0 fail, 2 expected skips: a live-network Jina test that skips on external HTTP 403, and an opt-in live TLS test)
+- `npm run test:all` → runs all 65 wired suites (1482 tests total, 0 fail, 3 expected skips: a live-network Jina test that skips on external HTTP 403, and opt-in live TLS tests)
+- `npm run test:webfetch-api` → static fetch API suite (`tests/static-webfetch-api.test.mjs`, 41 tests: SSRF pinning per hop, byte budgets, cancellation, redaction, shared error taxonomy, shared-helper guards)
+- `npm run test:webfetch-package` → packs the tarball, installs it into an isolated consumer with peers and Playwright removed, and verifies `pi-webaio/webfetch` loads with no leaked handles and no disk writes
 - `npm run test:mcp` → MCP server tests (standalone, not in test:all)
 - Specialized suites (each `npm run test:<name>`): `new` (new-features, 31), `paywall` (65), `check` (github-check, 35), `render` (render-result, 40), `fetcherror` (fetch-error, 57), `fetchprogress` (9), `hardening` (16), `redact` (21), `ssrf` (ssrf-hardening, 30), `fingerprint` (14), `format` (18), `webfetch-summary` (13), `search-context` (20), `chunker` (31), `prune` (prune-markdown, 25), `github-map` (50), `reddit` (reddit-block, 7), `source-ranking` (16), `webresearch` (26), `stance` (24), `cookie-cache` (25), `title-extraction` (10), `integration` (5), `bench` (bench-harness, 35)
 - Additional suites present in `tests/` (run via test:all or directly): goggles (14), bot-wait (6), ssrf-allowlist (37), lifecycle-hooks (14), webquery (12), plus diff-refetch, query-mode, revalidation, strategy-memory, prefetch, token-budget, user-verticals

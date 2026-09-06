@@ -1056,6 +1056,25 @@ test("extractClientSideRedirect follows a literal script assignment", () => {
 	);
 });
 
+test("extractClientSideRedirect matches script end tags carrying junk", () => {
+	// HTML parsers ignore attributes and whitespace on an end tag, so all of
+	// these are valid `</script>`. A bare `<\/script>` pattern misses every one
+	// (CodeQL js/bad-tag-filter).
+	const cases = [
+		['<script >window.location.href="/docs"</script >', "https://example.com/docs"],
+		['<script>location.replace("https://example.com/new")</script\t>', "https://example.com/new"],
+		['<script type="module">window.location="/m"</script foo="bar">', "https://example.com/m"],
+		['<script>location.href="/nl"</script\t\n bar>', "https://example.com/nl"],
+	];
+	for (const [html, expected] of cases) {
+		assert.strictEqual(
+			extractClientSideRedirect(html, "https://example.com/start"),
+			expected,
+			html,
+		);
+	}
+});
+
 test("extractClientSideRedirect follows location.replace calls", () => {
 	const html = '<script>location.replace("https://example.com/new")</script>';
 	assert.strictEqual(

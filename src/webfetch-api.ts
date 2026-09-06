@@ -9,12 +9,33 @@ import {
 } from "wreq-js";
 import type { BrowserAlias, BrowserProfile, EmulationOS } from "wreq-js";
 import { detectBotBlock } from "./bot-detection.ts";
+import { extractClientSideRedirect } from "./client-redirect.ts";
+import {
+	binarySignature,
+	decodeResponseBody,
+	htmlToPlainText,
+	isHtmlContentType,
+	isJsonContentType,
+	isLikelyJsonBody,
+	isTextualContentType,
+	looksBinary,
+	normalizeContentType,
+	sniffContentType,
+} from "./http-text.ts";
 import { redactSecrets } from "./redact.ts";
 import {
 	scanForSecrets,
 	validateUrlForSsrf,
 	type SsrfValidation,
 } from "./security.ts";
+import {
+	classifyError,
+	fetchErrorCategory,
+	isRetryableCode,
+	type FetchErrorCategory,
+	type FetchErrorCode,
+	type FetchPhase,
+} from "./tools/fetch-error.ts";
 import { loadPdfParseCtor, type PdfParseCtor } from "./types.ts";
 
 export const DEFAULT_WEBFETCH_BROWSER = "chrome_145";
@@ -99,30 +120,25 @@ export interface StaticWebFetchOptions {
 	signal?: AbortSignal;
 }
 
-export type StaticWebFetchErrorCode =
-	| "invalid_url"
-	| "unsupported_protocol"
-	| "invalid_option"
-	| "blocked_secret"
-	| "blocked_ssrf"
-	| "dns_error"
-	| "too_many_redirects"
-	| "redirect_loop"
-	| "aborted"
-	| "timeout"
-	| "network_error"
-	| "http_error"
-	| "response_too_large"
-	| "binary_content"
-	| "unexpected_content_type"
-	| "parse_error"
-	| "bot_detected"
-	| "no_content";
+/**
+ * Failure codes for this entrypoint.
+ *
+ * This is the project-wide {@link FetchErrorCode} taxonomy, not a
+ * parallel one: pi-webaio has a single error model shared by the pi
+ * tools, the MCP server, and this static API, so a consumer's `switch`
+ * over codes works the same on every surface.
+ */
+export type StaticWebFetchErrorCode = FetchErrorCode;
+
+/** Timeline stage, from the shared {@link FetchPhase} taxonomy. */
+export type StaticWebFetchPhase = FetchPhase;
 
 export interface StaticWebFetchError {
 	code: StaticWebFetchErrorCode;
 	message: string;
-	phase: "validation" | "connecting" | "waiting" | "loading" | "processing";
+	phase: StaticWebFetchPhase;
+	/** Coarse bucket from the shared taxonomy (validation/network/server/client/blocked/processing/unknown). */
+	category: FetchErrorCategory;
 	retryable: boolean;
 	statusCode?: number;
 }
@@ -261,6 +277,7 @@ class RetryAttempt extends Error {
 class StaticFetchException extends Error {
 	readonly code: StaticWebFetchErrorCode;
 	readonly phase: StaticWebFetchError["phase"];
+	readonly category: FetchErrorCategory;
 	readonly retryable: boolean;
 	readonly statusCode?: number;
 	readonly finalUrl?: string;
@@ -281,7 +298,10 @@ class StaticFetchException extends Error {
 		this.name = "StaticFetchException";
 		this.code = code;
 		this.phase = options.phase;
-		this.retryable = options.retryable ?? false;
+		this.category = fetchErrorCategory(code);
+		// Default from the shared retry matrix so every pi-webaio surface agrees
+		// on which codes are worth retrying; callers may still override.
+		this.retryable = options.retryable ?? isRetryableCode(code);
 		this.statusCode = options.statusCode;
 		this.finalUrl = options.finalUrl;
 		this.redirects = options.redirects ?? [];
@@ -567,7 +587,7 @@ async function readBody(
 		throw new StaticFetchException(
 			"response_too_large",
 			`Response Content-Length ${contentLength} exceeds the remaining ${budget.remaining} byte input budget`,
-			{ phase: "loading" },
+			{ phase: "downloading" },
 		);
 	}
 
@@ -580,7 +600,7 @@ async function readBody(
 			throw new StaticFetchException(
 				"response_too_large",
 				"Response exceeded the aggregate input budget",
-				{ phase: "loading" },
+				{ phase: "downloading" },
 			);
 		}
 		return {
@@ -605,7 +625,7 @@ async function readBody(
 				throw new StaticFetchException(
 					"response_too_large",
 					"Response exceeded the aggregate input budget",
-					{ phase: "loading" },
+					{ phase: "downloading" },
 				);
 			}
 			chunks.push(value);
@@ -637,6 +657,37 @@ function isRetryableNetworkError(error: unknown): boolean {
 		message.includes("fetch failed") ||
 		message.includes("timed out")
 	);
+}
+
+/**
+ * Turn a throw from the transport into the shared error taxonomy.
+ *
+ * `classifyError` is the same classifier the pi tools and the MCP server use,
+ * but its catch-all is `unknown` at phase `downloading` — and at this point we
+ * know the failure happened in the transport, so an unrecognised throw is
+ * reported as the canonical `connect_error` rather than losing the phase.
+ */
+function classifyTransportError(
+	error: unknown,
+	url: string,
+	redirects: string[],
+): StaticFetchException {
+	if (error instanceof StaticFetchException) return error;
+	const classified = classifyError(error, { url, finalUrl: url });
+	if (classified.code === "unknown") {
+		return new StaticFetchException("connect_error", classified.message, {
+			phase: "connecting",
+			finalUrl: url,
+			redirects,
+		});
+	}
+	return new StaticFetchException(classified.code, classified.message, {
+		phase: classified.phase,
+		retryable: classified.retryable,
+		statusCode: classified.statusCode,
+		finalUrl: url,
+		redirects,
+	});
 }
 
 function retryDelay(attempt: number): number {
@@ -686,143 +737,10 @@ function redirectTarget(response: StaticResponse, currentUrl: string): string | 
 		return new URL(location, currentUrl).href;
 	} catch {
 		throw new StaticFetchException("invalid_url", "Server returned an invalid redirect URL", {
-			phase: "loading",
+			phase: "headers",
 			finalUrl: currentUrl,
 		});
 	}
-}
-
-function clientRedirectTarget(html: string, currentUrl: string): string | null {
-	const snippet = html.slice(0, 4096);
-	const resolve = (target: string): string | null => {
-		const cleaned = target.trim().replace(/^["']|["']$/g, "");
-		if (!cleaned || /[\u0000-\u001f\u007f]/.test(cleaned)) return null;
-		try {
-			const parsed = new URL(cleaned, currentUrl);
-			if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
-			return parsed.href === currentUrl ? null : parsed.href;
-		} catch {
-			return null;
-		}
-	};
-	const meta = snippet.match(
-		/<meta[^>]+http-equiv=["']?refresh["']?[^>]+content=["']?([^"'>]*)/i,
-	);
-	if (meta) {
-		const parts = meta[1]!.split(";");
-		const delay = Number.parseFloat(parts[0]!.trim());
-		const match = parts.slice(1).join(";").match(/url\s*=\s*(.+)/i);
-		if (Number.isFinite(delay) && delay >= 0 && delay < 30 && match) {
-			const target = resolve(match[1]!);
-			if (target) return target;
-		}
-	}
-	for (const match of snippet.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)) {
-		const script = match[1] ?? "";
-		const assignment = script.match(
-			/^\s*(?:window\.|document\.)?location(?:\.href)?\s*=\s*(["'])(.*?)\1\s*;?\s*$/i,
-		);
-		const call = script.match(
-			/^\s*(?:window\.|document\.)?location\.(?:replace|assign)\(\s*(["'])(.*?)\1\s*\)\s*;?\s*$/i,
-		);
-		const target = resolve(assignment?.[2] ?? call?.[2] ?? "");
-		if (target) return target;
-	}
-	return null;
-}
-
-function decodeBody(headers: HeaderReader, body: Uint8Array): string {
-	const declared = headers.get("content-type") ?? "";
-	const charset = declared.match(/charset\s*=\s*["']?([^;"'\s]+)/i)?.[1];
-	try {
-		return new TextDecoder(charset || "utf-8").decode(body);
-	} catch {
-		return new TextDecoder().decode(body);
-	}
-}
-
-function binarySignature(body: Uint8Array): "pdf" | "binary" | undefined {
-	const startsWith = (signature: number[]): boolean =>
-		body.length >= signature.length &&
-		signature.every((byte, index) => body[index] === byte);
-	if (startsWith([0x25, 0x50, 0x44, 0x46, 0x2d])) return "pdf";
-	for (const signature of [
-		[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a],
-		[0xff, 0xd8, 0xff],
-		[0x47, 0x49, 0x46, 0x38],
-		[0x50, 0x4b, 0x03, 0x04],
-		[0x50, 0x4b, 0x05, 0x06],
-		[0x1f, 0x8b],
-		[0x7f, 0x45, 0x4c, 0x46],
-	]) {
-		if (startsWith(signature)) return "binary";
-	}
-	return undefined;
-}
-
-function looksBinary(headers: HeaderReader, body: Uint8Array): boolean {
-	if (body.length === 0) return false;
-	const sample = body.subarray(0, Math.min(body.length, 4096));
-	if (sample.includes(0)) return true;
-	const declared = headers.get("content-type") ?? "";
-	const charset = declared.match(/charset\s*=\s*["']?([^;"'\s]+)/i)?.[1];
-	let decoded: string;
-	try {
-		decoded = new TextDecoder(charset || "utf-8", { fatal: true }).decode(sample);
-	} catch {
-		return true;
-	}
-	let controls = 0;
-	for (const char of decoded) {
-		const code = char.codePointAt(0)!;
-		if ((code < 0x20 && code !== 0x09 && code !== 0x0a && code !== 0x0d) || code === 0x7f) {
-			controls += 1;
-		}
-	}
-	return controls / Math.max(1, decoded.length) > 0.05;
-}
-
-function contentTypeOf(headers: HeaderReader, text: string): string {
-	const declared = headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
-	if (declared) return declared;
-	const sample = text.trimStart().slice(0, 100).toLowerCase();
-	if (sample.startsWith("<!doctype html") || sample.startsWith("<html")) return "text/html";
-	if (sample.startsWith("{") || sample.startsWith("[")) return "application/json";
-	return "text/plain";
-}
-
-function isJson(contentType: string, text: string): boolean {
-	return (
-		contentType === "application/json" ||
-		contentType === "text/json" ||
-		contentType.endsWith("+json") ||
-		text.trimStart().startsWith("{") ||
-		text.trimStart().startsWith("[")
-	);
-}
-
-function isHtml(contentType: string): boolean {
-	return contentType === "text/html" || contentType === "application/xhtml+xml";
-}
-
-function isText(contentType: string): boolean {
-	return (
-		contentType.startsWith("text/") ||
-		contentType.includes("json") ||
-		contentType.includes("xml") ||
-		contentType === "application/javascript"
-	);
-}
-
-function textFromHtml(html: string): string {
-	const { document } = parseHTML(html);
-	return (document.body?.textContent || document.documentElement?.textContent || "")
-		.replace(/\r/g, "")
-		.replace(/[^\S\n]+/g, " ")
-		.split("\n")
-		.map((line) => line.trim())
-		.filter(Boolean)
-		.join("\n");
 }
 
 function fallbackHtmlContent(
@@ -840,7 +758,7 @@ function fallbackHtmlContent(
 		document.querySelector("h1")?.textContent?.trim() ??
 		"";
 	const raw = main?.outerHTML ?? "";
-	const plain = textFromHtml(raw);
+	const plain = htmlToPlainText(raw);
 	return {
 		content: format === "html" ? raw : plain,
 		title,
@@ -874,7 +792,7 @@ async function extractHtml(
 			signal,
 		);
 		let content = result.content ?? "";
-		if (format === "text" && content) content = textFromHtml(content);
+		if (format === "text" && content) content = htmlToPlainText(content);
 		if (content.trim()) {
 			return {
 				content,
@@ -891,7 +809,16 @@ async function extractHtml(
 		if (signal.aborted) throw abortException(signal);
 		// The DOM fallback below keeps extraction usable when Defuddle rejects.
 	}
-	return fallbackHtmlContent(html, format, options.removeImages ?? false);
+	try {
+		return fallbackHtmlContent(html, format, options.removeImages ?? false);
+	} catch (error) {
+		if (signal.aborted) throw abortException(signal);
+		throw new StaticFetchException(
+			"parse_error",
+			`Could not extract HTML content: ${(error as Error)?.message ?? String(error)}`,
+			{ phase: "processing", finalUrl: url },
+		);
+	}
 }
 
 async function extractPdf(
@@ -908,8 +835,18 @@ async function extractPdf(
 			{ phase: "processing", finalUrl: url },
 		);
 	}
-	const PdfParse = await raceWithAbort(loadParser(), signal);
-	const parser = new PdfParse({ data: body });
+	let parser: InstanceType<PdfParseCtor>;
+	try {
+		const PdfParse = await raceWithAbort(loadParser(), signal);
+		parser = new PdfParse({ data: body });
+	} catch (error) {
+		if (signal.aborted) throw abortException(signal);
+		throw new StaticFetchException(
+			"parse_error",
+			`Could not load the PDF parser: ${(error as Error)?.message ?? String(error)}`,
+			{ phase: "processing", finalUrl: url },
+		);
+	}
 	try {
 		await raceWithAbort(parser.load(), signal);
 		const parsed = await raceWithAbort(parser.getText(), signal);
@@ -933,6 +870,17 @@ async function extractPdf(
 			title,
 			wordCount: parsed.text.trim().split(/\s+/).length,
 		};
+	} catch (error) {
+		if (error instanceof StaticFetchException) throw error;
+		if (signal.aborted) throw abortException(signal);
+		// A corrupt or mislabelled PDF is a content failure, not a transport one:
+		// report it as non-retryable parse_error instead of letting the catch-all
+		// in failureResult() degrade it to a retryable network error.
+		throw new StaticFetchException(
+			"parse_error",
+			`Could not parse the PDF: ${(error as Error)?.message ?? String(error)}`,
+			{ phase: "processing", finalUrl: url },
+		);
 	} finally {
 		await boundedCleanup(() => parser.destroy(), signal);
 	}
@@ -1040,7 +988,17 @@ async function download(
 				},
 				() => {},
 			);
-			const transport = await raceWithAbort(transportPromise, signal);
+			// A transport-creation failure is a connecting failure, not a download
+			// one: route it through the same classifier as request throws so an
+			// unrecognized error degrades to connect_error instead of the catch-all's
+			// phase-less unknown at phase "downloading".
+			let transport: StaticTransport;
+			try {
+				transport = await raceWithAbort(transportPromise, signal);
+			} catch (error) {
+				if (signal.aborted) throw abortException(signal);
+				throw classifyTransportError(error, current, redirects);
+			}
 			let retryMs: number | undefined;
 			try {
 				const requestPromise = dependencies.request(current, {
@@ -1072,13 +1030,13 @@ async function download(
 						throw new StaticFetchException(
 							"too_many_redirects",
 							`Redirect limit (${limits.maxRedirects}) exceeded`,
-							{ phase: "loading", finalUrl: current, redirects },
+							{ phase: "headers", finalUrl: current, redirects },
 						);
 					}
 					const normalizedTarget = parseHttpUrl(target, "redirect URL").href;
 					if (seen.has(normalizedTarget)) {
 						throw new StaticFetchException("redirect_loop", "Redirect loop detected", {
-							phase: "loading",
+							phase: "headers",
 							finalUrl: normalizedTarget,
 							redirects,
 						});
@@ -1094,24 +1052,32 @@ async function download(
 
 				const body = await readBody(response, byteBudget, signal);
 				const responseUrl = response.url ?? current;
-				const responseText = decodeBody(response.headers, body.body);
-				const responseType = contentTypeOf(response.headers, responseText);
+				const responseText = decodeResponseBody(
+					body.body,
+					response.headers.get("content-type"),
+				);
+				const responseType = sniffContentType(
+					response.headers.get("content-type"),
+					responseText,
+				);
 				const clientTarget =
-					response.status >= 200 && response.status < 300 && isHtml(responseType)
-						? clientRedirectTarget(responseText, responseUrl)
+					response.status >= 200 &&
+					response.status < 300 &&
+					isHtmlContentType(responseType)
+						? extractClientSideRedirect(responseText, responseUrl)
 						: null;
 				if (clientTarget) {
 					if (redirects.length >= limits.maxRedirects) {
 						throw new StaticFetchException(
 							"too_many_redirects",
 							`Redirect limit (${limits.maxRedirects}) exceeded`,
-							{ phase: "loading", finalUrl: responseUrl, redirects },
+							{ phase: "headers", finalUrl: responseUrl, redirects },
 						);
 					}
 					const normalizedTarget = parseHttpUrl(clientTarget, "redirect URL").href;
 					if (seen.has(normalizedTarget)) {
 						throw new StaticFetchException("redirect_loop", "Redirect loop detected", {
-							phase: "loading",
+							phase: "headers",
 							finalUrl: normalizedTarget,
 							redirects,
 						});
@@ -1139,7 +1105,7 @@ async function download(
 				if (error instanceof RetryAttempt) retryMs = error.delayMs;
 				else if (attempt < limits.maxRetries && isRetryableNetworkError(error)) {
 					retryMs = retryDelay(attempt);
-				} else throw error;
+				} else throw classifyTransportError(error, current, redirects);
 			} finally {
 				await boundedCleanup(() => transport.close(), signal);
 			}
@@ -1149,7 +1115,7 @@ async function download(
 			}
 		}
 		if (!nextUrl) {
-			throw new StaticFetchException("network_error", "Request failed after retries", {
+			throw new StaticFetchException("connect_error", "Request failed after retries", {
 				phase: "connecting",
 				finalUrl: current,
 				redirects,
@@ -1226,24 +1192,28 @@ function failureResult(
 				code: error.code,
 				message: error.message,
 				phase: error.phase,
+				category: error.category,
 				retryable: error.retryable,
 				statusCode: error.statusCode,
 			},
 		};
 	}
-	const value = error as NodeJS.ErrnoException | undefined;
-	const message = redactErrorText(value?.message ?? String(error));
-	const timedOut = value?.code === "ETIMEDOUT" || /timed out/i.test(message);
+	// Unexpected throws go through the shared classifier rather than a bespoke
+	// timeout guess, so this surface reports the same code/phase/category as the
+	// pi tools and the MCP server instead of inventing a retryable network error.
+	const classified = classifyError(error, { url: redactUrl(url) });
 	return {
 		ok: false,
 		url: redactUrl(url),
 		redirects: [],
 		elapsedMs: Date.now() - startedAt,
 		error: {
-			code: timedOut ? "timeout" : "network_error",
-			message,
-			phase: timedOut ? "waiting" : "connecting",
-			retryable: true,
+			code: classified.code,
+			message: redactErrorText(classified.message),
+			phase: classified.phase,
+			category: classified.category,
+			retryable: classified.retryable,
+			statusCode: classified.statusCode,
 		},
 	};
 }
@@ -1339,14 +1309,13 @@ async function createResult(
 	signal: AbortSignal,
 	startedAt: number,
 ): Promise<StaticWebFetchSuccess> {
-	const declaredType =
-		downloaded.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+	const declaredType = normalizeContentType(downloaded.headers.get("content-type"));
 	const signature = binarySignature(downloaded.body);
 	if (
 		signature === "binary" ||
 		(signature !== "pdf" &&
 			declaredType !== "application/pdf" &&
-			looksBinary(downloaded.headers, downloaded.body))
+			looksBinary(downloaded.headers.get("content-type"), downloaded.body))
 	) {
 		throw new StaticFetchException("binary_content", "The response body is binary", {
 			phase: "processing",
@@ -1354,15 +1323,20 @@ async function createResult(
 			redirects: downloaded.redirects,
 		});
 	}
-	const text = signature === "pdf" ? "" : decodeBody(downloaded.headers, downloaded.body);
+	const text =
+		signature === "pdf"
+			? ""
+			: decodeResponseBody(downloaded.body, downloaded.headers.get("content-type"));
 	const contentType =
-		signature === "pdf" ? "application/pdf" : contentTypeOf(downloaded.headers, text);
+		signature === "pdf"
+			? "application/pdf"
+			: sniffContentType(downloaded.headers.get("content-type"), text);
 	if (downloaded.status < 200 || downloaded.status >= 300) {
 		throw new StaticFetchException(
 			"http_error",
 			`Server returned HTTP ${downloaded.status}${downloaded.statusText ? ` ${downloaded.statusText}` : ""}`,
 			{
-				phase: "loading",
+				phase: "headers",
 				statusCode: downloaded.status,
 				finalUrl: downloaded.url,
 				redirects: downloaded.redirects,
@@ -1379,7 +1353,7 @@ async function createResult(
 			signal,
 			dependencies.loadPdfParser,
 		);
-	} else if (!isText(contentType)) {
+	} else if (!isTextualContentType(contentType)) {
 		throw new StaticFetchException(
 			"binary_content",
 			`Unsupported binary response (${contentType || "unknown content type"})`,
@@ -1387,13 +1361,13 @@ async function createResult(
 		);
 	} else if (format === "raw") {
 		extracted = { content: text };
-	} else if (format === "html" && !isHtml(contentType)) {
+	} else if (format === "html" && !isHtmlContentType(contentType)) {
 		throw new StaticFetchException(
 			"unexpected_content_type",
 			`HTML output requires an HTML response, got ${contentType}`,
 			{ phase: "processing", finalUrl: downloaded.url, redirects: downloaded.redirects },
 		);
-	} else if (isJson(contentType, text)) {
+	} else if (isJsonContentType(contentType) || isLikelyJsonBody(text)) {
 		let formatted: string;
 		try {
 			formatted = JSON.stringify(JSON.parse(text), null, 2);
@@ -1416,11 +1390,11 @@ async function createResult(
 			finalUrl: downloaded.url,
 			redirects: downloaded.redirects,
 		});
-	} else if (isHtml(contentType)) {
+	} else if (isHtmlContentType(contentType)) {
 		const bot = detectBotBlock(text);
 		if (bot.blocked) {
 			throw new StaticFetchException("bot_detected", bot.message, {
-				phase: "loading",
+				phase: "processing",
 				finalUrl: downloaded.url,
 				redirects: downloaded.redirects,
 				retryable: bot.retryable,
@@ -1431,7 +1405,7 @@ async function createResult(
 		extracted = {
 			content:
 				format === "text"
-					? textFromHtml(text)
+					? htmlToPlainText(text)
 					: format === "markdown"
 						? `\`\`\`xml\n${text}\n\`\`\``
 						: text,

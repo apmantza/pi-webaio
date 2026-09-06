@@ -25,6 +25,8 @@ import {
 } from "./paywall.ts";
 import { detectPromptInjection, applyInjectionAction } from "./injection.ts";
 import { compressHtml } from "./html-compress.ts";
+import { extractClientSideRedirect } from "./client-redirect.ts";
+import { cleanText, isJsonContentType, isLikelyJsonBody } from "./http-text.ts";
 import { isDangerousUrl, scanForSecrets } from "./security.ts";
 import { BASE_TEMP } from "./session-store.ts";
 import { loadPdfParseCtor } from "./types.ts";
@@ -217,17 +219,6 @@ function preCleanHtmlWithDocument(
 	} catch {
 		return null;
 	}
-}
-
-function cleanText(value: string): string {
-	let s = value.replace(/\r/g, "");
-	s = s.replace(/[^\S\n]+/g, " ");
-	const lines = s.split("\n");
-	s = lines
-		.map((l) => l.trim())
-		.filter((l) => l !== "")
-		.join("\n");
-	return s;
 }
 
 function extractHeadingTitle(text: string): string | null {
@@ -492,18 +483,13 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 }
 
 // ─── Smart content-type detection ──────────────────────────────────
+//
+// The predicates themselves live in ./http-text.ts so the static fetch
+// entrypoint can share them without importing this module (which pulls in
+// the browser, search, Jina, and storage layers). Re-exported here because
+// they are part of this module's established surface.
 
-export function isJsonContentType(ct: string): boolean {
-	const norm = ct.split(";")[0]?.trim().toLowerCase() ?? "";
-	return (
-		norm === "application/json" || norm === "text/json" || norm.endsWith("+json")
-	);
-}
-
-export function isLikelyJsonBody(text: string): boolean {
-	const trimmed = text.trim();
-	return trimmed.startsWith("{") || trimmed.startsWith("[");
-}
+export { isJsonContentType, isLikelyJsonBody } from "./http-text.ts";
 
 export function formatJsonContent(text: string, url: string): PullResult {
 	try {
@@ -530,63 +516,11 @@ export function formatJsonContent(text: string, url: string): PullResult {
 }
 
 // ─── Client-side redirect extraction ───────────────────────────────
+//
+// Implemented in ./client-redirect.ts and shared with the static fetch
+// entrypoint; re-exported here as part of this module's surface.
 
-export function extractClientSideRedirect(
-	html: string,
-	baseUrl: string,
-): string | null {
-	const snippet = html.slice(0, 4096);
-	const resolveTarget = (rawTarget: string): string | null => {
-		const target = rawTarget.trim().replace(/^['"]|['"]$/g, "");
-		if (!target || /[\u0000-\u001f\u007f]/.test(target)) return null;
-		try {
-			const resolvedUrl = new URL(target, baseUrl);
-			if (resolvedUrl.protocol !== "http:" && resolvedUrl.protocol !== "https:")
-				return null;
-			const resolved = resolvedUrl.toString();
-			return resolved === baseUrl ? null : resolved;
-		} catch {
-			return null;
-		}
-	};
-
-	const meta = snippet.match(
-		/<meta[^>]+http-equiv=["']?refresh["']?[^>]+content=["']?([^"'>]*)/i,
-	);
-	if (meta) {
-		const parts = meta[1]!.split(";");
-		const delay = Number.parseFloat(parts[0]!.trim());
-		if (Number.isFinite(delay) && delay >= 0 && delay < 30) {
-			const urlMatch = parts
-				.slice(1)
-				.join(";")
-				.match(/url\s*=\s*(.+)/i);
-			if (urlMatch) {
-				const resolved = resolveTarget(urlMatch[1]!);
-				if (resolved) return resolved;
-			}
-		}
-	}
-
-	// Some static sites emit a tiny HTML shell that redirects with JavaScript
-	// instead of a meta tag (for example, `/release-notes/overview` on the
-	// TypeScript docs site). Inspect script bodies only and accept literal
-	// location assignments/calls; do not evaluate arbitrary page JavaScript.
-	for (const match of snippet.matchAll(
-		/<script\b[^>]*>([\s\S]*?)<\/script>/gi,
-	)) {
-		const script = match[1] ?? "";
-		const assignment = script.match(
-			/^\s*(?:window\.|document\.)?location(?:\.href)?\s*=\s*(["'])(.*?)\1\s*;?\s*$/i,
-		);
-		const call = script.match(
-			/^\s*(?:window\.|document\.)?location\.(?:replace|assign)\(\s*(["'])(.*?)\1\s*\)\s*;?\s*$/i,
-		);
-		const resolved = resolveTarget(assignment?.[2] ?? call?.[2] ?? "");
-		if (resolved) return resolved;
-	}
-	return null;
-}
+export { extractClientSideRedirect } from "./client-redirect.ts";
 
 // ─── Alternate link extraction ─────────────────────────────────────
 
