@@ -12,7 +12,11 @@ import {
 } from "../chunker.ts";
 import { fetchTinyfish } from "../tinyfish.ts";
 import { fetchFirecrawl } from "../firecrawl.ts";
-import { resolveTinyfishConfigKey } from "../config.ts";
+import { fetchParallel } from "../parallel.ts";
+import {
+	resolveTinyfishConfigKey,
+	resolveParallelConfigKey,
+} from "../config.ts";
 import { DEFAULT_OS, getLatestChromeProfile, smartFetch } from "../fetch.ts";
 import {
 	aiSummaryAvailable,
@@ -1175,6 +1179,30 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 										const tfErr =
 											tfResult?.errors?.[0]?.error ?? "TinyFish fetch returned no results";
 										result = { ok: false, url: url.href, error: tfErr };
+									}
+								} else if (params.parallel === true && resolveParallelConfigKey()) {
+									// ── Parallel Extract API path ──────────────────────
+									// When the user passes parallel: true and an API key is
+									// configured, delegate the URL to Parallel's Extract API.
+									// It handles JS pages and PDFs server-side and returns
+									// clean markdown full content.
+									const pResult = await fetchParallel([url.href]);
+									if (pResult?.results?.[0]) {
+										const r = pResult.results[0];
+										result = {
+											ok: true,
+											url: r.url,
+											title: r.title,
+											language: undefined,
+											content: r.text,
+										};
+									} else {
+										const pErr =
+											pResult?.errors?.[0]?.error ??
+											(pResult
+												? "Parallel extract returned no content"
+												: "Parallel extract failed (missing API key or error)");
+										result = { ok: false, url: url.href, error: pErr };
 									}
 								} else {
 									try {

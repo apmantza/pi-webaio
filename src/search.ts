@@ -656,6 +656,9 @@ export const ENGINE_WEIGHTS: Record<string, number> = {
 	google: 10, // first-class citizen — double weight, life-depends priority
 	// TinyFish is a high-quality API-based search; weight it just below Google.
 	tinyfish: 4,
+	// Parallel is a high-quality API-based search (objective + keyword queries,
+	// LLM-optimized excerpts); weight it on par with TinyFish.
+	parallel: 4,
 	// Firecrawl Keyless is a general-purpose web search; weight it on par with
 	// Bing as a secondary search engine.
 	firecrawl: 3,
@@ -848,7 +851,8 @@ type EngineId =
 	| "bing"
 	| "reddit"
 	| "tinyfish"
-	| "firecrawl";
+	| "firecrawl"
+	| "parallel";
 
 /**
  * Outcome of a single engine in one search round. `http_<code>` covers any
@@ -882,6 +886,7 @@ const ENGINE_DISPLAY_NAMES: Record<EngineId, string> = {
 	reddit: "Reddit",
 	tinyfish: "TinyFish",
 	firecrawl: "FireCrawl",
+	parallel: "Parallel",
 };
 
 const ENGINE_IDS: readonly EngineId[] = [
@@ -892,6 +897,7 @@ const ENGINE_IDS: readonly EngineId[] = [
 	"reddit",
 	"tinyfish",
 	"firecrawl",
+	"parallel",
 ];
 
 /**

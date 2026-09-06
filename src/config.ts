@@ -13,12 +13,16 @@
  *     },
  *     "firecrawl": {
  *       "apiKey": "fc-..."
+ *     },
+ *     "parallel": {
+ *       "apiKey": "..."
  *     }
  *   }
  *
  * .env format (~/.piwebaio/.env):
  *   TINYFISH_API_KEY=sk-tinyfish-...
  *   FIRECRAWL_API_KEY=fc-...
+ *   PARALLEL_API_KEY=...
  */
 
 import { accessSync, constants, readFileSync } from "node:fs";
@@ -35,6 +39,7 @@ let overrideConfigPath: string | null = null;
 /** For testing: override the config directory. */
 export function setConfigDir(dir: string): void {
 	cachedJson = null;
+	cachedEnv = null;
 	overrideConfigPath = dir;
 }
 
@@ -49,6 +54,9 @@ interface UserConfig {
 		apiKey?: string;
 	};
 	firecrawl?: {
+		apiKey?: string;
+	};
+	parallel?: {
 		apiKey?: string;
 	};
 }
@@ -162,4 +170,18 @@ export function resolveFirecrawlConfigKey(): string | null {
 	const fromEnv = loadDotEnv();
 	if (fromEnv.FIRECRAWL_API_KEY) return fromEnv.FIRECRAWL_API_KEY;
 	return process.env.FIRECRAWL_API_KEY ?? null;
+}
+
+/**
+ * Resolve the Parallel API key, checked in order:
+ *   1. `~/.piwebaio/config` JSON (`parallel.apiKey`)
+ *   2. `~/.piwebaio/.env` (`PARALLEL_API_KEY=...`)
+ *   3. `PARALLEL_API_KEY` environment variable
+ */
+export function resolveParallelConfigKey(): string | null {
+	const fromJson = getConfig<string>("parallel.apiKey");
+	if (fromJson) return fromJson;
+	const fromEnv = loadDotEnv();
+	if (fromEnv.PARALLEL_API_KEY) return fromEnv.PARALLEL_API_KEY;
+	return process.env.PARALLEL_API_KEY ?? null;
 }

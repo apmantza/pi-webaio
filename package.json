@@ -1,169 +1,170 @@
 {
-  "name": "pi-webaio",
-  "version": "1.0.5",
-  "description": "All-in-one web tools for pi with search (Google, Brave, DDG, TinyFish, FireCrawl) and fetch with headless browser AI summarization, TinyFish Fetch, and FireCrawl Keyless Scrape",
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/apmantza/pi-webaio.git"
-  },
-  "keywords": [
-    "pi",
-    "pi-extension",
-    "pi-package",
-    "web-scraping",
-    "web-fetch",
-    "crawler",
-    "markdown",
-    "anti-bot",
-    "tls-fingerprinting",
-    "pdf-extraction",
-    "duckduckgo",
-    "brave",
-    "google",
-    "google-search",
-    "ai-summarization",
-    "headless-chrome",
-    "cdp",
-    "llm",
-    "typescript"
-  ],
-  "type": "module",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
-  "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
-    },
-    "./webfetch": {
-      "types": "./dist/src/webfetch.d.ts",
-      "import": "./dist/src/webfetch.js"
-    }
-  },
-  "imports": {
-    "#stealth-script": "./extractors/stealth-script.mjs"
-  },
-  "bin": {
-    "pi-webaio-mcp": "bin/pi-webaio-mcp.mjs"
-  },
-  "pi": {
-    "extensions": [
-      "./pi-entry.mjs"
-    ]
-  },
-  "files": [
-    "dist/",
-    "bin/",
-    "pi-entry.mjs",
-    "extractors/",
-    "scripts/bench-google-cdp.mjs",
-    "package.json",
-    "README.md",
-    "CHANGELOG.md",
-    "CONTRIBUTING.md",
-    "LICENSE",
-    "docs/architecture.md",
-    "docs/custom-verticals.md",
-    "docs/features.md",
-    "docs/mcp.md",
-    "docs/tools.md",
-    "docs/usage.md",
-    "tsconfig.json"
-  ],
-  "scripts": {
-    "build": "tsc --project tsconfig.dist.json",
-    "build:dist": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && tsc --project tsconfig.dist.json",
-    "prepare": "node scripts/prepare.mjs",
-    "lint": "tsc --project tsconfig.json",
-    "watch": "tsc --watch",
-    "test": "node --experimental-strip-types --test tests/unit.test.mjs",
-    "test:startup": "node --experimental-strip-types --test tests/startup-lazy.test.mjs",
-    "test:broker": "node --test tests/google-cdp-broker.test.mjs tests/google-cdp-broker-process.test.mjs tests/google-cdp-broker-cdp.test.mjs tests/google-cdp-broker-client.test.mjs tests/google-ai-broker.test.mjs",
-    "test:mcp": "node --test tests/mcp-server.test.mjs",
-    "test:integration": "node --experimental-strip-types --test tests/integration.test.mjs",
-    "test:new": "node --experimental-strip-types --test tests/new-features.test.mjs",
-    "test:paywall": "node --experimental-strip-types --test tests/paywall.test.mjs",
-    "test:check": "node --experimental-strip-types --test tests/github-check.test.mjs",
-    "test:render": "node --experimental-strip-types --test tests/render-result.test.mjs",
-    "test:fetcherror": "node --experimental-strip-types --test tests/fetch-error.test.mjs",
-    "test:fetchprogress": "node --experimental-strip-types --test tests/fetch-progress.test.mjs",
-    "test:webfetch-api": "node --experimental-strip-types --test tests/static-webfetch-api.test.mjs",
-    "test:webfetch-package": "node scripts/test-static-webfetch-package.mjs",
-    "test:hardening": "node --experimental-strip-types --test tests/hardening.test.mjs",
-    "test:redact": "node --experimental-strip-types --test tests/redact.test.mjs",
-    "test:ssrf": "node --experimental-strip-types --test tests/ssrf-hardening.test.mjs",
-    "test:fingerprint": "node --experimental-strip-types --test tests/fingerprint.test.mjs",
-    "test:format": "node --experimental-strip-types --test tests/format.test.mjs",
-    "test:webfetch-summary": "node --experimental-strip-types --test tests/webfetch-summary.test.mjs",
-    "test:search-context": "node --experimental-strip-types --test tests/search-context.test.mjs",
-    "test:chunker": "node --experimental-strip-types --test tests/chunker.test.mjs",
-    "test:prune": "node --experimental-strip-types --test tests/prune-markdown.test.mjs",
-    "test:github-map": "node --experimental-strip-types --test tests/github-map.test.mjs",
-    "test:reddit": "node --experimental-strip-types --test tests/reddit-block.test.mjs",
-    "test:source-ranking": "node --experimental-strip-types --test tests/source-ranking.test.mjs",
-    "test:webresearch": "node --experimental-strip-types --test tests/webresearch.test.mjs",
-    "test:stance": "node --experimental-strip-types --test tests/stance.test.mjs",
-    "test:cookie-cache": "node --experimental-strip-types --test tests/cookie-cache.test.mjs",
-    "test:title-extraction": "node --experimental-strip-types --test tests/title-extraction.test.mjs",
-    "test:escalation": "node --experimental-strip-types --test tests/escalation-404.test.mjs",
-    "test:batch-isolation": "node --experimental-strip-types --test tests/batch-throw-isolation.test.mjs",
-    "test:debug": "node --experimental-strip-types --test tests/debug.test.mjs",
-    "test:search-engine-status": "node --experimental-strip-types --test tests/search-engine-status.test.mjs",
-    "test:search-orchestration": "node --experimental-strip-types --test tests/search-orchestration.test.mjs",
-    "test:browser-obs": "node --experimental-strip-types --test tests/browser-obs.test.mjs",
-    "test:obs-small-wins": "node --experimental-strip-types --test tests/obs-small-wins.test.mjs",
-    "test:perf-extraction": "node --experimental-strip-types --test tests/perf-extraction.test.mjs",
-    "test:perf-browser-pool": "node --experimental-strip-types --test tests/perf-browser-pool.test.mjs",
-    "test:perf-search-deadline": "node --experimental-strip-types --test tests/perf-search-deadline.test.mjs",
-    "test:perf-workers-cache": "node --experimental-strip-types --test tests/perf-workers-cache.test.mjs",
-    "test:ux-webfetch-output": "node --experimental-strip-types --test tests/ux-webfetch-output.test.mjs",
-    "test:ux-compact-search": "node --experimental-strip-types --test tests/ux-compact-search.test.mjs",
-    "test:ux-multi-answer": "node --experimental-strip-types --test tests/ux-multi-answer.test.mjs",
-    "test:extraction-quality": "node --experimental-strip-types --test tests/extraction-quality.test.mjs",
-    "test:all": "node --experimental-strip-types --test tests/unit.test.mjs tests/startup-lazy.test.mjs tests/tui-compat.test.mjs tests/websearch-google-flag.test.mjs tests/google-cdp-broker.test.mjs tests/google-cdp-broker-process.test.mjs tests/google-cdp-broker-cdp.test.mjs tests/google-cdp-broker-client.test.mjs tests/google-ai-broker.test.mjs tests/google-search-waits.test.mjs tests/new-features.test.mjs tests/paywall.test.mjs tests/github-check.test.mjs tests/reddit-block.test.mjs tests/reddit-search.test.mjs tests/github-map.test.mjs tests/render-result.test.mjs tests/fetch-error.test.mjs tests/fetch-progress.test.mjs tests/static-webfetch-api.test.mjs tests/hardening.test.mjs tests/fingerprint.test.mjs tests/format.test.mjs tests/webfetch-summary.test.mjs tests/search-context.test.mjs tests/chunker.test.mjs tests/prune-markdown.test.mjs tests/integration.test.mjs tests/bench-harness.test.mjs tests/webresearch.test.mjs tests/source-ranking.test.mjs tests/cookie-cache.test.mjs tests/goggles.test.mjs tests/stance.test.mjs tests/bot-wait.test.mjs tests/ssrf-allowlist.test.mjs tests/lifecycle-hooks.test.mjs tests/webquery.test.mjs tests/ssrf-hardening.test.mjs tests/redact.test.mjs tests/title-extraction.test.mjs tests/source-trust.test.mjs tests/diagnose-backends.test.mjs tests/security-crosscheck.test.mjs tests/verticals-context7-deepwiki.test.mjs tests/search-diversity.test.mjs tests/content-hash-dedup.test.mjs tests/local-precheck.test.mjs tests/escalation-404.test.mjs tests/batch-throw-isolation.test.mjs tests/debug.test.mjs tests/search-engine-status.test.mjs tests/search-orchestration.test.mjs tests/browser-obs.test.mjs tests/obs-small-wins.test.mjs tests/perf-extraction.test.mjs tests/perf-browser-pool.test.mjs tests/perf-search-deadline.test.mjs tests/perf-workers-cache.test.mjs tests/ux-webfetch-output.test.mjs tests/ux-compact-search.test.mjs tests/ux-multi-answer.test.mjs tests/extraction-quality.test.mjs tests/search-render.test.mjs tests/websearch-default-captcha.test.mjs",
-    "check:lockfile": "node scripts/check-lockfile-sync.mjs",
-    "changelog:check": "node scripts/changelog-release.mjs --check",
-    "changelog:release": "node scripts/changelog-release.mjs",
-    "changelog:extract": "node scripts/changelog-extract.mjs",
-    "release:backfill-notes": "node scripts/backfill-github-releases.mjs",
-    "diagnose:fingerprint": "node --experimental-strip-types scripts/fingerprint-diagnostics.mjs",
-    "diagnose:backends": "node scripts/diagnose-backends.mjs",
-    "bench": "node --experimental-strip-types scripts/bench-extraction.mjs",
-    "bench:google-cdp": "node --experimental-strip-types scripts/bench-google-cdp.mjs",
-    "test:bench": "node --experimental-strip-types --test tests/bench-harness.test.mjs",
-    "test:search-render": "node --experimental-strip-types --test tests/search-render.test.mjs"
-  },
-  "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.30.0",
-    "@mozilla/readability": "^0.6.0",
-    "defuddle": "^0.19.2",
-    "linkedom": "^0.18.12",
-    "pdf-parse": "^2.4.5",
-    "wreq-js": "^3.0.0",
-    "youtube-transcript-plus": "^2.0.0",
-    "ws": "^8.21.1"
-  },
-  "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "^0.83.0 || ^0.84.0",
-    "@earendil-works/pi-tui": "^0.83.0 || ^0.84.0"
-  },
-  "peerDependenciesMeta": {
-    "@earendil-works/pi-tui": {
-      "optional": true
-    }
-  },
-  "overrides": {
-    "protobufjs": "^7.6.5",
-    "@hono/node-server": "^2.0.5"
-  },
-  "optionalDependencies": {
-    "playwright": "^1.55.0"
-  },
-  "devDependencies": {
-    "@earendil-works/pi-tui": "^0.83.0 || ^0.84.0",
-    "@types/node": "^26.1.2",
-    "typescript": "^7.0.2",
-    "@types/ws": "^8.18.1"
-  }
+	"name": "pi-webaio",
+	"version": "1.0.5",
+	"description": "All-in-one web tools for pi with search (Google, Brave, DDG, TinyFish, FireCrawl) and fetch with headless browser AI summarization, TinyFish Fetch, and FireCrawl Keyless Scrape",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/apmantza/pi-webaio.git"
+	},
+	"keywords": [
+		"pi",
+		"pi-extension",
+		"pi-package",
+		"web-scraping",
+		"web-fetch",
+		"crawler",
+		"markdown",
+		"anti-bot",
+		"tls-fingerprinting",
+		"pdf-extraction",
+		"duckduckgo",
+		"brave",
+		"google",
+		"google-search",
+		"ai-summarization",
+		"headless-chrome",
+		"cdp",
+		"llm",
+		"typescript"
+	],
+	"type": "module",
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		},
+		"./webfetch": {
+			"types": "./dist/src/webfetch.d.ts",
+			"import": "./dist/src/webfetch.js"
+		}
+	},
+	"imports": {
+		"#stealth-script": "./extractors/stealth-script.mjs"
+	},
+	"bin": {
+		"pi-webaio-mcp": "bin/pi-webaio-mcp.mjs"
+	},
+	"pi": {
+		"extensions": [
+			"./pi-entry.mjs"
+		]
+	},
+	"files": [
+		"dist/",
+		"bin/",
+		"pi-entry.mjs",
+		"extractors/",
+		"scripts/bench-google-cdp.mjs",
+		"package.json",
+		"README.md",
+		"CHANGELOG.md",
+		"CONTRIBUTING.md",
+		"LICENSE",
+		"docs/architecture.md",
+		"docs/custom-verticals.md",
+		"docs/features.md",
+		"docs/mcp.md",
+		"docs/tools.md",
+		"docs/usage.md",
+		"tsconfig.json"
+	],
+	"scripts": {
+		"build": "tsc --project tsconfig.dist.json",
+		"build:dist": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && tsc --project tsconfig.dist.json",
+		"prepare": "node scripts/prepare.mjs",
+		"lint": "tsc --project tsconfig.json",
+		"watch": "tsc --watch",
+		"test": "node --experimental-strip-types --test tests/unit.test.mjs",
+		"test:startup": "node --experimental-strip-types --test tests/startup-lazy.test.mjs",
+		"test:broker": "node --test tests/google-cdp-broker.test.mjs tests/google-cdp-broker-process.test.mjs tests/google-cdp-broker-cdp.test.mjs tests/google-cdp-broker-client.test.mjs tests/google-ai-broker.test.mjs",
+		"test:mcp": "node --test tests/mcp-server.test.mjs",
+		"test:integration": "node --experimental-strip-types --test tests/integration.test.mjs",
+		"test:new": "node --experimental-strip-types --test tests/new-features.test.mjs",
+		"test:paywall": "node --experimental-strip-types --test tests/paywall.test.mjs",
+		"test:check": "node --experimental-strip-types --test tests/github-check.test.mjs",
+		"test:render": "node --experimental-strip-types --test tests/render-result.test.mjs",
+		"test:fetcherror": "node --experimental-strip-types --test tests/fetch-error.test.mjs",
+		"test:fetchprogress": "node --experimental-strip-types --test tests/fetch-progress.test.mjs",
+		"test:webfetch-api": "node --experimental-strip-types --test tests/static-webfetch-api.test.mjs",
+		"test:parallel": "node --experimental-strip-types --test tests/parallel.test.mjs",
+		"test:webfetch-package": "node scripts/test-static-webfetch-package.mjs",
+		"test:hardening": "node --experimental-strip-types --test tests/hardening.test.mjs",
+		"test:redact": "node --experimental-strip-types --test tests/redact.test.mjs",
+		"test:ssrf": "node --experimental-strip-types --test tests/ssrf-hardening.test.mjs",
+		"test:fingerprint": "node --experimental-strip-types --test tests/fingerprint.test.mjs",
+		"test:format": "node --experimental-strip-types --test tests/format.test.mjs",
+		"test:webfetch-summary": "node --experimental-strip-types --test tests/webfetch-summary.test.mjs",
+		"test:search-context": "node --experimental-strip-types --test tests/search-context.test.mjs",
+		"test:chunker": "node --experimental-strip-types --test tests/chunker.test.mjs",
+		"test:prune": "node --experimental-strip-types --test tests/prune-markdown.test.mjs",
+		"test:github-map": "node --experimental-strip-types --test tests/github-map.test.mjs",
+		"test:reddit": "node --experimental-strip-types --test tests/reddit-block.test.mjs",
+		"test:source-ranking": "node --experimental-strip-types --test tests/source-ranking.test.mjs",
+		"test:webresearch": "node --experimental-strip-types --test tests/webresearch.test.mjs",
+		"test:stance": "node --experimental-strip-types --test tests/stance.test.mjs",
+		"test:cookie-cache": "node --experimental-strip-types --test tests/cookie-cache.test.mjs",
+		"test:title-extraction": "node --experimental-strip-types --test tests/title-extraction.test.mjs",
+		"test:escalation": "node --experimental-strip-types --test tests/escalation-404.test.mjs",
+		"test:batch-isolation": "node --experimental-strip-types --test tests/batch-throw-isolation.test.mjs",
+		"test:debug": "node --experimental-strip-types --test tests/debug.test.mjs",
+		"test:search-engine-status": "node --experimental-strip-types --test tests/search-engine-status.test.mjs",
+		"test:search-orchestration": "node --experimental-strip-types --test tests/search-orchestration.test.mjs",
+		"test:browser-obs": "node --experimental-strip-types --test tests/browser-obs.test.mjs",
+		"test:obs-small-wins": "node --experimental-strip-types --test tests/obs-small-wins.test.mjs",
+		"test:perf-extraction": "node --experimental-strip-types --test tests/perf-extraction.test.mjs",
+		"test:perf-browser-pool": "node --experimental-strip-types --test tests/perf-browser-pool.test.mjs",
+		"test:perf-search-deadline": "node --experimental-strip-types --test tests/perf-search-deadline.test.mjs",
+		"test:perf-workers-cache": "node --experimental-strip-types --test tests/perf-workers-cache.test.mjs",
+		"test:ux-webfetch-output": "node --experimental-strip-types --test tests/ux-webfetch-output.test.mjs",
+		"test:ux-compact-search": "node --experimental-strip-types --test tests/ux-compact-search.test.mjs",
+		"test:ux-multi-answer": "node --experimental-strip-types --test tests/ux-multi-answer.test.mjs",
+		"test:extraction-quality": "node --experimental-strip-types --test tests/extraction-quality.test.mjs",
+		"test:all": "node --experimental-strip-types --test tests/unit.test.mjs tests/startup-lazy.test.mjs tests/tui-compat.test.mjs tests/websearch-google-flag.test.mjs tests/google-cdp-broker.test.mjs tests/google-cdp-broker-process.test.mjs tests/google-cdp-broker-cdp.test.mjs tests/google-cdp-broker-client.test.mjs tests/google-ai-broker.test.mjs tests/google-search-waits.test.mjs tests/new-features.test.mjs tests/paywall.test.mjs tests/github-check.test.mjs tests/reddit-block.test.mjs tests/reddit-search.test.mjs tests/github-map.test.mjs tests/render-result.test.mjs tests/fetch-error.test.mjs tests/fetch-progress.test.mjs tests/static-webfetch-api.test.mjs tests/parallel.test.mjs tests/hardening.test.mjs tests/fingerprint.test.mjs tests/format.test.mjs tests/webfetch-summary.test.mjs tests/search-context.test.mjs tests/chunker.test.mjs tests/prune-markdown.test.mjs tests/integration.test.mjs tests/bench-harness.test.mjs tests/webresearch.test.mjs tests/source-ranking.test.mjs tests/cookie-cache.test.mjs tests/goggles.test.mjs tests/stance.test.mjs tests/bot-wait.test.mjs tests/ssrf-allowlist.test.mjs tests/lifecycle-hooks.test.mjs tests/webquery.test.mjs tests/ssrf-hardening.test.mjs tests/redact.test.mjs tests/title-extraction.test.mjs tests/source-trust.test.mjs tests/diagnose-backends.test.mjs tests/security-crosscheck.test.mjs tests/verticals-context7-deepwiki.test.mjs tests/search-diversity.test.mjs tests/content-hash-dedup.test.mjs tests/local-precheck.test.mjs tests/escalation-404.test.mjs tests/batch-throw-isolation.test.mjs tests/debug.test.mjs tests/search-engine-status.test.mjs tests/search-orchestration.test.mjs tests/browser-obs.test.mjs tests/obs-small-wins.test.mjs tests/perf-extraction.test.mjs tests/perf-browser-pool.test.mjs tests/perf-search-deadline.test.mjs tests/perf-workers-cache.test.mjs tests/ux-webfetch-output.test.mjs tests/ux-compact-search.test.mjs tests/ux-multi-answer.test.mjs tests/extraction-quality.test.mjs tests/search-render.test.mjs tests/websearch-default-captcha.test.mjs",
+		"check:lockfile": "node scripts/check-lockfile-sync.mjs",
+		"changelog:check": "node scripts/changelog-release.mjs --check",
+		"changelog:release": "node scripts/changelog-release.mjs",
+		"changelog:extract": "node scripts/changelog-extract.mjs",
+		"release:backfill-notes": "node scripts/backfill-github-releases.mjs",
+		"diagnose:fingerprint": "node --experimental-strip-types scripts/fingerprint-diagnostics.mjs",
+		"diagnose:backends": "node scripts/diagnose-backends.mjs",
+		"bench": "node --experimental-strip-types scripts/bench-extraction.mjs",
+		"bench:google-cdp": "node --experimental-strip-types scripts/bench-google-cdp.mjs",
+		"test:bench": "node --experimental-strip-types --test tests/bench-harness.test.mjs",
+		"test:search-render": "node --experimental-strip-types --test tests/search-render.test.mjs"
+	},
+	"dependencies": {
+		"@modelcontextprotocol/sdk": "^1.30.0",
+		"@mozilla/readability": "^0.6.0",
+		"defuddle": "^0.19.2",
+		"linkedom": "^0.18.12",
+		"pdf-parse": "^2.4.5",
+		"wreq-js": "^3.0.0",
+		"youtube-transcript-plus": "^2.0.0",
+		"ws": "^8.21.1"
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-coding-agent": "^0.83.0 || ^0.84.0",
+		"@earendil-works/pi-tui": "^0.83.0 || ^0.84.0"
+	},
+	"peerDependenciesMeta": {
+		"@earendil-works/pi-tui": {
+			"optional": true
+		}
+	},
+	"overrides": {
+		"protobufjs": "^7.6.5",
+		"@hono/node-server": "^2.0.5"
+	},
+	"optionalDependencies": {
+		"playwright": "^1.55.0"
+	},
+	"devDependencies": {
+		"@earendil-works/pi-tui": "^0.83.0 || ^0.84.0",
+		"@types/node": "^26.1.2",
+		"typescript": "^7.0.2",
+		"@types/ws": "^8.18.1"
+	}
 }
