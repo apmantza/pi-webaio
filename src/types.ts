@@ -11,6 +11,7 @@ export type PdfParseCtor = new (opts: {
 }) => {
 	load: () => Promise<void>;
 	getText: () => Promise<{ text: string; total: number }>;
+	destroy: () => Promise<void>;
 };
 
 function ensurePdfDomPolyfills(): void {

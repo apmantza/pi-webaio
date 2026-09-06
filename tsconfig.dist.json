@@ -3,7 +3,7 @@
 	"compilerOptions": {
 		"rootDir": ".",
 		"outDir": "./dist",
-		"declaration": false,
+		"declaration": true,
 		"sourceMap": false,
 		"noEmit": false,
 		"rewriteRelativeImportExtensions": true,
