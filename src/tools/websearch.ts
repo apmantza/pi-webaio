@@ -2,9 +2,13 @@ import { TOOL_METADATA } from "./lazy.ts";
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { Text } from "./tui-compat.ts";
 import { setSearchContext } from "../session-store.ts";
-import { resolveTinyfishConfigKey } from "../config.ts";
+import {
+	resolveTinyfishConfigKey,
+	resolveParallelConfigKey,
+} from "../config.ts";
 import { searchTinyfish } from "../tinyfish.ts";
 import { searchFirecrawl } from "../firecrawl.ts";
+import { searchParallel } from "../parallel.ts";
 import {
 	searchWeb,
 	ENGINE_WEIGHTS,
@@ -87,6 +91,67 @@ function classifyRedditStatus(status: string, count: number): EngineStatus {
 	if (status.startsWith("error") || status.startsWith("unavailable"))
 		return "error";
 	return "empty";
+}
+
+/**
+ * Coarse status for a key-gated bonus provider (FireCrawl / TinyFish /
+ * Parallel): "timeout" when the lane missed the response budget, otherwise
+ * "ok"/"empty" by result count. Shared so the per-engine status blocks
+ * cannot drift apart.
+ */
+function bonusEngineStatus(count: number, settled: boolean): EngineStatus {
+	if (!settled) return "timeout";
+	return count > 0 ? "ok" : "empty";
+}
+
+type BonusLaneSource = "tinyfish" | "firecrawl" | "parallel";
+
+interface BonusLaneResult {
+	title: string;
+	url: string;
+	snippet: string;
+	domain: string;
+}
+
+/**
+ * Run one bonus search lane (TinyFish / FireCrawl / Parallel) and mirror its
+ * outcome into the live TUI provider row. All three lanes share this shape:
+ * call the client, map results into SearchResult, degrade to an empty result
+ * set on error, and report ok/empty-by-count to the TUI once settled.
+ */
+function runBonusSearchLane(
+	source: BonusLaneSource,
+	search: () => Promise<{
+		results: BonusLaneResult[];
+		latencyMs: number;
+	} | null>,
+	setProvider: (id: string, update: Partial<SearchProviderProgress>) => void,
+): Promise<{ source: BonusLaneSource; results: SearchResult[] }> {
+	const promise = (async () => {
+		try {
+			const r = await search();
+			return {
+				source,
+				results: (r?.results ?? []).map((item) => ({
+					title: item.title,
+					url: item.url,
+					snippet: item.snippet,
+					domain: item.domain,
+				})),
+			};
+		} catch {
+			return { source, results: [] as SearchResult[] };
+		}
+	})();
+	void promise.then((res) => {
+		setProvider(source, {
+			status: res.results.length > 0 ? "ok" : "empty",
+			count: res.results.length,
+			latencyMs: 0,
+			detail: res.results.length > 0 ? undefined : "0 results",
+		});
+	});
+	return promise;
 }
 
 function waitForPromiseOrDeadline(
@@ -210,6 +275,7 @@ export function registerWebsearchTool(
 			const engineNames = ["DDG", "Brave", "Yahoo", "Bing"];
 			if (resolveTinyfishConfigKey()) engineNames.push("TinyFish");
 			engineNames.push("FireCrawl");
+			if (resolveParallelConfigKey()) engineNames.push("Parallel");
 			if (useGoogle) engineNames.push("Google");
 			if (redditEnabled) engineNames.push("Reddit");
 
@@ -244,6 +310,12 @@ export function registerWebsearchTool(
 					id: "firecrawl",
 					label: "FireCrawl",
 					status: "running",
+				},
+				{
+					id: "parallel",
+					label: "Parallel",
+					status: resolveParallelConfigKey() ? "running" : "skipped",
+					detail: resolveParallelConfigKey() ? undefined : "no API key",
 				},
 			];
 			const renderDetails = {
@@ -589,77 +661,43 @@ export function registerWebsearchTool(
 
 			// Firecrawl search API (Keyless, no API key needed)
 			const firecrawlEnabled = true;
-			let firecrawlPromise: Promise<{
-				source: "firecrawl";
-				results: SearchResult[];
-			}>;
-			if (firecrawlEnabled) {
-				firecrawlPromise = (async () => {
-					try {
-						const r = await searchFirecrawl(query, { maxResults: 15 });
-						const results = (r?.results ?? []).map((item) => ({
-							title: item.title,
-							url: item.url,
-							snippet: item.snippet,
-							domain: item.domain,
-						}));
-						return { source: "firecrawl" as const, results };
-					} catch {
-						return { source: "firecrawl" as const, results: [] };
-					}
-				})();
-				// Live TUI: reflect the FireCrawl row as soon as it settles
-				void firecrawlPromise.then((res) => {
-					setProvider("firecrawl", {
-						status: res.results.length > 0 ? "ok" : "empty",
-						count: res.results.length,
-						latencyMs: 0,
-						detail: res.results.length > 0 ? undefined : "0 results",
+			const firecrawlPromise = firecrawlEnabled
+				? runBonusSearchLane(
+						"firecrawl",
+						() => searchFirecrawl(query, { maxResults: 15 }),
+						setProvider,
+					)
+				: Promise.resolve({
+						source: "firecrawl" as const,
+						results: [] as SearchResult[],
 					});
-				});
-			} else {
-				firecrawlPromise = Promise.resolve({
-					source: "firecrawl" as const,
-					results: [],
-				});
-			}
 
 			// TinyFish search API (HTTP, no browser needed)
 			const tinyfishEnabled = resolveTinyfishConfigKey() !== null;
-			let tinyfishPromise: Promise<{
-				source: "tinyfish";
-				results: SearchResult[];
-			}>;
-			if (tinyfishEnabled) {
-				tinyfishPromise = (async () => {
-					try {
-						const r = await searchTinyfish(query, { maxResults: 15 });
-						const results = (r?.results ?? []).map((item) => ({
-							title: item.title,
-							url: item.url,
-							snippet: item.snippet,
-							domain: item.domain,
-						}));
-						return { source: "tinyfish" as const, results };
-					} catch {
-						return { source: "tinyfish" as const, results: [] };
-					}
-				})();
-				// Live TUI: reflect the TinyFish row as soon as it settles
-				void tinyfishPromise.then((res) => {
-					setProvider("tinyfish", {
-						status: res.results.length > 0 ? "ok" : "empty",
-						count: res.results.length,
-						latencyMs: 0,
-						detail: res.results.length > 0 ? undefined : "0 results",
+			const tinyfishPromise = tinyfishEnabled
+				? runBonusSearchLane(
+						"tinyfish",
+						() => searchTinyfish(query, { maxResults: 15 }),
+						setProvider,
+					)
+				: Promise.resolve({
+						source: "tinyfish" as const,
+						results: [] as SearchResult[],
 					});
-				});
-			} else {
-				tinyfishPromise = Promise.resolve({
-					source: "tinyfish" as const,
-					results: [],
-				});
-			}
+
+			// Parallel search API (requires PARALLEL_API_KEY; objective + keyword
+			// queries → LLM-optimized excerpts)
+			const parallelEnabled = resolveParallelConfigKey() !== null;
+			const parallelPromise = parallelEnabled
+				? runBonusSearchLane(
+						"parallel",
+						() => searchParallel(query, { maxResults: 15 }),
+						setProvider,
+					)
+				: Promise.resolve({
+						source: "parallel" as const,
+						results: [] as SearchResult[],
+					});
 
 			// This is a hard response deadline. Providers are observed as they settle;
 			// after timeout we use only the values already available and detach from
@@ -671,6 +709,7 @@ export function registerWebsearchTool(
 					["reddit", redditPromise],
 					["tinyfish", tinyfishPromise],
 					["firecrawl", firecrawlPromise],
+					["parallel", parallelPromise],
 				],
 				Math.max(Math.min(responseDeadlineAt, searchDeadlineAt) - Date.now(), 1),
 			);
@@ -720,6 +759,7 @@ export function registerWebsearchTool(
 			let redditResults: SearchResult[] = [];
 			let tinyfishResults: SearchResult[] = [];
 			let firecrawlResults: SearchResult[] = [];
+			let parallelResults: SearchResult[] = [];
 			let httpCounts = {
 				ddg: 0,
 				brave: 0,
@@ -748,6 +788,9 @@ export function registerWebsearchTool(
 			const firecrawlResult = result.firecrawl as
 				| { results: SearchResult[] }
 				| undefined;
+			const parallelResult = result.parallel as
+				| { results: SearchResult[] }
+				| undefined;
 			if (httpResult) {
 				httpResults = httpResult.results;
 				httpCounts = httpResult.httpCounts ?? httpCounts;
@@ -757,6 +800,7 @@ export function registerWebsearchTool(
 			if (redditResult) redditResults = redditResult.results;
 			if (tinyfishResult) tinyfishResults = tinyfishResult.results;
 			if (firecrawlResult) firecrawlResults = firecrawlResult.results;
+			if (parallelResult) parallelResults = parallelResult.results;
 
 			if (collected.timedOut) {
 				if (googleEnabled && !googleResult)
@@ -817,6 +861,15 @@ export function registerWebsearchTool(
 				});
 				buckets.set(r.url, list);
 			}
+			for (const r of parallelResults) {
+				const list = buckets.get(r.url) || [];
+				list.push({
+					result: r,
+					engine: "parallel",
+					weight: ENGINE_WEIGHTS.parallel,
+				});
+				buckets.set(r.url, list);
+			}
 
 			// Keep Reddit's count/status in the same engine map as the HTTP
 			// providers. This is the source of truth for notes and TUI output.
@@ -838,11 +891,10 @@ export function registerWebsearchTool(
 					...engineStatus,
 					firecrawl: {
 						count: firecrawlResults.length,
-						status: firecrawlResult
-							? firecrawlResults.length > 0
-								? "ok"
-								: "empty"
-							: "timeout",
+						status: bonusEngineStatus(
+							firecrawlResults.length,
+							firecrawlResult !== undefined,
+						),
 						latencyMs: 0,
 					},
 				};
@@ -854,11 +906,25 @@ export function registerWebsearchTool(
 					...engineStatus,
 					tinyfish: {
 						count: tinyfishResults.length,
-						status: tinyfishResult
-							? tinyfishResults.length > 0
-								? "ok"
-								: "empty"
-							: "timeout",
+						status: bonusEngineStatus(
+							tinyfishResults.length,
+							tinyfishResult !== undefined,
+						),
+						latencyMs: 0,
+					},
+				};
+			}
+
+			// Keep Parallel's count/status in the same engine map.
+			if (engineStatus && parallelEnabled) {
+				engineStatus = {
+					...engineStatus,
+					parallel: {
+						count: parallelResults.length,
+						status: bonusEngineStatus(
+							parallelResults.length,
+							parallelResult !== undefined,
+						),
 						latencyMs: 0,
 					},
 				};
@@ -881,6 +947,7 @@ export function registerWebsearchTool(
 			if (!redditResult) markUnsettled("reddit");
 			if (!tinyfishResult) markUnsettled("tinyfish");
 			if (!firecrawlResult) markUnsettled("firecrawl");
+			if (!parallelResult) markUnsettled("parallel");
 			renderDetails.elapsedMs = Date.now() - startedAt;
 
 			const resultDetails = {
@@ -894,6 +961,7 @@ export function registerWebsearchTool(
 				redditStatus,
 				tinyfishCount: tinyfishResults.length,
 				firecrawlCount: firecrawlResults.length,
+				parallelCount: parallelResults.length,
 				durationMs: Date.now() - startedAt,
 				deadlineMs: searchDeadlineMs,
 				responseBudgetMs: responseTargetMs,
@@ -939,6 +1007,8 @@ export function registerWebsearchTool(
 				engineLabel.push(`TinyFish:${tinyfishResults.length}`);
 			if (firecrawlResults.length)
 				engineLabel.push(`FireCrawl:${firecrawlResults.length}`);
+			if (parallelResults.length)
+				engineLabel.push(`Parallel:${parallelResults.length}`);
 			if (!engineLabel.length) engineLabel.push("HTTP");
 
 			// Trigger speculative prefetch of top-N result URLs in the background.

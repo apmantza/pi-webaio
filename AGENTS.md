@@ -4,7 +4,7 @@
 
 pi-webaio is an **all-in-one web tools extension** for [pi](https://pi.dev) (the coding agent) that provides search, fetch, crawl, extraction, discovery, storage, compilation, RAG chunking, query-focused answer mode, offline corpus search, single-round research bundles, phase-aware error handling, TUI rendering, and (v0.4.1+) opt-in paywall bypass capabilities via 8 tools: `aio-websearch`, `aio-webfetch`, `aio-webcontent`, `aio-webresult`, `aio-webmap`, `aio-webpull`, `aio-webquery`, and `aio-webresearch`. It's published as `npm:pi-webaio` and installable via `pi install npm:pi-webaio`. The same eight tools are also exposed to non-pi MCP clients (Claude Code, Claude Desktop, etc.) through a stdio MCP server (`bin/pi-webaio-mcp.mjs`, `src/mcp-server.ts`).
 
-**Current version: 0.9.0** — Context7 + DeepWiki verticals (21 built-in extractors), multi-source **cited** answer mode (`urls`+`query`), outline mode + frugal default preview, opt-in AI summarization, compact search, per-engine search status/latency + ~4.5s deadline, Google-lane 3s cap, shared warm browser pool, lazy Jina extraction, CSS-cruft stripping (incl. `@media`) + heading-detection fallback, source trust-tier grading, content-hash dedup + `aio-webcontent` diff, local-knowledge pre-check, plus the SSRF/secret-redaction hardening from 0.7.3. 1482 tests / 65 wired suites.
+**Current version: 0.9.0** — Context7 + DeepWiki verticals (21 built-in extractors), multi-source **cited** answer mode (`urls`+`query`), outline mode + frugal default preview, opt-in AI summarization, compact search, per-engine search status/latency + ~4.5s deadline, Google-lane 3s cap, shared warm browser pool, lazy Jina extraction, CSS-cruft stripping (incl. `@media`) + heading-detection fallback, source trust-tier grading, content-hash dedup + `aio-webcontent` diff, local-knowledge pre-check, plus the SSRF/secret-redaction hardening from 0.7.3. 1515 tests / 66 wired suites.
 
 > **Internal-docs policy:** research / audit / inspiration notes — `docs/inspirations*.md`, `docs/pagemap-inspiration.md`, `docs/observability-gaps.md`, `docs/perf-improvements.md`, and root-level `inspiration7.md` — are **local-only working artifacts**. They are gitignored and must **never** be committed or shipped. Only user-facing docs (`README.md`, `docs/{features,tools,usage,architecture,custom-verticals,mcp}.md`) plus `ROADMAP.md` / `CHANGELOG.md` / `AGENTS.md` belong in the repo. When auditing or surveying, write findings to these local files, not to tracked docs.
 
@@ -22,7 +22,8 @@ pi-webaio/
 │   ├── google-ai.ts          ← TypeScript wrapper — spawns CDP child processes
 │   ├── tinyfish.ts           ← TinyFish Search & Fetch API client (API key) (v1.0.2)
 │   ├── firecrawl.ts          ← FireCrawl Keyless search/scrape client (no key) (v1.0.2)
-│   ├── config.ts             ← TinyFish API key resolution (v1.0.2)
+│   ├── parallel.ts           ← Parallel Search & Extract API client (x-api-key auth) (v1.0.6)
+│   ├── config.ts             ← TinyFish / FireCrawl / Parallel API key resolution
 │   ├── search.ts             ← HTTP search (DDG, Brave, Yahoo, Bing) + engine health, caching, dedup, source-type ranking, goggles
 │   ├── discovery.ts          ← Sitemap parsing, nav link extraction, crawling (fan-out capped)
 │   ├── bot-detection.ts      ← Structured bot-block detection (Cloudflare, Anubis, etc.)
@@ -299,8 +300,9 @@ pi-webaio/
 | `src/search.ts` | Source-type classification + preferred-domain boost folded into cross-engine ranking; `sourceType` exposed on results (v0.7.1). TinyFish/FireCrawl run as parallel providers alongside the HTTP engines (v1.0.2). |
 | `src/goggles.ts` | Search rerank presets (`docs-first`, `research`, `news-balanced`) or custom rules, added as a purely additive ranking term (v0.7.1). |
 | `src/tinyfish.ts` | TinyFish Search & Fetch API client; key resolved from `~/.piwebaio/config`, `~/.piwebaio/.env`, or `TINYFISH_API_KEY` (v1.0.2). |
+| `src/parallel.ts` | Parallel Search & Extract API client (`x-api-key` auth); key resolved from `~/.piwebaio/config`, `~/.piwebaio/.env`, or `PARALLEL_API_KEY`. Search returns LLM-optimized excerpts; extract returns markdown full content (JS-rendered + PDFs, up to 20 URLs per call). 429 rate-limit cooldown (v1.0.6). |
 | `src/firecrawl.ts` | FireCrawl Keyless search/scrape client (no key, 1k credits/month) with API-key support and 429 rate-limit cooldown (v1.0.2/1.0.3). |
-| `src/config.ts` | TinyFish API key resolution (config JSON / .env / env var) (v1.0.2). |
+| `src/config.ts` | API key resolution for TinyFish / FireCrawl / Parallel (config JSON dotted keys / `.env` / env vars) (v1.0.2, v1.0.6). |
 | `src/cookie-cache.ts` | Bounded (LRU 50) + short-TTL per-origin cookie cache bridging Playwright harvests across fetch calls; consulted by `smartFetch` before escalating to a browser (v0.7.1). |
 | `src/strategy-memory.ts` | Per-domain memory of which fetch-ladder rung worked, LRU-capped (500) with 7-day expiry and periodic cheaper-strategy re-probe (v0.7.0). |
 | `src/prefetch.ts` | Opt-in speculative prefetch of top search hits into the content cache (v0.7.0). |
@@ -476,8 +478,9 @@ TUI result rendering for all tools; phase-aware FetchError system; `format` para
 ## Testing
 
 - `npm test` → runs unit tests (`tests/unit.test.mjs`, 156 tests)
-- `npm run test:all` → runs all 65 wired suites (1482 tests total, 0 fail, 3 expected skips: a live-network Jina test that skips on external HTTP 403, and opt-in live TLS tests)
-- `npm run test:webfetch-api` → static fetch API suite (`tests/static-webfetch-api.test.mjs`, 41 tests: SSRF pinning per hop, byte budgets, cancellation, redaction, shared error taxonomy, shared-helper guards)
+- `npm run test:all` → runs all 65 wired suites (1515 tests total, 0 fail, 3 expected skips: a live-network Jina test that skips on external HTTP 403, and opt-in live TLS tests)
+- `npm run test:webfetch-api` → static fetch API suite (`tests/static-webfetch-api.test.mjs`, 41 tests:
+- `npm run test:parallel` → offline Parallel Search & Extract unit suite (`tests/parallel.test.mjs`, 33 tests: key resolution, request-shape, parsing, rate-limit cooldown, error handling) SSRF pinning per hop, byte budgets, cancellation, redaction, shared error taxonomy, shared-helper guards)
 - `npm run test:webfetch-package` → packs the tarball, installs it into an isolated consumer with peers and Playwright removed, and verifies `pi-webaio/webfetch` loads with no leaked handles and no disk writes
 - `npm run test:mcp` → MCP server tests (standalone, not in test:all)
 - Specialized suites (each `npm run test:<name>`): `new` (new-features, 31), `paywall` (65), `check` (github-check, 35), `render` (render-result, 40), `fetcherror` (fetch-error, 57), `fetchprogress` (9), `hardening` (16), `redact` (21), `ssrf` (ssrf-hardening, 30), `fingerprint` (14), `format` (18), `webfetch-summary` (13), `search-context` (20), `chunker` (31), `prune` (prune-markdown, 25), `github-map` (50), `reddit` (reddit-block, 7), `source-ranking` (16), `webresearch` (26), `stance` (24), `cookie-cache` (25), `title-extraction` (10), `integration` (5), `bench` (bench-harness, 35)

@@ -263,6 +263,9 @@ const lazyTools: LazyTool[] = [
 			firecrawl: boolean(
 				"Use Firecrawl Keyless Scrape API instead of the normal extraction pipeline. No API key needed — works out of the box. Free tier: 1,000 credits/month. Format maps: markdown (default), html.",
 			),
+			parallel: boolean(
+				"Use Parallel Extract API instead of the normal extraction pipeline. Requires PARALLEL_API_KEY in ~/.piwebaio/config, ~/.piwebaio/.env, or env var. Handles JS pages and PDFs server-side. Returns markdown full content.",
+			),
 		}),
 		load: async () => ({
 			register: (await import("./webfetch.ts")).registerWebfetchTool,

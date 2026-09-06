@@ -6,6 +6,8 @@ All notable changes to pi-webaio will be documented in this file.
 
 ### Added
 
+- **Parallel Search & Extract integration** (`src/parallel.ts`, `src/config.ts`, `src/search.ts`, `src/tools/websearch.ts`, `src/tools/webfetch.ts`) — Parallel provides LLM-oriented web search (objective + keyword queries → curated excerpts, `fast` mode ~1 s latency) and server-side full-content extract (JS rendering + PDFs, returns markdown). Auth is via `x-api-key`; key is resolved from `~/.piwebaio/config` (`parallel.apiKey`), `~/.piwebaio/.env` (`PARALLEL_API_KEY`), or the env var. Parallel runs as a parallel search provider (key-gated like TinyFish) and can be used for fetch via `parallel: true` on `aio-webfetch`. The client supports 429 rate-limit cooldown (same pattern as FireCrawl) and up to 20 URLs per extract call.
+
 - **Supported static fetch API** — `pi-webaio/webfetch` exports `fetch` and `fetchPage` for integrations that need fingerprinted HTTP fetch and local extraction without registering tools, starting a browser, contacting a remote reader, or writing a content cache. The API propagates cancellation, manually validates and pins each HTTP or client-side redirect, caps aggregate retry and redirect input at 10 MiB, supports five output formats, and exposes Defuddle image/reply controls.
 
 ### Changed
@@ -19,6 +21,7 @@ All notable changes to pi-webaio will be documented in this file.
 - **Client-side redirects inside `<script >` / `</script >` were missed** — HTML permits whitespace before the closing `>` of a tag, and the script-scanning regex required a bare `</script>`, so a literal `location` redirect in such a script was never seen (CodeQL `js/bad-tag-filter`, high). The pattern is now `<\/script[^>]*>`, matching what HTML parsers actually accept. This had been open in `content.ts` since 2026-08-21 and #116 duplicated it into `webfetch-api.ts`; consolidating both copies into `src/client-redirect.ts` means the one fix now covers both surfaces.
 - **Public-network guard coverage** — the SSRF guard denies non-public IPv4 and IPv6 special-purpose ranges by default, preserves the IANA globally reachable exceptions, handles canonical mapped/compatible/NAT64/6to4/Teredo encodings, and keeps transition-encoded cloud metadata addresses outside the CIDR allow-list.
 - **Tool registration crash when the `@earendil-works/pi-coding-agent` peer is unresolvable** — `src/tools/render-result.ts` statically value-imported `getMarkdownTheme` from the peer, which aborted `aio-webfetch`/`aio-webpull` registration at load time on installs where the peer is not hoisted into the extension's resolution path (e.g. `pi install npm:pi-webaio` copies under `~/.pi/agent/npm/node_modules/` on Linux). The theme now resolves via a lazy dynamic import cached at module load with an unstyled identity-theme fallback, so registration and rendering succeed regardless of peer availability; when the peer resolves, behavior is unchanged. Also fixed lint blockers in the same file (nested ternaries in the progress-bar background lookup, inverted negation ternary in the outline word-count line).
+
 ## [1.0.5] - 2026-09-03
 
 ### Changed

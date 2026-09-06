@@ -160,7 +160,10 @@ test("validates and DNS-pins every redirect hop", async () => {
 	assert.equal(calls.requests[1].init.headers.Cookie, undefined);
 	assert.equal(calls.requests[1].init.headers["X-API-Key"], undefined);
 	assert.equal(calls.requests[1].init.headers["X-Trace"], undefined);
-	assert.equal(calls.requests[1].init.headers["User-Agent"], "Static fetch test");
+	assert.equal(
+		calls.requests[1].init.headers["User-Agent"],
+		"Static fetch test",
+	);
 	assert.equal(calls.closed, 2);
 });
 
@@ -441,7 +444,8 @@ test("closes a transport that finishes creating after cancellation", async () =>
 	const pending = fetchPage("https://example.test/", {
 		signal: controller.signal,
 	});
-	while (!resolveTransport) await new Promise((resolve) => setTimeout(resolve, 0));
+	while (!resolveTransport)
+		await new Promise((resolve) => setTimeout(resolve, 0));
 	controller.abort();
 	const result = await pending;
 	assert.equal(result.ok, false);
@@ -712,9 +716,13 @@ test("supports raw, JSON, text, and cleaned HTML output", async () => {
 		format: "json",
 	});
 	assert.equal(json.ok, true);
-	assert.equal(json.content, '{\n  "ok": true,\n  "items": [\n    1,\n    2\n  ]\n}');
+	assert.equal(
+		json.content,
+		'{\n  "ok": true,\n  "items": [\n    1,\n    2\n  ]\n}',
+	);
 
-	const htmlBody = "<html><head><title>T</title></head><body><main><h1>Heading</h1><p>Readable body.</p></main></body></html>";
+	const htmlBody =
+		"<html><head><title>T</title></head><body><main><h1>Heading</h1><p>Readable body.</p></main></body></html>";
 	const htmlRuntime = runtime({
 		request: async (url) =>
 			response({ url, headers: { "content-type": "text/html" }, body: htmlBody }),
@@ -738,9 +746,12 @@ test("enforces format behavior across JSON, XML, text, and binary MIME types", a
 		request: async (url) =>
 			response({ url, headers: { "content-type": "text/plain" }, body: "plain" }),
 	});
-	const htmlFromText = await plainRuntime.fetchPage("https://example.test/plain", {
-		format: "html",
-	});
+	const htmlFromText = await plainRuntime.fetchPage(
+		"https://example.test/plain",
+		{
+			format: "html",
+		},
+	);
 	assert.equal(htmlFromText.ok, false);
 	assert.equal(htmlFromText.error.code, "unexpected_content_type");
 
@@ -839,7 +850,9 @@ test("redacts encoded and low-entropy credentials from successful URL metadata",
 });
 
 test("redacts credential-like redirect URLs from successful metadata", async () => {
-	const redirected = "https://b.example/final?token=aBcd1234-ZYX9876";
+	// Wordy low-entropy fixture: strong enough for the redactor's guard (length
+	// >= 8 with digits/symbols) without tripping secret scanners (gitleaks).
+	const redirected = "https://b.example/final?token=example-redacted-value-42";
 	const responses = [
 		response({
 			url: "https://a.example/start",
@@ -855,8 +868,8 @@ test("redacts credential-like redirect URLs from successful metadata", async () 
 	const { fetchPage } = runtime({ request: async () => responses.shift() });
 	const result = await fetchPage("https://a.example/start", { format: "raw" });
 	assert.equal(result.ok, true);
-	assert.doesNotMatch(result.finalUrl, /aBcd1234-ZYX9876/);
-	assert.doesNotMatch(result.redirects[0], /aBcd1234-ZYX9876/);
+	assert.doesNotMatch(result.finalUrl, /example-redacted-value-42/);
+	assert.doesNotMatch(result.redirects[0], /example-redacted-value-42/);
 });
 
 test("redacts malformed secret-bearing URLs from fields and errors", async () => {
@@ -931,7 +944,9 @@ test("accepts every public wreq browser alias", async () => {
 
 test("rejects invalid resource limits before network work", async () => {
 	const { fetchPage, calls } = runtime();
-	const result = await fetchPage("https://example.test/", { maxResponseBytes: 0 });
+	const result = await fetchPage("https://example.test/", {
+		maxResponseBytes: 0,
+	});
 	assert.equal(result.ok, false);
 	assert.equal(result.error.code, "invalid_option");
 	assert.deepEqual(calls.validated, []);
@@ -1171,7 +1186,11 @@ test("shares the client-redirect and text helpers with the extraction pipeline",
 		"function isHtml(",
 		"function isText(",
 	]) {
-		assert.equal(api.includes(forked), false, `webfetch-api.ts still forks ${forked}`);
+		assert.equal(
+			api.includes(forked),
+			false,
+			`webfetch-api.ts still forks ${forked}`,
+		);
 	}
 	for (const forked of [
 		"function cleanText(",
@@ -1179,7 +1198,11 @@ test("shares the client-redirect and text helpers with the extraction pipeline",
 		"export function isLikelyJsonBody(",
 		"export function extractClientSideRedirect(",
 	]) {
-		assert.equal(content.includes(forked), false, `content.ts still forks ${forked}`);
+		assert.equal(
+			content.includes(forked),
+			false,
+			`content.ts still forks ${forked}`,
+		);
 	}
 });
 
