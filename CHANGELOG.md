@@ -4,6 +4,8 @@ All notable changes to pi-webaio will be documented in this file.
 
 ## [Unreleased]
 
+## [1.0.6] - 2026-09-07
+
 ### Added
 
 - **Parallel Search & Extract integration** (`src/parallel.ts`, `src/config.ts`, `src/search.ts`, `src/tools/websearch.ts`, `src/tools/webfetch.ts`) — Parallel provides LLM-oriented web search (objective + keyword queries → curated excerpts, `fast` mode ~1 s latency) and server-side full-content extract (JS rendering + PDFs, returns markdown). Auth is via `x-api-key`; key is resolved from `~/.piwebaio/config` (`parallel.apiKey`), `~/.piwebaio/.env` (`PARALLEL_API_KEY`), or the env var. Parallel runs as a parallel search provider (key-gated like TinyFish) and can be used for fetch via `parallel: true` on `aio-webfetch`. The client supports 429 rate-limit cooldown (same pattern as FireCrawl) and up to 20 URLs per extract call.
