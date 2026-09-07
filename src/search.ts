@@ -221,9 +221,9 @@ export function domainFromGoogleCite(
 	for (const candidate of [token, `https://${token}`]) {
 		try {
 			const host = new URL(candidate).hostname.toLowerCase();
-		if (host && host.includes(".")) return host;
+			if (host && host.includes(".")) return host;
 		} catch {
-		/* try next candidate */
+			/* try next candidate */
 		}
 	}
 	return undefined;

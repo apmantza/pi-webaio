@@ -34,11 +34,7 @@ test("classifySourceType: arxiv/doi/semanticscholar and paper/pdf paths are acad
 		"academic",
 	);
 	assert.strictEqual(
-		classifySourceType(
-			"example.com",
-			"",
-			"https://example.com/paper/12345",
-		),
+		classifySourceType("example.com", "", "https://example.com/paper/12345"),
 		"academic",
 	);
 	assert.strictEqual(
@@ -50,10 +46,7 @@ test("classifySourceType: arxiv/doi/semanticscholar and paper/pdf paths are acad
 test("classifySourceType: known social/community/news hosts", () => {
 	assert.strictEqual(classifySourceType("twitter.com", "", ""), "social");
 	assert.strictEqual(classifySourceType("x.com", "", ""), "social");
-	assert.strictEqual(
-		classifySourceType("www.linkedin.com", "", ""),
-		"social",
-	);
+	assert.strictEqual(classifySourceType("www.linkedin.com", "", ""), "social");
 	assert.strictEqual(classifySourceType("dev.to", "", ""), "community");
 	assert.strictEqual(
 		classifySourceType("stackoverflow.com", "", ""),
@@ -98,11 +91,7 @@ test("classifySourceType: docs/developer/api prefixes and doc-ish paths/titles a
 		"official-docs",
 	);
 	assert.strictEqual(
-		classifySourceType(
-			"example.org",
-			"",
-			"https://example.org/reference/api",
-		),
+		classifySourceType("example.org", "", "https://example.org/reference/api"),
 		"official-docs",
 	);
 	assert.strictEqual(
@@ -117,11 +106,7 @@ test("classifySourceType: blog. prefix or /blog/ path is maintainer-blog", () =>
 		"maintainer-blog",
 	);
 	assert.strictEqual(
-		classifySourceType(
-			"example.org",
-			"",
-			"https://example.org/blog/some-post",
-		),
+		classifySourceType("example.org", "", "https://example.org/blog/some-post"),
 		"maintainer-blog",
 	);
 });
@@ -158,7 +143,10 @@ test("sourceTypePriority: official-docs ranks highest, social ranks lowest", () 
 			`${order[i - 1]} (${priorities[i - 1]}) should be >= ${order[i]} (${priorities[i]})`,
 		);
 	}
-	assert.ok(sourceTypePriority("social") < 0, "social priority must be negative");
+	assert.ok(
+		sourceTypePriority("social") < 0,
+		"social priority must be negative",
+	);
 });
 
 // ─── inferPreferredDomains (issue #63) ─────────────────────────────
@@ -376,7 +364,10 @@ test("domainFromGoogleCite: full cite with breadcrumb", () => {
 });
 
 test("domainFromGoogleCite: bare origin cite", () => {
-	assert.strictEqual(domainFromGoogleCite("https://usefresh.dev"), "usefresh.dev");
+	assert.strictEqual(
+		domainFromGoogleCite("https://usefresh.dev"),
+		"usefresh.dev",
+	);
 });
 
 test("domainFromGoogleCite: cite with path", () => {

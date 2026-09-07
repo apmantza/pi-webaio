@@ -89,7 +89,9 @@ type WebsearchDependencies = {
 /** Render an error without a doubled `Error:` prefix (`String(err)` on an
  *  Error already reads `Error: …`, so `error (${String(err)})` stutters). */
 function shortError(err: unknown): string {
-	return String(err).replace(/^Error:\s*/, "").slice(0, 120);
+	return String(err)
+		.replace(/^Error:\s*/, "")
+		.slice(0, 120);
 }
 
 function classifyRedditStatus(status: string, count: number): EngineStatus {
@@ -485,8 +487,7 @@ export function registerWebsearchTool(
 								snippet: r.snippet,
 								// Google hrefs are usually opaque /goto?url=CAES… redirects;
 								// prefer the SERP <cite> origin so ranking sees the real domain.
-								domain:
-									domainFromGoogleCite(r.cite) ?? extractDomain(r.url),
+								domain: domainFromGoogleCite(r.cite) ?? extractDomain(r.url),
 							}));
 							googleStatus = results.length
 								? g.degraded
