@@ -164,3 +164,11 @@ Use aio-webpull to download https://www.ft.com (max: 50, bypass: true)
 ```
 
 Applies the per-domain strategy chain to every page in the pull. NYT pages use `block_js → archive`; FT pages use `block_js → archive`; unknown sites fall through to the generic chain.
+
+## Headless Chrome
+
+Chrome (Google/Reddit CDP search, AI summaries) is **always headless** (`--headless=new` on a dedicated port-9222 profile) — even on Linux desktops with `$DISPLAY` set, so no window pops up or steals focus on any operation.
+
+- Visible window is explicit opt-in only: `GREEDY_SEARCH_VISIBLE=1`.
+- `--no-sandbox` is passed only when needed: automatically when running as root, or forced with `PI_WEBAIO_NO_SANDBOX=1` (force off with `=0`). As a normal user no flag is passed, so Chrome's "unsupported command-line flag" infobar never appears.
+- If an old visible Chrome is still running from before this change, stop it once with `node bin/launch.mjs --kill` — the next launch comes up headless.

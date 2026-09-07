@@ -692,9 +692,8 @@ async function fetchWithBypass(
 		const { chromium } = playwright;
 
 		const launchOptions: any = { headless: true };
-		if (process.platform === "linux" && process.env.DISPLAY) {
-			launchOptions.headless = false;
-		}
+		// NOTE: intentionally always headless — a headed browser would pop a
+		// window on Linux desktops ($DISPLAY set) on every paywall bypass.
 
 		let browser: any = null;
 		try {

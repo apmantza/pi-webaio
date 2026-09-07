@@ -76,8 +76,27 @@ const BASE_CHROME_FLAGS = [
 	"--window-size=1920,1080",
 	"--lang=en-US",
 	"--force-color-profile=srgb",
-	"--no-sandbox",
+	// NOTE: --no-sandbox is appended conditionally in buildChromeFlags().
+	// Passing it unconditionally triggers Chrome's "unsupported command-line
+	// flag" infobar on normal desktops; it is only needed when running as
+	// root or in containers without user namespaces.
 ];
+
+/**
+ * --no-sandbox is only needed when running as root (Chrome refuses the
+ * setuid sandbox) or in minimal containers. Opt in explicitly with
+ * PI_WEBAIO_NO_SANDBOX=1, opt out with =0. Defaults to root auto-detect.
+ */
+function needsNoSandbox() {
+	const env = process.env.PI_WEBAIO_NO_SANDBOX;
+	if (env === "1") return true;
+	if (env === "0") return false;
+	try {
+		if (typeof process.getuid === "function" && process.getuid() === 0)
+			return true;
+	} catch {}
+	return false;
+}
 
 function getChromeVersion(chromePath) {
 	// Primary: versioned sub-directory inside the Chrome Application folder.
@@ -109,6 +128,7 @@ function getChromeVersion(chromePath) {
 
 function buildChromeFlags(chromePath) {
 	const flags = [...BASE_CHROME_FLAGS];
+	if (needsNoSandbox()) flags.push("--no-sandbox");
 	if (isHeadless()) {
 		flags.push("--headless=new");
 		const major = getChromeVersion(chromePath) || "136";
