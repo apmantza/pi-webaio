@@ -199,6 +199,36 @@ export function extractDomain(url: string): string | undefined {
 	return domain;
 }
 
+/**
+ * Derive a Google result's real domain from its SERP `<cite>` breadcrumb
+ * (e.g. `"https://docs.deno.com › ..."` or `"https://usefresh.dev"`).
+ *
+ * Since ~2025 Google wraps result links in opaque `/goto?url=CAES…`
+ * redirects, so `extractDomain(url)` yields `google.com` for every Google
+ * result — collapsing source-type classification, preferred-domain boosts,
+ * and per-domain diversity. The cite element carries the publisher's own
+ * origin, which recovers the ranking signal at zero network cost. The
+ * redirect href itself is untouched (fetch follows it), so only ranking
+ * metadata changes. Returns undefined when the cite is missing or
+ * unparseable; callers fall back to `extractDomain(url)`.
+ */
+export function domainFromGoogleCite(
+	cite: string | undefined | null,
+): string | undefined {
+	if (!cite) return undefined;
+	const token = cite.trim().split(/\s+/)[0];
+	if (!token) return undefined;
+	for (const candidate of [token, `https://${token}`]) {
+		try {
+			const host = new URL(candidate).hostname.toLowerCase();
+		if (host && host.includes(".")) return host;
+		} catch {
+		/* try next candidate */
+		}
+	}
+	return undefined;
+}
+
 // ─── Search result parsers ─────────────────────────────────────────
 
 function checkSearchFilters(

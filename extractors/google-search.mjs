@@ -226,8 +226,14 @@ async function extractResults(tab, maxResults = 10) {
           if (textNodes[0]) snippetEl = textNodes[0];
         }
         snippet = snippetEl ? snippetEl.innerText.trim().slice(0, 300) : '';
-        
-        results.push({ title: title, url: url, snippet: snippet });
+
+        // The result href is usually an opaque /goto?url=CAES… redirect, so
+        // also capture the <cite> breadcrumb (publisher origin) for ranking.
+        var citeScope = a.closest('.yuRUbf, .g, [data-sokoban-container], .MjjYud') || container;
+        var citeEl = citeScope ? citeScope.querySelector('cite') : null;
+        var cite = citeEl ? (citeEl.innerText || '').trim().slice(0, 200) : '';
+
+        results.push({ title: title, url: url, snippet: snippet, cite: cite });
       }
       
       return JSON.stringify(results);

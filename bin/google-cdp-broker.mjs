@@ -491,7 +491,12 @@ const GOOGLE_SEARCH_EXTRACTION_SCRIPT = String.raw`(() => {
 				.sort((left, right) => right.innerText.length - left.innerText.length)[0];
 		}
 		const snippet = (snippetElement?.innerText || "").trim().slice(0, 300);
-		results.push({ title, url, snippet });
+		// The result href is usually an opaque /goto?url=CAES… redirect, so
+		// also capture the <cite> breadcrumb (publisher origin) for ranking.
+		const citeScope = anchor.closest(".yuRUbf, .g, [data-sokoban-container], .MjjYud") || container;
+		const citeElement = citeScope?.querySelector("cite");
+		const cite = (citeElement?.innerText || "").trim().slice(0, 200);
+		results.push({ title, url, snippet, cite });
 	}
 	return { consentDismissed, ready: document.readyState === "complete", results };
 })()`;

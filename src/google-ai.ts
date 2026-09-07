@@ -67,6 +67,14 @@ export interface GoogleSearchResult {
 	title: string;
 	url: string;
 	snippet: string;
+	/**
+	 * Raw SERP `<cite>` breadcrumb (e.g. `"https://docs.deno.com › ..."`).
+	 * Present when the extractor could read one; the result `url` may be an
+	 * opaque `/goto?url=CAES…` redirect, in which case callers derive the
+	 * ranking domain via `domainFromGoogleCite(cite)` instead of
+	 * `extractDomain(url)` (which would yield `google.com`).
+	 */
+	cite?: string;
 }
 
 /**
