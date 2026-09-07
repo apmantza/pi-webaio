@@ -11,6 +11,7 @@ import { searchFirecrawl } from "../firecrawl.ts";
 import { searchParallel } from "../parallel.ts";
 import {
 	searchWeb,
+	domainFromGoogleCite,
 	ENGINE_WEIGHTS,
 	recordProviderNetworkFailure,
 	isProviderAvailable,
@@ -84,6 +85,12 @@ type WebsearchDependencies = {
 	/** Test/benchmark seam for the Google lane cap. Defaults to 3s. */
 	googleLaneMaxMs?: number;
 };
+
+/** Render an error without a doubled `Error:` prefix (`String(err)` on an
+ *  Error already reads `Error: …`, so `error (${String(err)})` stutters). */
+function shortError(err: unknown): string {
+	return String(err).replace(/^Error:\s*/, "").slice(0, 120);
+}
 
 function classifyRedditStatus(status: string, count: number): EngineStatus {
 	if (count > 0 || status === "ok") return "ok";
@@ -476,7 +483,10 @@ export function registerWebsearchTool(
 								title: r.title,
 								url: r.url,
 								snippet: r.snippet,
-								domain: extractDomain(r.url),
+								// Google hrefs are usually opaque /goto?url=CAES… redirects;
+								// prefer the SERP <cite> origin so ranking sees the real domain.
+								domain:
+									domainFromGoogleCite(r.cite) ?? extractDomain(r.url),
 							}));
 							googleStatus = results.length
 								? g.degraded
@@ -496,7 +506,7 @@ export function registerWebsearchTool(
 							} else if (errorCode === "deadline_expired") {
 								googleStatus = `timeout (Google lane cap ${googleLaneMaxMs}ms; hard deadline ${searchDeadlineMs}ms)`;
 							} else {
-								googleStatus = `error (${String(err).slice(0, 120)})`;
+								googleStatus = `error (${shortError(err)})`;
 							}
 							return { source: "google" as const, results: [] };
 						}
@@ -620,7 +630,7 @@ export function registerWebsearchTool(
 						};
 					} catch (err) {
 						recordProviderNetworkFailure("reddit", String(err));
-						redditStatus = `error (${String(err).slice(0, 120)})`;
+						redditStatus = `error (${shortError(err)})`;
 						return {
 							source: "reddit" as const,
 							results: [],

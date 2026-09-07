@@ -29,6 +29,9 @@
 		"typescript"
 	],
 	"type": "module",
+	"engines": {
+		"node": ">=24"
+	},
 	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",
 	"exports": {

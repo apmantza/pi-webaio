@@ -5,6 +5,7 @@ import {
 	sourceTypePriority,
 	inferPreferredDomains,
 	scoreAndRankResults,
+	domainFromGoogleCite,
 	ENGINE_WEIGHTS,
 } from "../src/search.ts";
 
@@ -361,4 +362,69 @@ test("scoreAndRankResults: without a query, preferred-domain boost is a no-op", 
 	]);
 	const scored = scoreAndRankResults(buckets);
 	assert.strictEqual(scored[0].result.sourceType, "website");
+});
+
+// ─── domainFromGoogleCite ────────────────────────────────────────────
+// Google wraps result hrefs in opaque /goto?url=CAES… redirects; the SERP
+// <cite> breadcrumb carries the publisher origin used for ranking instead.
+
+test("domainFromGoogleCite: full cite with breadcrumb", () => {
+	assert.strictEqual(
+		domainFromGoogleCite("https://docs.deno.com › ..."),
+		"docs.deno.com",
+	);
+});
+
+test("domainFromGoogleCite: bare origin cite", () => {
+	assert.strictEqual(domainFromGoogleCite("https://usefresh.dev"), "usefresh.dev");
+});
+
+test("domainFromGoogleCite: cite with path", () => {
+	assert.strictEqual(
+		domainFromGoogleCite("https://github.com › fresh"),
+		"github.com",
+	);
+});
+
+test("domainFromGoogleCite: scheme-less host", () => {
+	assert.strictEqual(domainFromGoogleCite("fresh.deno.dev"), "fresh.deno.dev");
+});
+
+test("domainFromGoogleCite: missing or empty cite", () => {
+	assert.strictEqual(domainFromGoogleCite(undefined), undefined);
+	assert.strictEqual(domainFromGoogleCite(null), undefined);
+	assert.strictEqual(domainFromGoogleCite(""), undefined);
+	assert.strictEqual(domainFromGoogleCite("   "), undefined);
+});
+
+test("domainFromGoogleCite: garbage cite", () => {
+	assert.strictEqual(domainFromGoogleCite("› ..."), undefined);
+	assert.strictEqual(domainFromGoogleCite("not a url at all xyz"), undefined);
+});
+
+test("domainFromGoogleCite: case-insensitive", () => {
+	assert.strictEqual(
+		domainFromGoogleCite("https://DOCS.DENO.COM › ..."),
+		"docs.deno.com",
+	);
+});
+
+test("scoreAndRankResults: cite-derived domain classifies Google results", () => {
+	const gotoUrl =
+		"https://www.google.com/goto?url=CAESTQHrOzAV43FejSJOO3b7yG31QpyXOibTt1MvSqQ50HSppc0FeXpNfoqBUJOuq6DDF8XgtlJSw8ilUJF1EZWFflfg462v2rLrW63aDOht";
+	const buckets = new Map([
+		[
+			gotoUrl,
+			[
+				engineSource("google", {
+					title: "Fresh docs",
+					url: gotoUrl,
+					snippet: "islands",
+					domain: domainFromGoogleCite("https://fresh.deno.dev"),
+				}),
+			],
+		],
+	]);
+	const scored = scoreAndRankResults(buckets, "deno fresh framework");
+	assert.strictEqual(scored[0].result.domain, "fresh.deno.dev");
 });
