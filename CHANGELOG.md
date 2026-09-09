@@ -6,7 +6,8 @@ All notable changes to pi-webaio will be documented in this file.
 
 ### Added
 
-- **SDK runtime (`src/sdk.ts`)** — the "everything-as-an-SDK" surface: all eight `aio-*` tools exposed as callable functions (`runTool`, `runToolFull`, `listTools`, `getToolSchema`, `isTool`, `initRuntime`) with the exact business logic the pi extension runs (no forking). Tool implementation graphs are imported lazily on first call, and `initRuntime()` warms the session caches and user-defined verticals (parity with the pi extension's startup path). The pi extension, the MCP server, and a future CLI differ only in how they invoke `runTool` / render the returned text.
+- **SDK runtime (`src/sdk.ts`)** — the "everything-as-an-SDK" surface: all eight `aio-*` tools exposed as callable functions (`runTool`, `runToolFull`, `listTools`, `getToolSchema`, `isTool`, `initRuntime`) with the exact business logic the pi extension runs (no forking). Tool implementation graphs are imported lazily on first call, and `initRuntime()` warms the session caches and user-defined verticals (parity with the pi extension's startup path). The pi extension, the MCP server, and the CLI differ only in how they invoke `runTool` / render the returned text.
+- **CLI (`pi-webaio-cli`, `src/cli.ts`, `bin/pi-webaio-cli.mjs`)** — the third SDK surface: a thin argv parser over `runTool()` for callers who want the aio-* tools without pi or MCP. `pi-webaio-cli <tool> [params...]` runs a tool (params as a single JSON object positional or `--key value` flags, values JSON-parsed when they look like JSON), `list` enumerates the eight tools, `--json` prints a structured `{tool, text, details}` result, and `--help` shows usage. Exit codes: 0 success, 1 tool error, 2 usage/argument error. Wired as a `bin` and covered by `tests/cli.test.mjs` (6 offline tests).
 
 ### Changed
 
