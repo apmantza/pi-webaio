@@ -22,7 +22,7 @@ type RenderResult = (
 	theme: unknown,
 ) => unknown;
 
-type RegisteredTool = {
+export type RegisteredTool = {
 	name: string;
 	parameters?: unknown;
 	execute: (
@@ -39,7 +39,7 @@ type ToolModule = {
 	register: (pi: ExtensionAPI) => void;
 };
 
-type Ready = () => Promise<void>;
+export type Ready = () => Promise<void>;
 
 type LazyTool = {
 	name: string;
@@ -117,7 +117,7 @@ const routeSchema = schema(
 	["pattern"],
 );
 
-const lazyTools: LazyTool[] = [
+export const lazyTools: LazyTool[] = [
 	{
 		name: "aio-websearch",
 		label: "Web Search",
@@ -571,7 +571,7 @@ function fallbackResultText(
 	return name;
 }
 
-async function loadRegisteredTool(
+export async function loadRegisteredTool(
 	loader: () => Promise<ToolModule>,
 ): Promise<RegisteredTool> {
 	let captured: RegisteredTool | undefined;

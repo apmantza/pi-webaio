@@ -3,7 +3,7 @@
  *
  * Exposes all eight aio-* tools to any MCP client (Claude Code, Claude Desktop, etc.)
  * without requiring the pi coding-agent runtime. All tool logic is shared with the
- * pi extension via a thin ExtensionAPI capture shim — no forking of business logic.
+ * pi extension via the SDK runtime (src/sdk.ts) — no forking of business logic.
  *
  * stdout is the MCP protocol channel. All diagnostics go to stderr.
  */
@@ -15,94 +15,16 @@ import {
 	CallToolRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 
-import {
-	loadContentCacheFromDisk,
-	loadSearchCacheFromDisk,
-	cleanupSessionCache,
-	SESSION_CACHE_CLEANUP_MS,
-} from "./session-store.ts";
-import { registerWebfetchTool } from "./tools/webfetch.ts";
-import { registerWebcontentTool } from "./tools/webcontent.ts";
-import { registerWebresultTool } from "./tools/webresult.ts";
-import { registerWebsearchTool } from "./tools/websearch.ts";
-import { registerWebmapTool } from "./tools/webmap.ts";
-import { registerWebpullTool } from "./tools/webpull.ts";
-import { registerWebqueryTool } from "./tools/webquery.ts";
-import { registerWebresearchTool } from "./tools/webresearch.ts";
+import { initRuntime, listTools, runToolFull } from "./sdk.ts";
 import { redactSecrets } from "./redact.ts";
 
-// ─── Tool definition shape (subset of pi's registerTool config) ────────────
-
-interface McpToolDef {
-	name: string;
-	description: string;
-	/** Raw TypeBox / JSON Schema for the parameters object. */
-	inputSchema: Record<string, unknown>;
-	execute: (
-		toolCallId: string,
-		params: unknown,
-		signal: AbortSignal | undefined,
-		onUpdate: ((update: unknown) => void) | undefined,
-	) => Promise<{ content: Array<{ type: string; text: string }> }>;
-}
-
-// ─── ExtensionAPI capture shim ─────────────────────────────────────────────
-// Mimics the minimal subset of pi's ExtensionAPI that the registerX functions
-// actually use. We capture each tool definition without needing pi installed.
-
-function captureTools(): McpToolDef[] {
-	const tools: McpToolDef[] = [];
-
-	/** Minimal shim that matches the pi ExtensionAPI surface used by the tools. */
-	const piShim = {
-		registerTool(config: {
-			name: string;
-			description?: string;
-			parameters?: Record<string, unknown>;
-			execute: (...args: unknown[]) => Promise<unknown>;
-			// TUI-specific fields — ignored by MCP adapter
-			label?: string;
-			promptSnippet?: string;
-			promptGuidelines?: string[];
-			renderCall?: unknown;
-			renderResult?: unknown;
-		}): void {
-			const rawSchema =
-				config.parameters ??
-				({ type: "object", properties: {} } as Record<string, unknown>);
-
-			// Strip TypeBox metadata ($schema, $id, Symbol keys) that MCP clients
-			// may not understand. Keep the structural JSON Schema properties.
-			const inputSchema = sanitizeJsonSchema(rawSchema as Record<string, unknown>);
-			// MCP requires inputSchema to be type:"object" at the top level only —
-			// injecting `type` into nested nodes corrupts `properties` maps and unions.
-			if (!inputSchema["type"]) inputSchema["type"] = "object";
-
-			tools.push({
-				name: config.name,
-				description: config.description ?? "",
-				inputSchema,
-				execute: config.execute as McpToolDef["execute"],
-			});
-		},
-	};
-
-	// Register all eight tools via the same functions the pi extension uses.
-	// Cast to unknown first — pi is a peer-dep not required at MCP runtime;
-	// the shim satisfies the subset of the interface the tools actually call.
-	// SAFETY: piShim implements the registerTool subset consumed by every tool registration.
-	const pi = piShim as unknown as Parameters<typeof registerWebsearchTool>[0];
-	registerWebsearchTool(pi);
-	registerWebfetchTool(pi);
-	registerWebcontentTool(pi);
-	registerWebresultTool(pi);
-	registerWebmapTool(pi);
-	registerWebpullTool(pi);
-	registerWebqueryTool(pi);
-	registerWebresearchTool(pi);
-
-	return tools;
-}
+// ─── Tool runtime ───────────────────────────────────────────────────────────
+// The MCP adapter is a thin JSON-RPC wrapper over the shared SDK runtime
+// (src/sdk.ts): it enumerates tools via listTools() and dispatches calls via
+// runToolFull(), so the exact business logic the pi extension runs is reused
+// with no forking. Tool modules are loaded lazily on first call, and
+// initRuntime() warms the session caches AND user-defined verticals — the
+// pi-extension startup parity this adapter previously skipped.
 
 /**
  * Strip TypeBox-specific metadata and Symbol keys from a schema object so
@@ -155,12 +77,15 @@ function readPackageVersion(): string {
 // ─── MCP server ────────────────────────────────────────────────────────────
 
 export async function startMcpServer(): Promise<void> {
-	// Warm up session caches (same as pi extension startup).
-	loadSearchCacheFromDisk().catch(() => {});
-	loadContentCacheFromDisk();
-	setInterval(cleanupSessionCache, SESSION_CACHE_CLEANUP_MS).unref();
+	// Shared SDK runtime startup — warms session caches AND loads user-defined
+	// verticals (the pi-extension parity this adapter previously skipped).
+	await initRuntime();
 
-	const tools = captureTools();
+	const tools = listTools().map((t) => ({
+		name: t.name,
+		description: t.description,
+		inputSchema: sanitizeJsonSchema(t.parameters),
+	}));
 	const toolMap = new Map(tools.map((t) => [t.name, t]));
 
 	const server = new Server(
@@ -190,13 +115,15 @@ export async function startMcpServer(): Promise<void> {
 		}
 
 		const params = request.params.arguments ?? {};
-		const toolCallId = `mcp-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
 		try {
 			// onUpdate progress callbacks are no-ops in MCP context.
-			const result = await tool.execute(toolCallId, params, undefined, undefined);
+			const result = await runToolFull(name, params);
 			// result.content is already [{type:"text", text}] — pass through.
-			return { content: result.content };
+			return {
+				content: (result as { content: Array<{ type: string; text: string }> })
+					.content,
+			};
 		} catch (err: unknown) {
 			const msg = err instanceof Error ? err.message : String(err);
 			// Sanitization parity with the pi-extension path: fetch-error.ts /

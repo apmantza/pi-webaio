@@ -4,6 +4,14 @@ All notable changes to pi-webaio will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **SDK runtime (`src/sdk.ts`)** — the "everything-as-an-SDK" surface: all eight `aio-*` tools exposed as callable functions (`runTool`, `runToolFull`, `listTools`, `getToolSchema`, `isTool`, `initRuntime`) with the exact business logic the pi extension runs (no forking). Tool implementation graphs are imported lazily on first call, and `initRuntime()` warms the session caches and user-defined verticals (parity with the pi extension's startup path). The pi extension, the MCP server, and a future CLI differ only in how they invoke `runTool` / render the returned text.
+
+### Changed
+
+- **MCP server wired to the SDK runtime** — the parallel `captureTools`/ExtensionAPI-shim path is deleted; the adapter now enumerates tools via `listTools()` and dispatches calls via `runToolFull()`, reusing the SDK's lazy loading and shared startup. `startMcpServer()` awaits `initRuntime()`, which closes a parity gap: the MCP server previously warmed the session caches but never called `initUserExtractors()`, so user-defined verticals did not load in MCP. They now do.
+
 ## [1.0.6] - 2026-09-07
 
 ### Added
