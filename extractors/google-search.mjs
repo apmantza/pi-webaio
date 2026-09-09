@@ -454,7 +454,7 @@ async function main() {
 					[
 						"eval",
 						tab,
-						`(() => { try { const u = new URL(location.href); const h = u.hostname.toLowerCase(); const googleHost = h === "google.com" || h.endsWith(".google.com") || new RegExp(${JSON.stringify(GOOGLE_REGIONAL_HOST_RE.source)}).test(h); return u.protocol === "https:" && googleHost && u.pathname === "/search" && u.searchParams.get("q") === ${jsEvalLiteral(query)}; } catch { return false; } })()`,
+						`(() => { try { const u = new URL(location.href); const h = u.hostname.toLowerCase(); const googleHost = h === "google.com" || h.endsWith(".google.com") || new RegExp(${jsEvalLiteral(GOOGLE_REGIONAL_HOST_RE.source)}).test(h); return u.protocol === "https:" && googleHost && u.pathname === "/search" && u.searchParams.get("q") === ${jsEvalLiteral(query)}; } catch { return false; } })()`,
 					],
 					probeTimeoutMs,
 				).catch(() => "false");

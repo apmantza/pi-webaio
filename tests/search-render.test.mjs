@@ -35,8 +35,17 @@ function makeTheme() {
 }
 
 // Strip ANSI escapes (and any stray tag markup) for plain-text assertions.
+// Tag removal is applied repeatedly until no more tags remain: a single pass
+// can reintroduce a dangerous sequence (e.g. `<<script>script>` -> `<script>`),
+// which is the js/incomplete-multi-character-sanitization shape CodeQL flagged.
 function strip(s) {
-	return s.replace(/\x1b\[[0-9;]*m/g, "").replace(/<\/?[a-zA-Z][^>]*>/g, "");
+	s = s.replace(/\x1b\[[0-9;]*m/g, "");
+	let prev;
+	do {
+		prev = s;
+		s = s.replace(/<\/?[a-zA-Z][^>]*>/g, "");
+	} while (s !== prev);
+	return s;
 }
 
 // ─── providerFromEngineStatus ───────────────────────────────────────
@@ -452,9 +461,9 @@ test("result component expanded: rank numbers, sourceType tags, urls, snippets",
 	const plain = strip(comp.render(240).join("\n"));
 	assert.match(
 		plain,
-		/\b1\. First hit  \[official-docs\] \(example\.com\) — http\+google/,
+		/\b1\. First hit {2}\[official-docs\] \(example\.com\) — http\+google/,
 	);
-	assert.match(plain, /\b2\. Second hit  \[repo\] \(other\.org\)/);
+	assert.match(plain, /\b2\. Second hit {2}\[repo\] \(other\.org\)/);
 	assert.match(plain, /https:\/\/example\.com\/a/);
 	assert.match(plain, /An example snippet\./);
 });
