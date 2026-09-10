@@ -111,7 +111,7 @@ function printUsage(): void {
 		"",
 		"Params:",
 		"  Single JSON object positional:",
-		"    pi-webaio-cli aio-websearch '{\"query\":\"hello\"}'",
+		'    pi-webaio-cli aio-websearch \'{"query":"hello"}\'',
 		"  Key-value flags (values are JSON-parsed when they look like JSON):",
 		"    pi-webaio-cli aio-websearch --query hello --max 5",
 		"    pi-webaio-cli aio-webfetch --url https://example.com --format markdown",

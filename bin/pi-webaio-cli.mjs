@@ -26,11 +26,11 @@ const { main } = await import(pathToFileURL(cliPath).href);
 
 // Set exitCode (not process.exit) so pending stdout writes flush.
 main(process.argv).then(
-	(code) => {
-		process.exitCode = code;
-	},
-	(err) => {
-		process.stderr.write(`pi-webaio-cli fatal error: ${err?.message ?? err}\n`);
-		process.exitCode = 1;
-	},
+ (code) => {
+  process.exitCode = code;
+ },
+ (err) => {
+  process.stderr.write(`pi-webaio-cli fatal error: ${err?.message ?? err}\n`);
+  process.exitCode = 1;
+ },
 );

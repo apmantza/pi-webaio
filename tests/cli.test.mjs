@@ -96,7 +96,10 @@ test("CLI `--help` prints usage", async () => {
 test("CLI unknown tool exits 2 with a clear message", async () => {
 	const { code, stdout, stderr } = await runCli(["does-not-exist"]);
 	assert.equal(code, 2, "exit 2 (usage error)");
-	assert.ok(stderr.includes("Unknown tool"), `stderr says unknown tool (got: ${stderr})`);
+	assert.ok(
+		stderr.includes("Unknown tool"),
+		`stderr says unknown tool (got: ${stderr})`,
+	);
 	assert.ok(stdout.includes("Usage:"), "usage shown on stderr path");
 });
 
@@ -116,7 +119,8 @@ test("CLI aio-webquery via key-value flags (offline)", async () => {
 	assert.equal(code, 0, `exit 0 (stderr: ${stderr})`);
 	assert.ok(stdout.length > 0, "non-empty result");
 	assert.ok(
-		stdout.toLowerCase().includes("api") || stdout.toLowerCase().includes("endpoint"),
+		stdout.toLowerCase().includes("api") ||
+			stdout.toLowerCase().includes("endpoint"),
 		`result references API content (got: ${stdout.slice(0, 300)})`,
 	);
 });
@@ -125,12 +129,17 @@ test("CLI aio-webquery via key-value flags (offline)", async () => {
 
 test("CLI aio-webquery via JSON object positional (offline)", async () => {
 	const corpusDir = await buildFixtureCorpus();
-	const params = JSON.stringify({ query: "API endpoints data", dir: corpusDir, topK: 3 });
+	const params = JSON.stringify({
+		query: "API endpoints data",
+		dir: corpusDir,
+		topK: 3,
+	});
 	const { code, stdout, stderr } = await runCli(["aio-webquery", params]);
 	assert.equal(code, 0, `exit 0 (stderr: ${stderr})`);
 	assert.ok(stdout.length > 0, "non-empty result");
 	assert.ok(
-		stdout.toLowerCase().includes("api") || stdout.toLowerCase().includes("endpoint"),
+		stdout.toLowerCase().includes("api") ||
+			stdout.toLowerCase().includes("endpoint"),
 		`result references API content (got: ${stdout.slice(0, 300)})`,
 	);
 });
@@ -157,6 +166,9 @@ test("CLI --json prints a structured JSON result", async () => {
 		assert.fail(`stdout is not JSON (got: ${stdout.slice(0, 300)})`);
 	}
 	assert.equal(parsed.tool, "aio-webquery", "tool name in JSON");
-	assert.ok(typeof parsed.text === "string" && parsed.text.length > 0, "text is non-empty");
+	assert.ok(
+		typeof parsed.text === "string" && parsed.text.length > 0,
+		"text is non-empty",
+	);
 	assert.ok(parsed.details !== undefined, "details present");
 });
