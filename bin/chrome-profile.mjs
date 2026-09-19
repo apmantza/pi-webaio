@@ -22,7 +22,7 @@
 //   relative or garbage → throws. Fail closed: a half-applied override
 //     would point children at a directory Chrome was not launched with.
 import { isAbsolute, join } from "node:path";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 
 export const CHROME_PROFILE_DIR_ENV = "PI_WEBAIO_CHROME_PROFILE_DIR";
 
@@ -34,13 +34,19 @@ function defaultChromeProfileDir() {
 export function chromeProfileDir(env = process.env) {
 	const override = env[CHROME_PROFILE_DIR_ENV];
 	if (override === undefined) return defaultChromeProfileDir();
-	const trimmed = override.trim();
-	if (trimmed === "") return defaultChromeProfileDir();
-	if (!isAbsolute(trimmed)) {
+	let candidate = override.trim();
+	if (candidate === "") return defaultChromeProfileDir();
+	// Leading ~ expands to the home directory (shells expand it, but env set
+	// via systemd units / CI / APIs does not). Only bare ~ and ~/ or ~\ 
+	// prefixes expand — ~user is deliberately not supported.
+	if (candidate === "~" || candidate.startsWith("~/") || candidate.startsWith("~\\")) {
+		candidate = join(homedir(), candidate.slice(1).replace(/^[/\\]+/, ""));
+	}
+	if (!isAbsolute(candidate)) {
 		throw new Error(
 			`${CHROME_PROFILE_DIR_ENV} must be an absolute path (got: "${override}"); ` +
 				"unset it to use the default tmpdir profile",
 		);
 	}
-	return trimmed;
+	return candidate;
 }
