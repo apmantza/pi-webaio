@@ -26,11 +26,15 @@ jobs:
         with:
           node-version: "24"
 
-      - name: Install dependencies
-        run: npm install --no-audit --no-fund
-
+      # Lockfile check runs BEFORE npm install (#128): npm install normalizes
+      # the workspace lock, which masked committed drift (playwright sat in
+      # the lock's root `dependencies` while package.json declared it under
+      # `optionalDependencies`). Checking the committed bytes is the point.
       - name: Lockfile in sync with package.json
         run: npm run check:lockfile
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
 
       # Fail on known-vulnerable PRODUCTION deps (what actually ships to users
       # via `npm install --omit=dev`). Scoped to high/critical to avoid blocking
