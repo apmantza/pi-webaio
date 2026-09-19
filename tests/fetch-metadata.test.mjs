@@ -9,6 +9,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { composeFetchText } from "../src/tools/webfetch.ts";
+import { finalizePullResult } from "../src/content.ts";
 
 const base = {
 	formatLabel: "✓ Fetched and saved to /tmp/x.md",
@@ -42,4 +43,32 @@ test("composeFetchText omits metadata lines entirely when absent (no empty label
 	assert.doesNotMatch(text, /Published:/);
 	assert.doesNotMatch(text, /Site:/);
 	assert.match(text, /^Title: Example Page$/m);
+});
+
+test("finalizePullResult falls back to the URL hostname for missing Site provenance", () => {
+	const result = finalizePullResult({
+		ok: true,
+		url: "https://example.com/deep/page",
+		content: "Body text.",
+	});
+	assert.equal(result.site, "example.com", "hostname fallback must fill Site");
+});
+
+test("finalizePullResult keeps an explicit publisher site over the hostname fallback", () => {
+	const result = finalizePullResult({
+		ok: true,
+		url: "https://example.com/page",
+		content: "Body text.",
+		site: "Rust Blog",
+	});
+	assert.equal(result.site, "Rust Blog", "meta-tag publisher name must win");
+});
+
+test("finalizePullResult leaves invalid URLs without a Site rather than throwing", () => {
+	const result = finalizePullResult({
+		ok: true,
+		url: "not a url at all",
+		content: "Body text.",
+	});
+	assert.equal(result.site, undefined);
 });

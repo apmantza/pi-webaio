@@ -1,6 +1,6 @@
 import { TOOL_METADATA } from "./lazy.ts";
 import { mkdir, writeFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { searchWeb } from "../search.ts";
 import { loadGoggles, type GogglesInput } from "../goggles.ts";
@@ -42,11 +42,19 @@ const MAX_QUERIES = 6;
 /** Concurrency for fetching top-ranked sources. */
 const FETCH_CONCURRENCY = 3;
 
-function resolveOutDir(
+export function resolveOutDir(
 	outDir: string | undefined,
 	defaultName: string,
 ): string {
-	if (outDir) return resolve(process.cwd(), outDir);
+	// Relative outDirs resolve under .pi/webaio-research/ (battery finding
+	// 2026-09-19): a bare name used to land in the process CWD root -
+	// polluting the working tree, since only the default research path is
+	// gitignored. Absolute paths stay honored for scripts that own their
+	// storage layout.
+	if (outDir) {
+		if (isAbsolute(outDir)) return resolve(outDir);
+		return resolve(process.cwd(), ".pi", "webaio-research", outDir);
+	}
 	return resolve(process.cwd(), ".pi", "webaio-research", defaultName);
 }
 

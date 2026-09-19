@@ -639,8 +639,21 @@ export function finalizePullResult(
 	content = `[UNTRUSTED WEB CONTENT START]\n${content}\n[UNTRUSTED WEB CONTENT END]`;
 
 	const injection = detectPromptInjection(content);
+	// Site provenance fallback (battery finding 2026-09-19): defuddle only
+	// fills `site` when the page exposes a publisher meta tag; the URL
+	// hostname is a valid degradation so the agent-visible metadata block
+	// renders on essentially every page. Unparseable URLs stay silent.
+	let site = result.site;
+	if (!site) {
+		try {
+			site = new URL(result.url).hostname || undefined;
+		} catch {
+			// no hostname guess for malformed URLs
+		}
+	}
 	return {
 		...result,
+		site,
 		content: applyInjectionAction(content, injection),
 	};
 }
