@@ -539,8 +539,12 @@ const WAYBACK_TIMEOUT_MS = 15000;
  * Fetch a URL from the Wayback Machine. The "2/" prefix returns the
  * original (un-Wayback-toolbar-ed) version. Returns null if the URL
  * isn't archived.
+ *
+ * Exported for the 404 auto-fallback in content.ts (unsloth adoption):
+ * archival retrieval of a dead page reuses this same seam instead of
+ * growing a second Wayback fetcher.
  */
-async function tryArchiveOrgFetch(
+export async function tryArchiveOrgFetch(
 	url: string,
 	_opts: { proxy?: string } = {},
 ): Promise<BypassFetchResult | null> {

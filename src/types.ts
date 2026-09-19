@@ -101,6 +101,11 @@ export interface PullResult {
 	rawHtml?: string;
 	/** HTTP validators captured from the raw response (issue #46). */
 	httpValidators?: { etag?: string; lastModified?: string };
+	/** True when this result was served from the session cache after a hard
+	 * network failure (stale-on-failure); staleDate is the YYYY-MM-DD the
+	 * cached copy was stored. */
+	stale?: boolean;
+	staleDate?: string;
 }
 
 export type ScrapeMode = "fast" | "fingerprint" | "browser" | "auto";

@@ -18,6 +18,7 @@ import {
 	extractDomain,
 	scoreAndRankResults,
 	buildResultBuckets,
+	canonicalizeUrl,
 	buildEngineStatusMap,
 	engineStatusNotes,
 	formatEngineLatency,
@@ -836,51 +837,27 @@ export function registerWebsearchTool(
 			}
 
 			const buckets = buildResultBuckets(httpResults, "http");
-			for (const r of googleResults) {
-				const list = buckets.get(r.url) || [];
-				list.push({
-					result: r,
-					engine: "google",
-					weight: ENGINE_WEIGHTS.google,
-				});
-				buckets.set(r.url, list);
-			}
-			for (const r of redditResults) {
-				const list = buckets.get(r.url) || [];
-				list.push({
-					result: r,
-					engine: "reddit",
-					weight: ENGINE_WEIGHTS.reddit,
-				});
-				buckets.set(r.url, list);
-			}
-			for (const r of tinyfishResults) {
-				const list = buckets.get(r.url) || [];
-				list.push({
-					result: r,
-					engine: "tinyfish",
-					weight: ENGINE_WEIGHTS.tinyfish,
-				});
-				buckets.set(r.url, list);
-			}
-			for (const r of firecrawlResults) {
-				const list = buckets.get(r.url) || [];
-				list.push({
-					result: r,
-					engine: "firecrawl",
-					weight: ENGINE_WEIGHTS.firecrawl,
-				});
-				buckets.set(r.url, list);
-			}
-			for (const r of parallelResults) {
-				const list = buckets.get(r.url) || [];
-				list.push({
-					result: r,
-					engine: "parallel",
-					weight: ENGINE_WEIGHTS.parallel,
-				});
-				buckets.set(r.url, list);
-			}
+			// Merge every provider's results into the same bucket keys the HTTP
+			// lane used. The key is canonicalized so tracking-param variants of
+			// one page corroborate across engines instead of splitting; the
+			// original URLs stay on the results for display/fetch.
+			const mergeIntoBuckets = (
+				results: SearchResult[],
+				engine: string,
+				weight: number,
+			): void => {
+				for (const r of results) {
+					const key = canonicalizeUrl(r.url);
+					const list = buckets.get(key) || [];
+					list.push({ result: r, engine, weight });
+					buckets.set(key, list);
+				}
+			};
+			mergeIntoBuckets(googleResults, "google", ENGINE_WEIGHTS.google);
+			mergeIntoBuckets(redditResults, "reddit", ENGINE_WEIGHTS.reddit);
+			mergeIntoBuckets(tinyfishResults, "tinyfish", ENGINE_WEIGHTS.tinyfish);
+			mergeIntoBuckets(firecrawlResults, "firecrawl", ENGINE_WEIGHTS.firecrawl);
+			mergeIntoBuckets(parallelResults, "parallel", ENGINE_WEIGHTS.parallel);
 
 			// Keep Reddit's count/status in the same engine map as the HTTP
 			// providers. This is the source of truth for notes and TUI output.
