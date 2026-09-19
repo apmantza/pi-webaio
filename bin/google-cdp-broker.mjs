@@ -19,6 +19,7 @@ import {
 import net from "node:net";
 import { platform, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { chromeProfileDir } from "./chrome-profile.mjs";
 import { fileURLToPath } from "node:url";
 import http from "node:http";
 import WebSocket from "ws";
@@ -168,7 +169,7 @@ function newCapability() {
 }
 
 export function brokerPaths(
-	profileDir = join(tmpdir(), "greedysearch-chrome-profile"),
+	profileDir = chromeProfileDir(),
 ) {
 	const profileKey = resolve(profileDir);
 	const hash = profileHash(

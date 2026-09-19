@@ -12,7 +12,7 @@ import {
 } from "./_cdp-shared.ts";
 import { existsSync } from "fs";
 import { join } from "path";
-import { tmpdir as osTmpdir } from "os";
+import { chromeProfileDir } from "../chrome-profile.ts";
 import { randomInt } from "crypto";
 
 /** Page navigation timeout */
@@ -246,8 +246,7 @@ export async function searchReddit(
 		return redditTimeoutResult(query, startTime);
 	// Quick liveness probe — confirm Chrome is actually responding
 	const portPath = join(
-		process.env.CDP_PROFILE_DIR ||
-			join(osTmpdir(), "greedysearch-chrome-profile"),
+		process.env.CDP_PROFILE_DIR || chromeProfileDir(),
 		"DevToolsActivePort",
 	);
 	if (!existsSync(portPath)) return null;

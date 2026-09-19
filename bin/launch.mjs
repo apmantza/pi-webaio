@@ -30,9 +30,10 @@ import {
 import http from "node:http";
 import { platform, tmpdir } from "node:os";
 import { join } from "node:path";
+import { chromeProfileDir } from "./chrome-profile.mjs";
 
 const PORT = 9222;
-const PROFILE_DIR = join(tmpdir(), "greedysearch-chrome-profile");
+const PROFILE_DIR = chromeProfileDir();
 const ACTIVE_PORT = join(PROFILE_DIR, "DevToolsActivePort");
 const PID_FILE = join(tmpdir(), "greedysearch-chrome.pid");
 const MODE_FILE = join(tmpdir(), "greedysearch-chrome-mode");

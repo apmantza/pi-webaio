@@ -4,7 +4,7 @@
 
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
-import { tmpdir as osTmpdir } from "os";
+import { chromeProfileDir } from "../chrome-profile.ts";
 import http from "http";
 
 /** CDP connection timeout */
@@ -13,8 +13,7 @@ const CDP_CONNECT_TIMEOUT_MS = 5_000;
 /** Resolve the WebSocket URL for the dedicated Chrome instance. */
 export function getCdpWsUrl(): string {
 	const profileDir =
-		process.env.CDP_PROFILE_DIR ||
-		join(osTmpdir(), "greedysearch-chrome-profile");
+		process.env.CDP_PROFILE_DIR || chromeProfileDir();
 	const p = join(profileDir, "DevToolsActivePort");
 	if (!existsSync(p)) {
 		throw new Error(
@@ -28,8 +27,7 @@ export function getCdpWsUrl(): string {
 /** Quick liveness probe — returns true if Chrome responds on the port. */
 export async function cdpIsAvailable(portPath?: string): Promise<boolean> {
 	const profileDir =
-		process.env.CDP_PROFILE_DIR ||
-		join(osTmpdir(), "greedysearch-chrome-profile");
+		process.env.CDP_PROFILE_DIR || chromeProfileDir();
 	const p = portPath || join(profileDir, "DevToolsActivePort");
 	if (!existsSync(p)) return false;
 

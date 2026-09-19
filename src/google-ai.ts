@@ -9,7 +9,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join, resolve as resolvePathname } from "node:path";
 import { pathToFileURL } from "node:url";
 import { debug } from "./debug.ts";
@@ -18,6 +17,7 @@ import {
 	redactSecrets,
 	scrubBrokerEnvelopeValue,
 } from "./redact.ts";
+import { chromeProfileDir } from "./chrome-profile.ts";
 
 // ─── Paths ───────────────────────────────────────────────────────────
 
@@ -2373,7 +2373,7 @@ export async function googleAISearch(
 	if (short) args.push("--short");
 	if (locale) args.push("--locale", locale);
 
-	const greedyProfileDir = `${tmpdir().replace(/\\/g, "/")}/greedysearch-chrome-profile`;
+	const greedyProfileDir = chromeProfileDir().replace(/\\/g, "/");
 	const result = await runNodeChild(args, {
 		env: {
 			...process.env,
@@ -2433,7 +2433,7 @@ async function runLegacyGoogleSearch(
 		);
 	}
 
-	const greedyProfileDir = `${tmpdir().replace(/\\/g, "/")}/greedysearch-chrome-profile`;
+	const greedyProfileDir = chromeProfileDir().replace(/\\/g, "/");
 	const result = await runNodeChild(
 		[extractorBin, query, "--max", String(maxResults)],
 		{
@@ -2532,8 +2532,7 @@ export async function googleSearchWithDependencies(
 	}
 
 	const profileDir =
-		dependencies.brokerProfileDir ??
-		`${tmpdir().replace(/\\/g, "/")}/greedysearch-chrome-profile`;
+		dependencies.brokerProfileDir ?? chromeProfileDir();
 	const brokerState = brokerStateForProfile(profileDir);
 	const usesManagedBroker = !dependencies.connectBroker;
 	const ensure = dependencies.ensureChrome ?? ensureChrome;
@@ -3183,7 +3182,7 @@ export async function summarizeUrl(
 		? `The user searched for: "${context}". Give a concise summary of this page focusing on the user's search topic (use bullet points, ~500 tokens max): ${url}`
 		: `Give a concise summary (~500 tokens max, use bullet points) of this page: ${url}`;
 
-	const greedyProfileDir = `${tmpdir().replace(/\\/g, "/")}/greedysearch-chrome-profile`;
+	const greedyProfileDir = chromeProfileDir().replace(/\\/g, "/");
 	const result = await runNodeChild([extractorBin, query], {
 		env: {
 			...process.env,
