@@ -4,7 +4,7 @@
 
 pi-webaio is an **all-in-one web tools extension** for [pi](https://pi.dev) (the coding agent) that provides search, fetch, crawl, extraction, discovery, storage, compilation, RAG chunking, query-focused answer mode, offline corpus search, single-round research bundles, phase-aware error handling, TUI rendering, and (v0.4.1+) opt-in paywall bypass capabilities via 8 tools: `aio-websearch`, `aio-webfetch`, `aio-webcontent`, `aio-webresult`, `aio-webmap`, `aio-webpull`, `aio-webquery`, and `aio-webresearch`. It's published as `npm:pi-webaio` and installable via `pi install npm:pi-webaio`. The same eight tools are also exposed to non-pi MCP clients (Claude Code, Claude Desktop, etc.) through a stdio MCP server (`bin/pi-webaio-mcp.mjs`, `src/mcp-server.ts`).
 
-**Current version: 0.9.0** — Context7 + DeepWiki verticals (21 built-in extractors), multi-source **cited** answer mode (`urls`+`query`), outline mode + frugal default preview, opt-in AI summarization, compact search, per-engine search status/latency + ~4.5s deadline, Google-lane 3s cap, shared warm browser pool, lazy Jina extraction, CSS-cruft stripping (incl. `@media`) + heading-detection fallback, source trust-tier grading, content-hash dedup + `aio-webcontent` diff, local-knowledge pre-check, plus the SSRF/secret-redaction hardening from 0.7.3. 1515 tests / 66 wired suites.
+**Current version: 0.9.0** — Context7 + DeepWiki verticals (21 built-in extractors), multi-source **cited** answer mode (`urls`+`query`), outline mode + frugal default preview, opt-in AI summarization, compact search, per-engine search status/latency + ~4.5s deadline, Google-lane 3s cap, shared warm browser pool, lazy Jina extraction, CSS-cruft stripping (incl. `@media`) + heading-detection fallback, source trust-tier grading, content-hash dedup + `aio-webcontent` diff, local-knowledge pre-check, plus the SSRF/secret-redaction hardening from 0.7.3. 1518 tests / 67 wired suites.
 
 > **Internal-docs policy:** research / audit / inspiration notes — `docs/inspirations*.md`, `docs/pagemap-inspiration.md`, `docs/observability-gaps.md`, `docs/perf-improvements.md`, and root-level `inspiration7.md` — are **local-only working artifacts**. They are gitignored and must **never** be committed or shipped. Only user-facing docs (`README.md`, `docs/{features,tools,usage,architecture,custom-verticals,mcp}.md`) plus `ROADMAP.md` / `CHANGELOG.md` / `AGENTS.md` belong in the repo. When auditing or surveying, write findings to these local files, not to tracked docs.
 
@@ -68,6 +68,7 @@ pi-webaio/
 │   ├── webfetch-api.ts       ← Browser-free static fetch + local extraction engine behind the `pi-webaio/webfetch` entrypoint (DNS-pinned redirects, byte budget, cancellation, shared error taxonomy)
 │   ├── webfetch.ts           ← Public `pi-webaio/webfetch` surface: re-exports fetch/fetchPage + the shared FetchError types
 │   ├── debug.ts              ← Central PI_WEBAIO_DEBUG-gated debug() helper (stderr, MCP-safe) + strategy/cache/search tracing (post-0.7.3)
+│   ├── crash-guard.ts        ← Last-resort process guard (unhandledRejection/uncaughtException): bounded records, never exits (#125)
 │   ├── webquery-index.ts     ← BM25 index builder/loader for the aio-webpull corpus (v0.7.0)
 │   ├── hooks.ts              ← User lifecycle hooks (afterFetch/afterExtract) loaded from ~/.pi/agent/webaio/hooks/ (v0.7.2)
 │   ├── mcp-server.ts         ← MCP stdio server adapter exposing all 8 tools to non-pi clients (v0.7.0)
@@ -480,7 +481,7 @@ TUI result rendering for all tools; phase-aware FetchError system; `format` para
 ## Testing
 
 - `npm test` → runs unit tests (`tests/unit.test.mjs`, 156 tests)
-- `npm run test:all` → runs all 65 wired suites (1515 tests total, 0 fail, 3 expected skips: a live-network Jina test that skips on external HTTP 403, and opt-in live TLS tests)
+- `npm run test:all` → runs all 67 wired suites (1518 tests total, 0 fail, 3 expected skips: a live-network Jina test that skips on external HTTP 403, and opt-in live TLS tests)
 - `npm run test:webfetch-api` → static fetch API suite (`tests/static-webfetch-api.test.mjs`, 41 tests:
 - `npm run test:parallel` → offline Parallel Search & Extract unit suite (`tests/parallel.test.mjs`, 33 tests: key resolution, request-shape, parsing, rate-limit cooldown, error handling) SSRF pinning per hop, byte budgets, cancellation, redaction, shared error taxonomy, shared-helper guards)
 - `npm run test:webfetch-package` → packs the tarball, installs it into an isolated consumer with peers and Playwright removed, and verifies `pi-webaio/webfetch` loads with no leaked handles and no disk writes

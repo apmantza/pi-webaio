@@ -17,6 +17,12 @@ import {
 
 import { initRuntime, listTools, runToolFull } from "./sdk.ts";
 import { redactSecrets } from "./redact.ts";
+import { installCrashGuard } from "./crash-guard.ts";
+
+// Same last-resort net as the pi extension entry (issue #125): the MCP server
+// is a long-lived host process whose tool lanes also settle in the
+// background; a stray late rejection must not terminate it mid-session.
+installCrashGuard();
 
 // ─── Tool runtime ───────────────────────────────────────────────────────────
 // The MCP adapter is a thin JSON-RPC wrapper over the shared SDK runtime
