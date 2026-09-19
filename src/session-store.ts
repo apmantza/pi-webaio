@@ -103,6 +103,31 @@ export function peekStoredContent(url: string): StoredContent | null {
 	return sessionStore.get(key) ?? null;
 }
 
+/**
+ * Shared lazy-load path for stored entries: pull content from disk when the
+ * in-memory entry has only a filePath, and backfill the content hash (F6).
+ * Returns null when the entry is unreadable.
+ */
+function loadStoredEntry(url: string, entry: StoredContent): StoredContent | null {
+	if (!entry.content && entry.filePath) {
+		try {
+			const raw = readFileSync(entry.filePath, "utf8");
+			entry.content = stripFrontmatter(raw);
+		} catch {
+			debug("cache", `miss (disk read failed): ${url}`);
+			sessionStore.delete(normalizeCacheKey(url));
+			return null;
+		}
+	}
+	// F6: backfill the content hash for entries loaded from disk (or stored
+	// before hashing existed) so dedup/diff work uniformly.
+	if (entry.content && !entry.contentHash) {
+		entry.contentHash = hashContent(entry.content);
+	}
+	debug("cache", `hit: ${url}`);
+	return entry;
+}
+
 export function getStoredContent(url: string): StoredContent | null {
 	const key = normalizeCacheKey(url);
 	const entry = sessionStore.get(key);
@@ -115,24 +140,22 @@ export function getStoredContent(url: string): StoredContent | null {
 		sessionStore.delete(key);
 		return null;
 	}
-	// Lazy-load content from disk if entry has a filePath but no content loaded yet.
-	if (!entry.content && entry.filePath) {
-		try {
-			const raw = readFileSync(entry.filePath, "utf8");
-			entry.content = stripFrontmatter(raw);
-		} catch {
-			debug("cache", `miss (disk read failed): ${url}`);
-			sessionStore.delete(key);
-			return null;
-		}
+	return loadStoredEntry(url, entry);
+}
+
+/**
+ * Like getStoredContent but without the TTL: serves the last copy however
+ * old, for the stale-on-failure path (a page that no longer fetches is
+ * exactly the case where the cached copy is old). Does not evict expired
+ * entries — reading must not destroy the fallback copy.
+ */
+export function getStoredContentAnyAge(url: string): StoredContent | null {
+	const entry = sessionStore.get(normalizeCacheKey(url));
+	if (!entry) {
+		debug("cache", `stale-lookup miss (no entry): ${url}`);
+		return null;
 	}
-	// F6: backfill the content hash for entries loaded from disk (or stored
-	// before hashing existed) so dedup/diff work uniformly.
-	if (entry.content && !entry.contentHash) {
-		entry.contentHash = hashContent(entry.content);
-	}
-	debug("cache", `hit: ${url}`);
-	return entry;
+	return loadStoredEntry(url, entry);
 }
 
 export function storeContent(

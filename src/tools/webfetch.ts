@@ -653,6 +653,10 @@ export interface FetchTextParts {
 	title?: string;
 	url?: string;
 	format: string;
+	/** Provenance metadata — rendered only when the page provides it. */
+	author?: string;
+	published?: string;
+	site?: string;
 	responseId?: string;
 	/**
 	 * UX5: whether to print a standalone `Response ID:` line. Defaults to
@@ -680,6 +684,11 @@ export function composeFetchText(parts: FetchTextParts): string {
 		`URL: ${parts.url}`,
 		`Format: ${parts.format}`,
 	];
+	// Provenance block: the extraction pipeline fills these from meta tags
+	// when the page provides them; absent fields render nothing at all.
+	if (parts.author) lines.push(`Author: ${parts.author}`);
+	if (parts.published) lines.push(`Published: ${parts.published}`);
+	if (parts.site) lines.push(`Site: ${parts.site}`);
 	if (parts.showResponseId && parts.responseId) {
 		lines.push(`Response ID: ${parts.responseId}`);
 	}
@@ -1420,6 +1429,9 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 									ok: true,
 									url: result.url!,
 									title: result.title || url.pathname,
+									author: result.author,
+									published: result.published,
+									site: result.site,
 									outPath,
 									length: diffText.length,
 									responseId,
@@ -1440,6 +1452,9 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 								ok: true,
 								url: result.url!,
 								title: result.title || url.pathname,
+								author: result.author,
+								published: result.published,
+								site: result.site,
 								outPath,
 								length: formatted.contentLength,
 								responseId,
@@ -1706,23 +1721,25 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 								chunks,
 								params.overlapTokens ?? DEFAULT_OVERLAP_TOKENS,
 							);
-							const text = [
+							// Same composition seam as the default path (one header
+							// block, one metadata block) so the two cannot drift.
+							const text = composeFetchText({
 								formatLabel,
-								`\nTitle: ${r.title}`,
-								`URL: ${r.url}`,
-								`Format: ${itemFormat}`,
-								chunkFmt.header ? `\n${chunkFmt.header}` : "",
-								"\n---\n",
+								title: r.title,
+								url: r.url,
+								format: itemFormat,
+								author: r.author,
+								published: r.published,
+								site: r.site,
+								chunkHeader: chunkFmt.header || undefined,
 								displayContent,
-								chunkFmt.body
-									? ["\n\n---\n", `## Chunks (${chunks!.length})\n`, chunkFmt.body].join(
-											"\n",
-										)
-									: "",
-								chunkingErrors.length > 0
-									? `\n\n[WARN] Chunking failed: ${chunkingErrors.join("; ")}`
-									: "",
-							].join("\n");
+								chunkBody: chunkFmt.body || undefined,
+								chunkCount: chunks?.length,
+								warning:
+									chunkingErrors.length > 0
+										? `\n\n[WARN] Chunking failed: ${chunkingErrors.join("; ")}`
+										: undefined,
+							});
 							return {
 								content: [{ type: "text", text: text + localKnowledgeNote }],
 								details: {
@@ -1843,6 +1860,9 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 						title: r.title,
 						url: r.url,
 						format: itemFormat,
+						author: r.author,
+						published: r.published,
+						site: r.site,
 						responseId,
 						showResponseId: false,
 						chunkHeader: chunkFmt.header || undefined,

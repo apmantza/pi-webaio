@@ -12,6 +12,7 @@ import type { SearchResult } from "./types.ts";
 import { chunkMarkdown } from "./chunker.ts";
 import { createBM25Scorer } from "./bm25.ts";
 import { trustTierBoost, trustTierForSourceType } from "./source-trust.ts";
+import { canonicalizeUrl } from "./search.ts";
 import type { SourceType } from "./types.ts";
 
 // ─── Filesystem-safe naming ─────────────────────────────────────────────
@@ -177,30 +178,6 @@ export interface RankedSource {
 	score: number;
 	primary: boolean;
 }
-
-const _dedupeCache = new Map<string, string>();
-const _DEDUPE_CACHE_MAX = 512;
-
-function normalizeUrlForDedupe(url: string): string {
-	const cached = _dedupeCache.get(url);
-	if (cached !== undefined) return cached;
-	let normalized: string;
-	try {
-		const u = new URL(url);
-		u.hash = "";
-		const p = u.pathname.replace(/\/$/, "");
-		normalized = `${u.origin}${p}${u.search}`;
-	} catch {
-		normalized = url;
-	}
-	if (_dedupeCache.size >= _DEDUPE_CACHE_MAX) {
-		const oldest = _dedupeCache.keys().next().value as string | undefined;
-		if (oldest !== undefined) _dedupeCache.delete(oldest);
-	}
-	_dedupeCache.set(url, normalized);
-	return normalized;
-}
-
 /**
  * Merge per-sub-query search results into a single deduped, ranked list.
  * Ranking combines reciprocal rank (1/position) across all sub-queries a
@@ -228,7 +205,7 @@ export function rankSources(
 	for (const { query, results } of perQuery) {
 		results.forEach((r, i) => {
 			const rank = i + 1;
-			const key = normalizeUrlForDedupe(r.url);
+			const key = canonicalizeUrl(r.url);
 			let acc = byKey.get(key);
 			if (!acc) {
 				acc = {

@@ -1,6 +1,13 @@
 import { recordStartupTiming } from "./src/startup-timing.ts";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerLazyTools } from "./src/tools/lazy.ts";
+import { installCrashGuard } from "./src/crash-guard.ts";
+
+// Issue #125: a promise that rejects after its caller detached (e.g. a
+// background search lane timing out) or a throw inside a timer/listener must
+// never kill the host agent. Installed before any tool can run; bounded
+// observability contract in src/crash-guard.ts.
+installCrashGuard();
 
 /**
  * pi-webaio's entry point stays deliberately small. Fetching, extraction,

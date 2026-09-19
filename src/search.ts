@@ -859,11 +859,69 @@ export function buildResultBuckets(
 	const buckets = new Map<string, EngineSource[]>();
 	const weight = ENGINE_WEIGHTS[engine] || 1;
 	for (const r of results) {
-		const list = buckets.get(r.url) || [];
+		const key = canonicalizeUrl(r.url);
+		const list = buckets.get(key) || [];
 		list.push({ result: r, engine, weight });
-		buckets.set(r.url, list);
+		buckets.set(key, list);
 	}
 	return buckets;
+}
+
+// ─── URL canonicalization (dedup key only) ─────────────────────────
+//
+// Cross-engine corroboration is counted per bucket key. Keying on the raw
+// URL string diluted that signal: `example.com/a?utm_source=x` from DDG and
+// `example.com/a` from Brave scored as two results. canonicalizeUrl strips
+// what tracking injects (utm_*/click ids), fragments, host case, default
+// ports and trailing slashes, and re-serializes params in sorted order so
+// two engines' variants of one page share a bucket. Display and fetch
+// always use the ORIGINAL url — this function is only ever a dedup key.
+
+/** Query params injected by trackers — dropped from the canonical form. */
+const TRACKING_PARAM_PREFIXES = ["utm_"];
+const TRACKING_PARAM_NAMES = new Set([
+	"fbclid",
+	"gclid",
+	"dclid",
+	"msclkid",
+	"twclid",
+	"mc_eid",
+	"igshid",
+	"_hsenc",
+	"_hsmi",
+	"vero_id",
+	"wbraid",
+	"gbraid",
+	"yclid",
+]);
+
+export function canonicalizeUrl(url: string): string {
+	const trimmed = url.trim();
+	let u: URL;
+	try {
+		u = new URL(trimmed);
+	} catch {
+		// Fail open: an unparseable URL becomes its own key, same as before.
+		return trimmed;
+	}
+	if (u.protocol !== "http:" && u.protocol !== "https:") return trimmed;
+	// Drop tracking params, then sort the rest so order is irrelevant.
+	const params = [...u.searchParams.entries()].filter(
+		([name]) =>
+			!TRACKING_PARAM_NAMES.has(name.toLowerCase()) &&
+			!TRACKING_PARAM_PREFIXES.some((p) => name.toLowerCase().startsWith(p)),
+	);
+	params.sort(([a], [b]) => {
+		if (a === b) return 0;
+		if (a < b) return -1;
+		return 1;
+	});
+	const search = params.length
+		? `?${new URLSearchParams(params).toString()}`
+		: "";
+	// Collapse trailing slashes off the path (keep the root "/" itself).
+	const path = u.pathname.replace(/\/+$/, "") || "/";
+	return `${u.protocol}//${u.host.toLowerCase()}${path}${search}`;
 }
 
 // ─── Per-engine status (observability P2/P5) ───────────────────────

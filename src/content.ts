@@ -22,17 +22,22 @@ import {
 	stripPaywallText,
 	findStrategy,
 	isKnownPaywallSite,
+	tryArchiveOrgFetch,
 } from "./paywall.ts";
 import { detectPromptInjection, applyInjectionAction } from "./injection.ts";
 import { compressHtml } from "./html-compress.ts";
 import { extractClientSideRedirect } from "./client-redirect.ts";
 import { cleanText, isJsonContentType, isLikelyJsonBody } from "./http-text.ts";
 import { isDangerousUrl, scanForSecrets } from "./security.ts";
-import { BASE_TEMP } from "./session-store.ts";
+import { BASE_TEMP, getStoredContentAnyAge } from "./session-store.ts";
 import { loadPdfParseCtor } from "./types.ts";
 import type { PullResult, FetchOpts, FetchErrorInfo } from "./types.ts";
 import { formatErrorInfo } from "./types.ts";
-import { createFetchError } from "./tools/fetch-error.ts";
+import {
+	createFetchError,
+	fetchErrorCategory,
+	type FetchError,
+} from "./tools/fetch-error.ts";
 
 // ─── Constants ─────────────────────────────────────────────────────
 
@@ -927,6 +932,62 @@ async function runLocalExtraction(
 
 // ─── Pull page (full fetch + pipeline) ─────────────────────────────
 
+// ─── Wayback snapshot metadata ─────────────────────────────────────
+
+/**
+ * Extract the snapshot date (YYYY-MM-DD) from a Wayback Machine final URL
+ * like `https://web.archive.org/web/20240115123456/https://example.com/a`.
+ * Returns null when the URL carries no timestamp (e.g. the bare `2/` form)
+ * or is not a wayback URL at all.
+ */
+export function waybackSnapshotDate(finalUrl: string | undefined): string | null {
+	if (!finalUrl) return null;
+	const m = finalUrl.match(/web\.archive\.org\/web\/(\d{4})(\d{2})(\d{2})/);
+	if (!m) return null;
+	return `${m[1]}-${m[2]}-${m[3]}`;
+}
+
+// ─── Stale-cache serving (unsloth adoption) ────────────────────────
+
+/**
+ * Serve the last-good cached copy after a hard network failure.
+ *
+ * Eligibility is deliberately narrow: network-category failures (dns,
+ * connect, tls, timeout, download) plus 5xx http_error and rate limits —
+ * the cases where the origin is unreachable or broken and an old copy is
+ * better than nothing. NEVER served for validation/blocked failures
+ * (blocked_ssrf, blocked_secret, private_ip, paywall, bot blocks) — stale
+ * content must not mask a security block — and never for `aborted`, which
+ * is the user cancelling, not the network failing. 4xx failures are the
+ * origin making a statement about the resource, not transport trouble.
+ * Unknown codes fail closed (no stale serving).
+ */
+export function serveStaleIfAvailable(
+	url: string,
+	failure: FetchError | { code: import("./tools/fetch-error.ts").FetchErrorCode; statusCode?: number },
+): PullResult | null {
+	const code = failure.code;
+	if (code === "aborted") return null;
+	const category = fetchErrorCategory(code);
+	const statusCode = failure.statusCode;
+	const eligible =
+		category === "network" ||
+		code === "rate_limited" ||
+		(code === "http_error" && (statusCode ?? 0) >= 500);
+	if (!eligible) return null;
+	const entry = getStoredContentAnyAge(url);
+	if (!entry?.content) return null;
+	const staleDate = new Date(entry.timestamp).toISOString().slice(0, 10);
+	const notice = `> 📼 STALE cache from ${staleDate} — live fetch failed (${code}${statusCode ? `, HTTP ${statusCode}` : ""}); showing the last good copy.`;
+	return {
+		ok: true,
+		url,
+		content: `${notice}\n\n${entry.content}`,
+		stale: true,
+		staleDate,
+	};
+}
+
 async function pullPage(
 	url: string,
 	opts?: FetchOpts,
@@ -1050,6 +1111,8 @@ async function pullPage(
 			fetchError,
 		};
 	}
+	let waybackText: string | undefined;
+	let waybackFinalUrl: string | undefined;
 	if (res.status >= 400) {
 		const snippet4096 = res.text.slice(0, 4096).toLowerCase();
 		const isCf403 =
@@ -1072,41 +1135,65 @@ async function pullPage(
 				res = cfRes;
 			}
 		}
-		const httpInfo: FetchErrorInfo = {
-			message: `Server responded with HTTP ${res.status}`,
-			code: "http_error",
-			phase: "loading",
-			retryable: res.status >= 500 || res.status === 429,
-			statusCode: res.status,
-		};
-		const fetchError = createFetchError("http_error", httpInfo.message, {
-			url,
-			finalUrl: res.url,
-			phase: "headers",
-			statusCode: res.status,
-			mimeType: res.headers.get("content-type") ?? undefined,
-			downloadedBytes: res.downloadedBytes,
-			contentLength: res.contentLength ?? undefined,
-			elapsedMs: res.elapsedMs,
-			mode: opts?.mode,
-		});
-		return {
-			ok: false,
-			url,
-			error: formatErrorInfo(httpInfo),
-			errorInfo: httpInfo,
-			fetchError,
-		};
+		// 404 → Wayback auto-fallback (unsloth adoption). Archival retrieval
+		// of a dead page — legitimate fallback, distinct from the opt-in
+		// paywall bypass chain. Runs after the Cloudflare retry (which may
+		// still rescue the original) and before the error return.
+		let waybackNotice: string | undefined;
+		if (res.status === 404) {
+			const archived = await tryArchiveOrgFetch(url, { proxy: opts?.proxy });
+			if (archived?.text) {
+				const snapshotDate = waybackSnapshotDate(archived.finalUrl);
+				waybackNotice = `> 📼 Served from the Wayback Machine${snapshotDate ? ` (snapshot ${snapshotDate})` : ""} — the original returned HTTP 404.`;
+				waybackText = archived.text;
+				waybackFinalUrl = archived.finalUrl;
+				redirectNotice = waybackNotice + (redirectNotice ? `\n\n${redirectNotice}` : "");
+			}
+		}
+		// The error is returned only when the response is still failed AND the
+		// Wayback fallback did not rescue it. The status re-check also fixes
+		// the cf403-retry flow: a cleared challenge used to fall through to
+		// "Server responded with HTTP 200" as an error, discarding the body.
+		if (res.status >= 400 && !waybackNotice) {
+			const httpInfo: FetchErrorInfo = {
+				message: `Server responded with HTTP ${res.status}`,
+				code: "http_error",
+				phase: "loading",
+				retryable: res.status >= 500 || res.status === 429,
+				statusCode: res.status,
+			};
+			const fetchError = createFetchError("http_error", httpInfo.message, {
+				url,
+				finalUrl: res.url,
+				phase: "headers",
+				statusCode: res.status,
+				mimeType: res.headers.get("content-type") ?? undefined,
+				downloadedBytes: res.downloadedBytes,
+				contentLength: res.contentLength ?? undefined,
+				elapsedMs: res.elapsedMs,
+				mode: opts?.mode,
+			});
+			return {
+				ok: false,
+				url,
+				error: formatErrorInfo(httpInfo),
+				errorInfo: httpInfo,
+				fetchError,
+			};
+		}
 	}
 
-	const text = res.text;
-	const finalUrl = res.url;
-	const ct = res.headers.get("content-type") ?? "";
+	const text = waybackText ?? res.text;
+	const finalUrl = waybackFinalUrl ?? res.url;
+	const ct = waybackText ? "text/html" : (res.headers.get("content-type") ?? "");
 
+	// The cross-host redirect check is skipped for Wayback results: the
+	// wayback notice already explains the web.archive.org provenance, and
+	// the redirect warning would both mislead and overwrite it.
 	try {
 		const origHost = new URL(url).hostname;
 		const finalHost = new URL(finalUrl).hostname;
-		if (origHost !== finalHost) {
+		if (origHost !== finalHost && !waybackText) {
 			redirectNotice = `> ⚠️ Cross-host redirect detected: \`${url}\` → \`${finalUrl}\``;
 		}
 	} catch {
@@ -1174,7 +1261,7 @@ async function pullPage(
 
 // ─── Enhanced pull page with verticals, bot detection, modes ─------
 
-export async function pullPageEnhanced(
+async function pullPageEnhancedInner(
 	url: string,
 	opts?: FetchOpts,
 	_redirectCount = 0,
@@ -1427,4 +1514,27 @@ export async function pullPageEnhanced(
 	}
 
 	return runAfterExtractHooks(url, await pullPage(url, opts, _redirectCount));
+}
+
+/**
+ * Stale-on-failure wrapper (unsloth adoption): when the full pipeline fails
+ * with a hard network error and the session store holds a copy of the page,
+ * degrade to the cached content (clearly marked) instead of a bare error.
+ * Only the rich fetchError taxonomy drives eligibility — errorInfo-only
+ * failures (vertical extractor errors, bot blocks) stay hard. Validation and
+ * block failures never serve stale (see serveStaleIfAvailable). The cached
+ * body was already finalizePullResult-wrapped (UNTRUSTED markers, injection
+ * action) when first fetched, so it is served back as stored — no re-wrap.
+ */
+export async function pullPageEnhanced(
+	url: string,
+	opts?: FetchOpts,
+	_redirectCount = 0,
+): Promise<PullResult> {
+	const result = await pullPageEnhancedInner(url, opts, _redirectCount);
+	if (!result.ok && result.fetchError) {
+		const stale = serveStaleIfAvailable(url, result.fetchError);
+		if (stale) return runAfterExtractHooks(url, stale);
+	}
+	return result;
 }
