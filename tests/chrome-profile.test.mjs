@@ -15,7 +15,7 @@
 // PI_WEBAIO_CHROME_PROFILE_DIR identically: unset/blank → tmpdir default
 // (exact legacy behavior), absolute → honored, relative/garbage → throw.
 import assert from "node:assert/strict";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
@@ -74,12 +74,38 @@ test("relative or garbage override fails closed with a clear error", () => {
 	}
 });
 
+test("tilde override expands to the home directory (shell-independent)", () => {
+	const home = homedir();
+	for (const [name, resolve] of RESOLVERS) {
+		assert.equal(resolve({ [BIN_ENV_NAME]: "~" }), home, `${name}: bare ~`);
+		assert.equal(
+			resolve({ [BIN_ENV_NAME]: "~/.cache/chrome" }),
+			join(home, ".cache/chrome"),
+			`${name}: ~/path`,
+		);
+		assert.equal(
+			resolve({ [BIN_ENV_NAME]: "~\\win-style" }),
+			join(home, "win-style"),
+			`${name}: ~\\path`,
+		);
+		// ~user expansion is NOT supported — stays a relative path -> rejected.
+		assert.throws(
+			() => resolve({ [BIN_ENV_NAME]: "~otheruser/x" }),
+			undefined,
+			`${name}: ~user must not expand`,
+		);
+	}
+});
+
 test("parity: both implementations agree on every scenario", () => {
-	const scenarios = [
+const scenarios = [
 		{},
 		{ [BIN_ENV_NAME]: "" },
 		{ [BIN_ENV_NAME]: "   " },
 		{ [BIN_ENV_NAME]: join(tmpdir(), "parity-profile") },
+		{ [BIN_ENV_NAME]: "~" },
+		{ [BIN_ENV_NAME]: "~/.cache/parity" },
+		{ [BIN_ENV_NAME]: "~otheruser/x" },
 	];
 	for (const env of scenarios) {
 		const bin = (() => {
