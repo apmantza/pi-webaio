@@ -90,6 +90,64 @@ function wrapUntrusted(inner: string): string {
 	return `[UNTRUSTED WEB CONTENT START]\n${inner}\n[UNTRUSTED WEB CONTENT END]`;
 }
 
+// ─── Visible-width guards (TUI crash: "Rendered line exceeds width") ────
+//
+// pi's Markdown wrapper measures lines by code points, while the host
+// validator measures VISIBLE width — East Asian wide glyphs count 2
+// columns. A generated line with wide glyphs whose code-point length fits
+// the terminal renders wider than the terminal and hard-crashes the host
+// TUI (observed: cited-answer header echoing a CJK-mixed query, 206 > 205
+// at terminal width 205). Every line this composer generates is therefore
+// capped at MAX_GENERATED_VISIBLE_COLUMNS, CJK-aware. Static ASCII lines
+// never need the cap: code-point length equals visible width there, so
+// pi's wrap handles them correctly at any width.
+
+/** Generated lines never exceed this many visible columns. */
+const MAX_GENERATED_VISIBLE_COLUMNS = 76;
+
+function wideCharColumns(cp: number): number {
+	const wide =
+		(cp >= 0x1100 && cp <= 0x115f) || // Hangul Jamo
+		(cp >= 0x2e80 && cp <= 0xa4cf) || // CJK Radicals .. Yi
+		(cp >= 0xac00 && cp <= 0xd7a3) || // Hangul syllables
+		(cp >= 0xf900 && cp <= 0xfaff) || // CJK Compatibility Ideographs
+		(cp >= 0xfe30 && cp <= 0xfe4f) || // CJK Compatibility Forms
+		(cp >= 0xff00 && cp <= 0xff60) || // Fullwidth Forms
+		(cp >= 0xffe0 && cp <= 0xffe6) || // Fullwidth signs
+		(cp >= 0x20000 && cp <= 0x3fffd); // CJK Extension B+
+	return wide ? 2 : 1;
+}
+
+/** ANSI-stripped, CJK-aware visible width (wide glyphs count 2 columns). */
+export function visibleWidth(text: string): number {
+	// eslint-disable-next-line no-control-regex
+	const plain = text.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "");
+	let width = 0;
+	for (const ch of plain) width += wideCharColumns(ch.codePointAt(0) ?? 0);
+	return width;
+}
+
+/**
+ * Truncate to `max` visible columns (CJK-aware), appending an ellipsis when
+ * cut. Pass-through when the text already fits.
+ */
+export function truncateVisible(
+	text: string,
+	max: number = MAX_GENERATED_VISIBLE_COLUMNS,
+): string {
+	if (visibleWidth(text) <= max) return text;
+	let width = 0;
+	let out = "";
+	for (const ch of text) {
+		const w = wideCharColumns(ch.codePointAt(0) ?? 0);
+		// Reserve one column for the ellipsis.
+		if (width + w > max - 1) return `${out}…`;
+		out += ch;
+		width += w;
+	}
+	return `${out}…`;
+}
+
 /**
  * Strip the fetch pipeline's leading frontmatter + safety markers so chunk
  * text is clean supporting prose. Pure.
@@ -191,7 +249,11 @@ export function formatMultiSourceAnswer(
 ): string {
 	const wrap = opts.wrap ?? true;
 	if (ranked.length === 0) {
-		const empty = `Multi-source answer mode: no relevant chunks found across the fetched sources for "${query}". Full content for every page is cached — retrieve any page via aio-webcontent by URL.`;
+		const empty =
+			truncateVisible(
+				`Multi-source answer mode: no relevant chunks found for "${query}".`,
+			) +
+			"\nFull content for every page is cached — retrieve any page via aio-webcontent by URL.";
 		return wrap ? wrapUntrusted(empty) : empty;
 	}
 
@@ -199,8 +261,13 @@ export function formatMultiSourceAnswer(
 		opts.sourcesCount ?? new Set(ranked.map((r) => r.url)).size;
 
 	const blocks = ranked.map((r, i) => {
-		const heading = r.heading ? r.heading : "(no heading)";
-		const titleLine = r.title ? `\nTitle: ${r.title}` : "";
+		// Heading/title echo site-controlled text and may contain wide glyphs —
+		// budget them so the assembled lines stay within the cap (the
+		// "**[i] …** (score x)" and "Title: " scaffolding is ASCII and short).
+		const heading = truncateVisible(r.heading ? r.heading : "(no heading)", 50);
+		const titleLine = r.title
+			? `\nTitle: ${truncateVisible(r.title, 66)}`
+			: "";
 		return (
 			`**[${i + 1}] ${heading}** (score ${r.score})\n` +
 			`Source: ${r.url}${titleLine}\n\n` +
@@ -208,12 +275,21 @@ export function formatMultiSourceAnswer(
 		);
 	});
 
-	const inner =
+	// Two-line header: the first line embeds the raw query (site/user
+	// controlled, may contain wide glyphs) and is hard-capped; the verify
+	// note is static ASCII on ITS OWN line — mixing the two would put wide
+	// glyphs and a long ASCII tail on one line, which still crashes the
+	// host validator at widths between the line's code-point length and its
+	// visible width.
+	const header = truncateVisible(
 		`Cited answer: top ${ranked.length} chunk(s) across ${sourcesCount} ` +
-		`source(s) for "${query}". Each block is verbatim supporting text labeled ` +
-		`with its source URL — verify against that source.\n\n` +
+			`source(s) for "${query}"`,
+	);
+	const inner =
+		`${header}\n` +
+		`Each block is verbatim supporting text labeled with its source URL — verify against that source.\n\n` +
 		blocks.join("\n\n---\n\n") +
-		`\n\n---\n_Full content for every source is cached — retrieve any page in full via aio-webcontent by URL._`;
+		`\n\n---\n_Full content cached for every source — retrieve it via aio-webcontent._`;
 
 	return wrap ? wrapUntrusted(inner) : inner;
 }
