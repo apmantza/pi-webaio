@@ -10,6 +10,8 @@ All notable changes to pi-webaio will be documented in this file.
 
 ### Fixed
 
+- **TUI crash on CJK-mixed generated lines** (`src/multi-answer.ts`, `src/tools/webfetch.ts`) — pi's Markdown wrapper measures lines by code points while its host validator measures visible width (East Asian wide glyphs count 2 columns), so a generated line with wide glyphs whose code-point length fit the terminal rendered wider than the terminal and hard-crashed the host TUI (observed: `Rendered line 6034 exceeds terminal width (206 > 205)` — the cited-answer header echoing a raw CJK-mixed query). The composer now caps every generated line that can contain wide glyphs at 76 visible columns via a CJK-aware `truncateVisible()`/`visibleWidth()` pair: the cited-answer header, per-block headings and titles, the no-results line, and the webfetch multi-source notice (query moved to its own capped line). Static ASCII lines are untouched — pi's code-point wrap is exact for them. Residual risk (upstream): verbatim article bodies with long CJK lines still route through pi-tui's Markdown wrap and can trip the same validator — that wrap under-measurement belongs upstream in pi-tui. 3 tests in `tests/multi-answer-width.test.mjs` incl. an independent visible-width oracle; mutation-verified (disabling the truncation cut redds with two quoted crash shapes).
+
 ## [1.0.7] - 2026-09-19
 
 ### Added

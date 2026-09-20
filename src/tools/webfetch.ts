@@ -32,6 +32,7 @@ import { createBM25Scorer } from "../bm25.ts";
 import {
 	formatMultiSourceAnswer,
 	rankChunksAcrossSources,
+	truncateVisible,
 } from "../multi-answer.ts";
 import {
 	extractOutline,
@@ -1956,11 +1957,17 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 						}
 						const displayContent = wrapUntrusted(inner);
 						const header = `Fetched ${okResults.length}/${targets.length} URLs.`;
+						// Query on its own CJK-capped line: the Markdown wrap path
+						// measures by code points while the host validator measures
+						// visible width — a CJK-mixed query inline in a long line
+						// crashed the host TUI (206 > 205).
 						const notice =
 							`\n[Multi-source answer mode: top ${ranked.length} cited chunk(s) across ` +
-							`${sources.length} sources for "${multiAnswerQuery}". Each chunk is labeled ` +
-							`with its source URL — verify against that source. Full content for every ` +
-							`page is cached — retrieve any page in full via aio-webcontent by URL.]`;
+							`${sources.length} sources.]` +
+							`\n[Query: "${truncateVisible(multiAnswerQuery, 64)}"]` +
+							`\n[Each chunk is labeled with its source URL — verify against that ` +
+							`source. Full content for every page is cached — retrieve any page ` +
+							`in full via aio-webcontent by URL.]`;
 						return {
 							content: [
 								{
