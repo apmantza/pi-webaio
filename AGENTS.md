@@ -1,5 +1,7 @@
 # pi-webaio — Agent Context
 
+Engineering principles: this project follows the project-neutral rules in https://github.com/apmantza/engineering-principles (PRINCIPLES.md); every agent harness on this machine carries a verbatim copy in its global instruction file. Read them first; this file adds only what is specific to this repository and wins on conflict.
+
 ## What is this?
 
 pi-webaio is an **all-in-one web tools extension** for [pi](https://pi.dev) (the coding agent) that provides search, fetch, crawl, extraction, discovery, storage, compilation, RAG chunking, query-focused answer mode, offline corpus search, single-round research bundles, phase-aware error handling, TUI rendering, and (v0.4.1+) opt-in paywall bypass capabilities via 8 tools: `aio-websearch`, `aio-webfetch`, `aio-webcontent`, `aio-webresult`, `aio-webmap`, `aio-webpull`, `aio-webquery`, and `aio-webresearch`. It's published as `npm:pi-webaio` and installable via `pi install npm:pi-webaio`. The same eight tools are also exposed to non-pi MCP clients (Claude Code, Claude Desktop, etc.) through a stdio MCP server (`bin/pi-webaio-mcp.mjs`, `src/mcp-server.ts`).
