@@ -22,3 +22,7 @@ docs/observability-gaps.md
 docs/perf-improvements.md
 inspiration7.md
 unsloth_webtools_inspiration.md
+
+# Generated compile trees from the tla/ verification workflow (tsc --outDir
+# tla/compiled...). Never commit these; the checker sources are the artifact.
+tla/compiled*/
