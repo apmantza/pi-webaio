@@ -6,7 +6,7 @@
 // Playwright launch even though a previous call already proved a
 // headless render works there.
 //
-// Keyed by origin + proxy + browser profile so cached cookies are never
+// Keyed by origin + proxy + browser + OS profile so cached cookies are never
 // replayed under the wrong network/browser identity (a cookie captured
 // via one proxy or fingerprint profile is not safe to inject under a
 // different one). Bounded (LRU) + short TTL (~10 min, matching the
@@ -46,7 +46,14 @@ export const MAX_COOKIE_CACHE_ENTRIES = 50;
 const cache = new Map<string, CacheEntry>();
 
 /**
- * Build the cache key for an origin under a given proxy + browser profile.
+ * Build the cache key for an origin under a given proxy + browser + OS profile.
+ *
+ * `os` is part of the identity, not decoration: src/fetch.ts threads both
+ * browser and os into buildHeaders(), and the UA string and
+ * `Sec-Ch-Ua-Platform` both vary with os. Omitting it let a render under one
+ * platform replay its cookies under another — the cross-identity replay this
+ * module exists to prevent (tla/CookieCache.tla).
+ *
  * Returns null if `url` fails to parse (callers should treat that as
  * "no cache available" rather than throwing).
  */
@@ -54,10 +61,11 @@ export function cookieCacheKey(
 	url: string,
 	proxy?: string | null,
 	browserProfile?: string | null,
+	osProfile?: string | null,
 ): string | null {
 	try {
 		const origin = new URL(url).origin;
-		return `${origin}|${proxy ?? ""}|${browserProfile ?? ""}`;
+		return `${origin}|${proxy ?? ""}|${browserProfile ?? ""}|${osProfile ?? ""}`;
 	} catch {
 		return null;
 	}

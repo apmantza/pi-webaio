@@ -44,6 +44,31 @@ test("cookieCacheKey: different proxy => different key (key isolation)", () => {
 	assert.notEqual(k1, k2);
 });
 
+test("cookieCacheKey: different OS profile => different key (TLA+ NoCrossIdentityReplay recurrence)", () => {
+	// Recurrence: the key covered origin+proxy+browser but not os, while
+	// src/fetch.ts shapes the request from BOTH (UA string and
+	// Sec-Ch-Ua-Platform vary with os via buildHeaders). A render harvested
+	// under one platform was therefore replayed under another — the
+	// cross-identity replay cookie-cache.ts's own contract forbids.
+	// Found by tla/CookieCache.tla.
+	clearCookieCache();
+	const win = cookieCacheKey("https://iso-os.test", undefined, "chrome_145", "windows");
+	const lin = cookieCacheKey("https://iso-os.test", undefined, "chrome_145", "linux");
+	assert.notEqual(win, lin, "os must isolate the key");
+
+	// The observable defect: a linux fetch must not receive windows-harvested cookies.
+	setCachedCookies(win, [{ name: "session", value: "harvested-under-windows" }]);
+	assert.equal(
+		getCachedCookies(lin),
+		null,
+		"cookies harvested under windows must not be replayed under linux",
+	);
+	// Same identity still hits.
+	assert.deepEqual(getCachedCookies(win), [
+		{ name: "session", value: "harvested-under-windows" },
+	]);
+});
+
 test("cookieCacheKey: different browser profile => different key (key isolation)", () => {
 	const k1 = cookieCacheKey("https://example.com", "proxy1", "chrome_145");
 	const k2 = cookieCacheKey("https://example.com", "proxy1", "firefox_147");

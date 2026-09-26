@@ -1090,6 +1090,7 @@ export async function smartFetch(
 		url,
 		options.proxy,
 		options.browser ?? DEFAULT_BROWSER,
+		options.os ?? DEFAULT_OS,
 	);
 
 	// Resolve the render pool once for every browser escalation below: an

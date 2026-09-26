@@ -138,7 +138,7 @@
     "test:bench": "node --experimental-strip-types --test tests/bench-harness.test.mjs",
     "test:search-render": "node --experimental-strip-types --test tests/search-render.test.mjs",
     "test:strategy-memory": "node --experimental-strip-types --test tests/strategy-memory.test.mjs",
-    "test:models": "node tla/check-queue-model.mjs && node tla/check-pool-model.mjs && node tla/check-strategy-model.mjs",
+    "test:models": "node tla/check-queue-model.mjs && node tla/check-pool-model.mjs && node tla/check-strategy-model.mjs && node tla/check-cookie-model.mjs",
     "test:cli": "node --test tests/cli.test.mjs"
   },
   "dependencies": {
