@@ -28,7 +28,7 @@ import {
 	setCachedCookies,
 } from "../src/cookie-cache.ts";
 
-import { smartFetch } from "../src/fetch.ts";
+import { smartFetch, DEFAULT_OS } from "../src/fetch.ts";
 
 // ─── cookieCacheKey ─────────────────────────────────────────────────
 
@@ -339,7 +339,11 @@ test("smartFetch: second same-origin call reuses cached cookies instead of launc
 	assert.equal(result1.text, REAL_HTML);
 	assert.equal(pool1.acquireCount, 1, "first call must launch the browser once");
 
-	const cacheKey = cookieCacheKey(origin, undefined, "chrome_145");
+	// Derive the key from the same defaults the call site applies. The call
+	// above omits `os`, so smartFetch keys on DEFAULT_OS; hand-building the key
+	// without it is how this assertion silently desynced when `os` became an
+	// identity axis (tla/CookieCache.tla) — keep these in step.
+	const cacheKey = cookieCacheKey(origin, undefined, "chrome_145", DEFAULT_OS);
 	const cached = getCachedCookies(cacheKey);
 	assert.ok(cached && cached.length > 0, "browser render should populate the cookie cache");
 
