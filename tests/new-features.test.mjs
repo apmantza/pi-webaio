@@ -8,7 +8,7 @@
 
 import assert from "node:assert";
 import test from "node:test";
-import { mkdir, writeFile, rm, readFile } from "node:fs/promises";
+import { mkdir, writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -116,6 +116,46 @@ test("RequestQueue persistence and resume", async () => {
 	// Scan for .md files — none yet, so no extra completed
 	const nextUrl = await resumed.next();
 	assert.ok(nextUrl); // b or c
+
+	await resumed.close();
+	await rm(dir, { recursive: true, force: true });
+});
+
+test("RequestQueue resume preserves failed entries (TLA+ NoWedged recurrence)", async () => {
+	// Recurrence: resume() used to reset EVERY non-completed entry (incl. failed)
+	// to queued while keeping retries, wedging the queue: a queued entry with
+	// retries >= MAX_RETRIES is skipped by next() forever yet keeps isDone()
+	// false. Found by the tla/RequestQueue.tla model (CrashResume -> NoWedged).
+	const dir = join(tmpdir(), `rq-test-failed-resume-${Date.now()}`);
+	const q = await RequestQueue.create(dir);
+	await q.add(["https://example.com/fail", "https://example.com/ok"]);
+
+	// Drive the failing URL to terminal `failed` (MAX_RETRIES = 3).
+	for (let i = 0; i < 3; i++) {
+		const url = await q.next();
+		assert.strictEqual(url, "https://example.com/fail");
+		await q.fail(url, `boom ${i}`);
+	}
+	assert.strictEqual(q.stats().failed, 1);
+	await q.close(); // flush to disk
+
+	const resumed = await RequestQueue.resume(dir);
+	assert.ok(resumed);
+	// Failed must stay failed across resume, never become unretryable queued.
+	assert.strictEqual(resumed.stats().failed, 1);
+	for (const entry of resumed.snapshot()) {
+		assert.ok(
+			entry.status !== "queued" || entry.retries < 3,
+			`wedged entry: ${entry.url} queued with retries=${entry.retries}`,
+		);
+	}
+
+	// The remaining work must drain to done: no hang with next()=null, !isDone().
+	const rest = await resumed.next();
+	assert.strictEqual(rest, "https://example.com/ok");
+	await resumed.complete(rest);
+	assert.strictEqual(await resumed.next(), null);
+	assert.strictEqual(resumed.isDone(), true);
 
 	await resumed.close();
 	await rm(dir, { recursive: true, force: true });
@@ -510,4 +550,142 @@ test("BrowserPool closed flag behavior", async () => {
 	} catch (err) {
 		assert.ok(err.message.includes("closed"));
 	}
+});
+
+test("BrowserPool budget recycle never kills checked-out pages (TLA+ KILL-IN-FLIGHT recurrence)", async () => {
+	// Recurrence: findAvailableBrowser() recycled at-budget browsers even with
+	// pages checked out, closing in-flight pages (spurious navigation failures
+	// -> pages wrongly marked failed). Found by tla/BrowserPool.tla (I1).
+	// Fakes stand in for Playwright (child-process boundary); no launch path
+	// is reached, so no real browser ever starts. The at-budget browser's
+	// close() is gated so the background recycle can never kick a relaunch.
+	const { BrowserPool } = await import("../src/browser-pool.ts");
+	const pool = new BrowserPool({ maxBrowsers: 2, maxPagesPerBrowser: 1 });
+
+	let killed = 0;
+	let atBudgetCloses = 0;
+	let gateRelaunch = true;
+	let releaseGate;
+	const heldClose = () => {
+		killed++;
+		return Promise.resolve();
+	};
+	const freshPage = () => ({
+		setDefaultTimeout() {},
+		on() {},
+		close: () => Promise.resolve(),
+	});
+	const freshContext = () => ({ newPage: async () => freshPage() });
+	// The gate stalls the background recycle tail (which would otherwise kick
+	// a real relaunch) without affecting the synchronous kill under test.
+	const atBudgetBrowser = {
+		contexts: () => [freshContext()],
+		close: () => {
+			atBudgetCloses++;
+			return gateRelaunch ? new Promise((r) => (releaseGate = r)) : Promise.resolve();
+		},
+	};
+	const freshBrowser = { contexts: () => [freshContext()], close: async () => {} };
+	pool.browsers.push(
+		{ browser: atBudgetBrowser, pagesInUse: new Set([{ close: heldClose }]), pagesUsed: 1, closed: false },
+		{ browser: freshBrowser, pagesInUse: new Set(), pagesUsed: 0, closed: false },
+	);
+
+	try {
+		const acquired = await pool.acquirePage();
+		assert.strictEqual(acquired.browser, freshBrowser);
+		assert.strictEqual(killed, 0); // the checked-out page must survive
+		assert.strictEqual(atBudgetCloses, 0); // the busy browser is left alone
+		acquired.release();
+	} finally {
+		gateRelaunch = false;
+		releaseGate?.();
+		await pool.drain();
+	}
+});
+
+test("BrowserPool concurrent acquire respects maxBrowsers cap (TLA+ OVER-CAP recurrence)", async () => {
+	// Recurrence: launchBrowser() dedup fall-through launched without re-checking
+	// maxBrowsers, so concurrent callers exceeded maxBrowsers (tla/OVER-CAP).
+	const { BrowserPool } = await import("../src/browser-pool.ts");
+	const pool = new BrowserPool({ maxBrowsers: 1, maxPagesPerBrowser: 1 });
+
+	let launchCount = 0;
+	let resolveLaunch1;
+	const launch1Gate = new Promise((r) => { resolveLaunch1 = r; });
+
+	pool._launchBrowser = async () => {
+		const id = ++launchCount;
+		if (id === 1) await launch1Gate;
+		const fakePage = { setDefaultTimeout() {}, on() {}, close: async () => {} };
+		const fakeContext = { newPage: async () => fakePage };
+		const fakeBrowser = { contexts: () => [fakeContext], close: async () => {} };
+		const pb = {
+			browser: fakeBrowser,
+			pagesInUse: new Set(),
+			pagesUsed: 0,
+			closed: false,
+		};
+		pool.browsers.push(pb);
+		pool.totalLaunched++;
+		pool.notifyWaiters();
+		return pb;
+	};
+
+	const p1 = pool.acquirePage();
+	const p2 = pool.acquirePage();
+	resolveLaunch1();
+
+	const page1 = await p1;
+	assert.strictEqual(launchCount, 1);
+	assert.strictEqual(pool.stats().browsers, 1);
+
+	// page2 waits until page1 is released because maxBrowsers=1 and maxPages=1
+	page1.release();
+	const page2 = await p2;
+	assert.strictEqual(pool.stats().browsers, 1);
+	page2.release();
+	await pool.drain();
+});
+
+test("BrowserPool drain closes in-flight browser launches (TLA+ DRAIN-LEAK recurrence)", async () => {
+	// Recurrence: drain() did not await or close launches resolving after drain(),
+	// leaking orphan browser processes and adding them to drained pools.
+	const { BrowserPool } = await import("../src/browser-pool.ts");
+	const pool = new BrowserPool({ maxBrowsers: 1 });
+
+	let resolveLaunch;
+	const launchGate = new Promise((r) => { resolveLaunch = r; });
+	let browserClosed = false;
+
+	pool._launchBrowser = async () => {
+		await launchGate;
+		const fakePage = { setDefaultTimeout() {}, on() {}, close: async () => {} };
+		const fakeContext = { newPage: async () => fakePage };
+		const fakeBrowser = {
+			contexts: () => [fakeContext],
+			close: async () => { browserClosed = true; },
+		};
+		if (pool._closed) {
+			await fakeBrowser.close();
+			throw new Error("BrowserPool is closed");
+		}
+		const pb = {
+			browser: fakeBrowser,
+			pagesInUse: new Set(),
+			pagesUsed: 0,
+			closed: false,
+		};
+		pool.browsers.push(pb);
+		return pb;
+	};
+
+	const p1 = pool.acquirePage();
+	const drainPromise = pool.drain();
+	resolveLaunch();
+	await drainPromise;
+
+	await assert.rejects(p1, /closed/);
+	assert.strictEqual(pool.stats().browsers, 0);
+	assert.strictEqual(browserClosed, true);
 });

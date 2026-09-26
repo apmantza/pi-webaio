@@ -97,9 +97,12 @@ export class RequestQueue {
 				if (typeof entry.outputUrl === "string")
 					entry.outputUrl = canonicalQueueUrl(entry.outputUrl);
 				else delete entry.outputUrl;
-				// Only keep entries that aren't completed (or were in_progress/failed)
-				if (entry.status !== "completed") {
-					entry.status = "queued"; // reset in_progress to queued for retry
+				// Only in_progress entries are reset to queued for retry. Failed
+				// entries stay failed: requeueing them with retries intact would
+				// wedge the queue (queued with retries >= MAX_RETRIES is skipped
+				// by next() forever yet keeps isDone() false — tla/NoWedged).
+				if (entry.status === "in_progress") {
+					entry.status = "queued";
 				}
 				entries.set(entry.url, entry);
 			} catch {

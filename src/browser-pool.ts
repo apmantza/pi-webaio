@@ -133,24 +133,49 @@ export class BrowserPool {
 	 * If at max, waits for a page to be released.
 	 */
 	async acquirePage(): Promise<PooledPage> {
-		if (this._closed) {
-			throw new Error("BrowserPool is closed");
+		while (!this._closed) {
+			// Try to find an existing browser with capacity
+			const available = this.findAvailableBrowser();
+			if (available) {
+				return this.createPooledPage(available);
+			}
+
+			// Try to launch a new browser if under max
+			if (this.browsers.length < this.options.maxBrowsers) {
+				try {
+					const pb = await this.launchBrowser();
+					if (pb.pagesUsed < this.options.maxPagesPerBrowser && !pb.closed) {
+						return this.createPooledPage(pb);
+					}
+				} catch (err) {
+					// If pool has no browsers and no launches in flight, fail fast
+					if (this.browsers.length === 0 && this.launchQueue.length === 0) {
+						throw err;
+					}
+				}
+				continue;
+			}
+
+			// If a launch is in progress, await it
+			if (this.launchQueue.length > 0) {
+				try {
+					const pb = await this.launchQueue[this.launchQueue.length - 1];
+					if (pb.pagesUsed < this.options.maxPagesPerBrowser && !pb.closed) {
+						return this.createPooledPage(pb);
+					}
+				} catch {
+					// In-flight launch failed; loop back to re-evaluate
+				}
+				continue;
+			}
+
+			// All browsers are recycling/capped — wait for a release or launch.
+			await new Promise<void>((resolve) => {
+				this.waiters.push(resolve);
+			});
 		}
 
-		// Try to find an existing browser with capacity
-		const available = this.findAvailableBrowser();
-		if (available) {
-			return this.createPooledPage(available);
-		}
-
-		// Try to launch a new browser if under max
-		if (this.browsers.length < this.options.maxBrowsers) {
-			const pb = await this.launchBrowser();
-			return this.createPooledPage(pb);
-		}
-
-		// All browsers are recycling/capped — wait for a release or launch.
-		return this.waitForAvailable();
+		throw new Error("BrowserPool is closed");
 	}
 
 	/**
@@ -170,6 +195,20 @@ export class BrowserPool {
 						// already closed
 					}
 				})(),
+			);
+		}
+		// Also wait for in-flight launches so their processes don't leak
+		for (const lp of this.launchQueue) {
+			closePromises.push(
+				lp
+					.then(async (pb) => {
+						try {
+							await pb.browser.close();
+						} catch {
+							// already closed
+						}
+					})
+					.catch(() => {}),
 			);
 		}
 		await Promise.allSettled(closePromises);
@@ -228,8 +267,13 @@ export class BrowserPool {
 			if (pb.pagesUsed < this.options.maxPagesPerBrowser) {
 				return pb;
 			}
-			// Exceeded limit: close and replace
-			this.recycleBrowser(pb);
+			// Exceeded limit: recycle only when idle. Recycling a browser with
+			// checked-out pages would close in-flight navigations and turn
+			// healthy pulls into spurious failures (tla/KILL-IN-FLIGHT); a busy
+			// browser is recycled once its pages drain (see release()).
+			if (pb.pagesInUse.size === 0) {
+				this.recycleBrowser(pb);
+			}
 		}
 		return null;
 	}
@@ -244,6 +288,12 @@ export class BrowserPool {
 			if (pb.pagesUsed < this.options.maxPagesPerBrowser && !pb.closed) {
 				return pb;
 			}
+		}
+
+		// Re-check capacity before launching: in-flight launches or concurrent
+		// calls might have reached maxBrowsers while awaiting existing launches.
+		if (this.browsers.length >= this.options.maxBrowsers) {
+			throw new Error("BrowserPool at max capacity");
 		}
 
 		const launchPromise = this._launchBrowser();
@@ -291,6 +341,17 @@ export class BrowserPool {
 			formatLaunchTiming(Date.now() - launchStartedAt, usedChannel),
 		);
 
+		// If the pool was closed while this launch was in progress, close the
+		// browser immediately to prevent leaking processes (tla/DRAIN-LEAK).
+		if (this._closed) {
+			try {
+				await browser.close();
+			} catch {
+				// already closed
+			}
+			throw new Error("BrowserPool is closed");
+		}
+
 		// A successful launch clears any prior degraded state.
 		this._lastLaunchError = null;
 		this.totalLaunched++;
@@ -318,6 +379,17 @@ export class BrowserPool {
 			released = true;
 			pb.pagesInUse.delete(page);
 			page.close().catch(() => {});
+			// Lazy budget recycle: an at-budget browser skipped by
+			// findAvailableBrowser() while busy retires once its last page
+			// drains, so the page budget is still enforced without ever
+			// killing in-flight work.
+			if (
+				pb.pagesInUse.size === 0 &&
+				pb.pagesUsed >= this.options.maxPagesPerBrowser &&
+				!pb.closed
+			) {
+				this.recycleBrowser(pb);
+			}
 			this.notifyWaiters();
 		};
 
@@ -333,19 +405,6 @@ export class BrowserPool {
 		});
 
 		return { page, browser: pb.browser, release };
-	}
-
-	private async waitForAvailable(): Promise<PooledPage> {
-		while (!this._closed) {
-			const available = this.findAvailableBrowser();
-			if (available) {
-				return this.createPooledPage(available);
-			}
-			await new Promise<void>((resolve) => {
-				this.waiters.push(resolve);
-			});
-		}
-		throw new Error("BrowserPool closed while waiting for page");
 	}
 
 	private notifyWaiters(): void {
@@ -370,16 +429,21 @@ export class BrowserPool {
 		// Launch a replacement immediately if we're still open and need capacity.
 		// Don't throw from the background relaunch, but record the failure so the
 		// pool can report "degraded" instead of silently hanging later (P4).
-		if (!this._closed) {
-			this.launchBrowser().catch((err) => {
-				this._lastLaunchError = toLaunchErrorRecord(err);
-				debug(
-					"browser-pool",
-					`replacement launch failed: ${this._lastLaunchError.message} — ${degradedPoolNotice(
-						this._lastLaunchError,
-					)}`,
-				);
-			});
+		if (!this._closed && this.browsers.length < this.options.maxBrowsers) {
+			void (async () => {
+				try {
+					await this.launchBrowser();
+				} catch (err) {
+					this._lastLaunchError = toLaunchErrorRecord(err);
+					debug(
+						"browser-pool",
+						`replacement launch failed: ${this._lastLaunchError.message} — ${degradedPoolNotice(
+							this._lastLaunchError,
+						)}`,
+					);
+					this.notifyWaiters();
+				}
+			})();
 		}
 	}
 }
