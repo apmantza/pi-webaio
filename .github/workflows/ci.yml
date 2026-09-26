@@ -83,6 +83,9 @@ jobs:
       - name: Verify packed static fetch entrypoint without browser or pi peers
         run: npm run test:webfetch-package
 
+      - name: Run formal TLA+ state-space model checkers
+        run: npm run test:models
+
       - name: Run full test suite (all suites)
         # One invocation — Node 24 --experimental-strip-types handles all
         # .mjs files and their .ts imports in ~8s (was 4m50s with tsx).
@@ -184,9 +187,9 @@ jobs:
             (echo "ERROR: dist/index.js missing from tarball" \
               "(prepare build failed?)" && exit 1)
           tar -tzf "$TARBALL" | grep "package/dist/src/webfetch.js" || \
-            (echo "ERROR: static webfetch JavaScript missing from tarball" && exit 1)
+            (echo "ERROR: webfetch.js missing from tarball" && exit 1)
           tar -tzf "$TARBALL" | grep "package/dist/src/webfetch.d.ts" || \
-            (echo "ERROR: static webfetch declarations missing from tarball" && exit 1)
+            (echo "ERROR: webfetch.d.ts missing from tarball" && exit 1)
           # Guard against accidentally shipping TS source again
           # (reintroduces the jiti transpile-on-startup cost).
           if tar -tzf "$TARBALL" | grep -E \

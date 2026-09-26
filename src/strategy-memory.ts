@@ -172,6 +172,8 @@ export function recordDomainSuccess(
 			// Same or more expensive strategy still working — increment counter
 			// and schedule a re-probe once the threshold is hit so we don't pay
 			// browser cost forever if a cheaper rung later becomes viable.
+			// Clear reprobeNext now that this re-probe attempt has completed (tla/ReProbeResets).
+			existing.reprobeNext = false;
 			existing.consecutiveFailures[strategy] = 0;
 			existing.successCount += 1;
 			if (existing.successCount >= RE_PROBE_SUCCESS_COUNT) {

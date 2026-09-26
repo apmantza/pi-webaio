@@ -135,6 +135,30 @@ test("getStartingStrategy returns null when reprobeNext is set", () => {
 	assert.strictEqual(getStartingStrategy("reprobe.com"), null);
 });
 
+test("recordDomainSuccess clears reprobeNext when remembered strategy re-succeeds (TLA+ ReProbeResets recurrence)", () => {
+	// Recurrence: when a re-probe fails at cheaper rungs and succeeds at the
+	// remembered rung, the else-branch did not reset reprobeNext = false,
+	// permanently sticking the domain in re-probing mode (getStartingStrategy
+	// returning null forever). Found by tla/StrategyMemory.tla.
+	clearAll();
+	domainMemory.set("reprobe-same.com", {
+		lastSuccessStrategy: "browser",
+		consecutiveFailures: {},
+		successCount: 0,
+		reprobeNext: true,
+		updatedAt: Date.now(),
+	});
+
+	// Re-probe occurs: cheapest rung fails, remembered "browser" succeeds
+	recordDomainFailure("reprobe-same.com", "plain");
+	recordDomainSuccess("reprobe-same.com", "browser");
+
+	const entry = domainMemory.get("reprobe-same.com");
+	assert.strictEqual(entry?.lastSuccessStrategy, "browser");
+	assert.strictEqual(entry?.reprobeNext, false, "reprobeNext must be cleared after re-probe completes");
+	assert.strictEqual(getStartingStrategy("reprobe-same.com"), "browser");
+});
+
 test("recordDomainSuccess downgrade: cheaper strategy clears reprobeNext", () => {
 	clearAll();
 	domainMemory.set("cheaper.com", {
