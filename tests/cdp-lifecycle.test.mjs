@@ -44,6 +44,7 @@ const {
 	_writeDaemonRegistry,
 	_removeDaemonRegistry,
 	_removeDaemonRegistryIfCurrent,
+	_ownsRegistryEntry,
 	_listDaemonSocketsFromRegistry,
 	listDaemonSockets,
 } = await import("../bin/cdp.mjs");
@@ -685,6 +686,134 @@ test("daemon: exits within seconds when its session owner dies (#96)", async () 
 	} finally {
 		owner.kill();
 		if (daemon.exitCode === null) daemon.kill();
+		_removeDaemonRegistry(targetId);
+		await chrome.stop();
+		try {
+			rmSync(profileDir, { recursive: true, force: true });
+		} catch {}
+	}
+});
+
+// ---------------------------------------------------------------------------
+// Socket-steal guard (tla/CdpDaemon.tla I2)
+// ---------------------------------------------------------------------------
+
+test("daemon registry: _ownsRegistryEntry names only the current generation", () => {
+	const targetId = `owncheck-${process.pid}-${Date.now().toString(36)}`;
+	try {
+		// No entry: ownership unprovable.
+		assert.equal(_ownsRegistryEntry(targetId), false);
+		// Entry naming another pid: not ours.
+		_writeDaemonRegistry(targetId, null);
+		const raw = JSON.parse(readFileSync(_daemonRegistryPath(targetId), "utf8"));
+		raw.pid = process.pid + 1000000;
+		writeFileSync(_daemonRegistryPath(targetId), JSON.stringify(raw));
+		assert.equal(_ownsRegistryEntry(targetId), false);
+		// Entry naming this process: ours.
+		_writeDaemonRegistry(targetId, null);
+		assert.equal(_ownsRegistryEntry(targetId), true);
+	} finally {
+		_removeDaemonRegistry(targetId);
+	}
+});
+
+test("daemon: predecessor shutdown never unlinks a live successor socket (tla/CdpDaemon.tla I2)", async () => {
+	// Recurrence: runDaemon shutdown() unlinked the socket path and deleted
+	// the registry entry unconditionally. After a successor generation bound
+	// the same path, the predecessor's idle-timeout shutdown stole the live
+	// socket (and the registry entry), cascading a respawn. Found by
+	// tla/CdpDaemon.tla (bind A, bind B, shutdown A).
+	const chrome = await startFakeChrome();
+	const profileDir = `${tmpdir().replaceAll("\\", "/")}/cdp-steal-test-${process.pid}-${Date.now().toString(36)}`;
+	mkdirSync(profileDir, { recursive: true });
+	writeFileSync(
+		`${profileDir}/DevToolsActivePort`,
+		`${chrome.wss.address().port}\n/devtools/browser/steal-test\n`,
+	);
+	const targetId = `steal-${process.pid}-${Date.now().toString(36)}`;
+	const cdpBin = fileURLToPath(new URL("../bin/cdp.mjs", import.meta.url));
+	const spawnDaemon = () =>
+		spawn(process.execPath, [cdpBin, "_daemon", targetId], {
+			env: {
+				...process.env,
+				CDP_PROFILE_DIR: profileDir,
+				// Our own pid stays alive for the test, so neither generation
+				// can exit via the owner poll — only via the SIGTERM below.
+				PI_WEBAIO_SESSION_PID: String(process.pid),
+			},
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+	const registryPid = () => {
+		try {
+			return JSON.parse(readFileSync(_daemonRegistryPath(targetId), "utf8")).pid;
+		} catch {
+			return null;
+		}
+	};
+	const dialSocket = () =>
+		new Promise((resolve) => {
+			let conn;
+			try {
+				conn = net.connect(sockPath(targetId));
+			} catch {
+				resolve(false);
+				return;
+			}
+			conn.on("connect", () => {
+				conn.destroy();
+				resolve(true);
+			});
+			conn.on("error", () => resolve(false));
+		});
+	const daemonA = spawnDaemon();
+	const daemonBHolder = { current: null };
+	try {
+		// Generation A binds and registers.
+		const deadlineA = Date.now() + 10000;
+		while (Date.now() < deadlineA && registryPid() !== daemonA.pid) {
+			await sleep(100);
+		}
+		assert.equal(registryPid(), daemonA.pid, "generation A should register");
+		assert.equal(await dialSocket(), true, "generation A should be reachable");
+
+		// Generation B steals the path (same as a CLI respawn would).
+		const daemonB = spawnDaemon();
+		daemonBHolder.current = daemonB;
+		const deadlineB = Date.now() + 10000;
+		while (Date.now() < deadlineB && registryPid() !== daemonB.pid) {
+			await sleep(100);
+		}
+		assert.equal(registryPid(), daemonB.pid, "generation B should take over");
+
+		// Predecessor A shuts down (SIGTERM exercises the real shutdown path).
+		daemonA.kill("SIGTERM");
+		await new Promise((resolve) => {
+			const timer = setTimeout(() => resolve(), 8000);
+			daemonA.once("exit", () => {
+				clearTimeout(timer);
+				resolve();
+			});
+		});
+		assert.notEqual(daemonA.exitCode, null, "generation A should have exited");
+
+		// The successor must survive the predecessor's shutdown untouched.
+		assert.equal(
+			await dialSocket(),
+			true,
+			"generation B must stay reachable after generation A shuts down",
+		);
+		assert.equal(
+			registryPid(),
+			daemonB.pid,
+			"generation B must stay registered after generation A shuts down",
+		);
+	} finally {
+		try {
+			daemonA.kill();
+		} catch {}
+		try {
+			daemonBHolder.current?.kill();
+		} catch {}
 		_removeDaemonRegistry(targetId);
 		await chrome.stop();
 		try {

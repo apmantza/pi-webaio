@@ -175,6 +175,26 @@ function _removeDaemonRegistry(targetId) {
 }
 
 /**
+ * True when the registry entry for `targetId` names this process — i.e. no
+ * successor generation has taken over the socket since we bound it. Guards
+ * shutdown cleanup so an idling predecessor cannot unlink a live successor's
+ * socket or delete its registry entry (tla/CdpDaemon.tla).
+ *
+ * Fail closed: when the entry is missing or unparseable, ownership is
+ * unprovable, so the caller must release nothing. A stale socket left behind
+ * is reaped by the next generation's startup unlink, and listers already
+ * skip dead-pid entries — while stealing a live successor has no backstop.
+ */
+function _ownsRegistryEntry(targetId) {
+	try {
+		const record = JSON.parse(readFileSync(_daemonRegistryPath(targetId), "utf8"));
+		return !!record && record.pid === process.pid;
+	} catch {
+		return false;
+	}
+}
+
+/**
  * Remove a stale registry record without deleting a replacement written by a
  * daemon restart. Rename the observed path to a private quarantine, verify the
  * moved bytes still match, and preserve the quarantine on any ambiguity.
@@ -832,9 +852,9 @@ async function evalStr(cdp, sid, expression) {
 	}
 
 	// Fast path: cached context is still valid (the common case)
-	try {
+try {
 		return await _evalWith(contextId);
-	} catch (_e) {
+	} catch {
 		// Context was invalidated (e.g. page navigated to a new origin).
 		// Clear stale cache, re-capture, retry once.
 		_mainCtx.delete(sid);
@@ -1116,11 +1136,27 @@ async function runDaemon(targetId) {
 		if (!alive) return;
 		alive = false;
 		clearTimeout(ownerTimer);
-		server.close();
-		try {
-			unlinkSync(sp);
-		} catch {}
-		_removeDaemonRegistry(targetId);
+		// Release the socket path and registry entry only while they still
+		// name this daemon. A successor generation may have bound the path
+		// and re-registered after we became unreachable. Two separate calls
+		// would steal its live socket: the explicit unlinkSync below, AND
+		// server.close() itself — Node removes the socket path on close for
+		// unix-domain servers, keyed by path rather than by our (stale) fd —
+		// so the close must be skipped too when we no longer own the path.
+		// An unguarded predecessor shutdown otherwise cascades a respawn
+		// every idle timeout (tla/CdpDaemon.tla I2).
+		// Fail closed when ownership is unprovable: a stale socket left
+		// behind is reaped by the next generation's startup unlink, and
+		// listers already skip dead-pid entries — while stealing a live
+		// successor has no such backstop. process.exit() still reaps our
+		// own fds either way.
+		if (_ownsRegistryEntry(targetId)) {
+			server.close();
+			try {
+				unlinkSync(sp);
+			} catch {}
+			_removeDaemonRegistry(targetId);
+		}
 		cdp.close();
 		process.exit(0);
 	}
@@ -1609,6 +1645,7 @@ export {
 	_writeDaemonRegistry,
 	_removeDaemonRegistry,
 	_removeDaemonRegistryIfCurrent,
+	_ownsRegistryEntry,
 	_listDaemonSocketsFromRegistry,
 	listDaemonSockets,
 };
