@@ -153,8 +153,8 @@
     "ws": "^8.21.1"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "^0.83.0 || ^0.84.0",
-    "@earendil-works/pi-tui": "^0.83.0 || ^0.84.0"
+    "@earendil-works/pi-coding-agent": ">=0.83.0 <2.0.0",
+    "@earendil-works/pi-tui": ">=0.83.0 <2.0.0"
   },
   "peerDependenciesMeta": {
     "@earendil-works/pi-tui": {
@@ -169,9 +169,10 @@
     "playwright": "^1.55.0"
   },
   "devDependencies": {
-    "@earendil-works/pi-tui": "^0.83.0 || ^0.84.0",
+    "@earendil-works/pi-coding-agent": "^1.1.0",
+    "@earendil-works/pi-tui": "^1.1.0",
     "@types/node": "^26.1.2",
-    "typescript": "^7.0.2",
-    "@types/ws": "^8.18.1"
+    "@types/ws": "^8.18.1",
+    "typescript": "^7.0.2"
   }
 }
