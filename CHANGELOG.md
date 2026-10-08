@@ -8,6 +8,14 @@ All notable changes to pi-webaio will be documented in this file.
 
 ### Changed
 
+### Fixed
+
+## [1.0.9] - 2026-10-08
+
+### Added
+
+### Changed
+
 - **pi 1.x support.** The peer range for `@earendil-works/pi-coding-agent` and `@earendil-works/pi-tui` is now `>=0.83.0 <2.0.0`; it was `^0.83.0 || ^0.84.0`, which excluded every pi 1.x host. The development baseline moves to pi 1.1.0 (both packages added as dev dependencies). The type-check, build, TLA+ models and the full suite (1596 passed, 2 skipped, Node 24) pass on pi 1.1.0.
 
 ### Fixed
