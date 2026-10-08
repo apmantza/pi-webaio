@@ -123,10 +123,13 @@ jobs:
           node-version: "24"
 
       # --omit=dev omits @types/node (a devDep); typescript is also a devDep,
-      # so prepare's npx fallback (typescript@7.0.2) builds dist. This is the
-      # exact environment pi builds dist in.
-      - name: Install without devDeps (--omit=dev, prepare builds dist)
-        run: npm install --omit=dev --no-audit --no-fund
+      # so prepare's npx fallback (typescript@7.0.2) builds dist. pi passes
+      # --legacy-peer-deps too, so the pi host peers (and the types they pull
+      # in) are NOT installed: without it this job installed the peers and
+      # passed while every real pi update failed with 239 missing-type errors.
+      # Keep these flags identical to pi's own install command.
+      - name: Install without devDeps (pi's flags; prepare builds dist)
+        run: npm install --omit=dev --legacy-peer-deps --no-audit --no-fund
 
       - name: Verify dist built and the compiled entry loads
         run: |

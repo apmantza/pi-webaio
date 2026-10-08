@@ -33,6 +33,11 @@ try {
 			"tsc",
 			"--project",
 			"tsconfig.dist.json",
+			// An --omit=dev install has no @types/node and no pi type packages
+			// (peers are not installed under --legacy-peer-deps), so a checked
+			// build fails with hundreds of missing-type errors even though the
+			// emit is correct. Emit only: CI type-checks with devDependencies.
+			"--noCheck",
 		];
 		const npxCli = [
 			process.env.npm_execpath

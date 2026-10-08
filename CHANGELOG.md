@@ -10,6 +10,8 @@ All notable changes to pi-webaio will be documented in this file.
 
 ### Fixed
 
+- **pi updates of the git install no longer fail in `prepare`.** pi installs git packages with `npm install --omit=dev --legacy-peer-deps`, so neither `@types/node` nor the pi host packages are present. The npx compiler fallback type-checked anyway and failed with 239 missing-type errors, which aborted the update. The fallback now emits with `--noCheck`; CI still type-checks with devDependencies. The `--omit=dev` CI job now uses pi's exact flags, so this path can't silently regress.
+
 ## [1.0.8] - 2026-09-26
 
 ### Added
