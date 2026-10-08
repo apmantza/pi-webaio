@@ -8,6 +8,8 @@ All notable changes to pi-webaio will be documented in this file.
 
 ### Changed
 
+- **pi 1.x support.** The peer range for `@earendil-works/pi-coding-agent` and `@earendil-works/pi-tui` is now `>=0.83.0 <2.0.0`; it was `^0.83.0 || ^0.84.0`, which excluded every pi 1.x host. The development baseline moves to pi 1.1.0 (both packages added as dev dependencies). The type-check, build, TLA+ models and the full suite (1596 passed, 2 skipped, Node 24) pass on pi 1.1.0.
+
 ### Fixed
 
 - **pi updates of the git install no longer fail in `prepare`.** pi installs git packages with `npm install --omit=dev --legacy-peer-deps`, so neither `@types/node` nor the pi host packages are present. The npx compiler fallback type-checked anyway and failed with 239 missing-type errors, which aborted the update. The fallback now emits with `--noCheck`; CI still type-checks with devDependencies. The `--omit=dev` CI job now uses pi's exact flags, so this path can't silently regress.
