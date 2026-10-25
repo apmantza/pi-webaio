@@ -65,6 +65,9 @@ try {
 }
 
 rmSync("dist", { recursive: true, force: true });
-execFileSync(process.execPath, [tscPath, "--project", "tsconfig.dist.json"], {
+// Compiler availability does not imply dev/peer types are installed: Node can
+// resolve TypeScript from an ancestor node_modules even under --omit=dev.
+// Like the npx path, prepare only emits; lint/build keep checked builds in CI.
+execFileSync(process.execPath, [tscPath, "--project", "tsconfig.dist.json", "--noCheck"], {
 	stdio: "inherit",
 });

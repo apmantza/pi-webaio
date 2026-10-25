@@ -10,6 +10,8 @@ All notable changes to pi-webaio will be documented in this file.
 
 ### Fixed
 
+- **Git installs with an existing TypeScript compiler** no longer fail with missing development-type errors. `prepare` now emits without type-checking on both compiler paths, including compilers resolved from an ancestor `node_modules` (as seen on Windows). CI still type-checks through `lint` and checked builds. Regression tests run pi's npm install flags with local and ancestor compilers.
+
 ## [1.0.9] - 2026-10-08
 
 ### Added
