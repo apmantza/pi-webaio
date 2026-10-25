@@ -17,6 +17,7 @@ import {
 	isProviderAvailable,
 	extractDomain,
 	scoreAndRankResults,
+	dropGoogleRedirectDuplicates,
 	buildResultBuckets,
 	canonicalizeUrl,
 	buildEngineStatusMap,
@@ -919,7 +920,12 @@ export function registerWebsearchTool(
 			}
 
 			const scored = scoreAndRankResults(buckets, query, goggles);
-			const merged = scored.map((s) => s.result);
+			// Drop Google SERP redirect duplicates: the opaque /goto URL cannot
+			// be canonicalised locally, so the same page arriving via a direct
+			// URL from another engine used to survive as a second result.
+			const merged = dropGoogleRedirectDuplicates(
+				scored.map((s) => s.result),
+			);
 
 			// Freeze the final providers snapshot: lanes that missed the response
 			// budget must not be captured as frozen "running" spinner frames.

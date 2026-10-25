@@ -22,6 +22,7 @@ import {
 	isGitHubUrl,
 	mapGitHubRepo,
 	parseGitHubMapUrl,
+	renderRepoTreeMarkdown,
 	renderTree,
 	walkRepo,
 } from "../src/github-map.ts";
@@ -564,6 +565,47 @@ test("filterRepoPaths keeps README and source files", () => {
 	assert.strictEqual(out.length, 5);
 	assert.ok(out.includes("README.md"));
 	assert.ok(out.includes("package.json"));
+});
+
+// ─── renderRepoTreeMarkdown (repo tree bound) ─────────────────────
+//
+// Recurrence: aio-webmap on nodejs/node with max:12 rendered a
+// 2000-entry tree (maxFiles) because only the subdirectory path capped
+// its listing. The default 100-URL request must not dump a
+// maxFiles-sized tree.
+
+test("renderRepoTreeMarkdown bounds the rendered tree to max entries", () => {
+	const paths = [];
+	for (let i = 0; i < 2000; i++) paths.push(`src/file${i}.ts`);
+	const md = renderRepoTreeMarkdown(paths, 12, false);
+	const renderedLines = md
+		.split("\n")
+		.slice(md.indexOf("```") + 1)
+		.filter((l) => l.includes("└── ") || l.includes("├── "));
+	assert.ok(
+		renderedLines.length <= 12,
+		`expected <=12 rendered entries, got ${renderedLines.length}`,
+	);
+	assert.ok(md.includes("## File Tree (2000 entries)"));
+	assert.match(md, /first 12 of 2000 entries/);
+});
+
+test("renderRepoTreeMarkdown renders the whole tree when it fits in max", () => {
+	const paths = ["src/a.ts", "src/b.ts", "README.md"];
+	const md = renderRepoTreeMarkdown(paths, 100, false);
+	assert.ok(md.includes("## File Tree (3 entries)"));
+	assert.ok(md.includes("a.ts"));
+	assert.ok(md.includes("b.ts"));
+	assert.ok(md.includes("README.md"));
+	assert.ok(!/first \d+ of/.test(md), "no truncation note when it fits");
+});
+
+test("renderRepoTreeMarkdown keeps the API-truncated label and can both truncate", () => {
+	const paths = [];
+	for (let i = 0; i < 50; i++) paths.push(`pkg/f${i}.ts`);
+	const md = renderRepoTreeMarkdown(paths, 5, true);
+	assert.ok(md.includes("truncated by API"));
+	assert.match(md, /first 5 of 50 entries/);
 });
 
 test("filterRepoPaths is case-insensitive", () => {

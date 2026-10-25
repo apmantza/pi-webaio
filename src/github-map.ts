@@ -793,6 +793,36 @@ export async function mapGitHubRepo(
 
 // ─── Repo full map (clone + tree + features) ─────────────────────────
 
+/**
+ * Render the repo file tree, bounded to `max` entries.
+ *
+ * The subdirectory path already caps its listing at `max`; the full-repo
+ * path used to render every collected path, so a small `max` still
+ * dumped a maxFiles-sized tree (observed: 2000 entries for nodejs/node at
+ * `max: 12`) — pure token bloat, since the blob-URL list is capped at the
+ * same `max`. Architecture signals are computed from the FULL path list by
+ * the caller, so bounding the display loses no analysis.
+ *
+ * Exported for unit testing.
+ */
+export function renderRepoTreeMarkdown(
+	paths: string[],
+	max: number,
+	truncatedByApi: boolean,
+): string {
+	const budget = Math.max(1, Math.min(paths.length, max));
+	const shownPaths = paths.length > budget ? paths.slice(0, budget) : paths;
+	const rendered = renderTree(buildTree(shownPaths));
+	const label = truncatedByApi
+		? `## File Tree (${paths.length} entries, truncated by API)`
+		: `## File Tree (${paths.length} entries)`;
+	const note =
+		shownPaths.length < paths.length
+			? `\n_showing first ${shownPaths.length} of ${paths.length} entries; raise \`max\` for more_\n`
+			: "";
+	return `${label}${note}\n\`\`\`\n${rendered || "(empty)"}\n\`\`\`\n`;
+}
+
 async function mapGitHubRepoFull(
 	ref: { kind: "repo"; owner: string; repo: string },
 	max: number,
@@ -865,12 +895,7 @@ async function mapGitHubRepoFull(
 	let architecture: string | undefined;
 
 	if (paths.length > 0) {
-		const tree = buildTree(paths);
-		const rendered = renderTree(tree);
-		const label = truncated
-			? `## File Tree (${paths.length} entries, truncated by API)`
-			: `## File Tree (${paths.length} entries)`;
-		treeMarkdown = `${label}\n\n\`\`\`\n${rendered || "(empty)"}\n\`\`\`\n`;
+		treeMarkdown = renderRepoTreeMarkdown(paths, max, truncated);
 		architecture = detectArchitectureSignals(paths);
 
 		// Generate a blob/tree URL per entry (cap at max)

@@ -9,7 +9,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { buildResultBuckets, canonicalizeUrl } from "../src/search.ts";
+import { buildResultBuckets, canonicalizeUrl, dropGoogleRedirectDuplicates, isGoogleRedirectUrl } from "../src/search.ts";
 
 test("canonicalizeUrl strips tracking params, fragments, host case, default port, trailing slash", () => {
 	const variants = [
@@ -39,6 +39,87 @@ test("canonicalizeUrl leaves non-http(s) and unparseable input unchanged (fail o
 	assert.equal(canonicalizeUrl("ftp://example.com/file"), "ftp://example.com/file");
 	assert.equal(canonicalizeUrl("not a url"), "not a url");
 	assert.equal(canonicalizeUrl(""), "");
+});
+
+test("isGoogleRedirectUrl recognises only Google /goto and /url wrappers", () => {
+	assert.equal(isGoogleRedirectUrl("https://www.google.com/goto?url=CAESabc"), true);
+	assert.equal(isGoogleRedirectUrl("https://google.com/url?q=https%3A%2F%2Fx.test"), true);
+	assert.equal(isGoogleRedirectUrl("https://docs.python.org/3/library/pathlib.html"), false);
+	assert.equal(isGoogleRedirectUrl("https://www.google.com/search?q=x"), false);
+	assert.equal(isGoogleRedirectUrl("not a url"), false);
+});
+
+// Recurrence this prevents: a live aio-websearch for "Python pathlib Path
+// read_text official documentation" returned the SAME page twice — the
+// opaque Google /goto?url=CAES… result (title
+// "pathlib — Object-oriented filesystem paths", cite docs.python.org) AND the
+// direct docs.python.org result whose title carried a trailing suffix. The
+// goto target cannot be decoded locally, so dedup has to key on the
+// cite-derived domain plus a whole-word title prefix.
+test("dropGoogleRedirectDuplicates drops a goto result when a direct result has the same domain and a title prefix", () => {
+	const results = [
+		{
+			title: "pathlib — Object-oriented filesystem paths",
+			url: "https://www.google.com/goto?url=CAESaQHrOzAVyKkbmkoKwBNCHSnMetXzPUEAT5bb",
+			snippet: "s",
+			domain: "docs.python.org",
+		},
+		{
+			title: "pathlib — Object-oriented filesystem paths — Python 3.15.1 documentation",
+			url: "https://docs.python.org/3/library/pathlib.html",
+			snippet: "s",
+			domain: "docs.python.org",
+		},
+	];
+	const out = dropGoogleRedirectDuplicates(results);
+	assert.equal(out.length, 1, "the goto duplicate must be dropped");
+	assert.equal(out[0].url, "https://docs.python.org/3/library/pathlib.html");
+});
+
+test("dropGoogleRedirectDuplicates keeps a goto result that has no direct counterpart", () => {
+	const results = [
+		{
+			title: "Some page",
+			url: "https://www.google.com/goto?url=CAESabc",
+			snippet: "s",
+			domain: "uniquedomain.test",
+		},
+		{
+			title: "A different page",
+			url: "https://other.test/page",
+			snippet: "s",
+			domain: "other.test",
+		},
+	];
+	assert.equal(dropGoogleRedirectDuplicates(results).length, 2);
+});
+
+test("dropGoogleRedirectDuplicates never drops a distinct page on the same domain with an unrelated title", () => {
+	const results = [
+		{
+			title: "Installation guide",
+			url: "https://www.google.com/goto?url=CAESabc",
+			snippet: "s",
+			domain: "example.com",
+		},
+		{
+			title: "API reference",
+			url: "https://example.com/api",
+			snippet: "s",
+			domain: "example.com",
+		},
+	];
+	assert.equal(dropGoogleRedirectDuplicates(results).length, 2);
+});
+
+test("dropGoogleRedirectDuplicates is a no-op when no goto URLs are present", () => {
+	const results = [
+		{ title: "a", url: "https://example.com/a", snippet: "s", domain: "example.com" },
+		{ title: "b", url: "https://example.com/b", snippet: "s", domain: "example.com" },
+	];
+	const out = dropGoogleRedirectDuplicates(results);
+	assert.deepEqual(out, results);
+	assert.equal(out, results, "must return the same reference when nothing to do");
 });
 
 test("buildResultBuckets merges tracking-param variants into one bucket, keeping originals", () => {

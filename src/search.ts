@@ -924,6 +924,82 @@ export function canonicalizeUrl(url: string): string {
 	return `${u.protocol}//${u.host.toLowerCase()}${path}${search}`;
 }
 
+// ─── Google SERP redirect duplicates ───────────────────────────────
+//
+// Since ~2025 Google wraps result links in opaque `/goto?url=CAES…`
+// redirects whose target cannot be recovered locally (the payload is a
+// server-side protobuf token, not a URL — verified by decoding a live
+// sample). `canonicalizeUrl` therefore keys the goto result on its own
+// opaque URL, so the same page can also arrive as a direct URL from
+// another engine and survive as a duplicate. The SERP `<cite>` often
+// elides the path (`https://docs.python.org › ...`), so the redirect cannot
+// be rewritten to a real URL either — only the domain is reliable.
+//
+// Confirmed live: query "Python pathlib Path read_text official
+// documentation" returned both
+//   google.com/goto?url=CAES…  title "pathlib — Object-oriented filesystem paths"
+//   docs.python.org/3/library/pathlib.html  title "pathlib — Object-oriented
+//   filesystem paths — Python 3.15.1 documentation"
+// The tighter of the two candidates: drop a redirect ONLY when another
+// (non-redirect) result shares the same domain AND one normalised title is
+// a whole-word prefix of the other. Never rewrites the survivor, never
+// merges distinct pages on different domains.
+
+/** True when `url` is a Google SERP redirect wrapper (`/goto?` or `/url?`). */
+export function isGoogleRedirectUrl(url: string): boolean {
+	try {
+		const u = new URL(url);
+		const host = u.hostname.toLowerCase();
+		if (host !== "google.com" && !host.endsWith(".google.com")) return false;
+		return u.pathname === "/goto" || u.pathname === "/url";
+	} catch {
+		return false;
+	}
+}
+
+/** Lowercase, punctuation-free title used only for duplicate matching. */
+function normalizeTitleForDedup(title: string | undefined): string {
+	return (title ?? "")
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, " ")
+		.trim();
+}
+
+/** Whole-word prefix test (both directions), never a bare substring. */
+function titlesOverlap(a: string, b: string): boolean {
+	if (!a || !b) return false;
+	if (a === b) return true;
+	return a.startsWith(`${b} `) || b.startsWith(`${a} `);
+}
+
+/**
+ * Drop a Google SERP redirect result when the same page is already present
+ * via a direct URL from any engine. Order of the survivors is preserved.
+ *
+ * @internal Exported for unit tests only.
+ */
+export function dropGoogleRedirectDuplicates<T extends SearchResult>(
+	results: T[],
+): T[] {
+	if (!results.some((r) => isGoogleRedirectUrl(r.url))) return results;
+
+	const direct = results.filter((r) => !isGoogleRedirectUrl(r.url));
+	if (direct.length === 0) return results;
+
+	return results.filter((r) => {
+		if (!isGoogleRedirectUrl(r.url)) return true;
+		// Only the `<cite>`-derived domain is trustworthy on a goto URL.
+		const host = (r.domain ?? "").toLowerCase();
+		const title = normalizeTitleForDedup(r.title);
+		if (!host || !title) return true;
+		return !direct.some(
+			(d) =>
+				(d.domain ?? "").toLowerCase() === host &&
+				titlesOverlap(title, normalizeTitleForDedup(d.title)),
+		);
+	});
+}
+
 // ─── Per-engine status (observability P2/P5) ───────────────────────
 // `searchWeb` historically returned only result counts, so a down,
 // rate-limited, or cooled-down engine was indistinguishable from one that
