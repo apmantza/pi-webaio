@@ -26,6 +26,27 @@ jobs:
         with:
           node-version: "24"
 
+      # Internal research/audit notes are local-only by policy (AGENTS.md
+      # "Internal-docs policy"). .gitignore matches them by shape, but a glob
+      # is only as good as its case-folding (INSPIRATION.md walks past
+      # *[Ii]nspiration*.md). This gate reads tracked file NAMES and is
+      # case-insensitive, so a new spelling fails the build instead of quietly
+      # needing another .gitignore line — the previous list named 8 spellings
+      # and root-level inspiration.md / inspirations.md were still committed.
+      - name: No internal research notes tracked
+        run: |
+          set -euo pipefail
+          pattern='inspirat|observability-gaps|perf-improvements'
+          if hits=$(git ls-files | grep -iE "$pattern"); then
+            echo "::error::Internal-only notes are tracked."
+            echo "Untrack them with git rm --cached and keep them as local"
+            echo "working artifacts — see the Internal-docs policy in"
+            echo "AGENTS.md."
+            printf '%s\n' "$hits" | sed 's/^/  /'
+            exit 1
+          fi
+          echo "No internal research notes tracked ✓"
+
       # Lockfile check runs BEFORE npm install (#128): npm install normalizes
       # the workspace lock, which masked committed drift (playwright sat in
       # the lock's root `dependencies` while package.json declared it under

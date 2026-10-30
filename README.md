@@ -162,8 +162,6 @@ whose destination policy you trust. Successful results report
   CI, and security notes
 - [MCP server](docs/mcp.md) — use the tools from Claude Code, Claude Desktop,
   and other MCP clients without pi (`npx -y pi-webaio-mcp`)
-- [PageMap inspiration](docs/pagemap-inspiration.md) — future extraction and
-  structured-output ideas
 
 ## Contributing
 

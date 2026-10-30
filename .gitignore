@@ -13,15 +13,15 @@ grep-test.json
 nul
 autoresearch.ideas.md
 autoresearch.jsonl
-# Internal research/audit docs — local-only, not shipped
-docs/inspirations*.md
-docs/pagemap-inspiration.md
-docs/inspirations3.md
-docs/inspirations8.md
+# Internal research/audit docs — local-only, not shipped (see AGENTS.md
+# "Internal-docs policy"). Matched by shape, not by an enumerated list of past
+# filenames: the previous list named 8 spellings (docs/inspirations*.md,
+# inspiration7.md, unsloth_webtools_inspiration.md, ...) and root-level
+# inspiration.md / inspirations.md walked straight through it and were
+# committed. A gate that enumerates known-bad spellings admits the next one.
+*[Ii]nspiration*.md
 docs/observability-gaps.md
 docs/perf-improvements.md
-inspiration7.md
-unsloth_webtools_inspiration.md
 
 # Generated compile trees from the tla/ verification workflow (tsc --outDir
 # tla/compiled...). Never commit these; the checker sources are the artifact.
