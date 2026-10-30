@@ -163,14 +163,15 @@
   },
   "overrides": {
     "protobufjs": "^7.6.5",
-    "@hono/node-server": "^2.0.5"
+    "@hono/node-server": "^2.1.5",
+    "undici": "^8.12.3"
   },
   "optionalDependencies": {
     "playwright": "^1.55.0"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "^1.1.0",
-    "@earendil-works/pi-tui": "^1.1.0",
+    "@earendil-works/pi-coding-agent": "^1.4.0",
+    "@earendil-works/pi-tui": "^1.4.0",
     "@types/node": "^26.1.2",
     "@types/ws": "^8.18.1",
     "typescript": "^7.0.2"
