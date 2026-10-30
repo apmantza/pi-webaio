@@ -27,22 +27,37 @@ jobs:
           node-version: "24"
 
       # Internal research/audit notes are local-only by policy (AGENTS.md
-      # "Internal-docs policy"). .gitignore matches them by shape, but a glob
-      # is only as good as its case-folding (INSPIRATION.md walks past
-      # *[Ii]nspiration*.md). This gate reads tracked file NAMES and is
-      # case-insensitive, so a new spelling fails the build instead of quietly
-      # needing another .gitignore line — the previous list named 8 spellings
-      # and root-level inspiration.md / inspirations.md were still committed.
+      # "Internal-docs policy"). .gitignore matches the Markdown notes by
+      # shape, but a glob is narrower than the class on two axes: it is
+      # .md-only (inspiration.txt, notes/inspiration walk past it) and it is
+      # only as good as its case-folding (INSPIRATION.md too). This gate reads
+      # tracked file NAMES at any extension, case-insensitively, so a new
+      # spelling fails the build instead of quietly needing another
+      # .gitignore line — the previous list named 8 entries, one of them
+      # itself a wildcard, and root-level inspiration.md / inspirations.md
+      # were still committed.
       - name: No internal research notes tracked
         run: |
-          set -euo pipefail
+          # No `set -e`: the match result is read from $?, and a pipeline
+          # error must NOT be indistinguishable from "nothing matched".
+          set -uo pipefail
           pattern='inspirat|observability-gaps|perf-improvements'
-          if hits=$(git ls-files | grep -iE "$pattern"); then
+          files=$(git ls-files) || {
+            echo "::error::git ls-files failed; refusing to report clean."
+            exit 1
+          }
+          hits=$(printf '%s\n' "$files" | grep -iE "$pattern")
+          rc=$?
+          if [ "$rc" -eq 0 ]; then
             echo "::error::Internal-only notes are tracked."
             echo "Untrack them with git rm --cached and keep them as local"
             echo "working artifacts — see the Internal-docs policy in"
             echo "AGENTS.md."
             printf '%s\n' "$hits" | sed 's/^/  /'
+            exit 1
+          elif [ "$rc" -gt 1 ]; then
+            echo "::error::match failed (grep exit $rc); refusing to"
+            echo "report clean."
             exit 1
           fi
           echo "No internal research notes tracked ✓"
