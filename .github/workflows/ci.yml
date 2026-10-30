@@ -38,16 +38,20 @@ jobs:
       # were still committed.
       - name: No internal research notes tracked
         run: |
-          # No `set -e`: the match result is read from $?, and a pipeline
-          # error must NOT be indistinguishable from "nothing matched".
+          # The runner invokes `bash -e {0}`, so -e is already on: the match
+          # result is read from $? and a pipeline error must NOT be
+          # indistinguishable from "nothing matched", which means -e has to
+          # be turned off explicitly for that one command.
           set -uo pipefail
           pattern='inspirat|observability-gaps|perf-improvements'
           files=$(git ls-files) || {
             echo "::error::git ls-files failed; refusing to report clean."
             exit 1
           }
+          set +e
           hits=$(printf '%s\n' "$files" | grep -iE "$pattern")
           rc=$?
+          set -e
           if [ "$rc" -eq 0 ]; then
             echo "::error::Internal-only notes are tracked."
             echo "Untrack them with git rm --cached and keep them as local"
