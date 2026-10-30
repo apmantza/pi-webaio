@@ -26,6 +26,46 @@ jobs:
         with:
           node-version: "24"
 
+      # Internal research/audit notes are local-only by policy (AGENTS.md
+      # "Internal-docs policy"). .gitignore matches the Markdown notes by
+      # shape, but a glob is narrower than the class on two axes: it is
+      # .md-only (inspiration.txt, notes/inspiration walk past it) and it is
+      # only as good as its case-folding (INSPIRATION.md too). This gate reads
+      # tracked file NAMES at any extension, case-insensitively, so a new
+      # spelling fails the build instead of quietly needing another
+      # .gitignore line — the previous list named 8 entries, one of them
+      # itself a wildcard, and root-level inspiration.md / inspirations.md
+      # were still committed.
+      - name: No internal research notes tracked
+        run: |
+          # The runner invokes `bash -e {0}`, so -e is already on: the match
+          # result is read from $? and a pipeline error must NOT be
+          # indistinguishable from "nothing matched", which means -e has to
+          # be turned off explicitly for that one command.
+          set -uo pipefail
+          pattern='inspirat|observability-gaps|perf-improvements'
+          files=$(git ls-files) || {
+            echo "::error::git ls-files failed; refusing to report clean."
+            exit 1
+          }
+          set +e
+          hits=$(printf '%s\n' "$files" | grep -iE "$pattern")
+          rc=$?
+          set -e
+          if [ "$rc" -eq 0 ]; then
+            echo "::error::Internal-only notes are tracked."
+            echo "Untrack them with git rm --cached and keep them as local"
+            echo "working artifacts — see the Internal-docs policy in"
+            echo "AGENTS.md."
+            printf '%s\n' "$hits" | sed 's/^/  /'
+            exit 1
+          elif [ "$rc" -gt 1 ]; then
+            echo "::error::match failed (grep exit $rc); refusing to"
+            echo "report clean."
+            exit 1
+          fi
+          echo "No internal research notes tracked ✓"
+
       # Lockfile check runs BEFORE npm install (#128): npm install normalizes
       # the workspace lock, which masked committed drift (playwright sat in
       # the lock's root `dependencies` while package.json declared it under
