@@ -131,3 +131,64 @@ test("F4: the fetch paths use the shared guard", async () => {
 		);
 	}
 });
+
+// ─── A bare `host:port` is not a scheme (CodeRabbit on #166) ─────────
+//
+// The F4 fix introduced a regression: `/^([a-zA-Z][a-zA-Z0-9+.-]*):/` admits `.`
+// in the scheme name, exactly as RFC 3986 does, so `example.com:8443/path`
+// matched with scheme `example.com` and was refused as `unsupported_protocol`.
+// The removed inline regexes prefixed `https://` onto that input and it worked.
+// `new URL()` is no help — it parses `localhost:3000` as protocol `localhost:`,
+// so the parser cannot disambiguate either and the rule has to be explicit.
+//
+// Recurrence prevented: a documented, previously-working input shape
+// (`host:port`, the usual way to reach a local dev server) starts being refused
+// with a misleading "unsupported protocol" after a scheme-validation change.
+test("F4: a bare host:port is still fetched over https, not refused", () => {
+	for (const [input, host] of [
+		["localhost:3000", "localhost"],
+		["example.com:8443/path", "example.com"],
+		["sub.example.co.uk:443/x", "sub.example.co.uk"],
+		["127.0.0.1:8080/api", "127.0.0.1"],
+		// A host with an *empty* port, which is what `"${HOST}:${PORT}/path"` yields
+		// when PORT is unset. The dot in the token is what keeps it a host, since
+		// there is no port number to match on: without that check it is refused as
+		// scheme `example.com`. This is the only input shape where the dot check
+		// changes an allow/reject decision rather than just the error code.
+		["example.com:/path", "example.com"],
+		["foo:80", "foo"],
+	]) {
+		const r = normalizeFetchTarget(input);
+		assert.ok(r.ok, `${input} must be fetched, got ${r.code} (${r.scheme ?? ""})`);
+		assert.equal(r.hostname, host);
+		assert.equal(r.parsed.protocol, "https:");
+	}
+});
+
+// The rejection path must stay fail-closed while the host:port shape is allowed,
+// so the two are asserted together rather than in isolation.
+test("F4: allowing host:port does not widen the scheme refusal", () => {
+	for (const input of [
+		"file:///etc/passwd",
+		"javascript:alert(1)",
+		"data:text/html,x",
+		"blob:https://example.com",
+		"filesystem:https://x/y",
+		"view-source:https://x",
+		"gopher://example.com",
+		"FiLe:///x",
+	]) {
+		const r = normalizeFetchTarget(input);
+		assert.ok(!r.ok, `${input} must be refused`);
+		assert.equal(r.code, "unsupported_protocol", input);
+	}
+});
+
+// A non-http scheme whose payload happens to be port-like degrades to a harmless
+// https URL for a nonexistent host rather than a file/javascript URL. Recording
+// the trade-off the disambiguation makes, so it is not mistaken for a hole.
+test("F4: a scheme spelled like a port degrades to https, never to its own handler", () => {
+	const r = normalizeFetchTarget("javascript:123");
+	if (r.ok) assert.equal(r.parsed.protocol, "https:");
+	else assert.equal(r.code, "unsupported_protocol");
+});

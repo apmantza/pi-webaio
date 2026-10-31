@@ -72,6 +72,36 @@ export type FetchTarget =
 /** Matches a leading `scheme:` so an explicit scheme is never mistaken for a host. */
 const LEADING_SCHEME = /^([a-zA-Z][a-zA-Z0-9+.-]*):/;
 
+/**
+ * A port, optionally followed by the start of a path/query/fragment.
+ * `host:443`, `host:8443/x`, `host:3000?cb=1`.
+ */
+const PORT_LIKE = /^\d{1,5}([/?#]|$)/;
+
+/**
+ * Decide whether a leading `token:` is an explicit scheme or a bare `host:port`.
+ *
+ * RFC 3986 allows `.` in a scheme name, so `example.com:8443/path` matches
+ * `LEADING_SCHEME` with scheme `example.com`. `new URL()` cannot arbitrate
+ * either — it parses `localhost:3000` as protocol `localhost:` — so the rule has
+ * to be stated here. Rejecting the host:port shape was a real regression: the
+ * inline regexes this helper replaced prefixed `https://` onto it and it worked,
+ * and `host:port` is the ordinary way to name a local dev server.
+ *
+ * A dot in the token means host (`schemes` never contain one in practice, and no
+ * dangerous scheme does). A dotless token is a scheme unless what follows the
+ * colon is a port number — the one case that makes `localhost:3000` a host.
+ * The residual risk is a scheme whose payload happens to look like a port
+ * (`javascript:123`), which then becomes `https://javascript:123`: a DNS failure
+ * for a host spelled `javascript`, never a `javascript:` URL. Degradation is
+ * toward a harmless lookup, not toward execution.
+ */
+function isExplicitScheme(token: string, rest: string): boolean {
+	if (token.includes(".")) return false;
+	return !PORT_LIKE.test(rest);
+}
+
+
 export function normalizeFetchTarget(rawInput: string): FetchTarget {
 	const raw = String(rawInput ?? "").trim();
 	if (!raw) return { ok: false, code: "invalid_url", url: rawInput };
@@ -80,9 +110,13 @@ export function normalizeFetchTarget(rawInput: string): FetchTarget {
 	// parser while "file:///x" parses fine, so the two cases cannot be told apart
 	// by a failed parse. Detect the scheme explicitly instead.
 	const schemeMatch = LEADING_SCHEME.exec(raw);
+	// No scheme at all (bare host, or protocol-relative `//host/path`) and a bare
+	// `host:port` both take the default scheme, as the tools always assumed.
+	let candidate = `https://${raw}`;
 	if (schemeMatch) {
 		const scheme = schemeMatch[1]!.toLowerCase();
-		if (scheme !== "http" && scheme !== "https") {
+		const rest = raw.slice(schemeMatch[1]!.length + 1);
+		if (scheme !== "http" && scheme !== "https" && isExplicitScheme(scheme, rest)) {
 			// The defect this exists for: prefixing `https://` onto a `file:` URL
 			// produced a DNS lookup for a host spelled `file` and a retryable
 			// network error instead of a validation refusal.
@@ -93,21 +127,12 @@ export function normalizeFetchTarget(rawInput: string): FetchTarget {
 				url: raw,
 			};
 		}
-		// http(s) with an explicit scheme — including the single-slash `https:/x`
+		// Explicit http(s) is used as written — including the single-slash `https:/x`
 		// form the old two-slash regex missed (URL parses it as host `x`).
-		try {
-			const u = new URL(raw);
-			if (!u.hostname) return { ok: false, code: "invalid_url", url: rawInput };
-			return { ok: true, url: u.toString(), hostname: u.hostname, parsed: u };
-		} catch {
-			return { ok: false, code: "invalid_url", url: rawInput };
-		}
+		if (scheme === "http" || scheme === "https") candidate = raw;
 	}
-
-	// No scheme at all (bare host, or protocol-relative `//host/path`): assume
-	// https, as the tools always have.
 	try {
-		const u = new URL(`https://${raw}`);
+		const u = new URL(candidate);
 		if (!u.hostname) return { ok: false, code: "invalid_url", url: rawInput };
 		return { ok: true, url: u.toString(), hostname: u.hostname, parsed: u };
 	} catch {
