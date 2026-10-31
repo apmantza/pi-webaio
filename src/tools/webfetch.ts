@@ -83,7 +83,12 @@ import {
 	isFetchError,
 	suggestRetryTimeoutMs,
 } from "./fetch-error.ts";
-import { frontmatter, runInBatches, safeResolveInBaseTemp } from "./utils.ts";
+import {
+	frontmatter,
+	normalizeFetchTarget,
+	runInBatches,
+	safeResolveInBaseTemp,
+} from "./utils.ts";
 import { stripWrapper } from "../markdown-frontmatter.ts";
 import { queryIndex } from "../webquery-index.ts";
 import { resolveCorpusDir } from "./webquery.ts";
@@ -246,9 +251,9 @@ export async function runLocalKnowledgePreCheck(
 	let hostname: string;
 	let urlDerivedQuery: string;
 	try {
-		let urlStr = first;
-		if (!/^https?:\/\//i.test(urlStr)) urlStr = `https://${urlStr}`;
-		const u = new URL(urlStr);
+		const guard = normalizeFetchTarget(first);
+		if (!guard.ok) return undefined;
+		const u = guard.parsed;
 		hostname = u.hostname;
 		const pathTokens = u.pathname.split(/[/._-]+/).filter(Boolean);
 		urlDerivedQuery = [hostname, ...pathTokens].join(" ");
@@ -945,17 +950,23 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 							const startedAt = Date.now();
 							updateItem(idx, { status: "fetching", progress: 0.1 });
 
-							let urlStr = raw;
-							if (!/^https?:\/\//i.test(urlStr)) urlStr = `https://${urlStr}`;
-
-							let url: URL;
-							try {
-								url = new URL(urlStr);
-							} catch {
-								const fe = createFetchError("invalid_url", `Bad URL: ${raw}`, {
-									url: raw,
-									phase: "validation",
-								});
+							const guard = normalizeFetchTarget(raw);
+							if (!guard.ok) {
+								// A scheme mistake is a validation refusal, not a network
+								// failure: the old prefix-into-https path turned
+								// `file:///etc/passwd` into a retryable dns_error for a
+								// host spelled `file` (issue #165 F4).
+								const fe =
+									guard.code === "unsupported_protocol"
+										? createFetchError(
+												"unsupported_protocol",
+												`Unsupported protocol ${guard.scheme} for ${raw}. Only http(s) URLs can be fetched.`,
+												{ url: raw, phase: "validation" },
+											)
+										: createFetchError("invalid_url", `Bad URL: ${raw}`, {
+												url: raw,
+												phase: "validation",
+											});
 								markItemError(idx, buildUserFacingFetchErrorSummary(fe), startedAt);
 								return {
 									ok: false,
@@ -964,6 +975,7 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 									fetchError: fe,
 								};
 							}
+							const url = guard.parsed;
 
 							let outFile: string;
 							if (targets.length === 1 && params.out) {

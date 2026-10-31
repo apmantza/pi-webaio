@@ -53,18 +53,77 @@ export function resolveBinary(name: string): string | null {
 
 // ─── Frontmatter ────────────────────────────────────────────────────
 /**
+ * Decide the scheme of a user-supplied fetch target. Extracted from the inline
+ * `if (!/^https?:\/\//i.test(x)) x = "https://" + x` that webfetch/webpull each
+ * carried, plus the shared normalizeInputUrl (issue #165 F4). That pattern only
+ * recognised the two-slash form, so `file:///etc/passwd` became
+ * `https://file:///etc/passwd` — a DNS lookup for a host spelled `file`, reported
+ * as a retryable `dns_error` — and `https:/x` became a lookup for host `https`.
+ */
+export type FetchTarget =
+	| { ok: true; url: string; hostname: string; parsed: URL }
+	| {
+			ok: false;
+			code: "unsupported_protocol" | "invalid_url";
+			scheme?: string;
+			url: string;
+	  };
+
+/** Matches a leading `scheme:` so an explicit scheme is never mistaken for a host. */
+const LEADING_SCHEME = /^([a-zA-Z][a-zA-Z0-9+.-]*):/;
+
+export function normalizeFetchTarget(rawInput: string): FetchTarget {
+	const raw = String(rawInput ?? "").trim();
+	if (!raw) return { ok: false, code: "invalid_url", url: rawInput };
+
+	// Parse-first would be tempting, but a bare "example.com" throws in the URL
+	// parser while "file:///x" parses fine, so the two cases cannot be told apart
+	// by a failed parse. Detect the scheme explicitly instead.
+	const schemeMatch = LEADING_SCHEME.exec(raw);
+	if (schemeMatch) {
+		const scheme = schemeMatch[1]!.toLowerCase();
+		if (scheme !== "http" && scheme !== "https") {
+			// The defect this exists for: prefixing `https://` onto a `file:` URL
+			// produced a DNS lookup for a host spelled `file` and a retryable
+			// network error instead of a validation refusal.
+			return {
+				ok: false,
+				code: "unsupported_protocol",
+				scheme: `${schemeMatch[1]}:`,
+				url: raw,
+			};
+		}
+		// http(s) with an explicit scheme — including the single-slash `https:/x`
+		// form the old two-slash regex missed (URL parses it as host `x`).
+		try {
+			const u = new URL(raw);
+			if (!u.hostname) return { ok: false, code: "invalid_url", url: rawInput };
+			return { ok: true, url: u.toString(), hostname: u.hostname, parsed: u };
+		} catch {
+			return { ok: false, code: "invalid_url", url: rawInput };
+		}
+	}
+
+	// No scheme at all (bare host, or protocol-relative `//host/path`): assume
+	// https, as the tools always have.
+	try {
+		const u = new URL(`https://${raw}`);
+		if (!u.hostname) return { ok: false, code: "invalid_url", url: rawInput };
+		return { ok: true, url: u.toString(), hostname: u.hostname, parsed: u };
+	} catch {
+		return { ok: false, code: "invalid_url", url: rawInput };
+	}
+}
+
+/**
  * Normalize a user-supplied URL (add https:// when the scheme is missing)
  * and validate it parses. Shared by webpull/webmap/webquery-style tools
  * (dedup, jscpd). Throws Error("Bad URL: <original>") on malformed input.
  */
 export function normalizeInputUrl(rawInput: string): URL {
-	let raw = rawInput;
-	if (!/^https?:\/\//i.test(raw)) raw = `https://${raw}`;
-	try {
-		return new URL(raw);
-	} catch {
-		throw new Error(`Bad URL: ${rawInput}`);
-	}
+	const t = normalizeFetchTarget(rawInput);
+	if (!t.ok) throw new Error(`Bad URL: ${rawInput}`);
+	return t.parsed;
 }
 
 export function frontmatter(
