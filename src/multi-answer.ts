@@ -17,6 +17,7 @@
 // per-chunk source attribution is new.
 
 import { createBM25Scorer } from "./bm25.ts";
+import { estimateTokens } from "./token-count.ts";
 import { chunkMarkdown, type Chunk, type ChunkOptions } from "./chunker.ts";
 
 /** One fetched page fed into the multi-source pool. */
@@ -65,10 +66,17 @@ export interface FormatMultiSourceAnswerOptions {
 	sourcesCount?: number;
 	/**
 	 * Wrap the output in the [UNTRUSTED WEB CONTENT] safety markers. Default
-	 * true (safe by default). Callers that apply a further transform (e.g. a
-	 * hard token budget) and re-wrap themselves pass false to avoid nesting.
+	 * true (safe by default). Callers that apply a further transform and re-wrap
+	 * themselves pass false to avoid nesting.
 	 */
 	wrap?: boolean;
+	/**
+	 * Hard token ceiling for the rendered answer. When set, chunks are admitted
+	 * WHOLE until the budget is exhausted and the rest are reported as omitted —
+	 * never pruned inside a quote, because each block is promised as verbatim
+	 * supporting text (issue #165 F18).
+	 */
+	budgetTokens?: number;
 }
 
 /** Default number of cited chunks returned in multi-source answer mode. */
@@ -260,7 +268,7 @@ export function formatMultiSourceAnswer(
 	const sourcesCount =
 		opts.sourcesCount ?? new Set(ranked.map((r) => r.url)).size;
 
-	const blocks = ranked.map((r, i) => {
+	const blockOf = (r: RankedChunk, i: number): string => {
 		// Heading/title echo site-controlled text and may contain wide glyphs —
 		// budget them so the assembled lines stay within the cap (the
 		// "**[i] …** (score x)" and "Title: " scaffolding is ASCII and short).
@@ -273,7 +281,7 @@ export function formatMultiSourceAnswer(
 			`Source: ${r.url}${titleLine}\n\n` +
 			`${r.text}`
 		);
-	});
+	};
 
 	// Two-line header: the first line embeds the raw query (site/user
 	// controlled, may contain wide glyphs) and is hard-capped; the verify
@@ -281,15 +289,58 @@ export function formatMultiSourceAnswer(
 	// glyphs and a long ASCII tail on one line, which still crashes the
 	// host validator at widths between the line's code-point length and its
 	// visible width.
+	const budget = opts.budgetTokens ?? 0;
 	const header = truncateVisible(
 		`Cited answer: top ${ranked.length} chunk(s) across ${sourcesCount} ` +
 			`source(s) for "${query}"`,
 	);
-	const inner =
-		`${header}\n` +
-		`Each block is verbatim supporting text labeled with its source URL — verify against that source.\n\n` +
-		blocks.join("\n\n---\n\n") +
-		`\n\n---\n_Full content cached for every source — retrieve it via aio-webcontent._`;
+	const verifyNote =
+		"Each block is verbatim supporting text labeled with its source URL — verify against that source.";
+	const footerFor = (kept: number, dropped: number, over: boolean): string => {
+		if (over) {
+			// Never imply a budget was honoured when it was not.
+			return `\n\n---\n_The top chunk alone still exceeds the ${budget} token budget — showing it anyway; raise budgetTokens for more sources. Full content cached for every source — retrieve it via aio-webcontent._`;
+		}
+		return dropped > 0
+			? `\n\n---\n_${dropped} chunk(s) omitted to fit the ${budget} token budget; showing ${kept} of ${ranked.length}. Full content cached for every source — retrieve it via aio-webcontent._`
+			: `\n\n---\n_Full content cached for every source — retrieve it via aio-webcontent._`;
+	};
+
+	const blocksOf = (kept: number): string =>
+		ranked
+			.slice(0, kept)
+			.map((r, i) => blockOf(r, i))
+			.join("\n\n---\n\n");
+
+	const buildBody = (kept: number, dropped: number, over: boolean): string =>
+		`${header}\n${verifyNote}\n\n${blocksOf(kept)}${footerFor(kept, dropped, over)}`;
+
+	// Measure the SAME string the caller receives. Measuring the bare inner text
+	// under-counted by the safety markers, so a budget that looked honoured was
+	// not (the same framing-outside-the-budget shape as F20).
+	const measure = (kept: number, dropped: number, over: boolean): number =>
+		estimateTokens(
+			wrap ? wrapUntrusted(buildBody(kept, dropped, over)) : buildBody(kept, dropped, over),
+		);
+
+	// Admit chunks WHOLE, most relevant first, until the budget is spent. The
+	// old path rendered the full answer and then ran it through
+	// `applyTokenBudget`, which cut INSIDE the verbatim quotes and reported the
+	// wrapper title of a source page as a pruned "section" (issue #165 F18).
+	const hasBudget = budget > 0;
+	let kept = ranked.length;
+	if (hasBudget) {
+		kept = 1; // never return an empty answer while chunks exist
+		for (let k = ranked.length; k >= 1; k--) {
+			if (measure(k, ranked.length - k, false) <= budget) {
+				kept = k;
+				break;
+			}
+		}
+	}
+	const dropped = ranked.length - kept;
+	const over = hasBudget && measure(kept, dropped, false) > budget;
+	const inner = buildBody(kept, dropped, over);
 
 	return wrap ? wrapUntrusted(inner) : inner;
 }

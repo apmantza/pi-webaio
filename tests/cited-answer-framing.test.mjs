@@ -1,0 +1,167 @@
+// ─── Cited answer mode: one framing, whole-chunk budgeting (#165, F18) ───
+//
+// Live: `aio-webfetch(urls:[persist, issue#984], query:"How do you migrate
+// persisted state between store versions?", budgetTokens:320)` printed
+//
+//   [Multi-source answer mode: top 5 cited chunk(s)… ]   <- added by the tool
+//   Cited answer: top 5 chunk(s) across 2 source(s)…     <- added by the library
+//   Each block is verbatim supporting text labeled with  <- again, both layers
+//   its source URL — verify against that source.
+//
+// …then `applyTokenBudget` pruned INSIDE the verbatim quotes and reported
+// "6 sections omitted", listing the wrapper title `pmndrs/zustand — issues/984`
+// as a "section". A block the tool promises is "verbatim supporting text" must
+// not be cut mid-sentence, and framing must not be a pruning candidate.
+//
+// Recurrence prevented: duplicated framing burning the budget it claims to
+// conserve, and a "verbatim" quote that is silently truncated.
+import assert from "node:assert";
+import test from "node:test";
+import { formatMultiSourceAnswer } from "../src/multi-answer.ts";
+import { estimateTokens } from "../src/token-count.ts";
+
+const mk = (n, url, text) => ({
+	url,
+	title: `Doc ${n}`,
+	heading: `Heading ${n}`,
+	score: 10 - n,
+	text,
+});
+
+const RANKED = [
+	mk(1, "https://a.dev/persist", "Alpha " .repeat(60)),
+	mk(2, "https://b.dev/issues/984", "Bravo ".repeat(60)),
+	mk(3, "https://a.dev/migrate", "Charlie ".repeat(60)),
+];
+
+// ─── One owner of the framing ───
+
+test("F18: the answer states its mode exactly once", () => {
+	const out = formatMultiSourceAnswer(RANKED, "How do you migrate persisted state?");
+	const headerCount = (out.match(/Cited answer:/g) ?? []).length;
+	assert.equal(headerCount, 1, `expected one header, found ${headerCount}`);
+	const verifyCount = (
+		out.match(/verify against that source/gi) ?? []
+	).length;
+	assert.equal(
+		verifyCount,
+		1,
+		`the verify note must appear once, found ${verifyCount}`,
+	);
+});
+
+test("F18: the tool layer no longer repeats the library framing", async () => {
+	const { readFile } = await import("node:fs/promises");
+	const src = await readFile(
+		new URL("../src/tools/webfetch.ts", import.meta.url),
+		"utf8",
+	);
+	// The tool used to build its own "[Multi-source answer mode: …]" +
+	// "[Each chunk is labeled … verify against that source.]" notice on top of
+	// the library's identical header.
+	assert.ok(
+		!/Multi-source answer mode: top \$\{/.test(src),
+		"the tool still emits its own duplicate mode notice",
+	);
+	assert.ok(
+		!/Each chunk is labeled with its source URL/.test(src),
+		"the tool still emits its own duplicate verify note",
+	);
+});
+
+// ─── Budget selects whole chunks; quotes stay verbatim ───
+
+test("F18: a tight budget drops whole chunks instead of cutting them", () => {
+	// 200 fits framing + one chunk but not three (the full answer is ~306
+	// tokens), so this exercises selection rather than an impossible ask.
+	const budget = 200;
+	const out = formatMultiSourceAnswer(RANKED, "migrate persisted state", {
+		budgetTokens: budget,
+	});
+	assert.ok(
+		estimateTokens(out) <= budget,
+		`output ${estimateTokens(out)} tokens exceeds the ${budget} budget`,
+	);
+	// Whatever survived is verbatim; whatever did not is named as dropped chunks.
+	const included = RANKED.filter((r) => out.includes(r.text));
+	const excluded = RANKED.filter((r) => !out.includes(r.text));
+	assert.ok(included.length >= 1, "at least the top chunk must survive");
+	assert.equal(
+		included.length + excluded.length,
+		RANKED.length,
+		"a chunk must be either fully present or fully absent — never partial",
+	);
+	// The old behaviour: a section-prune footer that invents "sections".
+	assert.ok(
+		!/section[s]? omitted/i.test(out),
+		`the answer reports pruned sections, i.e. it cut inside quotes: ${out.slice(-260)}`,
+	);
+	assert.match(
+		out,
+		/chunks?\(s\)? (omitted|dropped)/i,
+		"the answer must name how many chunks the budget displaced",
+	);
+});
+
+test("F18: a generous budget keeps every chunk verbatim", () => {
+	const out = formatMultiSourceAnswer(RANKED, "migrate persisted state", {
+		budgetTokens: 4000,
+	});
+	for (const r of RANKED) {
+		assert.ok(out.includes(r.text), `chunk ${r.url} must be verbatim`);
+	}
+	assert.ok(!/omitted|dropped/i.test(out), "nothing was dropped, nothing to report");
+});
+
+test("F18: framing never costs the top chunk its place", () => {
+	// A budget equal to a bare one-chunk answer is smaller than the same chunk
+	// rendered inside a 3-chunk answer (which carries an omission line), so the
+	// honest contract is: the top quote is always shown, and if even that does
+	// not fit the answer says so rather than silently overrunning.
+	const oneChunk = estimateTokens(
+		formatMultiSourceAnswer([RANKED[0]], "q", { budgetTokens: 100000 }),
+	);
+	const out = formatMultiSourceAnswer(RANKED, "q", {
+		budgetTokens: oneChunk,
+	});
+	assert.ok(
+		out.includes(RANKED[0].text),
+		`the top chunk must survive at the ${oneChunk}-token budget: ${out.slice(0, 200)}`,
+	);
+	const tokens = estimateTokens(out);
+	assert.ok(
+		tokens <= oneChunk || /exceeds the \d+ token budget/i.test(out),
+		`either fits (${tokens} <= ${oneChunk}) or declares the overage: ${out.slice(-200)}`,
+	);
+});
+
+test("F18: an impossible budget says so instead of claiming to fit", () => {
+	// Smaller than framing plus the smallest possible chunk. The answer must keep
+	// the top quote verbatim and state that the budget could not be honoured.
+	const out = formatMultiSourceAnswer(RANKED, "q", { budgetTokens: 40 });
+	assert.ok(out.includes(RANKED[0].text), "the top chunk must survive");
+	assert.ok(
+		/exceeds the 40 token budget/i.test(out),
+		`must not imply the budget was honoured: ${out.slice(-220)}`,
+	);
+});
+
+test("F18: the safety wrap is inside the budget, not outside it", () => {
+	// Measuring the bare inner text under-counted by the wrap markers, so a
+	// budget that looked honoured was not.
+	const budget = 260;
+	const out = formatMultiSourceAnswer(RANKED, "q", { budgetTokens: budget });
+	assert.ok(out.includes("UNTRUSTED WEB CONTENT"), "safety markers must be present");
+	assert.ok(
+		estimateTokens(out) <= budget,
+		`wrapped output ${estimateTokens(out)} exceeds ${budget}`,
+	);
+});
+
+test("F18: no-chunk mode keeps its single honest line", () => {
+	const out = formatMultiSourceAnswer([], "nothing matched", {
+		budgetTokens: 200,
+	});
+	assert.match(out, /no relevant chunks found/i);
+	assert.equal((out.match(/Multi-source answer mode/g) ?? []).length, 1);
+});

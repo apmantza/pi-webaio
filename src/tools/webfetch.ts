@@ -1954,31 +1954,22 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 						},
 					});
 					if (ranked.length > 0) {
-						// Render the inner cited-answer text (no markers), apply an
-						// optional hard token budget, THEN wrap in fresh safety
-						// markers so the [UNTRUSTED WEB CONTENT] guard always survives
-						// the budget transform.
-						let inner = formatMultiSourceAnswer(ranked, multiAnswerQuery!, {
-							sourcesCount: sources.length,
-							wrap: false,
-						});
+						// The cited-answer block owns its own framing: it states the
+						// mode, the verify note and the cache pointer once. The tool
+						// layer used to print the same three lines again on top of it
+						// (issue #165 F18), spending the budget it claimed to conserve.
 						const budgetTokens = params.budgetTokens as number | undefined;
-						if (budgetTokens) {
-							inner = applyTokenBudget(inner, budgetTokens, multiAnswerQuery);
-						}
-						const displayContent = wrapUntrusted(inner);
+						const displayContent = formatMultiSourceAnswer(
+							ranked,
+							multiAnswerQuery!,
+							{
+								sourcesCount: sources.length,
+								budgetTokens,
+							},
+						);
 						const header = `Fetched ${okResults.length}/${targets.length} URLs.`;
-						// Query on its own CJK-capped line: the Markdown wrap path
-						// measures by code points while the host validator measures
-						// visible width — a CJK-mixed query inline in a long line
-						// crashed the host TUI (206 > 205).
 						const notice =
-							`\n[Multi-source answer mode: top ${ranked.length} cited chunk(s) across ` +
-							`${sources.length} sources.]` +
-							`\n[Query: "${truncateVisible(multiAnswerQuery, 64)}"]` +
-							`\n[Each chunk is labeled with its source URL — verify against that ` +
-							`source. Full content for every page is cached — retrieve any page ` +
-							`in full via aio-webcontent by URL.]`;
+							`\n[Query: "${truncateVisible(multiAnswerQuery, 64)}"]`;
 						return {
 							content: [
 								{
