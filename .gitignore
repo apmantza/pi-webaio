@@ -23,6 +23,26 @@ autoresearch.jsonl
 docs/observability-gaps.md
 docs/perf-improvements.md
 
+# Same policy stated the other way round: root-level Markdown is scratch unless
+# explicitly shipped, so a new note cannot even be `git add`ed by accident. The
+# allow-list lives in scripts/check-tracked-hygiene.mjs (issue #165 F5); speed.md,
+# newfeatures.md, implementationplan.md and roadmap_0_5.md all shipped while only
+# a name-based blocklist existed.
+/*.md
+!README.md
+!AGENTS.md
+!CHANGELOG.md
+!ROADMAP.md
+!CONTRIBUTING.md
+
+# aio-webresearch bundles are working artifacts, never repo content
+# (research-paramtest/ was 14 tracked files).
+/research-*/
+.pi/webaio-research/
+
+# Ad-hoc root scripts (test-youtube.mjs was tracked this way).
+/test-*.mjs
+
 # Generated compile trees from the tla/ verification workflow (tsc --outDir
 # tla/compiled...). Never commit these; the checker sources are the artifact.
 tla/compiled*/
