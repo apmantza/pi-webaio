@@ -6,7 +6,7 @@ import { readFile, writeFile, readdir, stat } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { chunkMarkdown } from "./chunker.ts";
 import { extractFrontmatterUrl } from "./markdown-frontmatter.ts";
-import { createBM25Scorer } from "./bm25.ts";
+import { createBM25Scorer, extractTerms } from "./bm25.ts";
 
 /** Index format version — bump when the stored shape changes. */
 export const INDEX_VERSION = 1;
@@ -15,7 +15,7 @@ export const INDEX_VERSION = 1;
 export const INDEX_FILENAME = ".webaio-index.json";
 
 /** One indexed chunk stored in the JSON file. */
-interface IndexedChunk {
+export interface IndexedChunk {
 	/** Relative path from outDir to the source markdown file. */
 	file: string;
 	/** Original URL from YAML frontmatter. */
@@ -184,7 +184,7 @@ export async function loadIndex(outDir: string): Promise<LoadIndexResult> {
 // ─── Querying ─────────────────────────────────────────────────────────
 
 /** One ranked hit returned by {@link queryIndex}. */
-interface CorpusHit {
+export interface CorpusHit {
 	/** BM25 relevance score (higher = more relevant). */
 	score: number;
 	/** Relative path from outDir to the source markdown file. */
@@ -202,6 +202,151 @@ export type QueryIndexResult =
 			reason: "missing" | "version_mismatch" | "corrupt";
 			message: string;
 	  };
+
+/**
+ * Rank corpus chunks against a query. THE single ranking seam for the corpus
+ * path: `queryIndex()` and the aio-webquery tool both call it, so the two cannot
+ * drift (issue #165 F15).
+ *
+ * Two guards the old `score > 0` filter lacked, because BM25 returns a positive
+ * score for any shared word:
+ *  1. a discriminative-term floor, so matching only ubiquitous corpus words
+ *     reports "no relevant chunks" instead of confident-looking noise;
+ *  2. a per-file cap with backfill, so a file that contributed most of the
+ *     chunks cannot own the whole result set.
+ */
+/** Tuning for the corpus ranking seam. */
+export interface RankOptions {
+	/**
+	 * Max chunks one file may contribute to the returned set, with the remaining
+	 * slots backfilled from other files. 0 disables the cap. Default 2.
+	 */
+	perFileCap?: number;
+	/**
+	 * Require a hit to contain at least one DISCRIMINATIVE query term. Default
+	 * true.
+	 */
+	requireDiscriminative?: boolean;
+}
+
+/** Default per-file ceiling in a corpus result set. */
+export const DEFAULT_PER_FILE_CAP = 2;
+
+/**
+ * A query term is discriminative when it is present in the corpus but rare
+ * enough that matching it means something: at least one file contains it, and at
+ * most two thirds of the FILES do. A term in every file ("state" in a zustand
+ * corpus) proves nothing, and a term in no file matches nothing — so a query
+ * whose only corpus-wide words are ubiquitous yields no hits instead of confident
+ * garbage.
+ *
+ * Document frequency is counted per FILE, not per chunk: a page split into six
+ * chunks must not count six times, or a term unique to the biggest file would be
+ * rejected as ubiquitous. The `max(1, …)` floor keeps a one-file corpus from
+ * silencing itself.
+ */
+function discriminativeTerms(
+	terms: string[],
+	fileTermSets: Map<string, Set<string>>,
+): Set<string> | null {
+	if (terms.length === 0) return null;
+	const dfMax = Math.max(1, Math.floor(fileTermSets.size * (2 / 3)));
+	const out = new Set<string>();
+	for (const t of terms) {
+		let df = 0;
+		for (const set of fileTermSets.values()) if (set.has(t)) df++;
+		if (df > 0 && df <= dfMax) out.add(t);
+	}
+	return out;
+}
+
+/**
+ * Rank corpus chunks against a query. THE single ranking seam for the corpus
+ * path: `queryIndex()` and the aio-webquery tool both call it, so the two cannot
+ * drift (issue #165 F15).
+ */
+/**
+ * Rank corpus chunks and return the surviving chunks with their scores.
+ * Use this when the caller needs the chunk body; `rankChunks()` is the same
+ * ranking reduced to the public hit shape.
+ */
+export function rankChunkEntries(
+	query: string,
+	chunks: IndexedChunk[],
+	topK = 8,
+	opts: RankOptions = {},
+): { score: number; chunk: IndexedChunk }[] {
+	const k = Math.max(1, Math.floor(topK));
+	const scorer = createBM25Scorer(query);
+	const scores = scorer.scoreAll(chunks.map((c) => c.text));
+
+	// One tokenization pass per chunk, reused by the floor. Same order of work
+	// the scorer already does for scoring.
+	const chunkTermSets = chunks.map((c) => new Set(extractTerms(c.text)));
+	// Fold chunk term sets up to per-file sets so DF counts files, not chunks.
+	const fileTermSets = new Map<string, Set<string>>();
+	chunks.forEach((c, i) => {
+		const acc = fileTermSets.get(c.file) ?? new Set<string>();
+		for (const t of chunkTermSets[i]!) acc.add(t);
+		fileTermSets.set(c.file, acc);
+	});
+	const discriminative =
+		opts.requireDiscriminative === false
+			? null
+			: discriminativeTerms(scorer.queryTerms, fileTermSets);
+
+	const ranked = scores
+		.map((score, i) => ({ score, i }))
+		.filter(({ score, i }) => {
+			if (score <= 0) return false;
+			if (!discriminative) return true;
+			const set = chunkTermSets[i]!;
+			for (const t of discriminative) if (set.has(t)) return true;
+			return false;
+		})
+		.sort((a, b) => b.score - a.score);
+
+	// Per-file cap: a hard ceiling on how many chunks one file may contribute.
+	// Overflow is DROPPED, not deferred to the tail — re-appending it would make
+	// the cap a no-op whenever topK exceeds the cap, which is exactly the monopoly
+	// this guard exists to stop. Slots go to other files' chunks instead, so a
+	// skewed corpus yields a shorter, more diverse set rather than the same skew.
+	const cap = opts.perFileCap ?? DEFAULT_PER_FILE_CAP;
+	const kept: typeof ranked = [];
+	if (cap > 0) {
+		const perFile = new Map<string, number>();
+		for (const entry of ranked) {
+			const file = chunks[entry.i]!.file;
+			const seen = perFile.get(file) ?? 0;
+			if (seen >= cap) continue;
+			perFile.set(file, seen + 1);
+			kept.push(entry);
+			if (kept.length >= k) break;
+		}
+	} else {
+		kept.push(...ranked.slice(0, k));
+	}
+
+	return kept.map(({ score, i }) => ({ score, chunk: chunks[i]! }));
+}
+
+/**
+ * Rank corpus chunks against a query, reduced to the public hit shape.
+ * THE single ranking seam for the corpus path (see `rankChunkEntries`).
+ */
+export function rankChunks(
+	query: string,
+	chunks: IndexedChunk[],
+	topK = 8,
+	opts: RankOptions = {},
+): CorpusHit[] {
+	return rankChunkEntries(query, chunks, topK, opts).map(({ score, chunk }) => ({
+		score,
+		file: chunk.file,
+		url: chunk.url,
+		heading: chunk.heading,
+	}));
+}
 
 /**
  * Load the corpus index at `outDir` and return the top-`topK` BM25-ranked
@@ -229,19 +374,7 @@ export async function queryIndex(
 		return { ok: true, hits: [], chunkCount: 0, builtAt: index.builtAt };
 	}
 
-	const scorer = createBM25Scorer(query);
-	const scores = scorer.scoreAll(chunks.map((c) => c.text));
-	const hits = scores
-		.map((score, i) => ({ score, chunk: chunks[i]! }))
-		.filter((r) => r.score > 0)
-		.sort((a, b) => b.score - a.score)
-		.slice(0, Math.max(1, Math.floor(topK)))
-		.map(({ score, chunk }) => ({
-			score,
-			file: chunk.file,
-			url: chunk.url,
-			heading: chunk.heading,
-		}));
+	const hits = rankChunks(query, chunks, topK);
 
 	return { ok: true, hits, chunkCount: chunks.length, builtAt: index.builtAt };
 }

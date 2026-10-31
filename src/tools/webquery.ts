@@ -2,8 +2,7 @@ import { TOOL_METADATA } from "./lazy.ts";
 import { join, isAbsolute, resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { tmpdir } from "node:os";
-import { createBM25Scorer } from "../bm25.ts";
-import { loadIndex } from "../webquery-index.ts";
+import { loadIndex, rankChunkEntries } from "../webquery-index.ts";
 
 // Query result cache — same query+dir+topK → same ranked output until index changes
 // Life-depends: avoids re-scoring 500 chunks via BM25 on repeated queries.
@@ -81,17 +80,9 @@ export function registerWebqueryTool(pi: ExtensionAPI): void {
 				return cached.result;
 			}
 
-			// Score all chunks with BM25
-			const scorer = createBM25Scorer(query);
-			const texts = chunks.map((c) => c.text);
-			const scores = scorer.scoreAll(texts);
-
-			// Rank and select top-k
-			const ranked = scores
-				.map((score, i) => ({ score, chunk: chunks[i]! }))
-				.filter((r) => r.score > 0)
-				.sort((a, b) => b.score - a.score)
-				.slice(0, topK);
+			// Rank through the shared corpus seam (queryIndex uses the same one), so
+			// the tool and the local-knowledge pre-check cannot drift (F15).
+			const ranked = rankChunkEntries(query, chunks, topK);
 
 			if (ranked.length === 0) {
 				return {
