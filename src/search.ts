@@ -489,7 +489,17 @@ const SOCIAL_HOSTS = [
 	"x.com",
 ];
 
-function stripWww(domain: string): string {
+/**
+ * Collapse the `www` label so a host spelled two ways compares equal.
+ *
+ * Exported because the rule is a matching rule, not a display rule: every seam
+ * that compares or keys on a domain must apply it on both sides, or a pair that
+ * differs only by that label is treated as two sites (issue #165 F1 found this
+ * in `canonicalizeUrl`, then in `dropGoogleRedirectDuplicates`, then in
+ * `isPrimarySource`). Five more private spellings of the same one-liner live in
+ * goggles/firecrawl/parallel/tinyfish/paywall — filed as a consolidation follow-up.
+ */
+export function stripWww(domain: string): string {
 	return domain.replace(/^www\./, "");
 }
 
@@ -1004,12 +1014,16 @@ export function dropGoogleRedirectDuplicates<T extends SearchResult>(
 	return results.filter((r) => {
 		if (!isGoogleRedirectUrl(r.url)) return true;
 		// Only the `<cite>`-derived domain is trustworthy on a goto URL.
-		const host = (r.domain ?? "").toLowerCase();
+		// Engines disagree on the `www` label (Google's `<cite>` keeps it, other
+		// providers report the apex), so both sides of this comparison go through
+		// the same `stripWww` the dedup key uses — otherwise a pair differing only
+		// by that label survives as two results (issue #165 F1, sibling seam).
+		const host = stripWww((r.domain ?? "").toLowerCase());
 		const title = normalizeTitleForDedup(r.title);
 		if (!host || !title) return true;
 		return !direct.some(
 			(d) =>
-				(d.domain ?? "").toLowerCase() === host &&
+				stripWww((d.domain ?? "").toLowerCase()) === host &&
 				titlesOverlap(title, normalizeTitleForDedup(d.title)),
 		);
 	});

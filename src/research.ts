@@ -12,7 +12,7 @@ import type { SearchResult } from "./types.ts";
 import { chunkMarkdown } from "./chunker.ts";
 import { createBM25Scorer } from "./bm25.ts";
 import { trustTierBoost, trustTierForSourceType } from "./source-trust.ts";
-import { canonicalizeUrl } from "./search.ts";
+import { canonicalizeUrl, stripWww } from "./search.ts";
 import type { SourceType } from "./types.ts";
 
 // ─── Filesystem-safe naming ─────────────────────────────────────────────
@@ -136,7 +136,11 @@ const PRIMARY_DOMAIN_PATTERNS: RegExp[] = [
 
 export function isPrimarySource(domain: string | undefined): boolean {
 	if (!domain) return false;
-	const d = domain.toLowerCase();
+	// Same rule as the search dedup seams: the `www` label is not a site
+	// boundary. Without this the start-anchored entries (`^docs\.`,
+	// `^developer\.`, `^learn\.`) silently deny primary status to a host that
+	// spells itself with the label (issue #165 F1, third member).
+	const d = stripWww(domain.toLowerCase());
 	if (PRIMARY_DOMAIN_SUFFIXES.some((suf) => d.endsWith(suf))) return true;
 	return PRIMARY_DOMAIN_PATTERNS.some((re) => re.test(d));
 }

@@ -19,7 +19,12 @@
 // the title, and a page found by two engines scoring as two separate findings.
 import assert from "node:assert";
 import test from "node:test";
-import { parseYahooResults, canonicalizeUrl, buildResultBuckets } from "../src/search.ts";
+import {
+	parseYahooResults,
+	canonicalizeUrl,
+	buildResultBuckets,
+	dropGoogleRedirectDuplicates,
+} from "../src/search.ts";
 
 // Shape captured from the live SERP (2026-10-31, query "zustand persist
 // middleware migrate version"). Real anchor textContent was:
@@ -155,4 +160,62 @@ test("F1: a bare www host keeps a usable key", () => {
 		canonicalizeUrl("https://www.example.com/"),
 		canonicalizeUrl("https://example.com/"),
 	);
+});
+
+// ─── Sibling seam: the Google-redirect dedup compares raw domains ───
+//
+// `dropGoogleRedirectDuplicates` matches a `/goto` redirect against a direct
+// result by (domain, title). Engines disagree on the `www` label — one reports
+// `www.w3schools.com` from the `<cite>`, another reports `w3schools.com` — and
+// the comparison lowercased but never www-stripped, so the www-asymmetric pair
+// survived as two results. Same defect shape as the canonicalizeUrl fix, a
+// seam that seam's own test file named in its header.
+test("F1: a goto redirect is dropped when only the www label differs", () => {
+	const goto = {
+		url: "https://www.google.com/goto?url=CAEScgHrOzAVdQioe0VY4Q-JJDex7trRrlyDqPUd",
+		domain: "www.w3schools.com",
+		title: "Python pathlib Module",
+		snippet: "",
+	};
+	const direct = {
+		url: "https://www.w3schools.com/python/ref_module_pathlib.asp",
+		domain: "w3schools.com",
+		title: "Python pathlib Module - W3Schools",
+		snippet: "",
+	};
+	const out = dropGoogleRedirectDuplicates([goto, direct]);
+	assert.equal(out.length, 1, `www-asymmetric redirect survived: ${JSON.stringify(out.map((r) => r.domain))}`);
+	assert.equal(out[0].url, direct.url, "the direct URL must be the survivor");
+});
+
+test("F1: the www asymmetry is symmetric — either side may carry the label", () => {
+	const goto = {
+		url: "https://www.google.com/goto?url=CAEScgHrOzAVdQioe0VY4Q-JJDex7trRrlyDqPUd",
+		domain: "w3schools.com",
+		title: "Python pathlib Module",
+		snippet: "",
+	};
+	const direct = {
+		url: "https://www.w3schools.com/python/ref_module_pathlib.asp",
+		domain: "www.w3schools.com",
+		title: "Python pathlib Module - W3Schools",
+		snippet: "",
+	};
+	assert.equal(dropGoogleRedirectDuplicates([goto, direct]).length, 1);
+});
+
+test("F1: a genuinely different site is never dropped by the www fold", () => {
+	const goto = {
+		url: "https://www.google.com/goto?url=CAEScgHrOzAVdQioe0VY4Q-JJDex7trRrlyDqPUd",
+		domain: "python.org",
+		title: "pathlib — Operating system pathways",
+		snippet: "",
+	};
+	const direct = {
+		url: "https://www.w3schools.com/python/ref_module_pathlib.asp",
+		domain: "w3schools.com",
+		title: "Python pathlib Module - W3Schools",
+		snippet: "",
+	};
+	assert.equal(dropGoogleRedirectDuplicates([goto, direct]).length, 2);
 });
