@@ -261,7 +261,7 @@ export function parseDuckDuckGoResults(html: string): SearchResult[] {
 	return results;
 }
 
-function parseYahooResults(html: string): SearchResult[] {
+export function parseYahooResults(html: string): SearchResult[] {
 	const { document } = parseHTML(html);
 	const results: SearchResult[] = [];
 
@@ -271,7 +271,15 @@ function parseYahooResults(html: string): SearchResult[] {
 		const a = el.querySelector("a");
 		if (!a) continue;
 		const rawUrl = a.getAttribute("href") || "";
-		const title = a.textContent?.trim() || "";
+		// The anchor wraps the WHOLE citation block on the current SERP (favicon,
+		// site span, breadcrumb URL, then the title), so `a.textContent` came back as
+		// "zustand.sitehttps://zustand.site › en › docsPersist Middleware - …" for
+		// every Yahoo result (issue #165 F1). The clean title is in h3.title;
+		// older/alternate markup has no h3, so the anchor text stays the fallback.
+		const titleEl = a.querySelector("h3.title") || a.querySelector("h3");
+		const title = (titleEl?.textContent || a.textContent || "")
+			.replace(/\s+/g, " ")
+			.trim();
 		if (!title || !rawUrl) continue;
 
 		let url: string | undefined;
@@ -921,7 +929,15 @@ export function canonicalizeUrl(url: string): string {
 		: "";
 	// Collapse trailing slashes off the path (keep the root "/" itself).
 	const path = u.pathname.replace(/\/+$/, "") || "/";
-	return `${u.protocol}//${u.host.toLowerCase()}${path}${search}`;
+	// The `www.` label is a spelling, not a different page, and it is the single
+	// most common way two engines disagree on the same URL — so it must share a
+	// bucket or cross-engine corroboration is diluted (issue #165 F1). Only the
+	// literal leading `www.` label collapses: docs.example.com and
+	// example.com stay separate buckets. This is a KEY change only; display and
+	// fetch always use the original URL.
+	let host = u.hostname.toLowerCase();
+	if (host.startsWith("www.")) host = host.slice(4);
+	return `${u.protocol}//${host}${path}${search}`;
 }
 
 // ─── Google SERP redirect duplicates ───────────────────────────────
