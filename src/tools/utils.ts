@@ -91,11 +91,24 @@ export function frontmatter(
 }
 
 // ─── Page path helpers ──────────────────────────────────────────────
-function pageToPath(page: Page): string {
-	// new URL throws on malformed page URLs; fall back to a safe stem.
+/**
+ * The canonical output path for a URL. This is the pull's page IDENTITY:
+ * `/learn/`, `/learn/index.html` and `/learn#x` all write `learn/index.md`, so
+ * they are one page.
+ *
+ * There used to be two canonicalizers of different strength (issue #165 F22):
+ * `search.ts` `canonicalizeUrl()` (host case, trailing slash, tracking params)
+ * and `request-queue.ts` `canonicalQueueUrl()` (hash/search only). The pull path
+ * used the weak one while completion was decided by the file, which is how two
+ * queue entries came to write one file. The queue now takes this function as its
+ * `pathFor` rule, so enqueue dedupe and completion answer to the same rule that
+ * actually writes the file.
+ */
+export function urlToPagePath(url: string): string {
+	// new URL throws on malformed URLs; fall back to the root stem.
 	let pathname: string;
 	try {
-		pathname = new URL(page.url).pathname;
+		pathname = new URL(url).pathname;
 	} catch {
 		pathname = "/";
 	}
@@ -104,6 +117,10 @@ function pageToPath(page: Page): string {
 	p = p.replace(/\.html?$/, "").replace(/^\//, "");
 	if (!p.endsWith(".md")) p += ".md";
 	return p;
+}
+
+function pageToPath(page: Page): string {
+	return urlToPagePath(page.url);
 }
 
 /** Normalize a URL to the same stem used by pageToPath for matching. */

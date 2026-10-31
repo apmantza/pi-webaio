@@ -22,6 +22,7 @@ import {
 	writePage,
 	rewriteLinks,
 	runPullFromQueue,
+	urlToPagePath,
 } from "./utils.ts";
 import { buildIndex } from "../webquery-index.ts";
 
@@ -192,7 +193,7 @@ export function registerWebpullTool(pi: ExtensionAPI): void {
 			let priorCompleted = 0;
 			let seedAlreadyCompleted = false;
 			if (resume && hasQueueFile(outDir)) {
-				queue = await RequestQueue.resume(outDir);
+				queue = await RequestQueue.resume(outDir, urlToPagePath);
 				if (queue) {
 					// Repair completed-before-write entries from older queue files,
 					// then backfill the explicitly requested page. RequestQueue
@@ -240,7 +241,7 @@ export function registerWebpullTool(pi: ExtensionAPI): void {
 				const urls = await discover(url.href, max, fetchOpts);
 				if (!urls.length) throw new Error("No pages found.");
 
-				queue = await RequestQueue.create(outDir);
+				queue = await RequestQueue.create(outDir, urlToPagePath);
 				await queue.add(urls);
 
 				// Size workers from the discovered URL set (P4): single-host

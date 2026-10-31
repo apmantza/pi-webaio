@@ -9,7 +9,7 @@
 
 import { readFile, writeFile, mkdir, readdir, open } from "node:fs/promises";
 
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import type { Dirent } from "node:fs";
 import { existsSync } from "node:fs";
 
@@ -19,6 +19,14 @@ type QueueStatus = "queued" | "in_progress" | "completed" | "failed";
 
 export interface QueueEntry {
 	url: string;
+	/**
+	 * Output path (relative to outDir) this entry writes. When the caller supplies
+	 * a `pathFor` rule this is the page's IDENTITY: two URLs that map to the same
+	 * path are the same page, so they are deduplicated at enqueue and completion
+	 * is proven by the file existing rather than by a URL written inside it
+	 * (issue #165 F14/F16/F22).
+	 */
+	path?: string;
 	/** Final URL whose markdown file was written, when the caller supplies it. */
 	outputUrl?: string;
 	status: QueueStatus;
@@ -48,6 +56,13 @@ export function canonicalQueueUrl(raw: string): string {
 export class RequestQueue {
 	private readonly entries: Map<string, QueueEntry> = new Map();
 	private readonly completedFileUrls: Set<string>;
+	/** Relative paths of the .md files already present in outDir. */
+	private readonly completedPaths: Set<string>;
+	/** path -> queue key, so enqueue dedupe and completion are O(1). */
+	private readonly byPath: Map<string, string>;
+	/** URL spellings that collapsed onto an already-queued path. */
+	private duplicateCount = 0;
+	private readonly pathFor?: (url: string) => string;
 	private readonly queuePath: string;
 	private saveTimer: ReturnType<typeof setTimeout> | null = null;
 	private dirty = false;
@@ -58,10 +73,30 @@ export class RequestQueue {
 		outDir: string,
 		entries: Map<string, QueueEntry>,
 		completedFileUrls: Set<string> = new Set(),
+		pathFor?: (url: string) => string,
+		completedPaths: Set<string> = new Set(),
 	) {
 		this.queuePath = join(outDir, QUEUE_FILENAME);
 		this.entries = entries;
 		this.completedFileUrls = completedFileUrls;
+		this.completedPaths = completedPaths;
+		this.pathFor = pathFor;
+		this.byPath = new Map();
+		for (const entry of entries.values()) {
+			const path = this.pathOf(entry);
+			if (path !== undefined && !this.byPath.has(path)) this.byPath.set(path, entry.url);
+		}
+	}
+
+	/** The output path an entry owns, when a path rule was supplied. */
+	private pathOf(entry: Pick<QueueEntry, "url" | "path">): string | undefined {
+		if (typeof entry.path === "string" && entry.path) return entry.path;
+		if (!this.pathFor) return undefined;
+		try {
+			return this.pathFor(entry.url);
+		} catch {
+			return undefined;
+		}
 	}
 
 	// ── Factory ─────────────────────────────────────────────────────
@@ -69,9 +104,12 @@ export class RequestQueue {
 	/**
 	 * Create a new empty queue.
 	 */
-	static async create(outDir: string): Promise<RequestQueue> {
+	static async create(
+		outDir: string,
+		pathFor?: (url: string) => string,
+	): Promise<RequestQueue> {
 		await mkdir(outDir, { recursive: true });
-		const q = new RequestQueue(outDir, new Map());
+		const q = new RequestQueue(outDir, new Map(), new Set(), pathFor);
 		q.startAutoSave();
 		return q;
 	}
@@ -81,7 +119,10 @@ export class RequestQueue {
 	 * already-downloaded markdown files and marks those URLs as completed.
 	 * Returns null if no queue file exists.
 	 */
-	static async resume(outDir: string): Promise<RequestQueue | null> {
+	static async resume(
+		outDir: string,
+		pathFor?: (url: string) => string,
+	): Promise<RequestQueue | null> {
 		const queuePath = join(outDir, QUEUE_FILENAME);
 		if (!existsSync(queuePath)) {
 			return null;
@@ -112,9 +153,17 @@ export class RequestQueue {
 
 		// Scan existing .md files to mark URLs as completed. Only read the
 		// frontmatter window; pulled pages can be large and the URL is near the top.
+		//
+		// The relative PATH of every file is recorded too. That is the authoritative
+		// completion signal when a path rule is in force: a file can hold only ONE
+		// URL in its frontmatter, so when several spellings write the same page the
+		// losing ones looked never-completed and were requeued on every run
+		// (issue #165 F16).
 		const completedFileUrls = new Set<string>();
+		const completedPaths = new Set<string>();
 		const mdFiles = await scanMarkdownFiles(outDir);
 		for (const mdPath of mdFiles) {
+			completedPaths.add(relative(outDir, mdPath).replace(/\\/g, "/"));
 			const url = await readFrontmatterUrl(mdPath);
 			if (!url) continue;
 			const canonicalUrl = canonicalQueueUrl(url);
@@ -129,7 +178,25 @@ export class RequestQueue {
 			}
 		}
 
-		const q = new RequestQueue(outDir, entries, completedFileUrls);
+		const q = new RequestQueue(
+			outDir,
+			entries,
+			completedFileUrls,
+			pathFor,
+			completedPaths,
+		);
+		// Path-based completion, the identity-correct answer when several URL
+		// spellings map to one file.
+		if (pathFor) {
+			for (const entry of entries.values()) {
+				if (entry.status === "completed") continue;
+				const path = q.pathOf(entry);
+				if (path !== undefined && completedPaths.has(path)) {
+					entry.status = "completed";
+					entry.retries = 0;
+				}
+			}
+		}
 		q.startAutoSave();
 		return q;
 	}
@@ -158,6 +225,7 @@ export class RequestQueue {
 			if (!url) continue;
 			const existing = this.entries.get(url);
 			if (existing) {
+				this.duplicateCount++;
 				// A queue entry can be marked completed just before a crash and
 				// before its markdown file is written. A seed backfill must make
 				// that missing output eligible for retry.
@@ -174,15 +242,32 @@ export class RequestQueue {
 				}
 				continue;
 			}
+			// Identity is the output path: `/learn/` and `/learn/index.html` write the
+			// same file, so the second spelling must not consume a slot, fetch a
+			// second page, and silently overwrite the first (issue #165 F14). The
+			// collapse is COUNTED so the caller can report "6 URLs, 4 pages" honestly
+			// instead of claiming 6 pages.
+			const path = this.pathFor ? this.pathOf({ url }) : undefined;
+			if (path !== undefined) {
+				const owner = this.byPath.get(path);
+				if (owner !== undefined) {
+					this.duplicateCount++;
+					continue;
+				}
+			}
 			this.entries.set(url, {
 				url,
+				path,
 				status:
-					preserveCompletedFiles && this.completedFileUrls.has(url)
+					preserveCompletedFiles &&
+					(this.completedFileUrls.has(url) ||
+						(path !== undefined && this.completedPaths.has(path)))
 						? "completed"
 						: "queued",
 				retries: 0,
 				timestamp: now,
 			});
+			if (path !== undefined) this.byPath.set(path, url);
 			this.dirty = true;
 		}
 	}
@@ -208,6 +293,11 @@ export class RequestQueue {
 	}
 
 	private hasCompletedFile(entry: QueueEntry): boolean {
+		// Path first: it is the identity, and it is the only signal that survives
+		// several URL spellings writing one file. Fall back to the frontmatter-URL
+		// set for legacy entries that carry no path and no rule can supply one.
+		const path = this.pathOf(entry);
+		if (path !== undefined) return this.completedPaths.has(path);
 		return (
 			this.completedFileUrls.has(entry.url) ||
 			(entry.outputUrl !== undefined &&
@@ -252,6 +342,9 @@ export class RequestQueue {
 		if (entry) {
 			entry.status = "completed";
 			entry.outputUrl = canonicalQueueUrl(outputUrl);
+			// Record the identity the file was written under, so a later resume can
+			// prove completion from the file's existence.
+			entry.path ??= this.pathOf(entry);
 			entry.lastError = undefined;
 			entry.timestamp = Date.now();
 			this.dirty = true;
@@ -312,6 +405,13 @@ export class RequestQueue {
 		completed: number;
 		failed: number;
 		total: number;
+		/**
+		 * URL spellings passed to add() that did NOT become their own entry —
+		 * either the same canonical URL was already queued, or they mapped to an
+		 * output path another entry already owns. Lets the caller say
+		 * "6 URLs, 4 pages" instead of claiming 6 pages (issue #165 F14).
+		 */
+		duplicates: number;
 	} {
 		let queued = 0,
 			inProgress = 0,
@@ -333,7 +433,14 @@ export class RequestQueue {
 					break;
 			}
 		}
-		return { queued, inProgress, completed, failed, total: this.entries.size };
+		return {
+			queued,
+			inProgress,
+			completed,
+			failed,
+			total: this.entries.size,
+			duplicates: this.duplicateCount,
+		};
 	}
 
 	/**
