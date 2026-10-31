@@ -325,3 +325,62 @@ test("withFrontmatter re-attaches a stripped block verbatim", () => {
 	const rebuilt = withFrontmatter(frontmatter, body);
 	assert.ok(rebuilt.startsWith(FM), "rebuilt document does not start with the block");
 });
+
+// ─── A fence is a whole line, or a thematic break eats the page ──────
+//
+// The closing side of FRONTMATTER_RE was `\r?\n---`, which matches any line that
+// merely *starts* with three dashes. `----` is a perfectly ordinary markdown
+// horizontal rule, so a document with no frontmatter at all — one that opens
+// with a thematic `---` and rules a section further down — had its heading
+// swallowed into the "frontmatter" and left a stray `-` behind as the body.
+// `chunkMarkdown` then dropped that text via stripWrapper, so content vanished.
+// This contradicts the contract stated in the module header: an unclosed `---`
+// is a thematic break and must not swallow the document.
+//
+// Recurrence prevented: a page whose body contains a `----` rule losing every
+// heading above it from chunks and from the pruned output.
+test("F21: a longer dash rule is not a closing fence", () => {
+	for (const closer of ["----", "-----", "---foo", "--- -"]) {
+		const doc = `---\ntitle: T\n${closer}\n\nBody\n`;
+		const r = splitFrontmatter(doc);
+		if (closer.startsWith("---foo") || closer === "--- -") {
+			// Not a fence at all: the whole document stays body.
+			assert.equal(r.frontmatter, "", `${closer} was taken as a fence`);
+			assert.equal(r.body, doc);
+		} else {
+			assert.equal(r.frontmatter, "", `${closer} was taken as a fence`);
+		}
+	}
+});
+
+test("F21: a body containing a horizontal rule keeps its headings", () => {
+	// No frontmatter: a thematic break at the top and a rule further down.
+	const doc = "---\n\n# Heading\n\n----\n\ntext\n";
+	const r = splitFrontmatter(doc);
+	assert.equal(r.frontmatter, "", "a thematic break was read as frontmatter");
+	assert.ok(r.body.includes("# Heading"), `heading lost: ${JSON.stringify(r.body)}`);
+	assert.ok(r.body.includes("text"), "body text lost");
+});
+
+test("F21: an empty frontmatter block is recognised", () => {
+	const r = splitFrontmatter("---\n---\n\nBody\n");
+	assert.equal(r.frontmatter, "---\n---\n");
+	assert.equal(r.body, "\nBody\n");
+});
+
+// The ordinary case must not regress while the pathological ones are fixed,
+// including CRLF and a block that ends at end-of-string with no trailing newline.
+test("F21: real frontmatter still splits, with and without a trailing newline", () => {
+	const doc = FM + "# H\n\ntext\n";
+	const r = splitFrontmatter(doc);
+	// The block is the fence lines plus ONE newline; the blank line after it is
+	// body, which is what the module header documents.
+	assert.equal(r.frontmatter, FM.replace(/\n$/, ""));
+	assert.equal(r.body, "\n# H\n\ntext\n");
+	const crlf = '---\r\ntitle: "T"\r\n---\r\nBody';
+	const rc = splitFrontmatter(crlf);
+	assert.equal(rc.frontmatter, '---\r\ntitle: "T"\r\n---\r\n');
+	assert.equal(rc.body, "Body");
+	const noNewline = '---\ntitle: "T"\n---';
+	assert.equal(splitFrontmatter(noNewline).frontmatter, '---\ntitle: "T"\n---');
+});

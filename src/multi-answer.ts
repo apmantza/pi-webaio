@@ -19,6 +19,7 @@
 import { createBM25Scorer } from "./bm25.ts";
 import { estimateTokens } from "./token-count.ts";
 import { chunkMarkdown, type Chunk, type ChunkOptions } from "./chunker.ts";
+import { stripWrapper } from "./markdown-frontmatter.ts";
 
 /** One fetched page fed into the multi-source pool. */
 export interface MultiAnswerSource {
@@ -81,13 +82,6 @@ export interface FormatMultiSourceAnswerOptions {
 
 /** Default number of cited chunks returned in multi-source answer mode. */
 export const DEFAULT_MULTI_ANSWER_TOP_K = 5;
-
-// Leading YAML frontmatter block (`---\n…\n---\n`) the fetch pipeline adds.
-const FRONTMATTER_RE = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/;
-
-// The prompt-injection safety markers. They wrap content, they ARE NOT
-// content — strip them before chunking so they never leak into a chunk.
-const MARKER_LINE_RE = /^\[UNTRUSTED WEB CONTENT (START|END)\]\s*$/;
 
 // First ATX heading inside a chunk (mirrors applyQueryAnswerMode). Used to
 // track the heading breadcrumb as we walk a source's chunks in order.
@@ -159,13 +153,15 @@ export function truncateVisible(
 /**
  * Strip the fetch pipeline's leading frontmatter + safety markers so chunk
  * text is clean supporting prose. Pure.
+ *
+ * Delegates to the shared `stripWrapper` — this module used to carry its own
+ * frontmatter and marker regexes, which is how the loose-fence defect found on
+ * #166 survived here after the shared parser was fixed: `chunker.ts` and
+ * `outline.ts` already import the shared one, so cited answers were the only
+ * path still splitting on `\r?\n---`.
  */
-function stripWrapper(content: string): string {
-	const withoutFm = content.replace(FRONTMATTER_RE, "");
-	const lines = withoutFm
-		.split("\n")
-		.filter((line) => !MARKER_LINE_RE.test(line.trim()));
-	return lines.join("\n").trim();
+function stripProse(content: string): string {
+	return stripWrapper(content).trim();
 }
 
 /**
@@ -198,7 +194,7 @@ export function rankChunksAcrossSources(
 
 	for (const source of sources) {
 		if (!source || !source.content) continue;
-		const clean = stripWrapper(source.content);
+		const clean = stripProse(source.content);
 		if (!clean) continue;
 
 		let chunks: Chunk[];

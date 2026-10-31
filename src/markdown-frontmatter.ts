@@ -25,8 +25,8 @@
  * an import cycle. CRLF tolerance and unquoted scalar values are the contract.
  */
 
-/** Leading YAML frontmatter block, LF or CRLF, with or without a trailing newline. */
-const FRONTMATTER_RE = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/;
+/** A frontmatter fence: exactly three dashes on a line of their own. */
+const FENCE_LINE = /^---[ \t]*$/;
 
 /** A `[UNTRUSTED WEB CONTENT START]` / `[UNTRUSTED WEB CONTENT END]` line. */
 export const MARKER_LINE_RE = /^\s*\[UNTRUSTED WEB CONTENT (?:START|END)\]\s*$/;
@@ -42,12 +42,43 @@ export interface MarkdownPrefix {
  * Split the leading frontmatter block from the document body. A `---` line with
  * no closing fence is NOT frontmatter (it is a thematic break) and is left in
  * the body, so a truncated block can never swallow the document.
+ *
+ * Line-anchored on purpose. The previous single regex used `\r?\n---` for the
+ * closing fence, which matches any line that merely *starts* with three dashes:
+ * `----` is an ordinary horizontal rule, and a page with no frontmatter at all —
+ * a thematic break at the top, a rule further down — had its heading taken as
+ * frontmatter and `chunkMarkdown` then dropped it. A lazy `[\s\S]*?` cannot
+ * express "the fence owns the whole line" either, because it happily absorbs
+ * the leading dash of `----` and calls the rest a fence; only walking lines can.
  */
 export function splitFrontmatter(markdown: string): MarkdownPrefix {
 	if (!markdown.startsWith("---")) return { frontmatter: "", body: markdown };
-	const match = markdown.match(FRONTMATTER_RE);
-	if (!match) return { frontmatter: "", body: markdown };
-	return { frontmatter: match[0], body: markdown.slice(match[0].length) };
+	// Keep each newline with its line so the returned block is verbatim and
+	// `withFrontmatter(frontmatter, body)` reproduces the input byte for byte.
+	const lines: string[] = [];
+	let start = 0;
+	for (let i = 0; i < markdown.length; i++) {
+		if (markdown[i] === "\n") {
+			lines.push(markdown.slice(start, i + 1));
+			start = i + 1;
+		}
+	}
+	if (start < markdown.length) lines.push(markdown.slice(start));
+
+	// A CRLF line arrives as `---\r\n`; the `\r` belongs to the line ending, not
+	// to the fence.
+	const isFence = (line: string) => FENCE_LINE.test(line.replace(/\r?\n$/, ""));
+	if (!isFence(lines[0] ?? "")) return { frontmatter: "", body: markdown };
+	for (let i = 1; i < lines.length; i++) {
+		if (isFence(lines[i]!)) {
+			return {
+				frontmatter: lines.slice(0, i + 1).join(""),
+				body: lines.slice(i + 1).join(""),
+			};
+		}
+	}
+	// Opening fence with no closer: a thematic break, not frontmatter.
+	return { frontmatter: "", body: markdown };
 }
 
 /**
