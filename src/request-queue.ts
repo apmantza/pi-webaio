@@ -293,11 +293,14 @@ export class RequestQueue {
 	}
 
 	private hasCompletedFile(entry: QueueEntry): boolean {
-		// Path first: it is the identity, and it is the only signal that survives
-		// several URL spellings writing one file. Fall back to the frontmatter-URL
-		// set for legacy entries that carry no path and no rule can supply one.
 		const path = this.pathOf(entry);
-		if (path !== undefined) return this.completedPaths.has(path);
+		// Path first: it is the identity, and it is the only signal that survives
+		// several URL spellings writing one file. But it must not VETO: a redirect
+		// writes the page under `result.url` while `entry.url` keeps the address that
+		// was requested, so the two map to different paths and insisting on the path
+		// alone re-fetches an already-successful page on every resume. Fall through
+		// to the URL proof, which covers exactly that case via `outputUrl`.
+		if (path !== undefined && this.completedPaths.has(path)) return true;
 		return (
 			this.completedFileUrls.has(entry.url) ||
 			(entry.outputUrl !== undefined &&

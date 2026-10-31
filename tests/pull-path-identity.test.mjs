@@ -24,7 +24,7 @@
 // a missing method.
 import assert from "node:assert";
 import test from "node:test";
-import { mkdtemp, mkdir, writeFile, readFile } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, dirname, relative, resolve, sep } from "node:path";
 import { RequestQueue } from "../src/request-queue.ts";
@@ -301,3 +301,54 @@ test("F14: the mapper never yields a path that escapes the output directory", ()
 	}
 });
 
+
+// ─── A redirect writes under the FINAL url; the path must not veto it ──
+//
+// `aio-webpull` writes the page at `urlToPagePath(result.url)` — the address
+// reached after redirects — while calling `queue.complete(pageUrl, result.url)`.
+// `complete()` recorded `entry.path` from `entry.url`, i.e. the address that was
+// REQUESTED. When a page redirects those two differ, so the identity said the
+// output was missing even though the file sat one name away, and every resume
+// re-fetched a page that had already succeeded.
+//
+// Recurrence prevented: a pull of a site with redirects never converges — each
+// resume re-queues the redirected pages forever.
+test("F14: a redirected page is not requeued when its file exists under the final URL", async () => {
+	const outDir = await scratch();
+	const queue = await RequestQueue.create(outDir, urlToPagePath);
+	await queue.add(["https://x.com/old"]);
+	assert.equal(await queue.next(), "https://x.com/old");
+	// The fetch followed a redirect; the file lands under the final address.
+	await writeSavedPage(outDir, urlToPagePath("https://x.com/new"), "https://x.com/new");
+	await queue.complete("https://x.com/old", "https://x.com/new");
+	await queue.close();
+
+	const resumed = await RequestQueue.resume(outDir, urlToPagePath);
+	assert.ok(resumed, "resume found no queue");
+	assert.equal(
+		await resumed.requeueCompletedMissingFiles(),
+		0,
+		"redirected page requeued although its markdown file exists",
+	);
+});
+
+// The fallback must not become a blanket "already done": if the file is deleted,
+// the entry has to be re-fetched even though its URL is remembered.
+test("F14: deleting a redirected page's output still requeues it", async () => {
+	const outDir = await scratch();
+	const queue = await RequestQueue.create(outDir, urlToPagePath);
+	await queue.add(["https://x.com/old"]);
+	assert.equal(await queue.next(), "https://x.com/old");
+	await writeSavedPage(outDir, urlToPagePath("https://x.com/new"), "https://x.com/new");
+	await queue.complete("https://x.com/old", "https://x.com/new");
+	await queue.close();
+	await rm(join(outDir, urlToPagePath("https://x.com/new")), { force: true });
+
+	const resumed = await RequestQueue.resume(outDir, urlToPagePath);
+	assert.ok(resumed, "resume found no queue");
+	assert.equal(
+		await resumed.requeueCompletedMissingFiles(),
+		1,
+		"output was deleted but the entry was not requeued",
+	);
+});
