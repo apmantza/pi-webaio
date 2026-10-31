@@ -26,7 +26,7 @@ import assert from "node:assert";
 import test from "node:test";
 import { mkdtemp, mkdir, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, dirname } from "node:path";
+import { join, dirname, relative, resolve, sep } from "node:path";
 import { RequestQueue } from "../src/request-queue.ts";
 import { urlToPagePath } from "../src/tools/utils.ts";
 
@@ -272,3 +272,32 @@ test("F14: the mapper is stable across host and query spellings of one page", ()
 	);
 	assert.ok(!urlToPagePath("https://docs.example.org/learn/guide").includes("?"));
 });
+
+// ─── The write path relies on the mapper being traversal-safe ──────
+//
+// `aio-webpull` does `join(outDir, urlToPagePath(url))` with no containment
+// check of its own, so safety rests entirely on this mapper: the WHATWG URL
+// parser normalizes dot-segments and nothing decodes percent-escapes before the
+// path reaches the filesystem. Pin that, because the plausible next
+// "improvement" — decoding the pathname so `%20` stops showing up in filenames —
+// would turn `..%2f..%2f` into real traversal, and the pull would write outside
+// the output directory.
+test("F14: the mapper never yields a path that escapes the output directory", () => {
+	const outDir = resolve("/tmp/pull-containment");
+	for (const url of [
+		"https://x/../../etc/passwd",
+		"https://x/%2e%2e/%2e%2e/etc/passwd",
+		"https://x/a/..%2f..%2fetc/passwd",
+		"https://x/..%5c..%5cwindows/win.ini",
+		"https://x/....//....//x",
+		"https://x/a/../../../b",
+		"https://x//../../y",
+	]) {
+		const rel = urlToPagePath(url);
+		const r = relative(outDir, resolve(join(outDir, rel)));
+		const escaped =
+			r === ".." || r.startsWith(`..${sep}`) || r.split(sep).includes("..");
+		assert.ok(!escaped, `${url} escapes the output dir as ${JSON.stringify(rel)}`);
+	}
+});
+
