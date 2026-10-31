@@ -123,9 +123,21 @@ test("F5: the repository itself satisfies the gate", (t) => {
 	try {
 		files = listTrackedFiles(new URL("../", import.meta.url).pathname);
 	} catch (err) {
-		const signal = `${err?.code ?? ""} ${err?.message ?? ""}`;
+		// A denied `git` child process can surface as EPERM/ENOENT/EACCES on
+		// `code`, or only inside the message/stderr (e.g. `spawnSync git EPERM`
+		// from the plegma sandbox). Anything else is a real index problem and
+		// must stay red — skipping on that would hide a genuine violation.
+		const stderr =
+			typeof err?.stderr === "string"
+				? err.stderr
+				: Buffer.isBuffer(err?.stderr)
+					? err.stderr.toString()
+					: "";
+		const signal = `${err?.code ?? ""} ${err?.message ?? ""} ${stderr}`;
 		if (/EPERM|ENOENT|EACCES/.test(signal)) {
-			t.skip(`git unavailable in this sandbox (${err?.code ?? err?.message})`);
+			t.skip(
+				`git unavailable in this sandbox (${String(err?.code ?? err?.message ?? stderr).slice(0, 120)})`,
+			);
 			return;
 		}
 		throw err;
