@@ -668,6 +668,69 @@ async function fetchReadmeExcerpt(
 }
 
 /**
+ * Map one GitHub API list onto the links aio-webmap publishes.
+ *
+ * Pure and exported so the URL shapes are unit-testable without the network
+ * (issue #165 F12/F13). Two shapes matter here:
+ *  - the Tags API returns no `html_url`, so the generic fallback built
+ *    `/tags/<name>`, which GitHub answers with 404. `/releases/tag/<name>` is
+ *    the page that actually exists — verified 200 for tags WITH a release and
+ *    for bare tags in repos that publish no releases at all (torvalds/linux,
+ *    golang/go: 100 tags, 0 releases, all 200).
+ *  - the Issues API also returns pull requests; without filtering them out the
+ *    `github-api:issues` bucket duplicates the `pulls` bucket.
+ */
+export function mapFeatureItems(
+	owner: string,
+	repo: string,
+	feature: string,
+	data: unknown,
+	limit = 20,
+): FeatureLink[] {
+	// /actions/runs answers `{ total_count, workflow_runs: [...] }`, not an array.
+	// Unwrap BEFORE the array check: the original order returned `[]` on the
+	// object body first, so the unwrap below could never run and the
+	// `github-api:actions` bucket was always empty (new finding, same function).
+	let items: unknown = data;
+	if (items && !Array.isArray(items) && Array.isArray((items as any).workflow_runs)) {
+		items = (items as any).workflow_runs;
+	}
+	if (!Array.isArray(items)) return [];
+	return items
+		.filter((item: any) => {
+			// GitHub's issues list includes pull requests (they share the issue
+			// number space). They belong in the `pulls` bucket only.
+			if (feature !== "issues") return true;
+			return !item || typeof item !== "object" || !("pull_request" in item);
+		})
+		.slice(0, limit)
+		.map((item: any): FeatureLink => {
+			const fallbackUrl =
+				feature === "tags"
+					? `https://github.com/${owner}/${repo}/releases/tag/${encodeURIComponent(item.name ?? "")}`
+					: // The chain exists for APIs that omit html_url. Commits carry
+						// neither `number` nor `name`, so without `sha` the fallback
+						// produced a ref-less `.../commits/`.
+						`https://github.com/${owner}/${repo}/${feature}/${item.number ?? item.name ?? item.sha ?? ""}`;
+			const url = item.html_url || fallbackUrl;
+			const title =
+				item.title ||
+				item.display_title ||
+				item.name ||
+				item.tag_name ||
+				item.commit?.message?.split("\n")[0] ||
+				item.sha?.slice(0, 7) ||
+				"(untitled)";
+		return {
+			url,
+			title,
+			number: item.number,
+			state: item.state || item.conclusion,
+		};
+	});
+}
+
+/**
  * List a feature (issues, pulls, etc.) and return URL+title pairs.
  * Returns up to `limit` items.
  *
@@ -718,30 +781,9 @@ async function listFeatureItems(
 			default:
 				return [];
 		}
-		if (!Array.isArray(data)) return [];
-		// Unwrap workflow_runs wrapper for /actions/runs
-		if (data && Array.isArray((data as any).workflow_runs)) {
-			data = (data as any).workflow_runs;
-		}
-		return data.slice(0, limit).map((item: any): FeatureLink => {
-			const url =
-				item.html_url ||
-				`https://github.com/${owner}/${repo}/${feature}/${item.number ?? item.name ?? ""}`;
-			const title =
-				item.title ||
-				item.display_title ||
-				item.name ||
-				item.tag_name ||
-				item.commit?.message?.split("\n")[0] ||
-				item.sha?.slice(0, 7) ||
-				"(untitled)";
-			return {
-				url,
-				title,
-				number: item.number,
-				state: item.state || item.conclusion,
-			};
-		});
+		// No array pre-check here: /actions/runs returns an object body and
+		// mapFeatureItems unwraps it, then rejects anything genuinely non-list.
+		return mapFeatureItems(owner, repo, feature, data, limit);
 	} catch {
 		return [];
 	}
