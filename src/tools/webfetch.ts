@@ -712,6 +712,40 @@ export function composeFetchText(parts: FetchTextParts): string {
 	return lines.join("\n");
 }
 
+export interface MultiAnswerTextParts {
+	/** e.g. `Fetched 3/4 URLs.` — the batch tally, printed once. */
+	header: string;
+	/** The echoed query line, or empty string when there is none. */
+	notice: string;
+	/** Output of `formatMultiSourceAnswer()` — owns the cited-answer framing. */
+	displayContent: string;
+	localKnowledgeNote?: string;
+}
+
+/**
+ * Compose the agent-visible text for a multi-source cited answer.
+ *
+ * The library (`formatMultiSourceAnswer`) owns the `Cited answer:` header, the
+ * per-source labels and the verify note; this layer adds only the batch tally
+ * and the echoed query. It used to repeat the library's mode notice and verify
+ * note on top of them (issue #165 F18), doubling framing the call claimed to
+ * keep cheap. Extracted from the handler so that boundary is testable through
+ * assembled output rather than by grepping this file's source.
+ *
+ * @internal Exported for unit tests only.
+ */
+export function composeMultiAnswerText(
+	parts: MultiAnswerTextParts,
+): string {
+	return (
+		parts.header +
+		parts.notice +
+		"\n\n" +
+		parts.displayContent +
+		(parts.localKnowledgeNote ?? "")
+	);
+}
+
 export function registerWebfetchTool(pi: ExtensionAPI): void {
 	pi.registerTool({
 		...TOOL_METADATA["aio-webfetch"],
@@ -1974,7 +2008,12 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 							content: [
 								{
 									type: "text",
-									text: header + notice + "\n\n" + displayContent + localKnowledgeNote,
+									text: composeMultiAnswerText({
+										header,
+										notice,
+										displayContent,
+										localKnowledgeNote,
+									}),
 								},
 							],
 							details: {

@@ -28,20 +28,13 @@ import { mkdtemp, mkdir, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { RequestQueue } from "../src/request-queue.ts";
+import { urlToPagePath } from "../src/tools/utils.ts";
 
-// The production path rule (utils.pageToPath): `/learn/` and `/learn/index.html`
-// both become `learn/index.md`.
-function pathFor(url) {
-	let p;
-	try {
-		p = new URL(url).pathname;
-	} catch {
-		p = "/";
-	}
-	if (p.endsWith("/")) p += "index";
-	p = p.replace(/\.html?$/, "").replace(/^\//, "");
-	return p.endsWith(".md") ? p : `${p}.md`;
-}
+// The queue is driven with the SAME mapper `aio-webpull` wires in
+// `src/tools/webpull.ts` (`RequestQueue.create/resume(outDir, urlToPagePath)`).
+// An earlier version of this file re-declared the rule locally, which proved
+// only that the queue honors an arbitrary callback: a regression inside
+// `urlToPagePath` would have shipped with all of these tests green.
 
 async function scratch() {
 	return mkdtemp(join(tmpdir(), "pi-webaio-pullid-"));
@@ -68,7 +61,7 @@ const PAIR = [
 
 test("F14: URLs that map to one output path occupy one queue entry", async () => {
 	const outDir = await scratch();
-	const q = await RequestQueue.create(outDir, pathFor);
+	const q = await RequestQueue.create(outDir, urlToPagePath);
 	await q.add(PAIR);
 
 	const s = q.stats();
@@ -90,10 +83,10 @@ test("F14: URLs that map to one output path occupy one queue entry", async () =>
 
 test("F14: no two pending entries can share an output path", async () => {
 	const outDir = await scratch();
-	const q = await RequestQueue.create(outDir, pathFor);
+	const q = await RequestQueue.create(outDir, urlToPagePath);
 	await q.add(PAIR);
 
-	const paths = queuedEntries(q).map((e) => pathFor(e.url));
+	const paths = queuedEntries(q).map((e) => urlToPagePath(e.url));
 	assert.ok(paths.length > 0, "nothing queued");
 	assert.equal(
 		new Set(paths).size,
@@ -104,7 +97,7 @@ test("F14: no two pending entries can share an output path", async () => {
 
 test("F14: URLs mapping to DIFFERENT paths are still distinct entries", async () => {
 	const outDir = await scratch();
-	const q = await RequestQueue.create(outDir, pathFor);
+	const q = await RequestQueue.create(outDir, urlToPagePath);
 	await q.add([
 		"https://docs.example.org/learn/a",
 		"https://docs.example.org/learn/b",
@@ -149,7 +142,7 @@ test("F16: a resumed pull whose output files all exist requeues nothing", async 
 	const outDir = await scratch();
 	await writeRealisticQueueFile(outDir);
 
-	const resumed = await RequestQueue.resume(outDir, pathFor);
+	const resumed = await RequestQueue.resume(outDir, urlToPagePath);
 	assert.ok(resumed, "resume found no queue");
 	const requeued = await resumed.requeueCompletedMissingFiles();
 
@@ -169,7 +162,7 @@ test("F16: a genuinely missing output file is still requeued (recovery preserved
 	const { rm } = await import("node:fs/promises");
 	await rm(join(outDir, "learn/getting-started/introduction.md"), { force: true });
 
-	const resumed = await RequestQueue.resume(outDir, pathFor);
+	const resumed = await RequestQueue.resume(outDir, urlToPagePath);
 	const requeued = await resumed.requeueCompletedMissingFiles();
 	assert.equal(
 		requeued,
@@ -182,7 +175,7 @@ test("F16: a genuinely missing output file is still requeued (recovery preserved
 
 test("F22: queue keys collapse the spellings that share an output path", async () => {
 	const outDir = await scratch();
-	const q = await RequestQueue.create(outDir, pathFor);
+	const q = await RequestQueue.create(outDir, urlToPagePath);
 	await q.add([
 		"https://docs.example.org/guide/",
 		"https://docs.example.org/guide/index.html",
@@ -202,7 +195,7 @@ test("F22: the boundary is the output path, not URL equivalence", async () => {
 	// layout, which is out of scope for this fix. This row pins the boundary so a
 	// later "just canonicalize harder" change must reckon with it explicitly.
 	const outDir = await scratch();
-	const q = await RequestQueue.create(outDir, pathFor);
+	const q = await RequestQueue.create(outDir, urlToPagePath);
 	await q.add(["https://docs.example.org/guide", "https://docs.example.org/guide/"]);
 	assert.equal(q.stats().queued, 2, "different output paths must stay distinct");
 	assert.equal(q.stats().duplicates, 0);
@@ -220,7 +213,7 @@ test("legacy queue files (no path field) still resume and complete", async () =>
 	);
 	await writeSavedPage(outDir, "legacy/page.md", url);
 
-	const resumed = await RequestQueue.resume(outDir, pathFor);
+	const resumed = await RequestQueue.resume(outDir, urlToPagePath);
 	assert.ok(resumed, "legacy queue did not resume");
 	assert.equal(await resumed.requeueCompletedMissingFiles(), 0);
 	assert.equal(resumed.stats().completed, 1);
@@ -228,7 +221,7 @@ test("legacy queue files (no path field) still resume and complete", async () =>
 
 test("the queue file records the output path it will write", async () => {
 	const outDir = await scratch();
-	const q = await RequestQueue.create(outDir, pathFor);
+	const q = await RequestQueue.create(outDir, urlToPagePath);
 	await q.add(PAIR);
 	await q.close();
 
@@ -239,4 +232,43 @@ test("the queue file records the output path it will write", async () => {
 		typeof raw.path === "string" && raw.path.endsWith(".md"),
 		`queue entry carries no path: ${JSON.stringify(raw)}`,
 	);
+});
+
+// ─── The mapper itself, not a local copy of it ─────────────────────
+//
+// These exist because the first version of this suite defined its own mapper.
+// If `urlToPagePath` regresses, the queue-level tests above must go red through
+// the same function aio-webpull actually calls — and that requires the mapper to
+// be asserted here, on its own, through its real export.
+test("F14: the production mapper collapses trailing-slash and .html spellings", () => {
+	assert.equal(
+		urlToPagePath("https://docs.example.org/learn/"),
+		urlToPagePath("https://docs.example.org/learn/index.html"),
+	);
+	assert.equal(
+		urlToPagePath("https://docs.example.org/learn/gs/intro"),
+		urlToPagePath("https://docs.example.org/learn/gs/intro.html"),
+	);
+	assert.equal(urlToPagePath("https://docs.example.org/learn/"), "learn/index.md");
+});
+
+test("F14: the mapper keeps genuinely different pages distinct", () => {
+	const distinct = [
+		"https://docs.example.org/learn/",
+		"https://docs.example.org/learn/intro",
+		"https://docs.example.org/api/",
+		"https://docs.example.org/",
+	];
+	const paths = distinct.map(urlToPagePath);
+	assert.equal(new Set(paths).size, distinct.length, JSON.stringify(paths));
+});
+
+test("F14: the mapper is stable across host and query spellings of one page", () => {
+	// Same path on the same host must land on one file regardless of query or
+	// trailing-slash noise; otherwise the queue re-pulls and `max` burns.
+	assert.equal(
+		urlToPagePath("https://docs.example.org/learn/guide"),
+		urlToPagePath("https://docs.example.org/learn/guide"),
+	);
+	assert.ok(!urlToPagePath("https://docs.example.org/learn/guide").includes("?"));
 });

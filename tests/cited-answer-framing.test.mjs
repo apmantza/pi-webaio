@@ -18,6 +18,7 @@
 import assert from "node:assert";
 import test from "node:test";
 import { formatMultiSourceAnswer } from "../src/multi-answer.ts";
+import { composeMultiAnswerText } from "../src/tools/webfetch.ts";
 import { estimateTokens } from "../src/token-count.ts";
 
 const mk = (n, url, text) => ({
@@ -50,22 +51,44 @@ test("F18: the answer states its mode exactly once", () => {
 	);
 });
 
-test("F18: the tool layer no longer repeats the library framing", async () => {
-	const { readFile } = await import("node:fs/promises");
-	const src = await readFile(
-		new URL("../src/tools/webfetch.ts", import.meta.url),
-		"utf8",
+// The earlier version of this test read `src/tools/webfetch.ts` and asserted
+// two literal strings were absent. That is brittle (any rewording reds it) and
+// weak (duplicate framing assembled from different fragments would pass). This
+// drives the real composition seam with the library's real output and counts
+// framing in the assembled text.
+test("F18: the tool layer adds the tally and query, not a second framing", () => {
+	const displayContent = formatMultiSourceAnswer(RANKED, "How do you migrate persisted state?", {
+		sourcesCount: 2,
+	});
+	const out = composeMultiAnswerText({
+		header: "Fetched 2/2 URLs.",
+		notice: '\n[Query: "persist"]',
+		displayContent,
+		localKnowledgeNote: "",
+	});
+	// The library's framing survives exactly once…
+	assert.equal(
+		(out.match(/Cited answer:/g) ?? []).length,
+		1,
+		`cited-answer header must appear once: ${out}`,
 	);
-	// The tool used to build its own "[Multi-source answer mode: …]" +
-	// "[Each chunk is labeled … verify against that source.]" notice on top of
-	// the library's identical header.
-	assert.ok(
-		!/Multi-source answer mode: top \$\{/.test(src),
-		"the tool still emits its own duplicate mode notice",
+	assert.equal(
+		(out.match(/verify against that source/gi) ?? []).length,
+		1,
+		"verify note must appear once",
 	);
-	assert.ok(
-		!/Each chunk is labeled with its source URL/.test(src),
-		"the tool still emits its own duplicate verify note",
+	// …and the tool's own contribution appears once and does not restate it.
+	assert.equal((out.match(/Fetched 2\/2 URLs\./g) ?? []).length, 1);
+	assert.equal((out.match(/\[Query: "persist"\]/g) ?? []).length, 1);
+	assert.equal(
+		/Each chunk is labeled/.test(out),
+		false,
+		"the tool must not restate the per-source labeling note",
+	);
+	assert.equal(
+		/Multi-source answer mode/.test(out),
+		false,
+		"the tool must not restate the mode notice the library already prints",
 	);
 });
 
