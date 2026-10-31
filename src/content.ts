@@ -27,7 +27,12 @@ import {
 import { detectPromptInjection, applyInjectionAction } from "./injection.ts";
 import { compressHtml } from "./html-compress.ts";
 import { extractClientSideRedirect } from "./client-redirect.ts";
-import { cleanText, isJsonContentType, isLikelyJsonBody } from "./http-text.ts";
+import {
+	binarySignature,
+	cleanText,
+	isJsonContentType,
+	isLikelyJsonBody,
+} from "./http-text.ts";
 import { isDangerousUrl, scanForSecrets } from "./security.ts";
 import { BASE_TEMP, getStoredContentAnyAge } from "./session-store.ts";
 import { loadPdfParseCtor } from "./types.ts";
@@ -1141,19 +1146,27 @@ async function pullPage(
 
 	const binPeek = await fetchBuffer(url, opts);
 	if (binPeek && binPeek.status < 400) {
-		if (url.toLowerCase().endsWith(".pdf")) {
+		const headBytes = binPeek.buffer.subarray(0, 1024);
+		// A PDF is a PDF by its magic bytes, not by its extension: arXiv serves the
+		// paper at `/pdf/2005.11401` with no `.pdf` suffix, so the extension test
+		// alone fell through to the download branch and the caller got a file path
+		// instead of the text it asked for (issue #165 F9). Reuses the shared
+		// signature already used by the content-type path.
+		const isPdf =
+			url.toLowerCase().endsWith(".pdf") ||
+			binarySignature(headBytes) === "pdf";
+		if (isPdf) {
 			const pdf = await extractPDF(binPeek.buffer, url);
 			if (pdf) return finalizePullResult(pdf, redirectNotice);
 			const dl = await downloadToTemp(binPeek.buffer, "application/pdf", "", url);
 			return finalizePullResult(dl, redirectNotice);
 		}
 
-		const headBytes = binPeek.buffer.subarray(0, 1024);
 		const isBinary =
 			headBytes.includes(0) ||
 			headBytes.toString("utf8").replace(/[\x20-\x7E\n\r\t]/g, "").length >
 				headBytes.length * 0.3;
-		if (isBinary && !url.toLowerCase().endsWith(".pdf")) {
+		if (isBinary) {
 			const dl = await downloadToTemp(binPeek.buffer, "", "", url);
 			return finalizePullResult(dl, redirectNotice);
 		}
