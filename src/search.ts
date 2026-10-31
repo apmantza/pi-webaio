@@ -935,8 +935,7 @@ export function canonicalizeUrl(url: string): string {
 	// literal leading `www.` label collapses: docs.example.com and
 	// example.com stay separate buckets. This is a KEY change only; display and
 	// fetch always use the original URL.
-	let host = u.hostname.toLowerCase();
-	if (host.startsWith("www.")) host = host.slice(4);
+	const host = stripWww(u.hostname.toLowerCase());
 	return `${u.protocol}//${host}${path}${search}`;
 }
 
