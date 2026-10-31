@@ -84,6 +84,7 @@ import {
 	suggestRetryTimeoutMs,
 } from "./fetch-error.ts";
 import { frontmatter, runInBatches, safeResolveInBaseTemp } from "./utils.ts";
+import { stripWrapper } from "../markdown-frontmatter.ts";
 import { queryIndex } from "../webquery-index.ts";
 import { resolveCorpusDir } from "./webquery.ts";
 
@@ -351,11 +352,9 @@ function extractJsonPayload(body: string): unknown | null {
 		trimmed = (wrapper as { content: string }).content.trim();
 	}
 
-	trimmed = trimmed.replace(/^---\n[\s\S]*?\n---\n/, "").trim();
-	trimmed = trimmed
-		.replace(/^\[UNTRUSTED WEB CONTENT START\]\n?/, "")
-		.replace(/\n?\[UNTRUSTED WEB CONTENT END\]$/, "")
-		.trim();
+	// Shared parser: the local copy of this was LF-only, so a CRLF page never had
+	// its frontmatter/markers stripped and JSON detection missed it (issue #165 F21).
+	trimmed = stripWrapper(trimmed).trim();
 
 	const fenced = trimmed.match(/^```json\s*\n([\s\S]*?)\n```\s*$/i);
 	if (fenced) return parseJsonCandidate(fenced[1]!.trim());

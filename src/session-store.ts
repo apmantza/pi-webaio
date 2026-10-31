@@ -17,6 +17,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { scoreRelevance } from "./bm25.ts";
 import { hashContent } from "./content-hash.ts";
+import { extractFrontmatterUrl, splitFrontmatter } from "./markdown-frontmatter.ts";
 import { debug } from "./debug.ts";
 import type { StoredContent, SearchResult } from "./types.ts";
 
@@ -214,21 +215,14 @@ export function storeContent(
 }
 
 // ─── Frontmatter helpers ───────────────────────────────────────────
+// The readers used to be local regexes that only understood LF line endings and
+// a quoted `url:`. A saved page written with CRLF (a Windows-authored or
+// CRLF-serving upstream) therefore produced no URL, so the disk cache warm-up
+// silently skipped the file: the agent had saved a page it could never retrieve
+// (issue #165 F21). One shared parser now serves every reader.
 
 function stripFrontmatter(raw: string): string {
-	if (!raw.startsWith("---\n")) return raw;
-	const end = raw.indexOf("\n---", 4);
-	if (end === -1) return raw;
-	return raw.slice(end + 5).trimStart();
-}
-
-function parseFrontmatterUrl(raw: string): string | null {
-	if (!raw.startsWith("---\n")) return null;
-	const end = raw.indexOf("\n---", 4);
-	if (end === -1) return null;
-	const fm = raw.slice(4, end);
-	const m = fm.match(/^url: "([^"]+)"$/m);
-	return m ? m[1] : null;
+	return splitFrontmatter(raw).body.trimStart();
 }
 
 // ─── Session cache cleanup ─────────────────────────────────────────
@@ -301,7 +295,7 @@ export function loadContentCacheFromDisk(): Promise<void> {
 			} else if (st.isFile() && name.endsWith(".md")) {
 				const head = await readFrontmatterHead(full);
 				if (!head) continue;
-				const fmUrl = parseFrontmatterUrl(head);
+				const fmUrl = extractFrontmatterUrl(head);
 				if (!fmUrl) continue;
 
 				const key = normalizeCacheKey(fmUrl);

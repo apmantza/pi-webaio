@@ -11,6 +11,8 @@
  * offline (tests/ux-webfetch-output.test.mjs).
  */
 
+import { stripWrapper } from "./markdown-frontmatter.ts";
+
 /** One heading in the document-ordered outline. */
 export interface OutlineHeading {
 	/** ATX level, 1..6. */
@@ -38,10 +40,6 @@ export interface Section extends OutlineHeading {
 	/** 0-based line index just past the section's last body line. */
 	end: number;
 }
-
-// Leading YAML frontmatter block (`---\n…\n---\n`). The saved markdown puts
-// this before the [UNTRUSTED WEB CONTENT] markers.
-const FRONTMATTER_RE = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/;
 
 // CommonMark ATX heading: up to 3 leading spaces, 1-6 hashes, required
 // whitespace, then the text. `#heading` (no space) is intentionally NOT a
@@ -79,11 +77,6 @@ function* linesWithFenceState(
 	}
 }
 
-// The prompt-injection safety markers added by content.ts. They are NOT
-// content, so they are excluded from word counts and heading detection here.
-// (Callers that RETURN web-derived text re-wrap it in fresh markers.)
-const MARKER_LINE_RE = /^\[UNTRUSTED WEB CONTENT (START|END)\]\s*$/;
-
 /** Count whitespace-separated tokens. Empty/blank → 0. */
 export function countWords(text: string): number {
 	const t = text.trim();
@@ -98,20 +91,6 @@ export function countWords(text: string): number {
  */
 function countContentWords(clean: string): number {
 	return countWords(clean.replace(/^[ \t]{0,3}#{1,6}[ \t]+/gm, ""));
-}
-
-/**
- * Strip the leading YAML frontmatter block and the [UNTRUSTED WEB CONTENT]
- * marker lines so they don't pollute heading detection or word counts.
- * Leaves all real content (including fenced code) intact.
- */
-function stripWrapper(markdown: string): string {
-	let s = markdown.replace(FRONTMATTER_RE, "");
-	s = s
-		.split("\n")
-		.filter((line) => !MARKER_LINE_RE.test(line.trim()))
-		.join("\n");
-	return s;
 }
 
 /** Trim an optional ATX closing hash sequence (`## Heading ##` → `Heading`). */

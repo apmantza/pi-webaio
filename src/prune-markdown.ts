@@ -10,6 +10,7 @@
 // sections survive the budget.
 
 import { estimateTokens } from "./token-count.ts";
+import { splitFrontmatter, withFrontmatter } from "./markdown-frontmatter.ts";
 import { createBM25Scorer } from "./bm25.ts";
 
 /** Default target token budget. */
@@ -93,17 +94,42 @@ function splitSections(markdown: string): Array<{
  */
 export function buildOmittedSectionsToc(
 	omitted: Array<{ heading: string; level: number }>,
+	/**
+	 * Token ceiling for the whole TOC block. Without it the list is bounded only
+	 * by entry COUNT, so a page of many long headings produced a 241-token footer
+	 * on a 250-token budget: the guarantee then trimmed the body to nothing and
+	 * STILL landed 2 tokens over (issue #165 F20). A heading list is a navigation
+	 * convenience and must never evict the content it is pointing at.
+	 */
+	maxTokens?: number,
 ): string {
 	const withHeadings = omitted.filter((s) => s.heading);
 	if (withHeadings.length === 0) return "";
 	const MAX_TOC = 20;
-	const tocLines = withHeadings.slice(0, MAX_TOC).map((s) => {
+	// Reserve room for the trailing "… N more" line. Without the reservation the
+	// last entry could consume the exact remaining budget, the suffix then failed
+	// its own fit check and was skipped, and the dropped headings vanished with no
+	// trace — the reader could not tell a complete list from a truncated one.
+	const RESERVE_MORE_TOKENS = 12;
+	const fillBudget = maxTokens === undefined ? undefined : maxTokens - RESERVE_MORE_TOKENS;
+	let toc = `\n\n*Omitted sections:*\n`;
+	let listed = 0;
+	for (const s of withHeadings.slice(0, MAX_TOC)) {
 		const indent = "  ".repeat(Math.max(0, s.level - 1));
-		return `${indent}- ${s.heading}`;
-	});
-	let toc = `\n\n*Omitted sections:*\n${tocLines.join("\n")}`;
-	if (withHeadings.length > MAX_TOC) {
-		toc += `\n- … ${withHeadings.length - MAX_TOC} more`;
+		// The header already ends in a newline; entries after the first need their
+		// own separator, or the whole list collapses onto one line.
+		const candidate = `${toc}${listed > 0 ? "\n" : ""}${indent}- ${s.heading}`;
+		if (fillBudget !== undefined && estimateTokens(candidate) > fillBudget) break;
+		toc = candidate;
+		listed++;
+	}
+	// No room for even one entry: emit nothing rather than a useless header.
+	if (listed === 0) return "";
+	const remaining = withHeadings.length - listed;
+	if (remaining > 0) {
+		// Always emitted: the count is the contract, and the reservation above
+		// guarantees it fits whenever any entry did.
+		toc += `\n- … ${remaining} more`;
 	}
 	return toc;
 }
@@ -235,15 +261,39 @@ export function pruneMarkdown(
 	originalTokens: number;
 	prunedTokens: number;
 	truncated: boolean;
-	/** Per-section relevance scores (only when query is provided). */
 	scores?: Array<{ heading: string; score: number }>;
 } {
-	// Normalize arguments
+	// The leading YAML frontmatter block is part of the document's contract, not
+	// content to rank: it must survive pruning at the top, terminated. Section
+	// scoring used to see it as ordinary text, which emitted an unterminated
+	// `---` block at mid budgets and moved the whole block behind the body at
+	// small ones (issue #165 F8, surfaced again through aio-webcontent in F10).
+	// Its tokens are reserved out of the budget so the caller's limit still holds.
+	const { frontmatter, body } = splitFrontmatter(markdown);
+	const frontmatterTokens = frontmatter ? estimateTokens(frontmatter) : 0;
 	const options: PruneOptions =
 		typeof maxTokensOrOptions === "number"
 			? { maxTokens: maxTokensOrOptions }
 			: maxTokensOrOptions;
+	const pruned = pruneBody(body, {
+		...options,
+		maxTokens: Math.max(1, (options.maxTokens ?? DEFAULT_PRUNE_TOKENS) - frontmatterTokens),
+	});
+	if (!frontmatter) return pruned;
+	const content = withFrontmatter(frontmatter, pruned.content);
+	return { ...pruned, content, prunedTokens: estimateTokens(content) };
+}
 
+function pruneBody(
+	markdown: string,
+	options: PruneOptions,
+): {
+	content: string;
+	originalTokens: number;
+	prunedTokens: number;
+	truncated: boolean;
+	scores?: Array<{ heading: string; score: number }>;
+} {
 	const maxTokens = options.maxTokens ?? DEFAULT_PRUNE_TOKENS;
 	const query = options.query;
 	const combineScores = options.combineScores ?? false;
@@ -461,17 +511,28 @@ export function applyTokenBudget(
 	const effectiveBudget = Math.max(100, Math.floor(budget));
 	if (estimateTokens(content) <= effectiveBudget) return content;
 
+	// The frontmatter block is re-emitted verbatim at the top of the result, so
+	// its tokens are part of what this function returns and must be reserved out
+	// of the budget. Everything below operates on the body only (issue #165 F8/F20).
+	const { frontmatter, body } = splitFrontmatter(content);
+	const frontmatterTokens = frontmatter ? estimateTokens(frontmatter) : 0;
+
 	// Extract heading skeleton — always preserved in the output.
-	const headingLines = content.split("\n").filter((l) => /^#{1,6}\s/.test(l));
+	const headingLines = body.split("\n").filter((l) => /^#{1,6}\s/.test(l));
 
 	// Use pruneMarkdown to select sections within budget.
 	// Reserve tokens for the footer so the guarantee is hard after we append it.
 	const FOOTER_TOKEN_RESERVE = 30;
-	const contentBudget = Math.max(1, effectiveBudget - FOOTER_TOKEN_RESERVE);
+	const contentBudget = Math.max(
+		1,
+		effectiveBudget - FOOTER_TOKEN_RESERVE - frontmatterTokens,
+	);
 
-	const pruned = pruneMarkdown(content, {
-		maxTokens: contentBudget,
-		query,
+	const pruned = pruneMarkdown(
+		body,
+		{
+			maxTokens: contentBudget,
+			query,
 		// When a query is present, drop lowest-BM25 sections first (the
 		// default pruneMarkdown behaviour). Without a query the heuristic
 		// scorer drops lower-priority sections first, which effectively
@@ -489,15 +550,13 @@ export function applyTokenBudget(
 
 	// Count sections in the original vs kept, and identify WHICH headings were
 	// dropped so the footer can list them (same mini-TOC as the prune path).
-	const originalSections = splitSections(content);
+	const originalSections = splitSections(body);
 	const prunedSections = splitSections(prunedContent);
 	const omitted = Math.max(0, originalSections.length - prunedSections.length);
 	const keptHeadings = new Set(prunedSections.map((s) => s.heading));
 	const omittedSections = originalSections.filter(
 		(s) => !keptHeadings.has(s.heading),
 	);
-	const omittedToc = buildOmittedSectionsToc(omittedSections);
-
 	const retrieveHint = url
 		? `retrieve via aio-webcontent with URL: ${url}`
 		: "retrieve via aio-webcontent by URL";
@@ -505,10 +564,24 @@ export function applyTokenBudget(
 	// The budget footer keeps its "full content cached — retrieve via
 	// aio-webcontent" hint AND appends the omitted-sections TOC, so the two
 	// truncation paths emit the same heading list. (F7)
-	const footer =
+	//
+	// The footer BASE is built first so the TOC can be sized against what is
+	// actually left: frontmatter + footer + a minimum slice of content must all
+	// fit. Previously the TOC was bounded only by entry COUNT, so 14 long headings
+	// produced a 241-token footer on a 250-token budget — the guarantee then
+	// trimmed the body to NOTHING and still landed 2 tokens over (issue #165 F20).
+	const footerBase =
 		omitted > 0
-			? `\n\n---\n_truncated to fit ${effectiveBudget}-token budget: ${omitted} section${omitted === 1 ? "" : "s"} omitted; full content cached — ${retrieveHint}._${omittedToc}`
+			? `\n\n---\n_truncated to fit ${effectiveBudget}-token budget: ${omitted} section${omitted === 1 ? "" : "s"} omitted; full content cached — ${retrieveHint}._`
 			: `\n\n---\n_content fits ${effectiveBudget}-token budget; full content cached — ${retrieveHint}._`;
+	// Keep at least a fifth of the budget (bounded) for real content.
+	const MIN_CONTENT_TOKENS = Math.min(40, Math.max(10, Math.floor(effectiveBudget * 0.2)));
+	const tocBudget = Math.max(
+		0,
+		effectiveBudget - frontmatterTokens - estimateTokens(footerBase) - MIN_CONTENT_TOKENS,
+	);
+	const omittedToc = buildOmittedSectionsToc(omittedSections, tocBudget);
+	const footer = `${footerBase}${omittedToc}`;
 
 	// Preserve heading skeleton even when most content was dropped.
 	// Prepend skeleton if none of the headings survived pruning.
@@ -523,26 +596,60 @@ export function applyTokenBudget(
 
 	result = result + footer;
 
-	// Hard guarantee: re-measure and trim character-level if still over.
-	if (estimateTokens(result) > effectiveBudget) {
+	// Hard guarantee: re-measure and trim until the FULL returned text —
+	// frontmatter, body and footer — actually fits. The previous version trusted
+	// a `maxTokens * 4` character estimate once and never re-checked, so
+	// `budgetTokens` came back over budget (measured live: 250 -> 273; issue #165
+	// F20). Markdown's short lines make chars/token far lower than 4.
+	const assemble = (portion: string): string => withFrontmatter(frontmatter, portion);
+	if (estimateTokens(assemble(result)) > effectiveBudget) {
 		// Trim content portion only, keep footer.
 		const footerIdx = result.lastIndexOf("\n\n---\n");
-		const body = footerIdx > 0 ? result.slice(0, footerIdx) : result;
+		const contentBody = footerIdx > 0 ? result.slice(0, footerIdx) : result;
 		let ft = footerIdx > 0 ? result.slice(footerIdx) : "";
-		// If the footer + TOC alone exceeds the budget (tiny budget, many
-		// omitted headings), drop the TOC first — the "N sections omitted"
-		// count line is more important than the heading list. This keeps the
-		// hard budget contract intact now that the footer carries the TOC.
-		if (estimateTokens(ft) > effectiveBudget) {
+		// If the footer + TOC crowds the content out (tiny budget, many omitted
+		// headings), drop the TOC — the "N sections omitted" count line matters more
+		// than the heading list, and content matters more than both.
+		if (
+			estimateTokens(ft) + frontmatterTokens + MIN_CONTENT_TOKENS >
+			effectiveBudget
+		) {
 			ft = ft.replace(/\n\n\*Omitted sections:\*[\s\S]*$/, "");
 		}
 		const footerTokens = estimateTokens(ft);
-		const bodyBudget = Math.max(0, effectiveBudget - footerTokens);
-		const trimmedBody = truncateToBudget(body, bodyBudget);
-		result = trimmedBody + ft;
+		const bodyBudget = Math.max(
+			0,
+			effectiveBudget - footerTokens - frontmatterTokens,
+		);
+		result = trimToTokenBudget(contentBody, bodyBudget) + ft;
 	}
 
-	return result;
+	return assemble(result);
+}
+
+/**
+ * Cut `text` so that it measures at most `maxTokens`.
+ *
+ * `truncateToBudget` alone is not enough: it cuts at a rough `maxTokens * 4`
+ * character estimate, which under-counts markdown with short lines, headings and
+ * CJK text. This measures the result and shrinks by the measured excess until it
+ * fits, so callers can state a hard token contract.
+ */
+function trimToTokenBudget(text: string, maxTokens: number): string {
+	if (maxTokens <= 0) return "";
+	if (estimateTokens(text) <= maxTokens) return text;
+	let chars = Math.min(text.length, Math.max(1, maxTokens * 4));
+	for (let attempt = 0; attempt < 12; attempt++) {
+		const candidate = truncateToBudget(text.slice(0, chars), maxTokens);
+		const used = estimateTokens(candidate);
+		if (used <= maxTokens) return candidate;
+		// Shrink proportionally to the measured overshoot, minus a small margin
+		// so progress cannot stall when the boundary search rounds back up.
+		chars = Math.max(1, Math.floor((chars * maxTokens) / used) - 16);
+	}
+	// Terminal fallback: a slice no longer than the token budget can never
+	// exceed it, since every remaining character is at least a fraction of a token.
+	return text.slice(0, maxTokens).replace(/\s+$/, "");
 }
 
 /**

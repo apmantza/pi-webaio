@@ -5,6 +5,7 @@
 import { readFile, writeFile, readdir, stat } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { chunkMarkdown } from "./chunker.ts";
+import { extractFrontmatterUrl } from "./markdown-frontmatter.ts";
 import { createBM25Scorer } from "./bm25.ts";
 
 /** Index format version — bump when the stored shape changes. */
@@ -36,15 +37,6 @@ interface WebpullIndex {
 }
 
 // ─── Index building ────────────────────────────────────────────────────
-
-/**
- * Extract the source URL from YAML frontmatter in a markdown file.
- * Returns an empty string if no frontmatter is found.
- */
-function extractFrontmatterUrl(markdown: string): string {
-	const match = markdown.match(/^---\n[\s\S]*?^url:\s*"?([^"\n]+)"?\s*$/m);
-	return match ? match[1].trim() : "";
-}
 
 /**
  * Extract the first H1/H2 heading from a chunk of text as a breadcrumb.
@@ -104,7 +96,7 @@ export async function buildIndex(outDir: string): Promise<void> {
 			continue;
 		}
 
-		const url = extractFrontmatterUrl(markdown);
+		const url = extractFrontmatterUrl(markdown) ?? "";
 		const rel = relative(outDir, fullPath).replace(/\\/g, "/");
 
 		const fileChunks = chunkMarkdown(markdown, {
