@@ -46,6 +46,40 @@ function hostnameOf(url: string): string {
 }
 
 /**
+ * Jina reader wraps its payload in a header block that is NOT page content:
+ *
+ *   URL Source: https://example.com/
+ *   Published Time: Thu, 29 Oct 2026 09:14:22 GMT
+ *   Warning: This page maybe not yet fully loaded, …
+ *   Markdown Content:
+ *
+ * Returning it verbatim did two damage (issue #165 F7): the agent was served
+ * proxy chrome as the article, and `content.ts` picks Jina over local extraction
+ * by `wordCount(jina.content) > localWords` — a comparison the wrapper inflates,
+ * so on low-word pages Jina won on its own boilerplate.
+ *
+ * Only the LEADING header block is consumed, and `Markdown Content:` terminates
+ * it, so an article that legitimately mentions those words keeps its text.
+ */
+const JINA_HEADER_LINE = /^(?:URL[ ]Source|Published[ ]Time|Retrieved|Warning|Fetched[ ]At|Cache[ ]Status)\s*:/i;
+const JINA_MARKER_LINE = /^Markdown[ ]Content\s*:/i;
+
+export function stripJinaEnvelope(content: string): string {
+	const lines = content.split("\n");
+	let idx = 0;
+	for (; idx < lines.length; idx++) {
+		const trimmed = lines[idx]!.trim();
+		if (JINA_MARKER_LINE.test(trimmed)) {
+			idx++; // everything after the marker is the payload
+			break;
+		}
+		if (trimmed === "" || JINA_HEADER_LINE.test(trimmed)) continue;
+		break; // no marker present: the payload starts here
+	}
+	return lines.slice(idx).join("\n").replace(/^\s+/, "");
+}
+
+/**
  * Classify a raw Jina reader body into a PullResult.
  *
  * Returns null when the body is empty or is a bot-challenge / garbage
@@ -77,11 +111,15 @@ export function parseJinaBody(text: string, url: string): PullResult | null {
 	if (titleLine) {
 		const contentStart = body.indexOf("\n\n", 6);
 		if (contentStart !== -1) {
+			const content = stripJinaEnvelope(body.slice(contentStart + 2));
+			// Nothing behind the envelope: fall through to the real pipeline
+			// instead of returning an empty "successful" page.
+			if (!content.trim()) return null;
 			return {
 				ok: true,
 				url,
 				title: titleLine,
-				content: body.slice(contentStart + 2),
+				content,
 			};
 		}
 	}
@@ -89,7 +127,9 @@ export function parseJinaBody(text: string, url: string): PullResult | null {
 	// Hostname title fallback is ONLY for genuine reader output that
 	// simply lacks a "Title:" line — never for a challenge page (rejected
 	// above).
-	return { ok: true, url, title: hostnameOf(url), content: body };
+	const fallbackContent = stripJinaEnvelope(body);
+	if (!fallbackContent.trim()) return null;
+	return { ok: true, url, title: hostnameOf(url), content: fallbackContent };
 }
 
 // ─── Timeout ───────────────────────────────────────────────────────
