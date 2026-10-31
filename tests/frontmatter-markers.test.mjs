@@ -384,3 +384,101 @@ test("F21: real frontmatter still splits, with and without a trailing newline", 
 	const noNewline = '---\ntitle: "T"\n---';
 	assert.equal(splitFrontmatter(noNewline).frontmatter, '---\ntitle: "T"\n---');
 });
+
+// ─── originalTokens and prunedTokens must share a base ───────────────
+//
+// `pruneMarkdown` hands the BODY to `pruneBody` (so `originalTokens` counts the
+// body) but then overrides `prunedTokens` with the token count of the full
+// document, frontmatter included. The two numbers therefore describe different
+// things, and the pair is reported as if they were a before/after: a caller
+// printing "pruned from X to Y" shows the document getting BIGGER.
+//
+// Reproduced before the fix, on a body of 180 tokens with 18 tokens of
+// frontmatter and a budget nobody needed:
+//   with frontmatter    original=180  pruned=198  truncated=false
+//   without frontmatter original=180  pruned=180  truncated=false
+//
+// Recurrence prevented: a budget/prune report that claims the output grew.
+test("F21: prune token accounting uses one base for original and pruned", () => {
+	const body = Array.from(
+		{ length: 20 },
+		(_, i) => `## Section ${i}\n\n${"word ".repeat(5)}`,
+	).join("\n\n");
+	const doc = FM + body;
+	const withFm = pruneMarkdown(doc, { maxTokens: 2000 });
+	const plain = pruneMarkdown(body, { maxTokens: 2000 });
+
+	assert.ok(
+		withFm.prunedTokens <= withFm.originalTokens,
+		`nothing was truncated yet the document reports growing: ${withFm.originalTokens} -> ${withFm.prunedTokens}`,
+	);
+	// Frontmatter is part of the document that was pruned, so it belongs in the
+	// original count; that is what makes the two numbers comparable.
+	assert.ok(
+		withFm.originalTokens > plain.originalTokens,
+		`originalTokens ignores frontmatter (${withFm.originalTokens} vs ${plain.originalTokens})`,
+	);
+	assert.equal(withFm.truncated, false);
+});
+
+// And the budget must still be honoured when it is actually tight: the body
+// budget is reduced by the frontmatter cost, so the FULL document (not just the
+// body) has to fit.
+test("F21: a tight budget keeps the whole document inside the limit", () => {
+	const body = Array.from(
+		{ length: 40 },
+		(_, i) => `## Section ${i}\n\n${"word ".repeat(20)}`,
+	).join("\n\n");
+	const doc = FM + body;
+	const budget = 200;
+	const r = pruneMarkdown(doc, { maxTokens: budget });
+	assert.equal(r.truncated, true, "a 40-section body must not fit 200 tokens");
+	assert.ok(
+		r.prunedTokens <= budget,
+		`pruned document is ${r.prunedTokens} tokens, over the ${budget} budget`,
+	);
+});
+
+// The overshoot is not a frontmatter effect — it reproduces on a plain body, so
+// it is pinned separately: frontmatter must not be load-bearing for the bug.
+// Measured before the fix: a 40-section body at a 200-token budget came back at
+// 226, because the body was packed to 157 (its share) and the omitted-sections
+// TOC then added 69 on top of the 20 tokens reserved for it.
+test("F21: pruneMarkdown's own footer cannot push it past its budget", () => {
+	for (const sections of [10, 20, 40, 80]) {
+		const body = Array.from(
+			{ length: sections },
+			(_, i) => `## Section ${i}\n\n${"word ".repeat(20)}`,
+		).join("\n\n");
+		for (const budget of [100, 200, 400]) {
+			const r = pruneMarkdown(body, { maxTokens: budget });
+			assert.ok(
+				r.prunedTokens <= budget,
+				`${sections} sections at budget ${budget} returned ${r.prunedTokens} tokens`,
+			);
+		}
+	}
+});
+
+// The ceiling passed to `buildOmittedSectionsToc` is not what enforces the budget
+// — the guarantee below it does that on its own. What the ceiling buys is the
+// heading LIST surviving instead of being dropped by the guarantee, which is the
+// whole point of the footer ("know what was left out", F7). Measured over the
+// sweep: 78 truncated outputs keep a TOC with the ceiling, 62 without it.
+// 40 sections at a 100-token budget is one of the cases where it is the
+// difference between a list and a bare count.
+test("F21: a footer that fits keeps its heading list rather than a bare count", () => {
+	const body = Array.from(
+		{ length: 40 },
+		(_, i) => `## Section ${i}\n\n${"word ".repeat(20)}`,
+	).join("\n\n");
+	const r = pruneMarkdown(body, { maxTokens: 100 });
+	assert.equal(r.truncated, true);
+	assert.ok(r.prunedTokens <= 100, `over budget: ${r.prunedTokens}`);
+	assert.ok(
+		r.content.includes("*Omitted sections:*"),
+		"the omitted-heading list was dropped even though the footer had room for it",
+	);
+	assert.match(r.content, /^\s+- Section \d+$/m, "no headings actually listed");
+});
+

@@ -281,7 +281,16 @@ export function pruneMarkdown(
 	});
 	if (!frontmatter) return pruned;
 	const content = withFrontmatter(frontmatter, pruned.content);
-	return { ...pruned, content, prunedTokens: estimateTokens(content) };
+	// One base for both numbers. `pruneBody` only saw the body, so its
+	// `originalTokens` excluded the frontmatter while `prunedTokens` (measured over
+	// the reassembled document) included it — the pair then read as "pruned from
+	// 180 to 197": growth, with nothing truncated (issue #165).
+	return {
+		...pruned,
+		content,
+		originalTokens: estimateTokens(markdown),
+		prunedTokens: estimateTokens(content),
+	};
 }
 
 function pruneBody(
@@ -433,8 +442,32 @@ function pruneBody(
 		const omitted = scored
 			.filter((s) => !keptIndices.has(s.index))
 			.sort((a, b) => a.index - b.index);
-		const omittedToc = buildOmittedSectionsToc(omitted);
-		result += `\n\n---\n*Truncated to ~${estimateTokens(result)} tokens. ${sections.length - kept.length} sections omitted.*${omittedToc}`;
+		const noticeBase = `\n\n---\n*Truncated to ~${estimateTokens(result)} tokens. ${sections.length - kept.length} sections omitted.*`;
+		// The TOC is sized from the room the CONTENT actually left, not from the
+		// reserve the packer carved out: `estimateTokens` is not additive across
+		// concatenation (shared newlines and markdown's short lines make the parts
+		// sum to more than the whole), so budgeting the footer by adding up its
+		// pieces under-shoots and the heading list vanished from documents that had
+		// room for it. Bounded at 80 for the same reason as the budget footer, then
+		// the guarantee below re-measures the whole thing.
+		const tocBudget = Math.min(80, Math.max(0, maxTokens - estimateTokens(result)));
+		result += noticeBase + buildOmittedSectionsToc(omitted, tocBudget);
+	}
+
+	// Hard guarantee, the same shape `applyTokenBudget` uses: re-measure the whole
+	// result and shrink instead of trusting the reserve. A heading list is a
+	// navigation convenience, so it is dropped before any content is cut.
+	if (estimateTokens(result) > maxTokens) {
+		const MIN_BODY_TOKENS = Math.min(40, Math.max(1, Math.floor(maxTokens * 0.2)));
+		const footerIdx = result.lastIndexOf("\n\n---\n");
+		const contentBody = footerIdx > 0 ? result.slice(0, footerIdx) : result;
+		let ft = footerIdx > 0 ? result.slice(footerIdx) : "";
+		if (estimateTokens(ft) + MIN_BODY_TOKENS > maxTokens) {
+			ft = ft.replace(/\n\n\*Omitted sections:\*[\s\S]*$/, "");
+		}
+		result =
+			trimToTokenBudget(contentBody, Math.max(0, maxTokens - estimateTokens(ft))) +
+			ft;
 	}
 
 	const prunedTokens = estimateTokens(result);
