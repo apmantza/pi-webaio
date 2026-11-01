@@ -878,3 +878,46 @@ test("an unheaded preamble is not labelled with a later heading", () => {
 	);
 	assert.ok(estimateTokens(out) <= 120);
 });
+
+// CodeRabbit round 9 on #169 (src/prune-markdown.ts:710). Round 8 set
+// prefixBeforeSkeleton on the NO-query branch only; two paths still select a section
+// whose heading never gets emitted, and the prose then lands after the whole outline.
+const BIG_PREAMBLE_DOC =
+	"intro preamble words ".repeat(400) +
+	"\n\n## One\n\n" +
+	"a-word ".repeat(500);
+
+test("a headingless section selected BY QUERY is not labelled by the outline", () => {
+	// A stop word scores 0 against every section, so sections[0] — the unheaded
+	// preamble — is chosen with no heading to emit. Measured pre-fix the answer was
+	// `## One` followed by the preamble, i.e. the preamble was credited to section One.
+	const out = applyTokenBudget(
+		BIG_PREAMBLE_DOC,
+		100,
+		"a",
+		"https://example.com/hq",
+	);
+	assert.ok(
+		out.trimStart().startsWith("intro preamble words"),
+		`a query-selected unheaded section was credited to the outline — ${JSON.stringify(out.slice(0, 90))}`,
+	);
+	assert.ok(estimateTokens(out) <= 100);
+});
+
+test("prose from a section whose heading was dropped for size is not relabelled", () => {
+	// The outline drops a heading larger than its whole share. The prose that came
+	// from behind it must not then be attributed to whichever heading the outline kept.
+	const doc =
+		"# " + "verylongheadingword ".repeat(120) + "\n\n" +
+		"bigprose ".repeat(400) +
+		"\n\n## Small\n\n" +
+		"s-word ".repeat(400);
+	const out = applyTokenBudget(doc, 150, "bigprose", "https://example.com/oh");
+	const idx = out.indexOf("bigprose");
+	assert.ok(idx >= 0, "no prose from the selected section");
+	assert.ok(
+		!/#{1,6}\s/.test(out.slice(0, idx)),
+		`prose from the oversized-heading section was credited to a kept heading — ${JSON.stringify(out.slice(0, 90))}`,
+	);
+	assert.ok(estimateTokens(out) <= 150);
+});

@@ -675,6 +675,12 @@ export function applyTokenBudget(
 			if (chosen && chosen.content.trim() !== "") {
 				// `chosen.content` is already heading-free, which is what the prefix wants.
 				source = chosen.content;
+				// A chosen section can have NO heading to emit: a leading preamble, a
+				// section after a `---` rule, or sections[0] picked by a query that scores 0
+				// everywhere. Emitting the outline first would credit that prose to the
+				// outline's last heading (issue #169, CodeRabbit thread
+				// src/prune-markdown.ts:710).
+				prefixBeforeSkeleton = !chosen.heading;
 				// The skeleton ends with some OTHER section's heading, so Markdown would
 				// attach this prose to it and the answer would name the wrong section as
 				// the source of its own text. Re-emit the selected heading at its own level
@@ -707,6 +713,10 @@ export function applyTokenBudget(
 		const outlineCap = Math.max(10, Math.floor(contentBudget * 0.4));
 		if (selectedHeading && estimateTokens(selectedHeading) > outlineCap) {
 			selectedHeading = "";
+			// The prose came from behind a heading the outline refused to carry. Without
+			// this it would fall through to the outline-first branch and be credited to
+			// whichever heading the outline DID keep.
+			prefixBeforeSkeleton = true;
 		}
 		const headingTokens =
 			selectedHeading && selIdx < 0 ? estimateTokens(selectedHeading) + 1 : 0;
