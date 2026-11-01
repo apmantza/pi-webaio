@@ -536,11 +536,26 @@ export function applyQueryAnswerMode(
 		headingByIndex.set(c.index, currentHeadingCtx);
 	}
 
-	const parts = selected.map(({ chunk }) => {
+	// Issue #131: overlap is a SCORING aid. When two adjacent chunks are both
+	// selected, the span the chunker prepended to the later one is the earlier
+	// one's tail, so it would render twice. Trim only that recorded span, and only
+	// when the previously displayed chunk actually ends with it — a legitimate
+	// repeat (table headers, an intentional code-block repeat) is left intact.
+	const parts: string[] = [];
+	let lastDisplayedBody = "";
+	for (const { chunk } of selected) {
+		let text = chunk.text;
+		const prefix = chunk.overlapPrefix;
+		if (prefix && lastDisplayedBody.endsWith(prefix)) {
+			// `overlapPrefix` is the span itself; the chunker joined it with a blank
+			// line, so the display copy drops the span plus that separator.
+			text = text.slice(prefix.length).replace(/^\s+/, "");
+		}
 		const heading = headingByIndex.get(chunk.index) ?? "";
 		const breadcrumb = heading ? `> **${heading}**\n\n` : "";
-		return `${breadcrumb}${chunk.text}`;
-	});
+		parts.push(`${breadcrumb}${text}`);
+		lastDisplayedBody = text;
+	}
 
 	const footer =
 		omitted > 0
