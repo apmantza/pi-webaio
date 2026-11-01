@@ -615,7 +615,56 @@ export function applyTokenBudget(
 	const partialFallback =
 		prunedContent.trim() === "" && body.trim() !== "" && contentBudget > 0;
 	if (partialFallback) {
-		prunedContent = trimToTokenBudget(body, contentBudget);
+		// Which slice to take is a ranking question, not a position question. With a
+		// query, the document prefix is usually the WRONG section: querying a later
+		// oversized section returned only unrelated opening prose while the section
+		// actually asked for stayed in the cache (issue #169, CodeRabbit thread
+		// src/prune-markdown.ts:618). Rank the same way pruneMarkdown does.
+		const sections = splitSections(body);
+		let source = body;
+		if (query && sections.length > 1) {
+			// Same ranking as the default pruneMarkdown path: with a query, BM25
+			// replaces the heuristic entirely (`combineScores` defaults false), so the
+			// heuristic must NOT be added here or document position outranks relevance.
+			const bm25 = createBM25Scorer(query).scoreAll(
+				sections.map((s) => `${s.heading}\n${s.content}`),
+			);
+			let best = 0;
+			let bestScore = 0;
+			bm25.forEach((sc, i) => {
+				if ((sc ?? 0) > bestScore) {
+					bestScore = sc ?? 0;
+					best = i;
+				}
+			});
+			// No section matches the query at all: keep document order rather than
+			// inventing a preference the pruner would not have expressed.
+			if (bestScore > 0) {
+				const chosen = sections[best];
+				source = chosen.heading
+					? `${chosen.heading}\n\n${chosen.content}`
+					: chosen.content;
+			}
+		}
+		// The prefix carries at most its own heading, so the outline must be added
+		// alongside it. Omitting this was a regression the fallback itself introduced:
+		// an empty pruned body used to take the skeleton path and keep every heading,
+		// but once the prefix supplied the first heading `resultHasHeadings` was true
+		// and the skeleton was skipped, so later sections vanished from the outline.
+		// The skeleton is capped so it cannot crowd the prose back out.
+		const skeleton =
+			headingLines.length > 0
+				? trimToTokenBudget(
+						headingLines.join("\n"),
+						Math.floor(contentBudget * 0.4),
+					)
+				: "";
+		const prefixRoom = Math.max(
+			1,
+			contentBudget - (skeleton ? estimateTokens(skeleton) : 0),
+		);
+		const prefix = trimToTokenBudget(source, prefixRoom);
+		prunedContent = skeleton ? `${skeleton}\n\n${prefix}` : prefix;
 	}
 
 	// Count sections in the original vs kept, and identify WHICH headings were
@@ -623,9 +672,17 @@ export function applyTokenBudget(
 	const originalSections = splitSections(body);
 	const prunedSections = splitSections(prunedContent);
 	// A partial prefix is a cut even when it retains the only section's heading, so
-	// `omitted` alone cannot be trusted to pick the footer wording here.
+	// `omitted` alone cannot be trusted to pick the footer wording here. `pruned.truncated`
+	// is the pruner's own statement of what it did; the token comparison is kept only
+	// as a backstop because estimating a truncation after the fact from a lossy
+	// estimator is inference where authoritative state is available (issue #169,
+	// CodeRabbit thread src/prune-markdown.ts:628 — no mislabelled footer was
+	// reproducible in 183 sweeps, so this is hardening of the source of truth, not a
+	// demonstrated defect).
 	const contentWasCut =
-		partialFallback || estimateTokens(prunedContent) < estimateTokens(body);
+		partialFallback ||
+		pruned.truncated ||
+		estimateTokens(prunedContent) < estimateTokens(body);
 	const omitted = Math.max(0, originalSections.length - prunedSections.length);
 	const keptHeadings = new Set(prunedSections.map((s) => s.heading));
 	const omittedSections = originalSections.filter(

@@ -718,3 +718,38 @@ test("a partial-section fallback is labelled truncated, never as fitting", () =>
 	);
 	assert.match(out, /truncated to fit/);
 });
+
+// CodeRabbit on #169 (threads src/prune-markdown.ts:618 x2). Both are defects in
+// the partial fallback itself — the third-round pattern repeating: the fix for
+// "answer contains none of the page" was picking the wrong slice of the page.
+const EARLY_900 = "## Intro\n\n" + "alpha ".repeat(900);
+const LATE_900 = "## Target\n\n" + "zebra ".repeat(900);
+
+test("a query targeting an oversized later section returns THAT section", () => {
+	// Pre-fix: query "zebra" returned only "alpha" — the fallback took the document
+	// prefix and ignored ranking, so the answer was unrelated prose while the asked
+	// for section sat in the cache. The fallback must rank like pruneMarkdown does.
+	const doc = `${EARLY_900}\n\n${LATE_900}`;
+	const out = applyTokenBudget(doc, 100, "zebra", "https://example.com/two");
+	assert.match(
+		out,
+		/zebra/,
+		"the query-targeted section was dropped in favour of the document prefix",
+	);
+});
+
+test("the fallback keeps later headings, not only the one in the prefix", () => {
+	// Pre-fix this was a REGRESSION the fallback introduced: with an empty pruned
+	// body the heading-skeleton path ran and every heading survived; once the prefix
+	// supplied the first heading, `resultHasHeadings` was true and the skeleton was
+	// skipped, so sections 2 and 3 vanished from the outline.
+	const doc = `${EARLY_900}\n\n## Second\n\nsmall body words\n\n## Third\n\nmore words here`;
+	const out = applyTokenBudget(doc, 100, undefined, "https://example.com/skel");
+	for (const h of ["Intro", "Second", "Third"]) {
+		assert.ok(
+			out.includes(h),
+			`heading "${h}" disappeared from the outline because the prefix already had one`,
+		);
+	}
+	assert.ok(estimateTokens(out) <= 100);
+});
