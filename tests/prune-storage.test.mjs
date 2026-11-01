@@ -25,14 +25,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { splitPrunedDisplay } from "../src/tools/webfetch.ts";
+import {
+	splitPrunedDisplay,
+	displayBodyForFormat,
+	projectResultsForPrune,
+} from "../src/tools/webfetch.ts";
 import { estimateTokens } from "../src/token-count.ts";
 import { registerWebfetchTool } from "../src/tools/webfetch.ts";
 import { getStoredContent, normalizeCacheKey, sessionStore } from "../src/session-store.ts";
-import {
-	maybeChunkMarkdown,
-	projectResultsForPrune,
-} from "../src/tools/webfetch.ts";
+import { maybeChunkMarkdown } from "../src/tools/webfetch.ts";
 
 // ─── Pure seam: the storage/display split ─────────────────────────────
 
@@ -260,7 +261,7 @@ test("#171 follow-up: failed results pass through untouched", () => {
 // the same reason `budgetTokens` is documented as markdown-only. An absent
 // format means the default markdown path.
 test("#172: prune never touches non-markdown result bodies", () => {
-	const json = '{"a":1,"b":"' + "x".repeat(4000) + '"}';
+	const json = `{"a":1,"b":"${"x".repeat(4000)}"}`;
 	const results = [
 		{ ok: true, url: "https://a.test/1", body: json, format: "json" },
 		{ ok: true, url: "https://a.test/2", body: `<p>${"y".repeat(4000)}</p>`, format: "html" },
@@ -304,4 +305,55 @@ test("#172: a projected result bounds diffResult alongside body", () => {
 	);
 	// The original must still hold both, untouched, for the durable record.
 	assert.ok(/dropme/.test(results[0].diffResult));
+});
+
+// ─── Review round 3, P1: the single-URL path pruned non-markdown ──────
+//
+// The batch projection guarded `format` but the single-URL preview did not, so
+// `aio-webfetch(url, format: "json", prune: 300)` returned 4014 chars of JSON
+// truncated to 1104 with a markdown footer appended — not valid JSON. Reproduced
+// before the fix:
+//
+//   { pruned: true, original: 4014, returned: 1104,
+//     ends: '"xxxxxxxxxx\\n\\n[...content truncated]"' }
+//   still valid JSON: NO — corrupted
+//
+// Both paths now share `displayBodyForFormat`, so the guard cannot exist in one
+// and not the other again.
+//
+// Recurrence prevented: a format-specific rule added at one call site and missed
+// at the sibling.
+
+test("#172: the shared display seam leaves non-markdown bodies byte-identical", () => {
+	const json = `{"a":1,"b":"${"x".repeat(4000)}"}`;
+	for (const format of ["json", "html", "text", "raw"]) {
+		const out = displayBodyForFormat(json, format, 300, undefined);
+		assert.equal(out.pruned, false, `${format} was reported as pruned`);
+		assert.equal(out.returned, json, `${format} body was altered`);
+	}
+	// The corruption is gone for real, not just flagged: JSON still parses.
+	assert.deepEqual(JSON.parse(displayBodyForFormat(json, "json", 300).returned), {
+		a: 1,
+		b: "x".repeat(4000),
+	});
+});
+
+test("#172: markdown and an absent format still prune through the shared seam", () => {
+	const body = twoSectionBody();
+	for (const format of ["markdown", undefined]) {
+		const out = displayBodyForFormat(body, format, 300, undefined);
+		assert.equal(out.pruned, true, `format=${format} should prune`);
+		assert.ok(!/dropme/.test(out.returned), `format=${format} kept the dropped section`);
+	}
+});
+
+test("#172: no prune request returns the body unchanged for every format", () => {
+	const body = twoSectionBody();
+	for (const format of ["markdown", "json", undefined]) {
+		for (const tokens of [undefined, 0, -5]) {
+			const out = displayBodyForFormat(body, format, tokens, undefined);
+			assert.equal(out.returned, body, `format=${format} tokens=${tokens} altered the body`);
+			assert.equal(out.pruned, false);
+		}
+	}
 });

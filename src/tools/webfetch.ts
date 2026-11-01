@@ -481,6 +481,31 @@ export function maybeChunkMarkdown(
  *
  * Exported for unit testing.
  */
+/**
+ * Bound a body for DISPLAY, honouring the format contract.
+ *
+ * `pruneMarkdown` is a MARKDOWN pruner: trimming serialized JSON or raw HTML
+ * mid-structure yields an unusable artifact, which is the same reason
+ * `budgetTokens` is documented as markdown-only. An absent format is the default
+ * markdown path.
+ *
+ * This is the single seam for that rule. The batch projection and the single-URL
+ * preview previously each had their own copy of the check, which is exactly how
+ * the batch path ended up guarding non-markdown while the single path kept
+ * corrupting it (issue #172 review, P1).
+ */
+export function displayBodyForFormat(
+	body: string,
+	format: string | undefined,
+	pruneTokens: number | undefined,
+	query?: string,
+): { pruned: boolean; returned: string } {
+	if (format !== undefined && format !== "markdown") {
+		return { pruned: false, returned: body };
+	}
+	return splitPrunedDisplay(body, pruneTokens, query);
+}
+
 export function projectResultsForPrune<
 	T extends {
 		ok?: boolean;
@@ -492,12 +517,7 @@ export function projectResultsForPrune<
 	if (!pruneTokens || pruneTokens <= 0) return results as T[];
 	return results.map((r) => {
 		if (!r.ok || typeof r.body !== "string") return r;
-		// `pruneMarkdown` is a MARKDOWN pruner. Trimming serialized JSON or raw
-		// HTML mid-structure yields an unusable artifact, which is the same reason
-		// `budgetTokens` is documented as markdown-only. An absent format is the
-		// default markdown path.
-		if (r.format !== undefined && r.format !== "markdown") return r;
-		const split = splitPrunedDisplay(r.body, pruneTokens, query);
+		const split = displayBodyForFormat(r.body, r.format, pruneTokens, query);
 		if (!split.pruned) return r;
 		const projected: T = { ...r, body: split.returned };
 		// The worker populates BOTH `body` and `diffResult` from the same diff
@@ -1912,20 +1932,22 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 					// to disk. For non-markdown (html/text/json/raw), `outPath`
 					// is undefined and a readFile would throw.
 					//
+					// Resolved output format + opt-in outline mode (UX1). Defined
+					// before the prune step: `pruneMarkdown` is a MARKDOWN pruner, and
+					// trimming serialized JSON or raw HTML mid-structure returns an
+					// unusable artifact (the truncated JSON no longer parses).
+					const itemFormat = (r as any).format ?? "markdown";
 					// Issue #171: `prune` is applied HERE, to the returned preview only.
 					// The saved file and the content cache were written from the
 					// unpruned body above, so the durable record stays complete while
 					// every display branch below sees bounded text.
-					const pruneSplit = splitPrunedDisplay(
+					const pruneSplit = displayBodyForFormat(
 						r.body ?? "",
+						itemFormat,
 						params.prune as number | undefined,
 						params.query as string | undefined,
 					);
 					const preview = pruneSplit.returned;
-
-					// Resolved output format + opt-in outline mode (UX1). Defined
-					// early so the AI-summary step can be skipped in outline mode.
-					const itemFormat = (r as any).format ?? "markdown";
 					const outlineMode = params.outline === true && itemFormat === "markdown";
 
 					let summary: string | null = null;
