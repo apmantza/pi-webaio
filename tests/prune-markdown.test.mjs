@@ -799,3 +799,45 @@ test("a cut inside a fenced block leaves no block open over the footer", () => {
 		assert.ok(estimateTokens(out) <= 200);
 	}
 });
+
+test("a query-selected section's prose is attributed to its own heading", () => {
+	// CodeRabbit round 7 on #169 (src/prune-markdown.ts:667). The fallback emitted the
+	// whole heading skeleton and then the selected section's prose with no heading of
+	// its own, so Markdown attached that prose to the LAST heading in the skeleton —
+	// the answer named the wrong section as the source of its own text.
+	const doc =
+		"## One\n\n" +
+		"a ".repeat(500) +
+		"\n\n## Two\n\n" +
+		"targetword ".repeat(500) +
+		"\n\n## Three\n\n" +
+		"c ".repeat(500);
+	const out = applyTokenBudget(doc, 120, "targetword", "https://example.com/sel");
+	assert.match(out, /targetword/, "the selected section's prose is missing");
+	// The prose must directly follow its own heading, not the skeleton's last one.
+	const idx = out.indexOf("targetword");
+	const preceding = out.slice(0, idx);
+	const lastHeading = (preceding.match(/^#{1,6} (.+)$/gm) || []).pop() || "";
+	assert.ok(
+		/Two/.test(lastHeading),
+		`prose is attached to "${lastHeading.trim()}" instead of the section it came from — ${JSON.stringify(out.slice(0, 120))}`,
+	);
+	assert.ok(estimateTokens(out) <= 120);
+
+	// A stop word scores 0 against every section, so nothing is "selected". That is
+	// still not a licence to attach section one's prose to the skeleton's last
+	// heading: document order means the FIRST section here, named as such.
+	const stopWord = applyTokenBudget(
+		doc,
+		120,
+		"a",
+		"https://example.com/sel",
+	);
+	const sIdx = stopWord.indexOf("a a");
+	const sLast =
+		(stopWord.slice(0, sIdx).match(/^#{1,6} (.+)$/gm) || []).pop() || "";
+	assert.ok(
+		/One/.test(sLast),
+		`an unranked (stop-word) query attached prose to "${sLast.trim()}" instead of the first section`,
+	);
+});

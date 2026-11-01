@@ -632,6 +632,7 @@ export function applyTokenBudget(
 		let source = body
 			.replace(/^\s+/, "")
 			.replace(/^(?:[ \t]*#{1,6}[ \t].*(?:\n|$))+/, "");
+		let selectedHeading = "";
 		if (query && sections.length > 1) {
 			// Same ranking as the default pruneMarkdown path: with a query, BM25
 			// replaces the heuristic entirely (`combineScores` defaults false), so the
@@ -647,11 +648,21 @@ export function applyTokenBudget(
 					best = i;
 				}
 			});
-			// No section matches the query at all: keep document order rather than
-			// inventing a preference the pruner would not have expressed.
-			if (bestScore > 0) {
+			// No section matches the query (a stop word scores 0 everywhere): fall back
+			// to the FIRST section rather than the whole body, so "document order" means
+			// the same section here as it does for the pruner, and the emitted heading
+			// still names the prose that follows it.
+			const chosen = bestScore > 0 ? sections[best] : sections[0];
+			if (chosen && chosen.content.trim() !== "") {
 				// `chosen.content` is already heading-free, which is what the prefix wants.
-				source = sections[best].content;
+				source = chosen.content;
+				// The skeleton ends with some OTHER section's heading, so Markdown would
+				// attach this prose to it and the answer would name the wrong section as
+				// the source of its own text. Re-emit the selected heading at its own level
+				// (issue #169, CodeRabbit thread src/prune-markdown.ts:667).
+				if (chosen.heading) {
+					selectedHeading = `${"#".repeat(chosen.level)} ${chosen.heading}`;
+				}
 			}
 		}
 		// The prefix carries at most its own heading, so the outline must be added
@@ -664,12 +675,18 @@ export function applyTokenBudget(
 			headingLines,
 			Math.max(10, Math.floor(contentBudget * 0.4)),
 		).join("\n");
+		const skeletonTokens = skeleton ? estimateTokens(skeleton) : 0;
+		const headingTokens = selectedHeading
+			? estimateTokens(selectedHeading) + 1
+			: 0;
 		const prefixRoom = Math.max(
 			1,
-			contentBudget - (skeleton ? estimateTokens(skeleton) : 0),
+			contentBudget - skeletonTokens - headingTokens,
 		);
 		const prefix = trimToTokenBudgetWithClosedFence(source, prefixRoom);
-		prunedContent = skeleton ? `${skeleton}\n\n${prefix}` : prefix;
+		prunedContent = [skeleton, selectedHeading, prefix]
+			.filter((part) => part !== "")
+			.join("\n\n");
 	}
 
 	// Count sections in the original vs kept, and identify WHICH headings were
