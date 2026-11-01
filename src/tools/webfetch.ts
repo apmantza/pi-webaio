@@ -84,6 +84,7 @@ import {
 	suggestRetryTimeoutMs,
 } from "./fetch-error.ts";
 import {
+	contentBudgetForFraming,
 	frontmatter,
 	normalizeFetchTarget,
 	runInBatches,
@@ -767,10 +768,10 @@ function multiAnswerContentBudget(parts: {
 	localKnowledgeNote?: string;
 }): number | undefined {
 	if (!parts.budgetTokens) return undefined;
-	const framing = estimateTokens(
+	return contentBudgetForFraming(
+		parts.budgetTokens,
 		parts.header + parts.notice + (parts.localKnowledgeNote ?? ""),
 	);
-	return Math.max(1, parts.budgetTokens - framing);
 }
 
 /**
@@ -1927,29 +1928,49 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 						displayContent = trimPreviewFrontmatter(displayContent);
 					}
 
-					// Apply hard token budget to the display content if requested.
-					// Full content is already cached above — only the agent-visible
-					// portion is narrowed here. Only applied to markdown format.
-					const budgetTokens = params.budgetTokens as number | undefined;
-					if (budgetTokens && itemFormat === "markdown") {
-						displayContent = applyTokenBudget(
-							displayContent,
-							budgetTokens,
-							params.query as string | undefined,
-							r.url as string | undefined,
-						);
-					}
-
-					// For non-markdown formats, the content is in the response-id cache
-					// rather than written as a markdown file. Show a different header.
+					// UX5: the standalone `Response ID:` line is de-emphasized (agents
+					// retrieve by URL via aio-webcontent). The ID stays in `details`
+					// and in the non-markdown format label above.
 					const formatLabel =
 						itemFormat === "markdown"
 							? `✓ Fetched and saved to ${r.outPath}${summaryNotice}`
 							: `✓ Fetched as ${itemFormat} (${preview.length} chars, result ID ${responseId ?? "unavailable"})${summaryNotice}`;
 
-					// Compute RAG chunks if requested. Only meaningful for
-					// format: markdown (other formats are in-memory; caller
-					// can chunk them themselves).
+					// Apply hard token budget to the display content if requested.
+					// Full content is already cached above — only the agent-visible
+					// portion is narrowed here. Only applied to markdown format.
+					// The budget is charged against the COMPOSED answer: the fetch header
+					// and the local-knowledge note are added after this call, so they are
+					// reserved here rather than stacked on top of the ceiling. Measured
+					// before this: body 91, composed 147 at `budgetTokens: 100`.
+					const budgetTokens = params.budgetTokens as number | undefined;
+					if (budgetTokens && itemFormat === "markdown") {
+						const framing =
+							composeFetchText({
+								formatLabel,
+								title: r.title,
+								url: r.url,
+								format: itemFormat,
+								author: r.author,
+								published: r.published,
+								site: r.site,
+								responseId,
+								showResponseId: false,
+								displayContent: "",
+							}) + localKnowledgeNote;
+						displayContent = applyTokenBudget(
+								displayContent,
+								contentBudgetForFraming(budgetTokens, framing),
+								params.query as string | undefined,
+								r.url as string | undefined,
+							);
+					}
+
+					// For non-markdown formats, the content is in the response-id cache
+					// rather than written as a markdown file. Show a different header.
+					// RAG chunks are a separate opt-in output and are additive to the
+					// budget, like the answer-mode chunk bodies; the reserved framing here
+					// is the fetch header plus the note, not the chunk bodies.
 					const chunks =
 						itemFormat === "markdown"
 							? maybeChunkMarkdown((r as any).body, params, chunkingErrors)

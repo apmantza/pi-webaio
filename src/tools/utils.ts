@@ -4,6 +4,29 @@ import { spawnSync } from "node:child_process";
 import type { Page } from "../types.ts";
 import type { RequestQueue } from "../request-queue.ts";
 import { BASE_TEMP } from "../session-store.ts";
+import { estimateTokens } from "../token-count.ts";
+
+/**
+ * The content budget that leaves a COMPOSED answer inside `totalTokens`.
+ *
+ * `budgetTokens` is documented as a hard output-size ceiling on what the agent
+ * sees, but every tool adds framing around the pruned body — a fetch header, a
+ * stored-content header, a truncation pointer, a local-knowledge note. Charging the
+ * budget to the body alone put that framing OUTSIDE the ceiling it claimed to bound:
+ * measured on aio-webfetch at `budgetTokens: 100`, the body came back at 91 tokens and
+ * the composed answer at 147 (independent review dlg-c3e2aa89).
+ *
+ * Floors at 1 rather than 0: a non-positive budget reads as "no budget", so an
+ * impossible budget would otherwise fail open into returning the whole document.
+ * Framing that is itself larger than the budget still overflows on purpose — the
+ * floor bounds the framing, it cannot shrink the caller's header.
+ */
+export function contentBudgetForFraming(
+	totalTokens: number,
+	framing: string,
+): number {
+	return Math.max(1, totalTokens - estimateTokens(framing));
+}
 
 // ─── Safe path resolution under BASE_TEMP ────────────────────────────
 // Resolves `userInput` against `BASE_TEMP` and verifies the result
