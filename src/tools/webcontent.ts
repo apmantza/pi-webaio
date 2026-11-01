@@ -50,9 +50,12 @@ export function bodyBudgetForFraming(
  * still says which URL it came from at every budget.
  */
 export function fitHeaderToBudget(header: string[], totalTokens: number): string[] {
-	// Leave the body a token budget it can actually use; an all-header answer is
-	// not an answer about the page.
-	const MIN_BODY_TOKENS = 8;
+	// The page is the point, so the body gets the larger share: at least 70% of the
+	// budget (never below 8 tokens). Two wrong ratios were measured before landing
+	// here — `budget - 8` left the body a budget so small only headings survived,
+	// and a 30% body reserve still produced a 100-token answer with no prose, because
+	// the header took 70 (issue #165, CodeRabbit thread src/tools/webcontent.ts:56).
+	const MIN_BODY_TOKENS = Math.max(8, Math.ceil(totalTokens * 0.7));
 	const room = Math.max(1, totalTokens - MIN_BODY_TOKENS);
 	const kept = header.filter(Boolean);
 	if (estimateTokens(buildWebcontentText(kept, "")) <= room) return kept;

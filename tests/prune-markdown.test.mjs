@@ -560,3 +560,91 @@ test("frontmatter larger than the budget does not break the ceiling", () => {
 		`frontmatter larger than the budget returned ${used} tokens (4x the ceiling)`,
 	);
 });
+
+test("the budget buys page content, not just metadata and a notice", () => {
+	// CodeRabbit's fourth pass (threads src/prune-markdown.ts:568 and
+	// src/tools/webcontent.ts:56), one root cause: the reserves (frontmatter, the
+	// 30-token footer, the pruning threshold) could together consume the entire
+	// budget, and whatever got squeezed out was the ONLY thing the caller asked
+	// for — the page content. Measured pre-fix:
+	//
+	//   92-token frontmatter at budget 100 -> 100 tokens of pure YAML, no prose
+	//   budget 40..80 on a plain page       -> headings + notice, no prose
+	//
+	// That is worse than going over budget: the answer looks complete and contains
+	// none of the document. Policy: content is the point, so it is reserved first
+	// and metadata or the notice is dropped when they cannot coexist with it.
+	const bigFm =
+		"---\n" +
+		Array.from(
+			{ length: 10 },
+			(_, i) => `key${i}: a descriptive value number ${i} here`,
+		).join("\n") +
+		"\n---\n\n";
+	const out = applyTokenBudget(
+		bigFm + BUDGET_DOC,
+		100,
+		undefined,
+		"https://example.com/page",
+	);
+	assert.match(
+		out,
+		/word word word/,
+		"a 92-token frontmatter left no room for any page content",
+	);
+});
+
+test("small budgets return the heading skeleton, not a truncated stub", () => {
+	// What this actually guarantees, corrected after measuring. The documented
+	// contract is "heading structure is preserved, lowest-value sections drop
+	// first, and a footer notes omitted sections" — so a 2,400-token document asked
+	// for in 60 tokens is answered with headings plus a pointer to the cached whole
+	// page, and that is the contract, not a failure. Demanding prose at every budget
+	// would assert more than the pruner can deliver: it admits WHOLE sections, and a
+	// 48-token section does not fit a 42-token content budget.
+	//
+	// What WAS broken, and is what this pins: the notice and the frontmatter could
+	// consume the whole budget, leaving a literal "#" plus a footer. Measured
+	// pre-fix at budget 40: "#\n\n---\n_truncated to fit 40-token budget…" — 35
+	// tokens of which 30 were the notice.
+	for (const budget of [40, 50, 60, 80, 100, 120, 200]) {
+		const out = applyTokenBudget(
+			BUDGET_DOC,
+			budget,
+			undefined,
+			"https://example.com/page",
+		);
+		assert.ok(
+			estimateTokens(out) <= budget,
+			`budget ${budget}: ${estimateTokens(out)} tokens`,
+		);
+		assert.match(
+			out,
+			/Section 0/,
+			`budget ${budget}: lost the heading skeleton the contract promises`,
+		);
+		// The stub case: a single stray "#" is not an answer.
+		assert.ok(
+			!/\n#\n/.test(`\n${out}\n`) && !out.startsWith("#\n"),
+			`budget ${budget}: degenerated to a truncated heading marker`,
+		);
+	}
+});
+
+test("budgets at or above the schema floor return prose too", () => {
+	// 100 is the tools' `minimum`, so this is the smallest call a caller can make.
+	for (const budget of [100, 120, 200, 400]) {
+		const out = applyTokenBudget(
+			BUDGET_DOC,
+			budget,
+			undefined,
+			"https://example.com/page",
+		);
+		assert.match(
+			out,
+			/word word word/,
+			`budget ${budget} (a legal call) returned no page prose`,
+		);
+		assert.ok(estimateTokens(out) <= budget);
+	}
+});

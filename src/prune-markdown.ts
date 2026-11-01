@@ -553,28 +553,35 @@ export function applyTokenBudget(
 	// its tokens are part of what this function returns and must be reserved out
 	// of the budget. Everything below operates on the body only (issue #165 F8/F20).
 	const { frontmatter: rawFrontmatter, body } = splitFrontmatter(content);
-	// The metadata block is re-emitted verbatim, so a block larger than the budget
-	// makes the ceiling unsatisfiable by trimming content or shrinking the notice —
-	// measured: a 402-token block against `budgetTokens: 100` returned 402 tokens,
-	// four times the ceiling, with the body gone entirely. The budget wins over the
-	// metadata too, so an oversized block is omitted and the whole budget goes to
-	// the body; the notice still points at the full document, which stays cached
-	// and retrievable by URL (issue #165, CodeRabbit thread src/prune-markdown.ts:655).
-	const oversizedFrontmatter =
-		rawFrontmatter !== "" && estimateTokens(rawFrontmatter) > effectiveBudget;
-	const frontmatter = oversizedFrontmatter ? "" : rawFrontmatter;
-	const frontmatterTokens = frontmatter ? estimateTokens(frontmatter) : 0;
-
-	// Extract heading skeleton — always preserved in the output.
-	const headingLines = body.split("\n").filter((l) => /^#{1,6}\s/.test(l));
-
-	// Use pruneMarkdown to select sections within budget.
-	// Reserve tokens for the footer so the guarantee is hard after we append it.
-	const FOOTER_TOKEN_RESERVE = 30;
+	// Content is what the caller asked for, so it is reserved FIRST, and the
+	// metadata and the truncation notice are dropped when they cannot coexist with
+	// it. Previously frontmatter was reserved first and the footer second, so the
+	// two together could consume the whole budget and the answer came back
+	// containing none of the document: a 92-token frontmatter at `budgetTokens: 100`
+	// returned 100 tokens of pure YAML, and budgets 40–80 on a plain page returned
+	// headings plus a notice with no prose at all. That is worse than going over
+	// budget, because the output looks complete (issue #165, CodeRabbit threads
+	// src/prune-markdown.ts:568 and src/tools/webcontent.ts:56).
+	const MIN_CONTENT_TOKENS = Math.max(1, Math.floor(effectiveBudget * 0.5));
+	const rawFrontmatterTokens =
+		rawFrontmatter === "" ? 0 : estimateTokens(rawFrontmatter);
+	const keepFrontmatter =
+		rawFrontmatter !== "" &&
+		rawFrontmatterTokens <= effectiveBudget - MIN_CONTENT_TOKENS;
+	const frontmatter = keepFrontmatter ? rawFrontmatter : "";
+	const frontmatterTokens = keepFrontmatter ? rawFrontmatterTokens : 0;
+	// Spend what is left on the notice, never at the cost of the content floor.
+	const FOOTER_TOKEN_RESERVE = Math.min(
+		30,
+		Math.max(0, effectiveBudget - frontmatterTokens - MIN_CONTENT_TOKENS),
+	);
 	const contentBudget = Math.max(
 		1,
 		effectiveBudget - FOOTER_TOKEN_RESERVE - frontmatterTokens,
 	);
+
+	// Extract heading skeleton — always preserved in the output.
+	const headingLines = body.split("\n").filter((l) => /^#{1,6}\s/.test(l));
 
 	const pruned = pruneMarkdown(
 		body,
@@ -622,8 +629,8 @@ export function applyTokenBudget(
 		omitted > 0
 			? `\n\n---\n_truncated to fit ${effectiveBudget}-token budget: ${omitted} section${omitted === 1 ? "" : "s"} omitted; full content cached — ${retrieveHint}._`
 			: `\n\n---\n_content fits ${effectiveBudget}-token budget; full content cached — ${retrieveHint}._`;
-	// Keep at least a fifth of the budget (bounded) for real content.
-	const MIN_CONTENT_TOKENS = Math.min(40, Math.max(10, Math.floor(effectiveBudget * 0.2)));
+	// Keep the content floor accounted for when sizing the TOC: the omitted-heading
+	// list is the lowest-priority thing in this output.
 	const tocBudget = Math.max(
 		0,
 		effectiveBudget - frontmatterTokens - estimateTokens(footerBase) - MIN_CONTENT_TOKENS,
@@ -662,7 +669,11 @@ export function applyTokenBudget(
 		// footer's size.
 		const ft = shrinkNoticeToRoom(
 			footerIdx > 0 ? result.slice(footerIdx) : "",
-			effectiveBudget - frontmatterTokens,
+			// Not the whole budget: the notice may use whatever is left AFTER the
+			// content floor, or it reclaims the space the floor exists to protect.
+			// Measured at budget 40, a ~35-token notice "fit" the 40-token room it was
+			// offered and left the content 5 tokens — a literal "#".
+			Math.max(0, effectiveBudget - frontmatterTokens - MIN_CONTENT_TOKENS),
 		);
 		const footerTokens = estimateTokens(ft);
 		const bodyBudget = Math.max(

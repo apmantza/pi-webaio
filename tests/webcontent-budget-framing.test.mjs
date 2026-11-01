@@ -76,21 +76,43 @@ test("budgetTokens bounds the composed output, header included", () => {
 	}
 });
 
-test("the pre-fix composition overruns, so the seam is what fixes it", () => {
-	// Guards against the seam silently becoming a no-op: reproduce the old
-	// handler arithmetic and show it really does overrun at the same budget the
-	// first test pins.
-	const header = HEADER();
-	const naive = applyTokenBudget(
-		LONG,
-		100,
-		undefined,
-		"https://example.com/page",
+test("the seam is what enforces the ceiling, not the pruner alone", () => {
+	// Guards against the seam silently becoming a no-op. The framing has to be big
+	// enough to matter here: with the content floor in place, a 25-token header
+	// against a 100-token budget now fits even without the subtraction, so the old
+	// small-header case no longer discriminates and was replaced rather than kept as
+	// decoration. A header set by a long URL and a long title is the case that shows
+	// the difference: composing it unbounded is many times over budget.
+	const hugeUrl = `https://shop.example.com/${Array.from(
+		{ length: 30 },
+		(_, i) => `category-${i}-with-a-long-slug`,
+	).join("/")}`;
+	const header = [
+		`Retrieved content for ${hugeUrl}`,
+		"Title: A very long page title ".repeat(4),
+		`Length: ${LONG.length} chars`,
+		"Content hash: a1b2c3d4e5f6",
+	];
+	const naive = buildWebcontentText(
+		header,
+		applyTokenBudget(LONG, 100, undefined, hugeUrl),
 	);
-	const old = `${header.join("\n")}\n---\n${naive}`;
 	assert.ok(
-		estimateTokens(old) > 100,
-		"old arithmetic now fits — the first test would pass without the seam",
+		estimateTokens(naive) > 100,
+		"unbounded composition now fits — the seam would be untested",
+	);
+	const seam = buildWebcontentText(
+		fitHeaderToBudget(header, 100),
+		applyTokenBudget(
+			LONG,
+			bodyBudgetForFraming(100, fitHeaderToBudget(header, 100)),
+			undefined,
+			hugeUrl,
+		),
+	);
+	assert.ok(
+		estimateTokens(seam) <= 100,
+		`through the seam: ${estimateTokens(seam)} tokens against 100`,
 	);
 });
 
@@ -222,4 +244,56 @@ test("the registered tool enforces the ceiling end to end", async () => {
 		`the tool returned ${estimateTokens(text)} tokens for budgetTokens: 100`,
 	);
 	assert.match(text, /Retrieved content for/);
+});
+
+test("a long URL cannot starve the body, and the ceiling holds", () => {
+	// CodeRabbit's fourth pass (thread src/tools/webcontent.ts:56). Two ratios were
+	// measured and rejected before landing on one: bounding the header to
+	// `budget - 8` left the body a budget so small that only headings survived, and
+	// a 30% body reserve still produced a 100-token answer with no prose because the
+	// header took 70. The header is metadata ABOUT the page, so the page gets the
+	// larger share: 70% of the budget to the body.
+	//
+	// What is asserted, and what is not: prose is demanded only where the pruner can
+	// deliver it — it admits WHOLE sections, so a body budget below one section's
+	// size yields the heading skeleton plus the pointer to the cached full page,
+	// which is the documented contract ("heading structure is preserved, lowest-value
+	// sections drop first"). At every budget the ceiling must hold and the answer
+	// must still name its source.
+	const hugeUrl = `https://shop.example.com/${Array.from(
+		{ length: 30 },
+		(_, i) => `category-${i}-with-a-long-slug`,
+	).join("/")}`;
+	const header = [
+		`Retrieved content for ${hugeUrl}`,
+		"Title: A very long page title ".repeat(4),
+		`Length: ${LONG.length} chars`,
+		"Content hash: a1b2c3d4e5f6",
+	];
+	for (const budget of [100, 150, 200, 300, 500, 800]) {
+		const fitted = fitHeaderToBudget(header, budget);
+		const body = applyTokenBudget(
+			LONG,
+			bodyBudgetForFraming(budget, fitted),
+			undefined,
+			hugeUrl,
+		);
+		const out = buildWebcontentText(fitted, body);
+		assert.ok(
+			estimateTokens(out) <= budget,
+			`budgetTokens: ${budget} returned ${estimateTokens(out)} tokens`,
+		);
+		assert.match(
+			out,
+			/Retrieved content for/,
+			`budgetTokens: ${budget} lost the line naming the document`,
+		);
+		if (budget >= 150) {
+			assert.match(
+				out,
+				/word word word/,
+				`budgetTokens: ${budget} returned no page prose`,
+			);
+		}
+	}
 });
