@@ -34,6 +34,7 @@ import {
 	isLikelyJsonBody,
 	stripMarkdownSyntax,
 } from "./http-text.ts";
+import { cleanMarkdown } from "./markdown-clean.ts";
 import { isDangerousUrl, scanForSecrets } from "./security.ts";
 import { BASE_TEMP, getStoredContentAnyAge } from "./session-store.ts";
 import { loadPdfParseCtor } from "./types.ts";
@@ -465,7 +466,10 @@ export async function articleHtmlToMarkdown(
 			DEFUDDLE_TIMEOUT,
 		);
 		let md = stripDefuddleComments(result.content || "");
-		md = cleanText(md);
+		// Structure-preserving: a fence body is the program, and a nested list's
+		// indent is its parentage (issue #162 corpus found `cleanText` flattening
+		// both, on output Defuddle had already produced correctly).
+		md = cleanMarkdown(md);
 		return md.trim() ? md : null;
 	} catch {
 		return null;
@@ -1027,7 +1031,7 @@ async function runLocalExtraction(
 		);
 		let defContent = result.content || "";
 		defContent = stripDefuddleComments(defContent);
-		defContent = cleanText(defContent);
+		defContent = cleanMarkdown(defContent);
 		return {
 			ok: true,
 			url: finalUrl,

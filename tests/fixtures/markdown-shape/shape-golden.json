@@ -1,0 +1,57 @@
+{
+  "article": [
+    "p",
+    "h2",
+    "p",
+    "ul",
+    "ul",
+    "ul",
+    "h2",
+    "p",
+    "ol",
+    "ol",
+    "quote",
+    "h2",
+    "p",
+    "p",
+    "p"
+  ],
+  "docs": [
+    "p",
+    "h2",
+    "p",
+    "fence:bash",
+    "p",
+    "fence:js",
+    "h2",
+    "p",
+    "ol",
+    "ol",
+    "h3",
+    "p",
+    "p"
+  ],
+  "table": [
+    "p",
+    "table",
+    "table",
+    "table",
+    "table",
+    "table",
+    "p",
+    "ul",
+    "ul"
+  ],
+  "math": [
+    "p",
+    "p",
+    "h2",
+    "p",
+    "p",
+    "p",
+    "h2",
+    "p",
+    "fence:python",
+    "p"
+  ]
+}

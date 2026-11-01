@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en"><head><title>Configuration Reference — Docs</title></head>
+<body>
+<nav><a href="/docs">Docs</a><a href="/docs/install">Install</a><a href="/api">API</a></nav>
+<main>
+<h1>Configuration Reference</h1>
+<p>This reference page describes every option the tool accepts. It is written
+the way documentation sites write: a short intro, then sections with code the
+reader is expected to copy, and it is long enough to clear the extraction
+threshold used by the local pipeline.</p>
+<h2>Installing</h2>
+<p>Install the package with your usual package manager, then import it:</p>
+<pre><code class="language-bash">npm install pi-webaio --save</code></pre>
+<p>The import looks like this, where <code>fetchPage</code> is the entry point:</p>
+<pre><code class="language-js">import { fetchPage } from "pi-webaio/webfetch";
+const page = await fetchPage("https://example.com");
+console.log(page.content);</code></pre>
+<h2>Options</h2>
+<p>Options are passed as an object and each one is optional:</p>
+<ol>
+  <li><code>format</code> — output format, defaults to markdown</li>
+  <li><code>budgetTokens</code> — hard ceiling on returned size</li>
+</ol>
+<h3>Nested heading</h3>
+<p>A third-level heading under Options, included because heading depth is one of
+the shape properties that a converter bump can silently flatten.</p>
+<p>Back to body text after the nested heading so the structure alternates the
+way real documentation pages alternate it.</p>
+</main>
+</body></html>
