@@ -5,6 +5,7 @@ import { applyTokenBudget, trimToTokenBudget } from "../prune-markdown.ts";
 import { estimateTokens } from "../token-count.ts";
 import { diffContent } from "../content-diff.ts";
 import { shortHash, hashesEqual } from "../content-hash.ts";
+import { contentBudgetForFraming } from "./utils.ts";
 
 /**
  * Compose the header block and the (already budgeted) body into what the agent
@@ -32,8 +33,10 @@ export function bodyBudgetForFraming(
 	totalTokens: number,
 	header: string[],
 ): number {
-	const framing = estimateTokens(buildWebcontentText(header, ""));
-	return Math.max(1, totalTokens - framing);
+	return contentBudgetForFraming(
+		totalTokens,
+		buildWebcontentText(header, ""),
+	);
 }
 
 /**

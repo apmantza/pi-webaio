@@ -648,3 +648,276 @@ test("budgets at or above the schema floor return prose too", () => {
 		assert.ok(estimateTokens(out) <= budget);
 	}
 });
+
+// Independent review of the merged budget work (dlg-cf70d5aa) found a shape every
+// sweep in this session missed: all fixtures used MANY small sections, so at least
+// one always fit the content budget. A body that is ONE section larger than the
+// budget is discarded whole, and the answer was 26 tokens of footer out of a
+// 100-token budget containing none of the document.
+const PLAIN_1200 = "word ".repeat(1200);
+
+test("a single oversized section still yields prose at the schema floor", () => {
+	// Pre-fix (measured on merged master ed7ec3a): budget 100 returned 26 tokens and
+	// the output was only the truncation notice — with a heading present it was 36
+	// tokens and still no prose. The content floor must be satisfied by SOME of the
+	// body even when no whole section fits; partial prose beats a footer.
+	for (const body of [PLAIN_1200, `## Only Section\n\n${PLAIN_1200}`]) {
+		for (const budget of [100, 150, 200]) {
+			const out = applyTokenBudget(
+				body,
+				budget,
+				undefined,
+				"https://example.com/plain",
+			);
+			assert.match(
+				out,
+				/word word word/,
+				`budget ${budget} on a single-section body returned no page prose`,
+			);
+			assert.ok(
+				estimateTokens(out) <= budget,
+				`budget ${budget}: ${estimateTokens(out)} tokens`,
+			);
+		}
+	}
+});
+
+test("frontmatter never survives at the cost of all content", () => {
+	// The stated policy: content is reserved first, and metadata is dropped when it
+	// cannot coexist with the content floor. Pre-fix, a 6-token frontmatter plus a
+	// single oversized section produced frontmatter + notice and zero prose, which
+	// contradicts the policy at the legal minimum budget.
+	const fm = "---\nk0: value words here\n---\n\n";
+	const out = applyTokenBudget(
+		fm + PLAIN_1200,
+		100,
+		undefined,
+		"https://example.com/plain",
+	);
+	assert.match(
+		out,
+		/word word word/,
+		"frontmatter was kept while every page word was dropped",
+	);
+	assert.ok(estimateTokens(out) <= 100);
+});
+
+test("a partial-section fallback is labelled truncated, never as fitting", () => {
+	// The footer says "content fits N-token budget" when zero sections were omitted.
+	// A partial fallback IS a cut, so emitting that sentence would misreport it.
+	const out = applyTokenBudget(
+		PLAIN_1200,
+		100,
+		undefined,
+		"https://example.com/plain",
+	);
+	assert.doesNotMatch(
+		out,
+		/content fits .*token budget/,
+		"a truncated single-section body was labelled as fitting the budget",
+	);
+	assert.match(out, /truncated to fit/);
+});
+
+// CodeRabbit on #169 (threads src/prune-markdown.ts:618 x2). Both are defects in
+// the partial fallback itself — the third-round pattern repeating: the fix for
+// "answer contains none of the page" was picking the wrong slice of the page.
+const EARLY_900 = "## Intro\n\n" + "alpha ".repeat(900);
+const LATE_900 = "## Target\n\n" + "zebra ".repeat(900);
+
+test("a query targeting an oversized later section returns THAT section", () => {
+	// Pre-fix: query "zebra" returned only "alpha" — the fallback took the document
+	// prefix and ignored ranking, so the answer was unrelated prose while the asked
+	// for section sat in the cache. The fallback must rank like pruneMarkdown does.
+	const doc = `${EARLY_900}\n\n${LATE_900}`;
+	const out = applyTokenBudget(doc, 100, "zebra", "https://example.com/two");
+	assert.match(
+		out,
+		/zebra/,
+		"the query-targeted section was dropped in favour of the document prefix",
+	);
+});
+
+test("the fallback keeps later headings, not only the one in the prefix", () => {
+	// Pre-fix this was a REGRESSION the fallback introduced: with an empty pruned
+	// body the heading-skeleton path ran and every heading survived; once the prefix
+	// supplied the first heading, `resultHasHeadings` was true and the skeleton was
+	// skipped, so sections 2 and 3 vanished from the outline.
+	const doc = `${EARLY_900}\n\n## Second\n\nsmall body words\n\n## Third\n\nmore words here`;
+	const out = applyTokenBudget(doc, 100, undefined, "https://example.com/skel");
+	for (const h of ["Intro", "Second", "Third"]) {
+		assert.ok(
+			out.includes(h),
+			`heading "${h}" disappeared from the outline because the prefix already had one`,
+		);
+	}
+	assert.ok(estimateTokens(out) <= 100);
+});
+
+// CodeRabbit round 6 on #169 (threads src/prune-markdown.ts:666, :667). Both are in
+// the fallback's own prefix logic — the same shape repeating for a sixth round.
+test("an oversized first heading cannot eat the whole prefix budget", () => {
+	// Pre-fix: the output was the heading text twice (skeleton + prefix) and no prose
+	// at all, i.e. the fallback still produced an answer with none of the document.
+	const longHeading = `# ${"verylongheadingword ".repeat(120)}`;
+	// The frontmatter variant is not decoration: after a frontmatter block the body
+	// begins with "\n", which defeated a heading-strip anchored at ^ and let the
+	// heading fragment back in. Both shapes are asserted.
+	const fm = "---\ntitle: A fairly long document title that costs tokens\n---\n\n";
+	for (const doc of [
+		`${longHeading}\n\n${"prose ".repeat(600)}`,
+		`${fm}${longHeading}\n\n${"prose ".repeat(600)}`,
+	]) {
+		const out = applyTokenBudget(
+			doc,
+			100,
+			undefined,
+			"https://example.com/heading",
+		);
+		assert.match(
+			out,
+			/prose prose/,
+			`an oversized first heading consumed the prefix and no prose survived (${out.includes("---") ? "with" : "without"} frontmatter) — ${JSON.stringify(out.slice(0, 70))}`,
+		);
+		assert.ok(estimateTokens(out) <= 100);
+	}
+});
+
+test("a cut inside a fenced block leaves no block open over the footer", () => {
+	// Pre-fix the fence count was odd, so the truncation footer was rendered INSIDE
+	// the code block and the pointer to the cached page became part of the snippet.
+	for (const fence of ["```js", "````", "~~~"]) {
+		const close = fence.replace(/[^\s~`]/g, "").length >= 0 ? fence[0].repeat(fence.length) : "`";
+		const body = `${fence}\n${"word ".repeat(900)}\n${close}\n`;
+		const out = applyTokenBudget(body, 200, undefined, "https://example.com/fence");
+		const openRuns = (out.match(/(^|\n)[ \t]*(`{3,}|~{3,})/g) || []).length;
+		assert.equal(
+			openRuns % 2,
+			0,
+			`${fence}: unclosed fence left the footer inside the code block — ${JSON.stringify(out.slice(-90))}`,
+		);
+		assert.ok(estimateTokens(out) <= 200);
+	}
+});
+
+test("a query-selected section's prose is attributed to its own heading", () => {
+	// CodeRabbit round 7 on #169 (src/prune-markdown.ts:667). The fallback emitted the
+	// whole heading skeleton and then the selected section's prose with no heading of
+	// its own, so Markdown attached that prose to the LAST heading in the skeleton —
+	// the answer named the wrong section as the source of its own text.
+	const doc =
+		"## One\n\n" +
+		"a ".repeat(500) +
+		"\n\n## Two\n\n" +
+		"targetword ".repeat(500) +
+		"\n\n## Three\n\n" +
+		"c ".repeat(500);
+	const out = applyTokenBudget(doc, 120, "targetword", "https://example.com/sel");
+	assert.match(out, /targetword/, "the selected section's prose is missing");
+	// The prose must directly follow its own heading, not the skeleton's last one.
+	const idx = out.indexOf("targetword");
+	const preceding = out.slice(0, idx);
+	const lastHeading = (preceding.match(/^#{1,6} (.+)$/gm) || []).pop() || "";
+	assert.ok(
+		/Two/.test(lastHeading),
+		`prose is attached to "${lastHeading.trim()}" instead of the section it came from — ${JSON.stringify(out.slice(0, 120))}`,
+	);
+	assert.ok(estimateTokens(out) <= 120);
+
+	// A stop word scores 0 against every section, so nothing is "selected". That is
+	// still not a licence to attach section one's prose to the skeleton's last
+	// heading: document order means the FIRST section here, named as such.
+	const stopWord = applyTokenBudget(
+		doc,
+		120,
+		"a",
+		"https://example.com/sel",
+	);
+	const sIdx = stopWord.indexOf("a a");
+	const sLast =
+		(stopWord.slice(0, sIdx).match(/^#{1,6} (.+)$/gm) || []).pop() || "";
+	assert.ok(
+		/One/.test(sLast),
+		`an unranked (stop-word) query attached prose to "${sLast.trim()}" instead of the first section`,
+	);
+});
+
+// CodeRabbit round 8 on #169 (src/prune-markdown.ts:635). Round 7 fixed attribution for
+// the RANKED branch only; the plain no-query fallback still took the whole body while the
+// skeleton ended on the last heading, so the same misattribution survived there.
+const THREE_SEC =
+	"## One\n\n" + "a-word ".repeat(500) +
+	"\n\n## Two\n\n" + "b-word ".repeat(500) +
+	"\n\n## Three\n\n" + "c-word ".repeat(500);
+
+test("the no-query fallback attributes prose to the first section", () => {
+	const out = applyTokenBudget(THREE_SEC, 120, undefined, "https://example.com/nq");
+	const idx = out.indexOf("a-word");
+	assert.ok(idx >= 0, "no page prose returned");
+	const last = (out.slice(0, idx).match(/^#{1,6} (.+)$/gm) || []).pop() || "(none)";
+	assert.ok(
+		/One/.test(last),
+		`no-query fallback attached section one's prose to "${last.trim()}" — ${JSON.stringify(out.slice(0, 100))}`,
+	);
+	assert.ok(estimateTokens(out) <= 120);
+});
+
+test("an unheaded preamble is not labelled with a later heading", () => {
+	// A preamble has no heading of its own. Emitting it AFTER the skeleton makes
+	// Markdown attribute it to the first real section, inventing a claim about where
+	// those words came from.
+	const doc =
+		"intro preamble words ".repeat(60) +
+		"\n\n## One\n\n" +
+		"a-word ".repeat(500);
+	const out = applyTokenBudget(doc, 120, undefined, "https://example.com/pre");
+	const trimmed = out.trimStart();
+	assert.ok(
+		trimmed.startsWith("intro preamble words"),
+		`preamble was emitted after the skeleton and so inherits a heading it does not have — ${JSON.stringify(out.slice(0, 90))}`,
+	);
+	assert.ok(estimateTokens(out) <= 120);
+});
+
+// CodeRabbit round 9 on #169 (src/prune-markdown.ts:710). Round 8 set
+// prefixBeforeSkeleton on the NO-query branch only; two paths still select a section
+// whose heading never gets emitted, and the prose then lands after the whole outline.
+const BIG_PREAMBLE_DOC =
+	"intro preamble words ".repeat(400) +
+	"\n\n## One\n\n" +
+	"a-word ".repeat(500);
+
+test("a headingless section selected BY QUERY is not labelled by the outline", () => {
+	// A stop word scores 0 against every section, so sections[0] — the unheaded
+	// preamble — is chosen with no heading to emit. Measured pre-fix the answer was
+	// `## One` followed by the preamble, i.e. the preamble was credited to section One.
+	const out = applyTokenBudget(
+		BIG_PREAMBLE_DOC,
+		100,
+		"a",
+		"https://example.com/hq",
+	);
+	assert.ok(
+		out.trimStart().startsWith("intro preamble words"),
+		`a query-selected unheaded section was credited to the outline — ${JSON.stringify(out.slice(0, 90))}`,
+	);
+	assert.ok(estimateTokens(out) <= 100);
+});
+
+test("prose from a section whose heading was dropped for size is not relabelled", () => {
+	// The outline drops a heading larger than its whole share. The prose that came
+	// from behind it must not then be attributed to whichever heading the outline kept.
+	const doc =
+		"# " + "verylongheadingword ".repeat(120) + "\n\n" +
+		"bigprose ".repeat(400) +
+		"\n\n## Small\n\n" +
+		"s-word ".repeat(400);
+	const out = applyTokenBudget(doc, 150, "bigprose", "https://example.com/oh");
+	const idx = out.indexOf("bigprose");
+	assert.ok(idx >= 0, "no prose from the selected section");
+	assert.ok(
+		!/#{1,6}\s/.test(out.slice(0, idx)),
+		`prose from the oversized-heading section was credited to a kept heading — ${JSON.stringify(out.slice(0, 90))}`,
+	);
+	assert.ok(estimateTokens(out) <= 150);
+});
