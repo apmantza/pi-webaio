@@ -27,7 +27,7 @@ import {
 	extractInteractables,
 	formatInteractablesSection,
 } from "../interactive-elements.ts";
-import { pruneMarkdown, applyTokenBudget } from "../prune-markdown.ts";
+import { pruneMarkdown, applyTokenBudget, trimToTokenBudget } from "../prune-markdown.ts";
 import { createBM25Scorer } from "../bm25.ts";
 import {
 	formatMultiSourceAnswer,
@@ -711,6 +711,111 @@ export function composeFetchText(parts: FetchTextParts): string {
 	}
 	if (parts.warning) lines.push(parts.warning);
 	return lines.join("\n");
+}
+
+/**
+ * Elide the middle of a string so it fits a token budget, keeping both ends.
+ *
+ * Used for the save-path line: the head (`✓ Fetched and saved to /tmp/…`) and the
+ * tail (the filename) are what a reader actually scans for, and the authoritative
+ * untruncated value is returned in `details.outPath`, so shortening the visible line
+ * loses no information.
+ */
+function elideToTokenBudget(text: string, maxTokens: number): string {
+	if (estimateTokens(text) <= maxTokens) return text;
+	const headTokens = Math.max(4, Math.floor(maxTokens * 0.6));
+	const tailTokens = Math.max(2, maxTokens - headTokens - 1);
+	const head = trimToTokenBudget(text, headTokens);
+	let tail = text.slice(Math.max(0, text.length - tailTokens * 4));
+	// Snap to a line boundary so an elided label cannot start mid-sentence.
+	const nl = tail.indexOf("\n");
+	if (nl >= 0 && nl < tail.length - 1) tail = tail.slice(nl + 1);
+	let guard = 0;
+	while (estimateTokens(tail) > tailTokens && tail.length > 1 && guard < 20) {
+		tail = tail.slice(Math.ceil(tail.length * 0.1));
+		guard++;
+	}
+	return `${head}\n…${tail}`;
+}
+
+/**
+ * Budget the body AND bound the framing, then compose what the agent receives.
+ *
+ * This is the whole boundary for a single fetched result, and both the answer-mode and
+ * the default markdown path go through it so they cannot drift. It exists because
+ * reserving framing out of the budget is not enough on its own: the fetch header can be
+ * larger than the budget it is inside (a long page title plus a deep save path measured
+ * 208 tokens of framing, so `budgetTokens: 100` came back at 209 with the body floored
+ * at 1). `contentBudgetForFraming` can only shrink the body; it cannot shrink the
+ * caller's header, exactly as documented on `fitHeaderToBudget` in webcontent (issue
+ * #169, independent review dlg-4e01c1e1).
+ *
+ * The body keeps the larger share — at least 70%, never below 8 tokens — the same ratio
+ * `fitHeaderToBudget` settled on after two wrong ratios were measured. Title is shortened
+ * first (it is descriptive only), then the save-path line is elided in the middle.
+ */
+export function composeBudgetedFetchText(opts: {
+	parts: FetchTextParts;
+	body: string;
+	budgetTokens?: number;
+	query?: string;
+	url?: string;
+	note?: string;
+}): { text: string; display: string } {
+	const note = opts.note ?? "";
+	const unbounded = () => ({
+		text: composeFetchText({ ...opts.parts, displayContent: opts.body }) + note,
+		display: opts.body,
+	});
+	if (!opts.budgetTokens) return unbounded();
+
+	const total = opts.budgetTokens;
+	const minBody = Math.max(8, Math.ceil(total * 0.7));
+	const room = Math.max(1, total - minBody);
+	let parts = opts.parts;
+	const composeFraming = (extra = "") =>
+		composeFetchText({ ...parts, displayContent: "" }) + note + extra;
+	let framing = composeFraming();
+	if (estimateTokens(framing) > room) {
+		// Priority order: the title is descriptive only, the save path is recoverable
+		// from `details.outPath`, and the URL — also in `details.url` — gives up last.
+		if (parts.title) {
+			const titleCap = Math.max(4, Math.floor(room / 3));
+			parts = { ...parts, title: trimToTokenBudget(parts.title, titleCap) };
+			framing = composeFraming();
+		}
+		if (estimateTokens(framing) > room) {
+			const labelCap = Math.max(
+				8,
+				room -
+					estimateTokens(composeFraming().replace(parts.formatLabel, "")) -
+					estimateTokens(parts.title ?? ""),
+			);
+			parts = {
+				...parts,
+				formatLabel: elideToTokenBudget(parts.formatLabel, labelCap),
+			};
+			framing = composeFraming();
+		}
+	}
+	// If the header still does not fit, the body keeps its share anyway. Flooring it to
+	// 1 token produced a 54-token answer containing a header and NONE of the page, which
+	// fails the more important promise: a non-empty body always yields some prose.
+	const display = applyTokenBudget(
+		opts.body,
+		Math.max(minBody, total - estimateTokens(framing)),
+		opts.query,
+		opts.url,
+	);
+	let text = composeFetchText({ ...parts, displayContent: display }) + note;
+	// The overflow is stated only when it actually happened. Keying the notice off
+	// "framing exceeded its share" was wrong: a 61-token answer-mode header at budget 200
+	// left the answer at 196 (inside the ceiling) while still announcing that the header
+	// had eaten the budget. Truthful by construction — measured on the composed answer.
+	if (estimateTokens(text) > total) {
+		text += `\n\n[Header needed ${estimateTokens(framing)} of the ${total}-token budget; less page content is shown than requested.]`;
+	}
+	return { text, display };
 }
 
 export interface MultiAnswerTextParts {
@@ -1808,16 +1913,12 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 							summaryNotice = r.outPath
 								? `\n[Answer mode: top ${topK} chunks for "${answerModeQuery}". Full content (${preview.length} chars) saved to ${r.outPath}.]`
 								: `\n[Answer mode: top ${topK} chunks for "${answerModeQuery}". Full content cached (result ID ${responseId ?? "unavailable"}).]`;
-							// Apply hard token budget after answer mode (composes cleanly).
+							// Apply hard token budget after answer mode, through the SAME
+							// seam as the default path: budgeting the raw body here and then
+							// appending the header and the local-knowledge note put the
+							// composed answer over the ceiling (measured 137 tokens at
+							// `budgetTokens: 100`; issue #169, review dlg-4e01c1e1).
 							const budgetTokens = params.budgetTokens as number | undefined;
-							displayContent = budgetTokens
-								? applyTokenBudget(
-										answerBody,
-										budgetTokens,
-										answerModeQuery,
-										r.url as string | undefined,
-									)
-								: answerBody;
 							// Skip the normal summarize/truncate path.
 							const formatLabel = `✓ Fetched and saved to ${r.outPath}${summaryNotice}`;
 							const chunks = maybeChunkMarkdown(
@@ -1831,25 +1932,34 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 							);
 							// Same composition seam as the default path (one header
 							// block, one metadata block) so the two cannot drift.
-							const text = composeFetchText({
-								formatLabel,
-								title: r.title,
-								url: r.url,
-								format: itemFormat,
-								author: r.author,
-								published: r.published,
-								site: r.site,
-								chunkHeader: chunkFmt.header || undefined,
-								displayContent,
-								chunkBody: chunkFmt.body || undefined,
-								chunkCount: chunks?.length,
-								warning:
-									chunkingErrors.length > 0
-										? `\n\n[WARN] Chunking failed: ${chunkingErrors.join("; ")}`
-										: undefined,
+							const composed = composeBudgetedFetchText({
+								parts: {
+									formatLabel,
+									title: r.title,
+									url: r.url,
+									format: itemFormat,
+									author: r.author,
+									published: r.published,
+									site: r.site,
+									chunkHeader: chunkFmt.header || undefined,
+									displayContent: "",
+									chunkBody: chunkFmt.body || undefined,
+									chunkCount: chunks?.length,
+									warning:
+										chunkingErrors.length > 0
+											? `\n\n[WARN] Chunking failed: ${chunkingErrors.join("; ")}`
+											: undefined,
+								},
+								body: answerBody,
+								budgetTokens,
+								query: answerModeQuery,
+								url: r.url as string | undefined,
+								note: localKnowledgeNote,
 							});
+							displayContent = composed.display;
+							const text = composed.text;
 							return {
-								content: [{ type: "text", text: text + localKnowledgeNote }],
+								content: [{ type: "text", text }],
 								details: {
 									outPath: r.outPath,
 									title: r.title,
@@ -1939,32 +2049,13 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 					// Apply hard token budget to the display content if requested.
 					// Full content is already cached above — only the agent-visible
 					// portion is narrowed here. Only applied to markdown format.
-					// The budget is charged against the COMPOSED answer: the fetch header
-					// and the local-knowledge note are added after this call, so they are
-					// reserved here rather than stacked on top of the ceiling. Measured
-					// before this: body 91, composed 147 at `budgetTokens: 100`.
+					// The budget is charged against the COMPOSED answer, through the same
+					// seam as the answer-mode path: the fetch header and the local-knowledge
+					// note are part of what the agent receives, so they are reserved and
+					// bounded rather than stacked on top of the ceiling. Measured before the
+					// seam: body 91, composed 147 at `budgetTokens: 100`; with a long title
+					// and a deep save path the header alone was 208 tokens.
 					const budgetTokens = params.budgetTokens as number | undefined;
-					if (budgetTokens && itemFormat === "markdown") {
-						const framing =
-							composeFetchText({
-								formatLabel,
-								title: r.title,
-								url: r.url,
-								format: itemFormat,
-								author: r.author,
-								published: r.published,
-								site: r.site,
-								responseId,
-								showResponseId: false,
-								displayContent: "",
-							}) + localKnowledgeNote;
-						displayContent = applyTokenBudget(
-								displayContent,
-								contentBudgetForFraming(budgetTokens, framing),
-								params.query as string | undefined,
-								r.url as string | undefined,
-							);
-					}
 
 					// For non-markdown formats, the content is in the response-id cache
 					// rather than written as a markdown file. Show a different header.
@@ -1983,28 +2074,37 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 					// UX5: the standalone `Response ID:` line is de-emphasized (agents
 					// retrieve by URL via aio-webcontent). The ID stays in `details`
 					// and in the non-markdown format label above.
-					const text = composeFetchText({
-						formatLabel,
-						title: r.title,
-						url: r.url,
-						format: itemFormat,
-						author: r.author,
-						published: r.published,
-						site: r.site,
-						responseId,
-						showResponseId: false,
-						chunkHeader: chunkFmt.header || undefined,
-						displayContent,
-						chunkBody: chunkFmt.body || undefined,
-						chunkCount: chunks?.length,
-						warning:
-							chunkingErrors.length > 0
-								? `\n\n[WARN] Chunking failed: ${chunkingErrors.join("; ")}`
-								: undefined,
+					const composed = composeBudgetedFetchText({
+						parts: {
+							formatLabel,
+							title: r.title,
+							url: r.url,
+							format: itemFormat,
+							author: r.author,
+							published: r.published,
+							site: r.site,
+							responseId,
+							showResponseId: false,
+							chunkHeader: chunkFmt.header || undefined,
+							displayContent: "",
+							chunkBody: chunkFmt.body || undefined,
+							chunkCount: chunks?.length,
+							warning:
+								chunkingErrors.length > 0
+									? `\n\n[WARN] Chunking failed: ${chunkingErrors.join("; ")}`
+									: undefined,
+						},
+						body: displayContent,
+						budgetTokens: itemFormat === "markdown" ? budgetTokens : undefined,
+						query: params.query as string | undefined,
+						url: r.url as string | undefined,
+						note: localKnowledgeNote,
 					});
+					displayContent = composed.display;
+					const text = composed.text;
 
 					return {
-						content: [{ type: "text", text: text + localKnowledgeNote }],
+						content: [{ type: "text", text }],
 						details: {
 							outPath: r.outPath,
 							title: r.title,
