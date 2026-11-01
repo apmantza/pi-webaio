@@ -61,6 +61,28 @@ jobs:
       # peer's subtree, so pi-coding-agent's transitive brace-expansion@5.0.7
       # advisory (GHSA-mh99-v99m-4gvg) cannot be bumped from this repo — it is
       # upstream's responsibility.
+      #
+      # ACCEPTED RESIDUAL (#164, advisory #75): minimatch@10.2.6, medium
+      # scope, `dev: true` in the lock, declared by
+      # @earendil-works/pi-coding-agent at an EXACT pin (not a range),
+      # first patched at 11.0.1 — i.e. the fix is a MAJOR. Verified from
+      # the lock rather than inferred:
+      #   node_modules/minimatch -> 10.2.6, dev=True
+      #   declared by node_modules/@earendil-works/pi-coding-agent -> "10.2.6"
+      # Two options were considered and one was rejected:
+      #   REJECTED — a root `overrides` entry forcing ^11.0.1. Unlike the
+      #     undici case (#158), where the patched release sat inside the
+      #     SAME major (8.10.2 -> 8.12.2), this injects a new major into a
+      #     graph whose host package declared exact 10.x semantics. That
+      #     is a real behavioural risk to the pi dev/test path, taken for
+      #     a medium, dev-scope advisory that ships to nobody.
+      #   ACCEPTED — upstream raises the pin. minimatch 10 -> 11 is
+      #     pi-coding-agent's call to validate, not ours to force from a
+      #     consumer. The gate above already excludes dev and peer, so
+      #     nothing published depends on it and no CI job is red because
+      #     of it. Revisit if the advisory is re-scored high/critical, if
+      #     it ever reaches the production graph, or if upstream ships a
+      #     10.x patch.
       - name: Audit production dependencies
         run: npm audit --omit=dev --omit=peer --audit-level=high
 

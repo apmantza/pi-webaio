@@ -33,18 +33,53 @@ const SECTIONS = [
 ];
 
 const problems = [];
+
+// Issue #161: npm records an OPTIONAL dependency in the lockfile's root
+// `dependencies` block at an exact pin, while package.json declares it under
+// `optionalDependencies` with a range:
+//
+//   packages[""].dependencies.playwright = "1.64.1"
+//   optionalDependencies.playwright      = "^1.55.0"
+//
+// Both are legitimate and `npm ci` accepts them, but the gate read the lock's
+// `dependencies` entry as a package nobody declared and failed every weekly
+// grouped Dependabot PR that touched an optional dep.
+//
+// Membership is narrowed, specs are not: a name may be RECORDED in any lock
+// section, but a spec mismatch inside the section package.json actually declares
+// it in is still drift. A gate that must be worked around stops being trusted;
+// a gate that stops catching real drift is worse, so both halves are tested.
+const lockIndex = new Map();
+for (const section of SECTIONS) {
+	for (const [name, spec] of Object.entries(root[section] ?? {})) {
+		if (!lockIndex.has(name)) lockIndex.set(name, { section, spec });
+	}
+}
 for (const section of SECTIONS) {
 	const pkgDeps = pkg[section] ?? {};
 	const lockDeps = root[section] ?? {};
 	for (const [name, spec] of Object.entries(pkgDeps)) {
-		if (lockDeps[name] !== spec) {
-			problems.push(
-				`${section}.${name}: package.json="${spec}" lock="${lockDeps[name] ?? "(missing)"}"`,
-			);
+		if (name in lockDeps) {
+			if (lockDeps[name] !== spec) {
+				problems.push(
+					`${section}.${name}: package.json="${spec}" lock="${lockDeps[name]}"`,
+				);
+			}
+			continue;
 		}
+		const elsewhere = lockIndex.get(name);
+		if (section === "optionalDependencies" && elsewhere) {
+			// Declared optional, recorded under another lock section: npm's own
+			// shape (issue #161), not drift.
+			continue;
+		}
+		problems.push(
+			`${section}.${name}: package.json="${spec}" lock="${elsewhere ? `in ${elsewhere.section} (${elsewhere.spec})` : "(missing)"}`,
+		);
 	}
 	for (const name of Object.keys(lockDeps)) {
-		if (!(name in pkgDeps)) {
+		const declaredSomewhere = SECTIONS.some((s) => name in (pkg[s] ?? {}));
+		if (!declaredSomewhere) {
 			problems.push(`${section}.${name}: in lock but not package.json`);
 		}
 	}
