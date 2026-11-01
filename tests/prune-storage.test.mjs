@@ -29,6 +29,10 @@ import { splitPrunedDisplay } from "../src/tools/webfetch.ts";
 import { estimateTokens } from "../src/token-count.ts";
 import { registerWebfetchTool } from "../src/tools/webfetch.ts";
 import { getStoredContent, normalizeCacheKey, sessionStore } from "../src/session-store.ts";
+import {
+	maybeChunkMarkdown,
+	projectResultsForPrune,
+} from "../src/tools/webfetch.ts";
 
 // ─── Pure seam: the storage/display split ─────────────────────────────
 
@@ -152,4 +156,99 @@ test("#171: a pruned fetch stores the full body (live)", async (t) => {
 	);
 
 	sessionStore.delete(normalizeCacheKey(result.details.url));
+});
+
+// ─── CodeRabbit on #172: `prune` + `chunks` bypassed the bound ──────────
+//
+// Reviewer finding, verified before accepting: all three `maybeChunkMarkdown`
+// call sites chunk `(r as any).body` — the FULL body — while `prune` was moved to
+// the preview. With both params set, the returned chunk list is generated from the
+// unpruned page, so the requested reduction is bypassed by the largest part of the
+// output.
+//
+// Pre-existing (the chunk path always read the full body), but the #171 fix made
+// the inconsistency explicit: if `prune` bounds what is returned, it must bound the
+// chunks too, because chunks ARE returned.
+//
+// Recurrence prevented: `prune: 300` on a 13k-char page returning 40 chunks of the
+// whole document because the knob only ever touched the preview.
+
+test("#171 follow-up: chunks are generated from the bounded display body", () => {
+	const body = twoSectionBody();
+	const errors = [];
+	const chunks = maybeChunkMarkdown(
+		body,
+		{ chunks: true, prune: 300, maxTokens: 120 },
+		errors,
+	);
+	assert.ok(chunks && chunks.length > 0, "chunking should have produced chunks");
+	assert.equal(errors.length, 0, `chunking reported errors: ${errors.join("; ")}`);
+
+	const joined = chunks.map((c) => c.text).join("\n");
+	const totalTokens = chunks.reduce((n, c) => n + c.tokenCount, 0);
+	assert.ok(
+		!/dropme/.test(joined),
+		"a chunk still carries the section `prune` was asked to drop",
+	);
+	assert.ok(
+		totalTokens <= 400,
+		`chunks total ${totalTokens} tokens against a 300-token prune budget`,
+	);
+});
+
+test("#171 follow-up: without prune, chunks still cover the whole page", () => {
+	const body = twoSectionBody();
+	const chunks = maybeChunkMarkdown(body, { chunks: true, maxTokens: 120 }, []);
+	assert.ok(chunks && chunks.length > 0);
+	assert.ok(
+		/dropme/.test(chunks.map((c) => c.text).join("\n")),
+		"no prune means no reduction — chunking must still see the full page",
+	);
+});
+
+// ─── CodeRabbit on #172 (thread 2): multi-URL mode ignored `prune` ──────
+//
+// `details: { results }` returns each worker result, and every result carries
+// `body: formatted.body` — the FULL markdown. Nothing in the multi-URL path ever
+// consulted `prune`, so on a batch fetch the knob did nothing whatsoever: the
+// agent asked for a 300-token-per-page reduction and got every page whole.
+//
+// The projection must CLONE. The original result objects are what the file write,
+// the content cache and chunking read, so mutating them in place would reintroduce
+// exactly the #171 defect from the other side.
+//
+// Recurrence prevented: `prune` silently doing nothing on `urls: [...]` fetches.
+
+test("#171 follow-up: multi-URL results are projected with bounded bodies", () => {
+	const results = [
+		{ ok: true, url: "https://a.test/x", body: twoSectionBody() },
+		{ ok: true, url: "https://b.test/y", body: twoSectionBody() },
+	];
+	const projected = projectResultsForPrune(results, 300, undefined);
+
+	assert.equal(projected.length, 2);
+	for (const r of projected) {
+		assert.ok(
+			!/dropme/.test(r.body),
+			`the returned body for ${r.url} still carries the dropped section`,
+		);
+	}
+	// The originals must be untouched: they feed the file write and the cache.
+	for (const r of results) {
+		assert.ok(
+			/dropme/.test(r.body),
+			`projecting mutated the original result for ${r.url} — that is the #171 defect again`,
+		);
+	}
+});
+
+test("#171 follow-up: no prune means results are returned as-is", () => {
+	const results = [{ ok: true, url: "https://a.test/x", body: twoSectionBody() }];
+	assert.equal(projectResultsForPrune(results, undefined, undefined), results);
+});
+
+test("#171 follow-up: failed results pass through untouched", () => {
+	const results = [{ ok: false, url: "https://a.test/x", error: "404" }];
+	const projected = projectResultsForPrune(results, 300, undefined);
+	assert.deepEqual(projected, results);
 });

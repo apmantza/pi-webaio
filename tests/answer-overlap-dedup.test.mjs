@@ -167,3 +167,10 @@ test("#131: a non-adjacent selection keeps its overlap head (the previous chunk 
 		"the last chunk's opening span must survive — the chunk that supplied it was not selected, so this is the reader's only copy",
 	);
 });
+
+// Note on CodeRabbit #172 thread 1 (adjacency check): a fixture with three
+// identical paragraphs does make tail(N-1) === tail(N-2), but the proposed extra
+// guard could not be made to fail on any input. If `endsWith` matches, the span is
+// already displayed, so nothing is hidden. The guard was rejected and the test that
+// would have pinned it was removed rather than left passing vacuously — the same
+// trap this file already records twice.

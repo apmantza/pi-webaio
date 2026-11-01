@@ -434,12 +434,29 @@ export function buildCompactJsonPreview(
  */
 export function maybeChunkMarkdown(
 	body: string | undefined,
-	params: { chunks?: boolean; maxTokens?: number; overlapTokens?: number },
+	params: {
+		chunks?: boolean;
+		maxTokens?: number;
+		overlapTokens?: number;
+		prune?: number;
+		query?: string;
+	},
 	errors: string[],
 ): Chunk[] | undefined {
 	if (!params.chunks || !body) return undefined;
 	try {
-		const result = chunkMarkdown(body, {
+		// Issue #171 follow-up (CodeRabbit on #172): the three call sites all pass
+		// the FULL result body, so with `prune` + `chunks` set together the returned
+		// chunk list was generated from the unpruned page and the requested output
+		// reduction was bypassed by the largest part of the output. Chunks are
+		// returned, so `prune` bounds them — same display-only seam as the preview,
+		// so the two cannot disagree about what "bounded" means.
+		const display = splitPrunedDisplay(
+			body,
+			params.prune,
+			params.query,
+		).returned;
+		const result = chunkMarkdown(display, {
 			maxTokens: params.maxTokens,
 			overlapTokens: params.overlapTokens,
 		});
@@ -448,6 +465,33 @@ export function maybeChunkMarkdown(
 		errors.push("chunking failed for this result");
 		return undefined;
 	}
+}
+
+/**
+ * Issue #171 follow-up (CodeRabbit on #172): bound the bodies the multi-URL path
+ * hands back.
+ *
+ * `details: { results }` carries every worker result, and each result carries
+ * `body: formatted.body` — the FULL markdown. Nothing in that path consulted
+ * `prune`, so a batch fetch ignored the knob entirely.
+ *
+ * CLONE, never mutate: the original result objects are what the file write, the
+ * content cache and chunking read, so mutating them in place would reintroduce
+ * the #171 defect from the opposite side.
+ *
+ * Exported for unit testing.
+ */
+export function projectResultsForPrune<T extends { ok?: boolean; body?: string }>(
+	results: readonly T[],
+	pruneTokens: number | undefined,
+	query?: string,
+): T[] {
+	if (!pruneTokens || pruneTokens <= 0) return results as T[];
+	return results.map((r) => {
+		if (!r.ok || typeof r.body !== "string") return r;
+		const split = splitPrunedDisplay(r.body, pruneTokens, query);
+		return split.pruned ? { ...r, body: split.returned } : r;
+	});
 }
 
 /** Default number of top chunks returned in answer mode. */
@@ -541,6 +585,13 @@ export function applyQueryAnswerMode(
 	// one's tail, so it would render twice. Trim only that recorded span, and only
 	// when the previously displayed chunk actually ends with it — a legitimate
 	// repeat (table headers, an intentional code-block repeat) is left intact.
+	//
+	// CodeRabbit (#172, thread 1) proposed ALSO requiring index adjacency. Rejected
+	// after building the fixture it needed (three identical paragraphs, so
+	// tail(N-1) === tail(N-2)) and failing to make the guard fail on any input.
+	// `endsWith` is the load-bearing condition: when it matches, that span is
+	// already on screen, so a coincidental match cannot hide anything from the
+	// reader. An adjacency check would be mechanism with no reachable failure.
 	const parts: string[] = [];
 	let lastDisplayedBody = "";
 	for (const { chunk } of selected) {
@@ -2374,7 +2425,11 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 				return {
 					content: [{ type: "text", text: lines.join("\n") + localKnowledgeNote }],
 					details: {
-						results,
+						results: projectResultsForPrune(
+							results,
+							params.prune as number | undefined,
+							params.query as string | undefined,
+						),
 						...(localKnowledge ? { localKnowledge } : {}),
 						browser,
 						os,
