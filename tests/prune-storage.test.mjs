@@ -252,3 +252,56 @@ test("#171 follow-up: failed results pass through untouched", () => {
 	const projected = projectResultsForPrune(results, 300, undefined);
 	assert.deepEqual(projected, results);
 });
+
+// ─── CodeRabbit on #172 round 2 ───────────────────────────────────────
+
+// Thread 1: `pruneMarkdown` is a MARKDOWN pruner. Running it over serialized
+// JSON or raw HTML can invalidate the document (cutting mid-structure), which is
+// the same reason `budgetTokens` is documented as markdown-only. An absent
+// format means the default markdown path.
+test("#172: prune never touches non-markdown result bodies", () => {
+	const json = '{"a":1,"b":"' + "x".repeat(4000) + '"}';
+	const results = [
+		{ ok: true, url: "https://a.test/1", body: json, format: "json" },
+		{ ok: true, url: "https://a.test/2", body: `<p>${"y".repeat(4000)}</p>`, format: "html" },
+		{ ok: true, url: "https://a.test/3", body: "z".repeat(4000), format: "text" },
+		{ ok: true, url: "https://a.test/4", body: "w".repeat(4000), format: "raw" },
+	];
+	const projected = projectResultsForPrune(results, 300, undefined);
+	projected.forEach((r, i) => {
+		assert.equal(
+			r.body,
+			results[i].body,
+			`${results[i].format} body was pruned — trimming a raw document mid-structure yields an unusable artifact`,
+		);
+	});
+});
+
+test("#172: an absent format is the default markdown path and IS pruned", () => {
+	const results = [{ ok: true, url: "https://a.test/x", body: twoSectionBody() }];
+	const projected = projectResultsForPrune(results, 300, undefined);
+	assert.ok(!/dropme/.test(projected[0].body));
+});
+
+// Thread 2: the worker populates BOTH `body` and `diffResult` from the same diff
+// text. Bounding only `body` left the structured result still exposing the text
+// `prune` removed.
+test("#172: a projected result bounds diffResult alongside body", () => {
+	const results = [
+		{
+			ok: true,
+			url: "https://a.test/x",
+			body: twoSectionBody(),
+			diffResult: twoSectionBody(),
+			format: "markdown",
+		},
+	];
+	const projected = projectResultsForPrune(results, 300, undefined);
+	assert.ok(!/dropme/.test(projected[0].body), "body should be bounded");
+	assert.ok(
+		!/dropme/.test(projected[0].diffResult),
+		"diffResult still carries the text `prune` removed — the structured result contradicts the body",
+	);
+	// The original must still hold both, untouched, for the durable record.
+	assert.ok(/dropme/.test(results[0].diffResult));
+});

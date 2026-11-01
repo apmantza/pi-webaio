@@ -481,16 +481,36 @@ export function maybeChunkMarkdown(
  *
  * Exported for unit testing.
  */
-export function projectResultsForPrune<T extends { ok?: boolean; body?: string }>(
-	results: readonly T[],
-	pruneTokens: number | undefined,
-	query?: string,
-): T[] {
+export function projectResultsForPrune<
+	T extends {
+		ok?: boolean;
+		body?: string;
+		format?: string;
+		diffResult?: string;
+	},
+>(results: readonly T[], pruneTokens: number | undefined, query?: string): T[] {
 	if (!pruneTokens || pruneTokens <= 0) return results as T[];
 	return results.map((r) => {
 		if (!r.ok || typeof r.body !== "string") return r;
+		// `pruneMarkdown` is a MARKDOWN pruner. Trimming serialized JSON or raw
+		// HTML mid-structure yields an unusable artifact, which is the same reason
+		// `budgetTokens` is documented as markdown-only. An absent format is the
+		// default markdown path.
+		if (r.format !== undefined && r.format !== "markdown") return r;
 		const split = splitPrunedDisplay(r.body, pruneTokens, query);
-		return split.pruned ? { ...r, body: split.returned } : r;
+		if (!split.pruned) return r;
+		const projected: T = { ...r, body: split.returned };
+		// The worker populates BOTH `body` and `diffResult` from the same diff
+		// text, so bounding only `body` left the structured result still exposing
+		// the text `prune` removed.
+		if (typeof r.diffResult === "string") {
+			projected.diffResult = splitPrunedDisplay(
+				r.diffResult,
+				pruneTokens,
+				query,
+			).returned;
+		}
+		return projected;
 	});
 }
 
