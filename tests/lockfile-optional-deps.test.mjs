@@ -142,3 +142,75 @@ test("#161: a NON-optional dep recorded only under another lock section is drift
 	);
 	assert.match(r.out, /linkedom/);
 });
+
+// ─── Review round 1 on #174: the exemption accepted an out-of-range pin ──
+//
+// The cross-section exemption keyed on the SECTION name alone, so it accepted
+// this, verified against the real script:
+//
+//   package.json  optionalDependencies.playwright = "^2.0.0"
+//   package-lock  packages[""].dependencies.playwright = "1.64.1"
+//   $ node scripts/check-lockfile-sync.mjs
+//   Lockfile in sync with package.json ✓      exit=0
+//
+// That is exactly the drift class the gate exists for: the resolved version
+// cannot satisfy the declared range, so `npm ci` installs something the manifest
+// forbids. Accepting an exact pin is only safe if it SATISFIES the range, so the
+// exemption now checks that. Ranges it cannot reason about are refused
+// (fail closed) rather than waved through.
+//
+// Recurrence prevented: a Dependabot or hand-edited lock whose optional pin fell
+// out of the declared range, reported as "in sync".
+
+function pair(pkgSpec, lockSpec) {
+	return run(
+		{ name: "x", optionalDependencies: { pw: pkgSpec } },
+		{ name: "x", packages: { "": { name: "x", dependencies: { pw: lockSpec } } } },
+	);
+}
+
+test("#174: an optional pin outside the declared caret range is drift", () => {
+	const r = pair("^2.0.0", "1.64.1");
+	assert.equal(r.code, 1, "lock 1.64.1 cannot satisfy ^2.0.0");
+	assert.match(r.out, /pw/);
+});
+
+test("#174: a satisfying optional pin is still in sync", () => {
+	const r = pair("^1.55.0", "1.64.1");
+	assert.equal(r.code, 0, `1.64.1 satisfies ^1.55.0:\n${r.out}`);
+});
+
+test("#174: caret on a 0.x major also constrains the minor", () => {
+	// ^0.15.0 means >=0.15.0 <0.16.0 is wrong (^0.B.C => >=0.B.C <0.(B+1).0);
+	// 0.18.14 is outside ^0.15.0 because the minor moved.
+	assert.equal(pair("^0.15.0", "0.18.14").code, 1, "minor moved for a 0.x caret");
+	assert.equal(pair("^0.15.0", "0.15.4").code, 0, "patch bump satisfies ^0.15.0");
+	assert.equal(pair("^0.18.0", "0.15.0").code, 1, "older minor must not pass");
+});
+
+test("#174: a tilde range rejects a minor bump", () => {
+	assert.equal(pair("~1.55.0", "1.64.1").code, 1, "~1.55.0 pins the minor to 55");
+	assert.equal(pair("~1.55.0", "1.55.9").code, 0, "patch bump satisfies ~1.55.0");
+});
+
+test("#174: an exact declared spec must match exactly", () => {
+	assert.equal(pair("1.64.1", "1.64.1").code, 0);
+	assert.equal(pair("1.64.1", "1.64.0").code, 1);
+});
+
+test("#174: unreasonably-shaped ranges FAIL CLOSED rather than passing", () => {
+	// Anything the checker cannot prove is refused, so an unforeseen spelling
+	// cannot silently widen the exemption.
+	for (const spec of ["workspace:*", "github:foo/pw", ">=1.0.0 <2.0.0", "1.x", ""]) {
+		const r = pair(spec, "1.64.1");
+		assert.equal(
+			r.code,
+			1,
+			`spec "${spec}" is not provably satisfiable and must not be waved through`,
+		);
+	}
+});
+
+test("#174: the wildcard range accepts any pin", () => {
+	assert.equal(pair("*", "1.64.1").code, 0, "* declares no constraint");
+});

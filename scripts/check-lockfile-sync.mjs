@@ -34,6 +34,66 @@ const SECTIONS = [
 
 const problems = [];
 
+/**
+ * Does an EXACT resolved version satisfy a declared range?
+ *
+ * The cross-section exemption (issue #161) accepts a package npm recorded in a
+ * different lock section at an exact pin. Keying on the section name alone meant
+ * it also accepted a pin that CANNOT satisfy the declared range - e.g. `^2.0.0`
+ * declared against `1.64.1` resolved - which is precisely the drift this gate
+ * exists to catch, so the exemption now has to prove satisfaction.
+ *
+ * Deliberately NOT a general semver implementation: it recognises the spellings
+ * npm actually writes for a resolved dependency and returns false for everything
+ * else, so an unforeseen range narrows nothing. Fail-closed by construction
+ * rather than by enumerating known-bad forms.
+ */
+function parseVersion(value) {
+	const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(value.trim());
+	if (!m) return null; // prereleases and builds are out of scope: unprovable
+	return { major: +m[1], minor: +m[2], patch: +m[3] };
+}
+
+function compareVersions(a, b) {
+	return a.major - b.major || a.minor - b.minor || a.patch - b.patch;
+}
+
+function pinSatisfiesRange(pin, range) {
+	const resolved = parseVersion(pin);
+	if (!resolved) return false;
+	const spec = String(range).trim();
+	if (spec === "*") return true;
+
+	let m = /^\^(\d+)\.(\d+)\.(\d+)$/.exec(spec);
+	if (m) {
+		const base = { major: +m[1], minor: +m[2], patch: +m[3] };
+		if (compareVersions(resolved, base) < 0) return false;
+		if (base.major > 0) return resolved.major === base.major;
+		// ^0.B.C allows no minor movement; ^0.0.C allows none at all.
+		if (base.minor > 0) return resolved.major === 0 && resolved.minor === base.minor;
+		return compareVersions(resolved, base) === 0;
+	}
+
+	m = /^~(\d+)(?:\.(\d+))?(?:\.(\d+))?$/.exec(spec);
+	if (m) {
+		if (resolved.major !== +m[1]) return false;
+		if (m[2] === undefined) return true;
+		if (resolved.minor !== +m[2]) return false;
+		if (m[3] === undefined) return true;
+		return resolved.patch >= +m[3];
+	}
+
+	m = /^>=(\d+)\.(\d+)\.(\d+)$/.exec(spec);
+	if (m) {
+		return compareVersions(resolved, { major: +m[1], minor: +m[2], patch: +m[3] }) >= 0;
+	}
+
+	const exact = parseVersion(spec);
+	if (exact) return compareVersions(resolved, exact) === 0;
+
+	return false; // ||, ranges, git:, workspace:, link:, anything unrecognised
+}
+
 // Issue #161: npm records an OPTIONAL dependency in the lockfile's root
 // `dependencies` block at an exact pin, while package.json declares it under
 // `optionalDependencies` with a range:
@@ -68,13 +128,25 @@ for (const section of SECTIONS) {
 			continue;
 		}
 		const elsewhere = lockIndex.get(name);
-		if (section === "optionalDependencies" && elsewhere) {
-			// Declared optional, recorded under another lock section: npm's own
-			// shape (issue #161), not drift.
+		if (
+			section === "optionalDependencies" &&
+			elsewhere &&
+			pinSatisfiesRange(elsewhere.spec, spec)
+		) {
+			// Declared optional, recorded under another lock section, and the
+			// resolved pin satisfies the declared range: npm's own shape (#161).
 			continue;
 		}
 		problems.push(
-			`${section}.${name}: package.json="${spec}" lock="${elsewhere ? `in ${elsewhere.section} (${elsewhere.spec})` : "(missing)"}`,
+			`${section}.${name}: package.json="${spec}" lock="${
+				elsewhere
+					? `in ${elsewhere.section} (${elsewhere.spec})${
+						section === "optionalDependencies"
+							? " - does not satisfy the range"
+							: ""
+					}`
+					: "(missing)"
+			}`,
 		);
 	}
 	for (const name of Object.keys(lockDeps)) {
