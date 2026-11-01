@@ -633,6 +633,25 @@ export function applyTokenBudget(
 			.replace(/^\s+/, "")
 			.replace(/^(?:[ \t]*#{1,6}[ \t].*(?:\n|$))+/, "");
 		let selectedHeading = "";
+		// A preamble has no heading of its own; emitting it after the skeleton would
+		// make Markdown attribute it to the first real section, inventing a claim about
+		// where those words came from (issue #169, CodeRabbit thread
+		// src/prune-markdown.ts:635).
+		let prefixBeforeSkeleton = false;
+		if (!query && sections.length > 0) {
+			// Without a query the document-order answer is the FIRST section, and its
+			// heading has to travel with it. Taking the whole body left the prose sitting
+			// under the skeleton's LAST heading — the same misattribution the ranked branch
+				// had already been fixed for.
+			const first = sections[0];
+			if (first.content.trim() !== "") {
+				source = first.content;
+				prefixBeforeSkeleton = !first.heading;
+				if (first.heading) {
+					selectedHeading = `${"#".repeat(first.level)} ${first.heading}`;
+				}
+			}
+		}
 		if (query && sections.length > 1) {
 			// Same ranking as the default pruneMarkdown path: with a query, BM25
 			// replaces the heuristic entirely (`combineScores` defaults false), so the
@@ -671,22 +690,43 @@ export function applyTokenBudget(
 		// but once the prefix supplied the first heading `resultHasHeadings` was true
 		// and the skeleton was skipped, so later sections vanished from the outline.
 		// The skeleton is capped so it cannot crowd the prose back out.
-		const skeleton = selectSkeletonLines(
+		const skelLines = selectSkeletonLines(
 			headingLines,
 			Math.max(10, Math.floor(contentBudget * 0.4)),
-		).join("\n");
+		);
+		const skeleton = skelLines.join("\n");
 		const skeletonTokens = skeleton ? estimateTokens(skeleton) : 0;
-		const headingTokens = selectedHeading
-			? estimateTokens(selectedHeading) + 1
-			: 0;
+		// When the selected heading is already in the outline, the prose is inserted
+		// directly after it rather than appended past the whole skeleton: that keeps
+		// document order AND attribution without emitting the heading twice.
+		const selIdx = selectedHeading ? skelLines.indexOf(selectedHeading) : -1;
+		// The outline already dropped this heading for being larger than its whole share;
+		// re-emitting it separately would hand it that room back and leave the prose with
+		// nothing (the exact shape the skeleton rule exists to prevent). Same rule, same
+		// cap: if it did not fit the outline, it does not get a second chance.
+		const outlineCap = Math.max(10, Math.floor(contentBudget * 0.4));
+		if (selectedHeading && estimateTokens(selectedHeading) > outlineCap) {
+			selectedHeading = "";
+		}
+		const headingTokens =
+			selectedHeading && selIdx < 0 ? estimateTokens(selectedHeading) + 1 : 0;
 		const prefixRoom = Math.max(
 			1,
 			contentBudget - skeletonTokens - headingTokens,
 		);
 		const prefix = trimToTokenBudgetWithClosedFence(source, prefixRoom);
-		prunedContent = [skeleton, selectedHeading, prefix]
-			.filter((part) => part !== "")
-			.join("\n\n");
+		const parts: string[] = [];
+		if (prefixBeforeSkeleton) {
+			parts.push(prefix, skeleton);
+		} else if (selIdx >= 0) {
+			parts.push(skelLines.slice(0, selIdx + 1).join("\n"));
+			parts.push(prefix);
+			const rest = skelLines.slice(selIdx + 1).join("\n");
+			if (rest !== "") parts.push(rest);
+		} else {
+			parts.push(skeleton, selectedHeading, prefix);
+		}
+		prunedContent = parts.filter((part) => part !== "").join("\n\n");
 	}
 
 	// Count sections in the original vs kept, and identify WHICH headings were
@@ -756,7 +796,15 @@ export function applyTokenBudget(
 				headingLines,
 				Math.max(10, Math.floor(effectiveBudget * 0.25)),
 			).join("\n");
-			if (skeleton !== "") result = `${skeleton}\n\n${result}`;
+			if (skeleton !== "") {
+				// Heading-less prose goes FIRST. Prepending the outline always attributed
+				// that prose to the skeleton's LAST heading — this branch only runs when the
+				// kept content has no heading of its own, so every page reaching here was
+				// labelled with a heading it never had (issue #169, CodeRabbit thread
+				// src/prune-markdown.ts:635). The outline still travels with the answer, it
+				// just no longer speaks for text it did not introduce.
+				result = result.trim() === "" ? skeleton : `${result}\n\n${skeleton}`;
+			}
 		}
 	}
 

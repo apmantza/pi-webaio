@@ -841,3 +841,40 @@ test("a query-selected section's prose is attributed to its own heading", () => 
 		`an unranked (stop-word) query attached prose to "${sLast.trim()}" instead of the first section`,
 	);
 });
+
+// CodeRabbit round 8 on #169 (src/prune-markdown.ts:635). Round 7 fixed attribution for
+// the RANKED branch only; the plain no-query fallback still took the whole body while the
+// skeleton ended on the last heading, so the same misattribution survived there.
+const THREE_SEC =
+	"## One\n\n" + "a-word ".repeat(500) +
+	"\n\n## Two\n\n" + "b-word ".repeat(500) +
+	"\n\n## Three\n\n" + "c-word ".repeat(500);
+
+test("the no-query fallback attributes prose to the first section", () => {
+	const out = applyTokenBudget(THREE_SEC, 120, undefined, "https://example.com/nq");
+	const idx = out.indexOf("a-word");
+	assert.ok(idx >= 0, "no page prose returned");
+	const last = (out.slice(0, idx).match(/^#{1,6} (.+)$/gm) || []).pop() || "(none)";
+	assert.ok(
+		/One/.test(last),
+		`no-query fallback attached section one's prose to "${last.trim()}" — ${JSON.stringify(out.slice(0, 100))}`,
+	);
+	assert.ok(estimateTokens(out) <= 120);
+});
+
+test("an unheaded preamble is not labelled with a later heading", () => {
+	// A preamble has no heading of its own. Emitting it AFTER the skeleton makes
+	// Markdown attribute it to the first real section, inventing a claim about where
+	// those words came from.
+	const doc =
+		"intro preamble words ".repeat(60) +
+		"\n\n## One\n\n" +
+		"a-word ".repeat(500);
+	const out = applyTokenBudget(doc, 120, undefined, "https://example.com/pre");
+	const trimmed = out.trimStart();
+	assert.ok(
+		trimmed.startsWith("intro preamble words"),
+		`preamble was emitted after the skeleton and so inherits a heading it does not have — ${JSON.stringify(out.slice(0, 90))}`,
+	);
+	assert.ok(estimateTokens(out) <= 120);
+});
