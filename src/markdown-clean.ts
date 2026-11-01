@@ -47,10 +47,19 @@ export function cleanMarkdown(value: string): string {
 		const fenceMatch = FENCE_LINE.exec(line);
 
 		if (openFence) {
-			// Inside a fence: verbatim. Close only on a line that starts with the
-			// same marker character, so a ``` block containing ~~~ stays open.
+			// Inside a fence: verbatim. A closing fence must use the same marker
+			// character, be at least as long as the opener, and have nothing after
+			// the marker — so a 4-backtick fence holding a 3-backtick sample stays
+			// open, and a line like "```js" written as content is not a terminator.
 			out.push(line);
-			if (fenceMatch && fenceMatch[1][0] === openFence[0]) openFence = null;
+			if (
+				fenceMatch &&
+				fenceMatch[1][0] === openFence[0] &&
+				fenceMatch[1].length >= openFence.length &&
+				/^[ \t]*$/.test(line.slice(fenceMatch[0].length))
+			) {
+				openFence = null;
+			}
 			continue;
 		}
 

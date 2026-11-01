@@ -171,3 +171,48 @@ test("shape signature matches the committed golden", async () => {
 		);
 	}
 });
+
+// ─── CodeRabbit on #175: fence closing was not CommonMark ─────────────
+//
+// The cleaner closed a fence on ANY line starting with the same marker
+// character. Two real shapes break under that rule, and Defuddle can emit both:
+//
+//   1. a 4-backtick fence containing a 3-backtick fence (nested code samples) —
+//      the inner ``` ended the outer fence, so everything after it was treated
+//      as prose and its indentation was destroyed;
+//   2. a fence line with trailing text (```js written as content, or a caption)
+//      — CommonMark says a closing fence has nothing after the marker.
+//
+// Recurrence prevented: a code sample about markdown silently losing its
+// indentation from the midpoint outward.
+
+test("#175: a 4-backtick fence is not closed by a 3-backtick line inside it", async () => {
+	const { cleanMarkdown } = await import("../src/markdown-clean.ts");
+	const md = "````md\nouter line\n```\n  inner sample\n````\nprose  after";
+	const out = cleanMarkdown(md);
+	// Exact line: the ONLY acceptable result keeps the two-space indent, because
+	// the inner ``` is content of the outer fence, not its terminator.
+	assert.ok(
+		out.split("\n").includes("  inner sample"),
+		`the inner \`\`\` closed the outer fence and its content was reflowed:\n${out}`,
+	);
+	assert.ok(out.includes("prose after"), "prose outside the fence must still collapse");
+});
+
+test("#175: a fence line with trailing text does not close the fence", async () => {
+	const { cleanMarkdown } = await import("../src/markdown-clean.ts");
+	const md = "```\nfirst\n``` not a closing fence\n  still inside\n```";
+	const out = cleanMarkdown(md);
+	assert.ok(
+		/^ {2}still inside$/m.test(out),
+		`content after a fenced line with trailing text was treated as prose:\n${out}`,
+	);
+});
+
+test("#175: a normal fence still closes normally", async () => {
+	const { cleanMarkdown } = await import("../src/markdown-clean.ts");
+	const md = "```js\nconst a = 1;\n```\nafter";
+	const out = cleanMarkdown(md);
+	assert.ok(/^after$/m.test(out), `closing fence stopped working:\n${out}`);
+	assert.match(out, /^ {0}const a = 1;$/m);
+});
