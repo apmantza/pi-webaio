@@ -227,3 +227,23 @@ test("framing overflow stays bounded for extreme notes, URLs and headings-only b
 		}
 	}
 });
+
+// The body floor is load-bearing but was unpinned: removing `Math.max(minBody, ...)` left
+// every test green while silently returning LESS page (long framing + huge note at budget
+// 400 dropped from 280 content tokens to 160, the 40% fallback). Verify review
+// dlg-4961f07f reported the guard as untested; a differential run over the extreme matrix
+// showed it changes output, so the test was missing, not the guard.
+test("the body keeps its 70% share even when the header cannot fit", () => {
+	const budget = 400;
+	const out = composeBudgetedFetchText({
+		parts: EXTREME.headingsOnlyLongFraming.parts,
+		body: "```js\n" + "x ".repeat(900) + "\n```\n",
+		budgetTokens: budget,
+		note: `\n\n> ${"local knowledge note words ".repeat(40)}`,
+	});
+	const minBody = Math.max(8, Math.ceil(budget * 0.7));
+	assert.ok(
+		estimateTokens(out.display) >= minBody,
+		`body was cut to ${estimateTokens(out.display)} tokens, below its ${minBody}-token share`,
+	);
+});
