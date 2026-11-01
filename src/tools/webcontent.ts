@@ -2,8 +2,39 @@ import { TOOL_METADATA } from "./lazy.ts";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { getStoredContent } from "../session-store.ts";
 import { applyTokenBudget } from "../prune-markdown.ts";
+import { estimateTokens } from "../token-count.ts";
 import { diffContent } from "../content-diff.ts";
 import { shortHash, hashesEqual } from "../content-hash.ts";
+
+/**
+ * Compose the header block and the (already budgeted) body into what the agent
+ * actually receives. Exported so the budget maths is testable through the same
+ * seam the handler uses — a test that rebuilt this composition itself would stay
+ * green while the handler drifted.
+ */
+export function buildWebcontentText(header: string[], body: string): string {
+	return `${header.filter(Boolean).join("\n")}\n\n---\n\n${body}`;
+}
+
+/**
+ * `budgetTokens` is documented as a hard ceiling on "the content returned to the
+ * agent", and the header block is returned to the agent too. Budget the body for
+ * whatever the header leaves, so the composed output honours the number the
+ * caller passed — the same guarantee `aio-webfetch` makes for the same parameter
+ * name.
+ *
+ * Floors at 1 rather than 0: `applyTokenBudget` reads a non-positive budget as
+ * "no budget", so an impossible budget would otherwise fail open into returning
+ * the whole document (the shape that made a negative content budget mean
+ * unlimited in the cited-answer path).
+ */
+export function bodyBudgetForFraming(
+	totalTokens: number,
+	header: string[],
+): number {
+	const framing = estimateTokens(buildWebcontentText(header, ""));
+	return Math.max(1, totalTokens - framing);
+}
 
 // Per-URL prune result cache — same url+budget+query → same pruned output
 // until content changes (key includes contentHash). Life-depends: avoids
@@ -92,21 +123,35 @@ export function registerWebcontentTool(pi: ExtensionAPI): void {
 			// ── Default retrieval — with prune cache (life-depends) ───────
 			const budgetTokens = params.budgetTokens as number | undefined;
 			const query = params.query as string | undefined;
+			const header = [
+				`Retrieved content for ${stored.url}`,
+				stored.title ? `Title: ${stored.title}` : "",
+				`Length: ${stored.content.length} chars`,
+				contentHash ? `Content hash: ${contentHash}` : "",
+				unchanged
+					? `Unchanged since previous version (${shortHash(stored.previousContentHash!)})`
+					: "",
+			];
 			let displayContent: string;
 			if (budgetTokens) {
-				const cacheKey = `${stored.url}\x00${budgetTokens}\x00${query ?? ""}\x00${stored.contentHash ?? ""}`;
+				// The header is part of what the caller budgeted, so it is charged
+				// against the budget before the body is pruned.
+				const bodyBudget = bodyBudgetForFraming(budgetTokens, header);
+				const cacheKey = `${stored.url}\x00${bodyBudget}\x00${query ?? ""}\x00${stored.contentHash ?? ""}`;
 				const hit = _pruneCache.get(cacheKey);
 				if (hit && hit.contentHash === stored.contentHash) {
 					displayContent = hit.result;
 				} else {
 					displayContent = applyTokenBudget(
 						stored.content,
-						budgetTokens,
+						bodyBudget,
 						query,
 						stored.url,
 					);
 					if (_pruneCache.size >= _PRUNE_CACHE_MAX) {
-						const oldest = _pruneCache.keys().next().value as string | undefined;
+						const oldest = _pruneCache.keys().next().value as
+							| string
+							| undefined;
 						if (oldest !== undefined) _pruneCache.delete(oldest);
 					}
 					_pruneCache.set(cacheKey, {
@@ -117,19 +162,7 @@ export function registerWebcontentTool(pi: ExtensionAPI): void {
 			} else {
 				displayContent = stored.content;
 			}
-			const text = [
-				`Retrieved content for ${stored.url}`,
-				stored.title ? `Title: ${stored.title}` : "",
-				`Length: ${stored.content.length} chars`,
-				contentHash ? `Content hash: ${contentHash}` : "",
-				unchanged
-					? `Unchanged since previous version (${shortHash(stored.previousContentHash!)})`
-					: "",
-				"\n---\n",
-				displayContent,
-			]
-				.filter(Boolean)
-				.join("\n");
+			const text = buildWebcontentText(header, displayContent);
 			return {
 				content: [{ type: "text", text }],
 				details: {
