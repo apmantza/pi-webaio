@@ -541,7 +541,12 @@ export function applyTokenBudget(
 	query?: string,
 	url?: string,
 ): string {
-	const effectiveBudget = Math.max(100, Math.floor(budget));
+	// The caller's number is the contract. This used to floor at 100, which
+	// silently overrode any smaller budget: `budgetTokens: 50` was answered with
+	// ~100 tokens of content, and it also masked the footer-vs-budget case that
+	// `shrinkNoticeToRoom` now handles. A budget of 1 still yields a non-empty
+	// budget rather than collapsing to "no budget".
+	const effectiveBudget = Math.max(1, Math.floor(budget));
 	if (estimateTokens(content) <= effectiveBudget) return content;
 
 	// The frontmatter block is re-emitted verbatim at the top of the result, so
@@ -639,16 +644,16 @@ export function applyTokenBudget(
 		// Trim content portion only, keep footer.
 		const footerIdx = result.lastIndexOf("\n\n---\n");
 		const contentBody = footerIdx > 0 ? result.slice(0, footerIdx) : result;
-		let ft = footerIdx > 0 ? result.slice(footerIdx) : "";
-		// If the footer + TOC crowds the content out (tiny budget, many omitted
-		// headings), drop the TOC — the "N sections omitted" count line matters more
-		// than the heading list, and content matters more than both.
-		if (
-			estimateTokens(ft) + frontmatterTokens + MIN_CONTENT_TOKENS >
-			effectiveBudget
-		) {
-			ft = ft.replace(/\n\n\*Omitted sections:\*[\s\S]*$/, "");
-		}
+		// The footer is information, not the contract. A budget smaller than the
+		// footer itself could not be satisfied by trimming content: the body went to
+		// zero and the notice alone still overran (measured: budgets 1–31 returned
+		// 33–34 tokens). Step the notice down until it fits and let content take what
+		// is left, so the ceiling holds at every budget rather than only above the
+		// footer's size.
+		const ft = shrinkNoticeToRoom(
+			footerIdx > 0 ? result.slice(footerIdx) : "",
+			effectiveBudget - frontmatterTokens,
+		);
 		const footerTokens = estimateTokens(ft);
 		const bodyBudget = Math.max(
 			0,
@@ -658,6 +663,32 @@ export function applyTokenBudget(
 	}
 
 	return assemble(result);
+}
+
+/**
+ * Shorten a truncation notice until it fits the room it was given, stepping
+ * through progressively terser forms and finally dropping it entirely.
+ *
+ * Ordered by what is worth keeping as the budget shrinks: the omitted-sections
+ * heading list first, then the "full content cached" wording, then the count and
+ * retrieval hint, then the notice itself. The caller's budget always wins over
+ * the explanation of why the content was cut.
+ */
+function shrinkNoticeToRoom(footer: string, room: number): string {
+	if (estimateTokens(footer) <= room) return footer;
+	// 1. Drop the omitted-sections TOC, keep the count line.
+	const noToc = footer.replace(/\n\n\*Omitted sections:\*[\s\S]*$/, "");
+	if (estimateTokens(noToc) <= room) return noToc;
+	// 2–4. Fixed notices, longest first.
+	for (const notice of [
+		"_truncated to fit the token budget; full content cached._",
+		"_truncated; full content cached._",
+		"_truncated._",
+	]) {
+		const candidate = `\n\n---\n${notice}`;
+		if (estimateTokens(candidate) <= room) return candidate;
+	}
+	return "";
 }
 
 /**
