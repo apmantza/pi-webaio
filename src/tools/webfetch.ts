@@ -754,6 +754,37 @@ function elideToTokenBudget(text: string, maxTokens: number): string {
  * `fitHeaderToBudget` settled on after two wrong ratios were measured. Title is shortened
  * first (it is descriptive only), then the save-path line is elided in the middle.
  */
+/**
+ * Issue #171: `prune` is an OUTPUT knob. It bounds what the agent is handed and
+ * must never touch the durable copy.
+ *
+ * The defect this exists to prevent: `prune` reassigned the one variable that fed
+ * both `writeFile()`/`storeContent()` and the returned preview, so the saved file
+ * and the content cache kept the excerpt while the agent still got the whole
+ * page — the exact inverse of the documented contract ("Full content is ALWAYS
+ * saved to disk + cached; these controls only change what is RETURNED"). Measured
+ * on the installed extension: `prune: 300` on a 13,160-char Express page left
+ * 1,134 chars in the cache, and the truncation footer tells the agent to read
+ * that record back via `aio-webcontent`.
+ *
+ * Returning both values from one call is the point: the bug was two consumers of
+ * a single variable, so the split is named rather than implied by ordering.
+ */
+export function splitPrunedDisplay(
+	body: string,
+	pruneTokens: number | undefined,
+	query?: string,
+): { stored: string; returned: string; pruned: boolean } {
+	if (!pruneTokens || pruneTokens <= 0) {
+		return { stored: body, returned: body, pruned: false };
+	}
+	if (estimateTokens(body) <= pruneTokens) {
+		return { stored: body, returned: body, pruned: false };
+	}
+	const pruned = pruneMarkdown(body, { maxTokens: pruneTokens, query });
+	return { stored: body, returned: pruned.content, pruned: true };
+}
+
 export function composeBudgetedFetchText(opts: {
 	parts: FetchTextParts;
 	body: string;
@@ -1195,8 +1226,6 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 
 							const mode = (params.mode as ScrapeMode) ?? "auto";
 							const interactive = params.interactive === true;
-							const pruneTokens = params.prune as number | undefined;
-							const pruneQuery = params.query as string | undefined;
 							const startIndex = params.start_index as number | undefined;
 							const maxLength = params.max_length as number | undefined;
 							const bypass = params.bypass === true;
@@ -1543,15 +1572,11 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 								}
 							}
 
-							const tokenCount = estimateTokens(contentBody);
-
-							if (pruneTokens && pruneTokens > 0 && tokenCount > pruneTokens) {
-								const pruned = pruneMarkdown(contentBody, {
-									maxTokens: pruneTokens,
-									query: pruneQuery,
-								});
-								contentBody = pruned.content;
-							}
+							// Issue #171: `prune` used to rewrite `contentBody` here, which
+							// is the value that feeds the file write and `storeContent()`
+							// below. Bounding it belongs on the returned text instead, so
+							// it is applied at the preview site. Nothing may reassign
+							// `contentBody` for display reasons from here on.
 
 							const markdown =
 								frontmatter(result.title || url.pathname, result.url!, {
@@ -1800,7 +1825,17 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 					// so this works regardless of whether the result was saved
 					// to disk. For non-markdown (html/text/json/raw), `outPath`
 					// is undefined and a readFile would throw.
-					const preview = r.body ?? "";
+					//
+					// Issue #171: `prune` is applied HERE, to the returned preview only.
+					// The saved file and the content cache were written from the
+					// unpruned body above, so the durable record stays complete while
+					// every display branch below sees bounded text.
+					const pruneSplit = splitPrunedDisplay(
+						r.body ?? "",
+						params.prune as number | undefined,
+						params.query as string | undefined,
+					);
+					const preview = pruneSplit.returned;
 
 					// Resolved output format + opt-in outline mode (UX1). Defined
 					// early so the AI-summary step can be skipped in outline mode.
