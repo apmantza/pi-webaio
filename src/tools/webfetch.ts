@@ -746,6 +746,63 @@ export function composeMultiAnswerText(
 	);
 }
 
+/**
+ * The chunk budget that leaves the COMPOSED answer inside `budgetTokens`.
+ *
+ * `budgetTokens` is documented as a hard output-size ceiling, but the framing
+ * `composeMultiAnswerText` adds — batch tally, echoed query, local-knowledge note
+ * — is not inside `formatMultiSourceAnswer`, so it was being added ON TOP of the
+ * budget it claimed to bound (measured at budget 100: library 98, composed 107;
+ * 119 with a local-knowledge note). The framing is therefore paid for out of the
+ * budget.
+ *
+ * A budget too small for the single best chunk is still exceeded on purpose —
+ * `formatMultiSourceAnswer` shows that chunk with an explicit notice rather than
+ * returning nothing — so this bounds the framing, not the library's floor.
+ */
+function multiAnswerContentBudget(parts: {
+	budgetTokens?: number;
+	header: string;
+	notice: string;
+	localKnowledgeNote?: string;
+}): number | undefined {
+	if (!parts.budgetTokens) return undefined;
+	const framing = estimateTokens(
+		parts.header + parts.notice + (parts.localKnowledgeNote ?? ""),
+	);
+	return Math.max(1, parts.budgetTokens - framing);
+}
+
+/**
+ * Build the agent-visible text of a multi-source cited answer.
+ *
+ * This is the whole boundary: ranking in, final text out. The handler calls it
+ * rather than assembling the pieces itself, so "did the framing get charged
+ * against the budget?" is a question the tests can actually ask — a previous
+ * shape let the handler forget the subtraction with every test still green.
+ *
+ * @internal Exported for unit tests only.
+ */
+export function buildMultiAnswerText(opts: {
+	ranked: Parameters<typeof formatMultiSourceAnswer>[0];
+	query: string;
+	sourcesCount: number;
+	header: string;
+	notice: string;
+	localKnowledgeNote?: string;
+	budgetTokens?: number;
+}): string {
+	return composeMultiAnswerText({
+		header: opts.header,
+		notice: opts.notice,
+		localKnowledgeNote: opts.localKnowledgeNote,
+		displayContent: formatMultiSourceAnswer(opts.ranked, opts.query, {
+			sourcesCount: opts.sourcesCount,
+			budgetTokens: multiAnswerContentBudget(opts),
+		}),
+	});
+}
+
 export function registerWebfetchTool(pi: ExtensionAPI): void {
 	pi.registerTool({
 		...TOOL_METADATA["aio-webfetch"],
@@ -1993,27 +2050,23 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 						// layer used to print the same three lines again on top of it
 						// (issue #165 F18), spending the budget it claimed to conserve.
 						const budgetTokens = params.budgetTokens as number | undefined;
-						const displayContent = formatMultiSourceAnswer(
-							ranked,
-							multiAnswerQuery!,
-							{
-								sourcesCount: sources.length,
-								budgetTokens,
-							},
-						);
 						const header = `Fetched ${okResults.length}/${targets.length} URLs.`;
 						const notice =
 							`\n[Query: "${truncateVisible(multiAnswerQuery, 64)}"]`;
+						const answerText = buildMultiAnswerText({
+							ranked,
+							query: multiAnswerQuery!,
+							sourcesCount: sources.length,
+							header,
+							notice,
+							localKnowledgeNote,
+							budgetTokens,
+						});
 						return {
 							content: [
 								{
 									type: "text",
-									text: composeMultiAnswerText({
-										header,
-										notice,
-										displayContent,
-										localKnowledgeNote,
-									}),
+									text: answerText,
 								},
 							],
 							details: {
@@ -2028,7 +2081,11 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 								status: "done",
 								progress: 1,
 								spinnerTick: details.spinnerTick,
-								content: displayContent,
+								// The composed answer, not the bare cited block: the preview
+								// must be the text the agent actually received. Keeping a
+								// separate unframed variant was a second path that could
+								// drift from the one the tool returned.
+								content: answerText,
 								format: "markdown",
 								items: details.items,
 								total: targets.length,
