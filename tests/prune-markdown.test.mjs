@@ -753,3 +753,49 @@ test("the fallback keeps later headings, not only the one in the prefix", () => 
 	}
 	assert.ok(estimateTokens(out) <= 100);
 });
+
+// CodeRabbit round 6 on #169 (threads src/prune-markdown.ts:666, :667). Both are in
+// the fallback's own prefix logic — the same shape repeating for a sixth round.
+test("an oversized first heading cannot eat the whole prefix budget", () => {
+	// Pre-fix: the output was the heading text twice (skeleton + prefix) and no prose
+	// at all, i.e. the fallback still produced an answer with none of the document.
+	const longHeading = `# ${"verylongheadingword ".repeat(120)}`;
+	// The frontmatter variant is not decoration: after a frontmatter block the body
+	// begins with "\n", which defeated a heading-strip anchored at ^ and let the
+	// heading fragment back in. Both shapes are asserted.
+	const fm = "---\ntitle: A fairly long document title that costs tokens\n---\n\n";
+	for (const doc of [
+		`${longHeading}\n\n${"prose ".repeat(600)}`,
+		`${fm}${longHeading}\n\n${"prose ".repeat(600)}`,
+	]) {
+		const out = applyTokenBudget(
+			doc,
+			100,
+			undefined,
+			"https://example.com/heading",
+		);
+		assert.match(
+			out,
+			/prose prose/,
+			`an oversized first heading consumed the prefix and no prose survived (${out.includes("---") ? "with" : "without"} frontmatter) — ${JSON.stringify(out.slice(0, 70))}`,
+		);
+		assert.ok(estimateTokens(out) <= 100);
+	}
+});
+
+test("a cut inside a fenced block leaves no block open over the footer", () => {
+	// Pre-fix the fence count was odd, so the truncation footer was rendered INSIDE
+	// the code block and the pointer to the cached page became part of the snippet.
+	for (const fence of ["```js", "````", "~~~"]) {
+		const close = fence.replace(/[^\s~`]/g, "").length >= 0 ? fence[0].repeat(fence.length) : "`";
+		const body = `${fence}\n${"word ".repeat(900)}\n${close}\n`;
+		const out = applyTokenBudget(body, 200, undefined, "https://example.com/fence");
+		const openRuns = (out.match(/(^|\n)[ \t]*(`{3,}|~{3,})/g) || []).length;
+		assert.equal(
+			openRuns % 2,
+			0,
+			`${fence}: unclosed fence left the footer inside the code block — ${JSON.stringify(out.slice(-90))}`,
+		);
+		assert.ok(estimateTokens(out) <= 200);
+	}
+});

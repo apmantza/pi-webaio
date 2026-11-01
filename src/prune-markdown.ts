@@ -466,8 +466,10 @@ function pruneBody(
 			ft = ft.replace(/\n\n\*Omitted sections:\*[\s\S]*$/, "");
 		}
 		result =
-			trimToTokenBudget(contentBody, Math.max(0, maxTokens - estimateTokens(ft))) +
-			ft;
+			trimToTokenBudgetWithClosedFence(
+				contentBody,
+				Math.max(0, maxTokens - estimateTokens(ft)),
+			) + ft;
 	}
 
 	const prunedTokens = estimateTokens(result);
@@ -621,7 +623,15 @@ export function applyTokenBudget(
 		// actually asked for stayed in the cache (issue #169, CodeRabbit thread
 		// src/prune-markdown.ts:618). Rank the same way pruneMarkdown does.
 		const sections = splitSections(body);
-		let source = body;
+		// Headings come from the skeleton, so the prefix is built from PROSE. Left as
+		// the raw body, a first heading line longer than the prefix room produced an
+		// answer containing the heading twice and no page prose at all (issue #169,
+		// CodeRabbit thread src/prune-markdown.ts:666). The leading blank is not
+		// cosmetic: after a frontmatter block the body starts with "\n", so a regex
+		// anchored at ^ never matched and the heading fragment came straight back.
+		let source = body
+			.replace(/^\s+/, "")
+			.replace(/^(?:[ \t]*#{1,6}[ \t].*(?:\n|$))+/, "");
 		if (query && sections.length > 1) {
 			// Same ranking as the default pruneMarkdown path: with a query, BM25
 			// replaces the heuristic entirely (`combineScores` defaults false), so the
@@ -640,10 +650,8 @@ export function applyTokenBudget(
 			// No section matches the query at all: keep document order rather than
 			// inventing a preference the pruner would not have expressed.
 			if (bestScore > 0) {
-				const chosen = sections[best];
-				source = chosen.heading
-					? `${chosen.heading}\n\n${chosen.content}`
-					: chosen.content;
+				// `chosen.content` is already heading-free, which is what the prefix wants.
+				source = sections[best].content;
 			}
 		}
 		// The prefix carries at most its own heading, so the outline must be added
@@ -652,18 +660,15 @@ export function applyTokenBudget(
 		// but once the prefix supplied the first heading `resultHasHeadings` was true
 		// and the skeleton was skipped, so later sections vanished from the outline.
 		// The skeleton is capped so it cannot crowd the prose back out.
-		const skeleton =
-			headingLines.length > 0
-				? trimToTokenBudget(
-						headingLines.join("\n"),
-						Math.floor(contentBudget * 0.4),
-					)
-				: "";
+		const skeleton = selectSkeletonLines(
+			headingLines,
+			Math.max(10, Math.floor(contentBudget * 0.4)),
+		).join("\n");
 		const prefixRoom = Math.max(
 			1,
 			contentBudget - (skeleton ? estimateTokens(skeleton) : 0),
 		);
-		const prefix = trimToTokenBudget(source, prefixRoom);
+		const prefix = trimToTokenBudgetWithClosedFence(source, prefixRoom);
 		prunedContent = skeleton ? `${skeleton}\n\n${prefix}` : prefix;
 	}
 
@@ -726,8 +731,15 @@ export function applyTokenBudget(
 	if (headingLines.length > 0) {
 		const resultHasHeadings = /^#{1,6}\s/m.test(result);
 		if (!resultHasHeadings) {
-			const skeleton = headingLines.join("\n");
-			result = `${skeleton}\n\n${result}`;
+			// Same rule as the fallback outline: WHOLE headings, and an individual
+			// heading larger than the outline's share is dropped rather than prepended
+			// unbounded — a 120-token H1 prepended here left 90 tokens of heading and no
+			// prose at all (issue #169, CodeRabbit thread src/prune-markdown.ts:666).
+			const skeleton = selectSkeletonLines(
+				headingLines,
+				Math.max(10, Math.floor(effectiveBudget * 0.25)),
+			).join("\n");
+			if (skeleton !== "") result = `${skeleton}\n\n${result}`;
 		}
 	}
 
@@ -762,7 +774,7 @@ export function applyTokenBudget(
 			0,
 			effectiveBudget - footerTokens - frontmatterTokens,
 		);
-		result = trimToTokenBudget(contentBody, bodyBudget) + ft;
+		result = trimToTokenBudgetWithClosedFence(contentBody, bodyBudget) + ft;
 	}
 
 	return assemble(result);
@@ -805,6 +817,112 @@ function shrinkNoticeToRoom(footer: string, room: number): string {
  * CJK text. This measures the result and shrinks by the measured excess until it
  * fits, so callers can state a hard token contract.
  */
+/**
+ * Find a fence run that is opened but never closed, returning its marker and the
+ * character offset of its opening line.
+ *
+ * A fence run is three or more backticks or tildes at the start of a line; the
+ * opening run may carry an info string (```js), a closing run may not, and it must
+ * use the same character and be at least as long as the run it closes.
+ */
+function findUnclosedFence(
+	text: string,
+): { marker: string; startIndex: number } | null {
+	const lines = text.split("\n");
+	let open: { marker: string; startIndex: number } | null = null;
+	let cursor = 0;
+	for (const line of lines) {
+		if (open) {
+			const ch = open.marker[0];
+			const close = new RegExp(
+				`^[ \\t]*${ch === "`" ? "`" : "~"}{${open.marker.length},}[ \\t]*$`,
+			);
+			if (close.test(line)) open = null;
+		} else {
+			const m = line.match(/^[ \t]*(`{3,}|~{3,})/);
+			if (m) open = { marker: m[1], startIndex: cursor };
+		}
+		cursor += line.length + 1;
+	}
+	return open;
+}
+
+/**
+ * Close a fenced block that the text leaves open, within a token budget.
+ *
+ * The closer uses the ORIGINAL fence character and length — a fixed triple-backtick
+ * suffix is wrong for longer backtick fences and for tilde fences. When `reserve` is
+ * set, the closer's cost is taken out of the budget first so a page that is entirely
+ * one code block still yields prose instead of collapsing to nothing.
+ */
+function closeFencesWithin(
+	text: string,
+	maxTokens: number,
+	reserve = true,
+): string {
+	let open = findUnclosedFence(text);
+	if (!open) return text;
+	let closer = `\n${open.marker}\n`;
+	if (estimateTokens(text) + estimateTokens(closer) <= maxTokens) {
+		return text + closer;
+	}
+	if (!reserve) {
+		// Closing still beats leaving the block open; the caller's hard trim re-checks
+		// the ceiling with the cost reserved.
+		return text + closer;
+	}
+	// Re-trim with the closer reserved instead of dropping the fragment, so the
+	// answer still contains the page.
+	const trimmed = trimToTokenBudget(
+		text,
+		Math.max(1, maxTokens - estimateTokens(closer)),
+	);
+	open = findUnclosedFence(trimmed);
+	if (!open) return trimmed;
+	closer = `\n${open.marker}\n`;
+	if (estimateTokens(trimmed) + estimateTokens(closer) <= maxTokens) {
+		return trimmed + closer;
+	}
+	// Only reachable when the budget cannot hold a fence plus its closer; at the
+	// tools' minimum of 100 tokens a closer costs 2-3.
+	return trimmed.slice(0, open.startIndex).trimEnd();
+}
+
+/**
+ * Trim to a token budget while guaranteeing the result does not leave a fenced code
+ * block open.
+ *
+ * Cutting inside a fence used to append the truncation footer INSIDE the code block,
+ * so the pointer to the cached page rendered as part of the snippet (issue #169,
+ * CodeRabbit thread src/prune-markdown.ts:667).
+ */
+export function trimToTokenBudgetWithClosedFence(
+	text: string,
+	maxTokens: number,
+): string {
+	return closeFencesWithin(trimToTokenBudget(text, maxTokens), maxTokens, true);
+}
+
+/**
+ * Pick heading lines for the outline, budget permitting.
+ *
+ * Whole lines only: trimming the joined list to a token budget cut a heading mid-word
+ * (`## Sect`), which is neither structure nor prose. A single heading larger than the
+ * outline's share is skipped rather than kept, so the prose gets the room instead.
+ */
+function selectSkeletonLines(headingLines: string[], capTokens: number): string[] {
+	const kept: string[] = [];
+	let used = 0;
+	for (const h of headingLines) {
+		const t = estimateTokens(h);
+		if (kept.length > 0 && used + t > capTokens) break;
+		if (t > capTokens) continue;
+		kept.push(h);
+		used += t;
+	}
+	return kept;
+}
+
 export function trimToTokenBudget(text: string, maxTokens: number): string {
 	if (maxTokens <= 0) return "";
 	if (estimateTokens(text) <= maxTokens) return text;
@@ -831,6 +949,26 @@ function truncateToBudget(text: string, maxTokens: number): string {
 	// Rough character budget
 	const charBudget = maxTokens * 4;
 
+	// A leading heading block that ALONE exceeds the budget is structure, not
+	// content: cutting it returned a heading fragment and no page prose at all, which
+	// is the same failure the content floor exists to prevent. Start from the prose
+	// instead (issue #169, CodeRabbit thread src/prune-markdown.ts:666).
+	const firstBlockEnd = text.search(/\n[ \t]*\n/);
+	if (
+		firstBlockEnd > 0 &&
+		/^[ \t]*#{1,6}[ \t]/.test(text) &&
+		estimateTokens(text.slice(0, firstBlockEnd)) >= maxTokens
+	) {
+		const prose = text.slice(firstBlockEnd).replace(/^[\s\S]*?\n[ \t]*\n/, "");
+		if (prose.trim() !== "") {
+			return closeFencesWithin(
+				`${prose.slice(0, Math.max(charBudget, 100))}\n\n[...content truncated]`,
+				maxTokens,
+				false,
+			);
+		}
+	}
+
 	// Try to find a good sentence boundary
 	const truncated = text.slice(0, charBudget);
 
@@ -847,13 +985,17 @@ function truncateToBudget(text: string, maxTokens: number): string {
 	// Find the last paragraph boundary
 	const lastParagraph = truncated.lastIndexOf("\n\n");
 
-	// Prefer sentence boundary, fall back to paragraph boundary
-	const cutPoint =
-		lastPeriod > charBudget * 0.5
-			? lastPeriod + 1
-			: lastParagraph > charBudget * 0.5
-				? lastParagraph
-				: charBudget;
+	// Prefer a sentence boundary, then a paragraph boundary, then the raw cut.
+	let cutPoint = charBudget;
+	if (lastPeriod > charBudget * 0.5) {
+		cutPoint = lastPeriod + 1;
+	} else if (lastParagraph > charBudget * 0.5) {
+		cutPoint = lastParagraph;
+	}
 
-	return text.slice(0, Math.max(cutPoint, 100)) + "\n\n[...content truncated]";
+	return closeFencesWithin(
+		`${text.slice(0, Math.max(cutPoint, 100))}\n\n[...content truncated]`,
+		maxTokens,
+		false,
+	);
 }
