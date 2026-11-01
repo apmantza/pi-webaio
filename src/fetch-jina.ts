@@ -94,42 +94,36 @@ export function parseJinaBody(text: string, url: string): PullResult | null {
 	const body = text.trim();
 	if (!body) return null;
 
-	// Parse Jina's "Title: ...\n\ncontent" format without regex backtracking
-	const titleLine = body.startsWith("Title:")
-		? body.slice(6).split("\n")[0]!.trim()
-		: null;
+	// Presence and value are two different questions. `Title: ` with no value is
+	// Jina saying "no title", not "there is no Title line": conflating them made
+	// `titleLine` an empty string that was neither `null` (so the challenge check
+	// below was skipped) nor truthy (so the branch that slices past the header was
+	// skipped), and the body fell through to the hostname path with its envelope
+	// intact — including Cloudflare challenge pages served as the article.
+	const hasTitleLine = body.startsWith("Title:");
+	const titleValue = hasTitleLine ? body.slice(6).split("\n")[0]!.trim() : "";
 
-	// A genuine Jina reader response begins with a "Title:" line. When it
-	// does not, the body is either clean markdown (acceptable) or a
-	// bot-challenge / HTML garbage page. Reject the latter so the real
-	// pipeline runs — never let a challenge page through with a hostname
-	// title.
-	if (titleLine === null && isJinaChallengeBody(body)) {
-		return null;
-	}
-
-	if (titleLine) {
+	// Everything the reader-proxy added, minus the payload.
+	let payload = body;
+	if (hasTitleLine) {
 		const contentStart = body.indexOf("\n\n", 6);
-		if (contentStart !== -1) {
-			const content = stripJinaEnvelope(body.slice(contentStart + 2));
-			// Nothing behind the envelope: fall through to the real pipeline
-			// instead of returning an empty "successful" page.
-			if (!content.trim()) return null;
-			return {
-				ok: true,
-				url,
-				title: titleLine,
-				content,
-			};
-		}
+		// A Title line with no blank separator has no payload at all.
+		payload = contentStart === -1 ? "" : body.slice(contentStart + 2);
 	}
-
-	// Hostname title fallback is ONLY for genuine reader output that
-	// simply lacks a "Title:" line — never for a challenge page (rejected
-	// above).
-	const fallbackContent = stripJinaEnvelope(body);
-	if (!fallbackContent.trim()) return null;
-	return { ok: true, url, title: hostnameOf(url), content: fallbackContent };
+	const content = stripJinaEnvelope(payload);
+	// Nothing behind the envelope: fall through to the real pipeline instead of
+	// returning an empty "successful" page.
+	if (!content.trim()) return null;
+	// The challenge check runs on the PAYLOAD, so it now covers a response that
+	// does carry a Title line — a challenge page has one, and previously only
+	// title-less bodies were screened.
+	if (isJinaChallengeBody(content)) return null;
+	return {
+		ok: true,
+		url,
+		title: titleValue || hostnameOf(url),
+		content,
+	};
 }
 
 // ─── Timeout ───────────────────────────────────────────────────────

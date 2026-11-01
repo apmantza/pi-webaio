@@ -122,3 +122,76 @@ Body text after the headers.
 	assert.ok(!r.content.includes("URL Source:"), r.content);
 	assert.match(r.content, /Body text after the headers/);
 });
+
+// ─── An empty `Title:` value is not "no Title line" ──────────────────
+//
+// `titleLine` was a single string doing two jobs: `null` meant "no Title line"
+// and `""` was unreachable in practice — except when Jina answers `Title: ` with
+// no value, which it does. Then `""` is neither `null` (so the challenge check was
+// skipped) nor truthy (so the Title branch that slices past the header was
+// skipped), and the body fell to the hostname fallback whose `stripJinaEnvelope`
+// could not strip anything: `JINA_HEADER_LINE` does not list `Title`, so the loop
+// broke on the very first line. Measured before the fix:
+//
+//   "Title: \n\nURL Source: …\n\nMarkdown Content:\n\n"
+//     -> ok, content "Title: \n\nURL Source: https://e.com/\n\nMarkdow…"
+//   "Title: \n\n…\n\nMarkdown Content:\n\n# Real\n\ntext"
+//     -> ok, content STILL carrying the whole envelope
+//   "Title: \n\nJust a moment…\n\nRay ID: abc"
+//     -> ok, a Cloudflare CHALLENGE PAGE returned as the article
+//
+// The third is the serious one: it is the F7 defect recurring through the
+// empty-value door, plus a bot-block page accepted as content.
+test("F7: an empty Title value still strips the reader envelope", () => {
+	const r = parseJinaBody(
+		"Title: \n\nURL Source: https://e.com/\n\nMarkdown Content:\n\n# Real\n\ntext",
+		"https://e.com/",
+	);
+	assert.ok(r, "empty title made the response unparseable");
+	assert.ok(
+		!r.content.includes("Markdown Content:"),
+		`envelope served as content: ${JSON.stringify(r.content.slice(0, 60))}`,
+	);
+	assert.ok(!r.content.includes("URL Source:"), "envelope header left in content");
+	assert.equal(r.content.trim(), "# Real\n\ntext");
+	// No title to report, so the hostname is used rather than "".
+	assert.equal(r.title, "e.com");
+});
+
+test("F7: an empty Title with no payload falls through to the real pipeline", () => {
+	for (const body of [
+		"Title: \n\nURL Source: https://e.com/\n\nMarkdown Content:\n\n",
+		"Title: \n",
+	]) {
+		assert.equal(
+			parseJinaBody(body, "https://e.com/"),
+			null,
+			`${JSON.stringify(body)} returned an empty "successful" page`,
+		);
+	}
+});
+
+test("F7: a challenge page behind an empty Title is rejected, not served", () => {
+	const r = parseJinaBody(
+		"Title: \n\nJust a moment…\n\nRay ID: abc123\n\nPerformance & security by Cloudflare",
+		"https://e.com/",
+	);
+	assert.equal(r, null, "a bot-challenge page was returned as page content");
+});
+
+// A real title must still win over the hostname fallback, and clean markdown
+// with no Title line must keep working — the two paths this restructure touches.
+test("F7: a real title is kept and title-less markdown still parses", () => {
+	const titled = parseJinaBody(
+		"Title: Example Domain\n\nMarkdown Content:\n\nThis domain is for use in examples.",
+		"https://e.com/",
+	);
+	assert.ok(titled);
+	assert.equal(titled.title, "Example Domain");
+	assert.equal(titled.content, "This domain is for use in examples.");
+
+	const bare = parseJinaBody("# Just markdown\n\nBody text.", "https://e.com/");
+	assert.ok(bare);
+	assert.equal(bare.title, "e.com");
+	assert.equal(bare.content, "# Just markdown\n\nBody text.");
+});
