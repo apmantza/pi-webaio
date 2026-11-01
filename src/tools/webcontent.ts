@@ -1,7 +1,7 @@
 import { TOOL_METADATA } from "./lazy.ts";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { getStoredContent } from "../session-store.ts";
-import { applyTokenBudget } from "../prune-markdown.ts";
+import { applyTokenBudget, trimToTokenBudget } from "../prune-markdown.ts";
 import { estimateTokens } from "../token-count.ts";
 import { diffContent } from "../content-diff.ts";
 import { shortHash, hashesEqual } from "../content-hash.ts";
@@ -34,6 +34,46 @@ export function bodyBudgetForFraming(
 ): number {
 	const framing = estimateTokens(buildWebcontentText(header, ""));
 	return Math.max(1, totalTokens - framing);
+}
+
+/**
+ * Shorten the header block so it cannot outgrow the budget it is inside.
+ *
+ * The floor in `bodyBudgetForFraming` protects against a zero budget, not against
+ * framing that is itself larger than the budget: a long stored URL plus a long
+ * title measured 259 tokens, so `budgetTokens: 100` came back at 260 — header
+ * whole, body gone. Neither the floor nor the pruner can fix that; the header has
+ * to be bounded (issue #165, CodeRabbit thread src/tools/webcontent.ts:36).
+ *
+ * Lines are kept in priority order — the line naming the document first — and the
+ * first line that no longer fits is truncated rather than dropped, so the output
+ * still says which URL it came from at every budget.
+ */
+export function fitHeaderToBudget(header: string[], totalTokens: number): string[] {
+	// Leave the body a token budget it can actually use; an all-header answer is
+	// not an answer about the page.
+	const MIN_BODY_TOKENS = 8;
+	const room = Math.max(1, totalTokens - MIN_BODY_TOKENS);
+	const kept = header.filter(Boolean);
+	if (estimateTokens(buildWebcontentText(kept, "")) <= room) return kept;
+	const out: string[] = [];
+	// The separator is part of the framing too.
+	let used = estimateTokens("\n\n---\n\n");
+	for (const line of kept) {
+		const left = room - used;
+		if (left <= 0) break;
+		const joined = out.length ? `\n${line}` : line;
+		const cost = estimateTokens(joined);
+		if (cost <= left) {
+			out.push(line);
+			used += cost;
+			continue;
+		}
+		const trimmed = trimToTokenBudget(line, left);
+		if (trimmed.trim()) out.push(trimmed);
+		break;
+	}
+	return out;
 }
 
 // Per-URL prune result cache — same url+budget+query → same pruned output
@@ -123,7 +163,7 @@ export function registerWebcontentTool(pi: ExtensionAPI): void {
 			// ── Default retrieval — with prune cache (life-depends) ───────
 			const budgetTokens = params.budgetTokens as number | undefined;
 			const query = params.query as string | undefined;
-			const header = [
+			let header = [
 				`Retrieved content for ${stored.url}`,
 				stored.title ? `Title: ${stored.title}` : "",
 				`Length: ${stored.content.length} chars`,
@@ -135,7 +175,10 @@ export function registerWebcontentTool(pi: ExtensionAPI): void {
 			let displayContent: string;
 			if (budgetTokens) {
 				// The header is part of what the caller budgeted, so it is charged
-				// against the budget before the body is pruned.
+				// against the budget before the body is pruned — and bounded first, so a
+				// long URL or title cannot outgrow the ceiling on its own.
+				const fitted = fitHeaderToBudget(header, budgetTokens);
+				header = fitted;
 				const bodyBudget = bodyBudgetForFraming(budgetTokens, header);
 				const cacheKey = `${stored.url}\x00${bodyBudget}\x00${query ?? ""}\x00${stored.contentHash ?? ""}`;
 				const hit = _pruneCache.get(cacheKey);

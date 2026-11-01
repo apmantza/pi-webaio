@@ -552,7 +552,17 @@ export function applyTokenBudget(
 	// The frontmatter block is re-emitted verbatim at the top of the result, so
 	// its tokens are part of what this function returns and must be reserved out
 	// of the budget. Everything below operates on the body only (issue #165 F8/F20).
-	const { frontmatter, body } = splitFrontmatter(content);
+	const { frontmatter: rawFrontmatter, body } = splitFrontmatter(content);
+	// The metadata block is re-emitted verbatim, so a block larger than the budget
+	// makes the ceiling unsatisfiable by trimming content or shrinking the notice —
+	// measured: a 402-token block against `budgetTokens: 100` returned 402 tokens,
+	// four times the ceiling, with the body gone entirely. The budget wins over the
+	// metadata too, so an oversized block is omitted and the whole budget goes to
+	// the body; the notice still points at the full document, which stays cached
+	// and retrievable by URL (issue #165, CodeRabbit thread src/prune-markdown.ts:655).
+	const oversizedFrontmatter =
+		rawFrontmatter !== "" && estimateTokens(rawFrontmatter) > effectiveBudget;
+	const frontmatter = oversizedFrontmatter ? "" : rawFrontmatter;
 	const frontmatterTokens = frontmatter ? estimateTokens(frontmatter) : 0;
 
 	// Extract heading skeleton — always preserved in the output.
@@ -694,12 +704,15 @@ function shrinkNoticeToRoom(footer: string, room: number): string {
 /**
  * Cut `text` so that it measures at most `maxTokens`.
  *
+ * Exported because `aio-webcontent` bounds its header block with the same rule
+ * rather than carrying a second truncation loop.
+ *
  * `truncateToBudget` alone is not enough: it cuts at a rough `maxTokens * 4`
  * character estimate, which under-counts markdown with short lines, headings and
  * CJK text. This measures the result and shrinks by the measured excess until it
  * fits, so callers can state a hard token contract.
  */
-function trimToTokenBudget(text: string, maxTokens: number): string {
+export function trimToTokenBudget(text: string, maxTokens: number): string {
 	if (maxTokens <= 0) return "";
 	if (estimateTokens(text) <= maxTokens) return text;
 	let chars = Math.min(text.length, Math.max(1, maxTokens * 4));

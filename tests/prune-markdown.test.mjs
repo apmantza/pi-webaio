@@ -529,3 +529,34 @@ test("a budget smaller than the truncation notice itself is still honoured", () 
 		);
 	}
 });
+
+test("frontmatter larger than the budget does not break the ceiling", () => {
+	// CodeRabbit's third pass (thread src/prune-markdown.ts:655). The metadata
+	// block is re-emitted verbatim, so a block bigger than the budget could not be
+	// honoured by trimming content or shrinking the notice — measured: a 402-token
+	// frontmatter against `budgetTokens: 100` came back as 402 tokens, four times
+	// the requested ceiling, with the body gone entirely.
+	//
+	// Policy, now stated: the budget wins over the metadata too. A page whose
+	// opening block is bigger than the caller's ceiling gets that block omitted
+	// rather than the ceiling ignored; the full document stays cached and is
+	// retrievable by URL, which is what the footer points at.
+	const bigFrontmatter =
+		"---\n" +
+		Array.from(
+			{ length: 40 },
+			(_, i) => `key${i}: value ${i} with some descriptive words here`,
+		).join("\n") +
+		"\n---\n\n";
+	const out = applyTokenBudget(
+		bigFrontmatter + BUDGET_DOC,
+		100,
+		undefined,
+		"https://example.com/page",
+	);
+	const used = estimateTokens(out);
+	assert.ok(
+		used <= 100,
+		`frontmatter larger than the budget returned ${used} tokens (4x the ceiling)`,
+	);
+});

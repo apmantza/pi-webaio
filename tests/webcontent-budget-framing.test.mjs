@@ -31,8 +31,11 @@ import test from "node:test";
 import {
 	bodyBudgetForFraming,
 	buildWebcontentText,
+	fitHeaderToBudget,
 } from "../src/tools/webcontent.ts";
 import { applyTokenBudget } from "../src/prune-markdown.ts";
+import { registerWebcontentTool } from "../src/tools/webcontent.ts";
+import { storeContent } from "../src/session-store.ts";
 import { estimateTokens } from "../src/token-count.ts";
 
 const LONG = Array.from(
@@ -160,4 +163,63 @@ test("a long URL and title cannot push the total past the budget", () => {
 		estimateTokens(out) <= 100,
 		`composed ${estimateTokens(out)} tokens against budgetTokens: 100`,
 	);
+});
+
+test("a header larger than the budget is bounded, not emitted whole", () => {
+	// CodeRabbit's third pass (thread src/tools/webcontent.ts:36). The one-token
+	// body floor protects against a zero budget, not against framing that is
+	// itself bigger than the budget: a long stored URL plus a long title measured
+	// 259 tokens, so `budgetTokens: 100` came back at 260 — the header whole and
+	// the body gone. Neither the floor nor the pruner can fix that; the header has
+	// to be bounded.
+	const hugeUrl = `https://shop.example.com/${Array.from(
+		{ length: 30 },
+		(_, i) => `category-${i}-with-a-long-slug`,
+	).join("/")}`;
+	const header = [
+		`Retrieved content for ${hugeUrl}`,
+		"Title: A very long page title ".repeat(4),
+		`Length: ${LONG.length} chars`,
+		"Content hash: a1b2c3d4e5f6",
+	];
+	const fitted = fitHeaderToBudget(header, 100);
+	const body = applyTokenBudget(
+		LONG,
+		bodyBudgetForFraming(100, fitted),
+		undefined,
+		hugeUrl,
+	);
+	const out = buildWebcontentText(fitted, body);
+	assert.ok(
+		estimateTokens(out) <= 100,
+		`composed ${estimateTokens(out)} tokens against budgetTokens: 100`,
+	);
+	// The header must still identify the document, not collapse to nothing.
+	assert.match(out, /Retrieved content for/, "the bounded header lost its identity");
+});
+
+test("the registered tool enforces the ceiling end to end", async () => {
+	// The seam tests above could stay green while the handler forgot to call
+	// fitHeaderToBudget — the exact failure mode that needed a handler-seam test
+	// for the cited-answer budget. Drive the tool the way the harness does: seed
+	// the content store, register the tool on a stub, and call its execute.
+	const registered = [];
+	registerWebcontentTool({ registerTool: (t) => registered.push(t) });
+	assert.equal(registered.length, 1);
+	const hugeUrl = `https://shop.example.com/${Array.from(
+		{ length: 30 },
+		(_, i) => `category-${i}-with-a-long-slug`,
+	).join("/")}`;
+	const title = "A very long page title ".repeat(6);
+	storeContent(hugeUrl, title, LONG);
+	const result = await registered[0].execute("call-1", {
+		url: hugeUrl,
+		budgetTokens: 100,
+	});
+	const text = result.content[0].text;
+	assert.ok(
+		estimateTokens(text) <= 100,
+		`the tool returned ${estimateTokens(text)} tokens for budgetTokens: 100`,
+	);
+	assert.match(text, /Retrieved content for/);
 });
