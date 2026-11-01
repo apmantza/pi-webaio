@@ -16,10 +16,35 @@ const JINA_CHALLENGE_MARKERS = [
 	"challenge-platform",
 	"cf_chl",
 	"cf-chl",
-	"turnstile",
-	"attention required",
 	"verify you are human",
 	"checking your browser",
+];
+
+/**
+ * Phrases that identify an interstitial only in context. `turnstile` is the name
+ * of a bot-defence product and `attention required` is ordinary prose, so an
+ * article ABOUT Cloudflare Turnstile matched the screen that exists to reject the
+ * Turnstile interstitial — and `fetchJina` then skips the remaining pages on that
+ * domain, so one article about bot defence costed the fallback for the whole site
+ * (issue #165, CodeRabbit thread src/fetch-jina.ts:120).
+ */
+const JINA_CHALLENGE_AMBIGUOUS_MARKERS = ["turnstile", "attention required"];
+
+/**
+ * Independent signals that the page IS a challenge interstitial rather than text
+ * describing one. Deliberately excludes product names.
+ */
+const JINA_CHALLENGE_CONTEXT_MARKERS = [
+	"ray id",
+	"cf-ray",
+	"you are unable to access",
+	"blocked because",
+	"unusual traffic",
+	"access denied",
+	"reference #",
+	"performance & security by cloudflare",
+	"click for more information",
+	"the owner of this website",
 ];
 
 /**
@@ -33,7 +58,15 @@ const JINA_CHALLENGE_MARKERS = [
 function isJinaChallengeBody(body: string): boolean {
 	if (detectBotBlock(body).blocked) return true;
 	const sample = body.slice(0, 8000).toLowerCase();
-	return JINA_CHALLENGE_MARKERS.some((m) => sample.includes(m));
+	if (JINA_CHALLENGE_MARKERS.some((m) => sample.includes(m))) return true;
+	// An ambiguous phrase alone is not enough: it must agree with a signal that is
+	// specific to the interstitial. Plain-text interstitials still land here
+	// because `detectBotBlock()` is structural and does not catch them (measured:
+	// "Just a moment… Ray ID" -> blocked:false), which is why this list stays.
+	return (
+		JINA_CHALLENGE_AMBIGUOUS_MARKERS.some((m) => sample.includes(m)) &&
+		JINA_CHALLENGE_CONTEXT_MARKERS.some((m) => sample.includes(m))
+	);
 }
 
 /** Hostname title fallback, guarded against invalid URLs. */

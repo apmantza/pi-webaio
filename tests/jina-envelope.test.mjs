@@ -195,3 +195,53 @@ test("F7: a real title is kept and title-less markdown still parses", () => {
 	assert.equal(bare.title, "e.com");
 	assert.equal(bare.content, "# Just markdown\n\nBody text.");
 });
+
+// ─── A keyword that names a bot-defence PRODUCT is not a challenge ───
+// CodeRabbit's second pass on this branch (thread src/fetch-jina.ts:120). The
+// challenge screen added here for the empty-title defect tests the whole payload
+// for any of nine substrings, so a genuine article ABOUT Cloudflare Turnstile was
+// classified as the interstitial it describes. Measured pre-fix:
+//   "genuine article about Turnstile" -> NULL (rejected as a challenge)
+// and `fetchJina` then skips the remaining pages on that domain, so one article
+// about bot defence costs the fallback for the rest of the site.
+
+test("an article that discusses Turnstile is not the Cloudflare interstitial", () => {
+	const article = [
+		"Title: Implementing Cloudflare Turnstile in a React app",
+		"",
+		"URL Source: https://blog.example.com/turnstile",
+		"",
+		"Markdown Content:",
+		"# Implementing Cloudflare Turnstile",
+		"",
+		"Turnstile is a challenge widget. We add turnstile verification to the",
+		"signup form and verify the token server-side.",
+		"",
+		"## Why turnstile",
+		"",
+		"It replaces CAPTCHA with less friction for real users.",
+	].join("\n");
+	const r = parseJinaBody(
+		article,
+		"https://blog.example.com/turnstile",
+	);
+	assert.ok(r, "a genuine article about bot defence was rejected as a challenge");
+	assert.match(r.content, /replaces CAPTCHA/);
+});
+
+test("a real interstitial that names turnstile is still rejected", () => {
+	// The other side of the same rule: the challenge pages that made the keyword
+	// list necessary must stay blocked, because `detectBotBlock()` does not catch
+	// plain-text interstitials (measured: "Just a moment… Ray ID" -> blocked:false).
+	for (const challenge of [
+		"Title: \n\nJust a moment…\nPerforming security verification\nRay ID: 8f3ab1c2d3e4\n",
+		"Title: \n\ncf-chl-bypass turnstile widget solving the challenge\nRay ID: 1234abcd\n",
+		"Title: \n\nVerify you are human\nChecking your browser before accessing example.com\n",
+	]) {
+		assert.equal(
+			parseJinaBody(challenge, "https://example.com/"),
+			null,
+			`interstitial not rejected: ${challenge.slice(0, 50)}`,
+		);
+	}
+});

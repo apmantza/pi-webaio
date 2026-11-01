@@ -799,6 +799,10 @@ export function buildMultiAnswerText(opts: {
 		displayContent: formatMultiSourceAnswer(opts.ranked, opts.query, {
 			sourcesCount: opts.sourcesCount,
 			budgetTokens: multiAnswerContentBudget(opts),
+			// The value enforced above is the caller's number minus this function's
+			// framing. The footer must name what the caller asked for, not the
+			// remainder it never mentioned.
+			displayBudgetTokens: opts.budgetTokens,
 		}),
 	});
 }

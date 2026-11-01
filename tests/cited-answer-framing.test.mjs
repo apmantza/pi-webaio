@@ -329,3 +329,101 @@ test("F18: a budget smaller than the framing stays a budget, not unlimited", () 
 		`a 20-token answer came back no smaller than the unbounded one (${estimateTokens(tiny)} vs ${estimateTokens(unlimited)})`,
 	);
 });
+
+test("the footer names the budget the caller asked for, not the internal one", () => {
+	// CodeRabbit's second pass on this branch (thread src/tools/webfetch.ts:801).
+	// Charging the framing against the budget (the F18 fix above) means the value
+	// handed to the formatter is now the REMAINDER, and `footerFor` printed that
+	// remainder: a caller who asked for 200 was told chunks were omitted "to fit
+	// the 160 token budget", and when framing exceeded the budget it said "the 1
+	// token budget". A number the agent never requested, in a sentence about its
+	// own parameter.
+	const many = Array.from({ length: 14 }, (_, i) =>
+		mk(
+			i,
+			`https://src.example.com/p${i}`,
+			`chunk body number ${i} ` + "supporting detail words ".repeat(30),
+		),
+	);
+	const out = formatMultiSourceAnswer(many, "chunk body", {
+		budgetTokens: 300,
+		displayBudgetTokens: 400,
+	});
+	assert.match(out, /omitted to fit the 400 token budget/);
+	assert.ok(
+		!/300 token budget/.test(out),
+		"the footer leaked the internal content budget to the caller",
+	);
+});
+
+test("displayBudgetTokens defaults to the enforced budget", () => {
+	// Callers that enforce the number they print (the library path) must keep
+	// doing exactly that.
+	const many = Array.from({ length: 14 }, (_, i) =>
+		mk(
+			i,
+			`https://src.example.com/p${i}`,
+			`chunk body number ${i} ` + "supporting detail words ".repeat(30),
+		),
+	);
+	const out = formatMultiSourceAnswer(many, "chunk body", {
+		budgetTokens: 300,
+	});
+	assert.match(out, /omitted to fit the 300 token budget/);
+});
+
+test("the over-budget footer also names the caller's number", () => {
+	// The second footer prints a budget too, and it is the one a caller is most
+	// likely to hit with a small budget.
+	const many = Array.from({ length: 6 }, (_, i) =>
+		mk(
+			i,
+			`https://src.example.com/p${i}`,
+			`chunk body number ${i} ` + "supporting detail words ".repeat(60),
+		),
+	);
+	const out = formatMultiSourceAnswer(many, "chunk body", {
+		budgetTokens: 10,
+		displayBudgetTokens: 200,
+	});
+	assert.match(out, /exceeds the 200 token budget/);
+	assert.ok(
+		!/exceeds the 10 token budget/.test(out),
+		"the over-budget footer printed the internal remainder",
+	);
+});
+
+test("through the handler seam the footer still names the caller's budget", () => {
+	// The library-level test above could pass while the handler forgot to pass the
+	// display value, which is exactly the wiring that regressed. Drive the seam the
+	// handler calls: framing is charged first, so the enforced budget is lower than
+	// the caller's, and the footer must still print the caller's number.
+	const many = Array.from({ length: 14 }, (_, i) =>
+		mk(
+			i,
+			`https://src.example.com/p${i}`,
+			`chunk body number ${i} ` + "supporting detail words ".repeat(30),
+		),
+	);
+	const args = {
+		ranked: many,
+		query: "chunk body",
+		sourcesCount: 14,
+		header: "Fetched 14/14 URLs.",
+		notice: '\n[Query: "chunk body"]',
+		localKnowledgeNote: undefined,
+	};
+	const budgetTokens = 400;
+	const out = buildMultiAnswerText({ ...args, budgetTokens });
+	assert.match(
+		out,
+		new RegExp(`omitted to fit the ${budgetTokens} token budget`),
+		"the handler-level footer did not name the caller's budget",
+	);
+	// And it is genuinely the reduced number that is enforced underneath: without
+	// the subtraction the composed output would exceed the budget (the F18 defect).
+	assert.ok(
+		estimateTokens(out) <= budgetTokens,
+		`seam returned ${estimateTokens(out)} against a ${budgetTokens} budget`,
+	);
+});

@@ -78,6 +78,18 @@ export interface FormatMultiSourceAnswerOptions {
 	 * supporting text (issue #165 F18).
 	 */
 	budgetTokens?: number;
+	/**
+	 * Budget to NAME in the footer, when it differs from `budgetTokens`.
+	 *
+	 * `aio-webfetch` charges its own framing against the caller's number and hands
+	 * the remainder down as the enforced `budgetTokens`. Printing that remainder
+	 * told a caller who asked for 200 that chunks were omitted "to fit the 160
+	 * token budget", and "the 1 token budget" once framing exceeded it — a number
+	 * the agent never requested, in a sentence about its own parameter (issue #165,
+	 * CodeRabbit thread src/tools/webfetch.ts:801). Display only; the ceiling that
+	 * is enforced and measured stays `budgetTokens`.
+	 */
+	displayBudgetTokens?: number;
 }
 
 /** Default number of cited chunks returned in multi-source answer mode. */
@@ -293,12 +305,14 @@ export function formatMultiSourceAnswer(
 	const verifyNote =
 		"Each block is verbatim supporting text labeled with its source URL — verify against that source.";
 	const footerFor = (kept: number, dropped: number, over: boolean): string => {
+		// What the caller asked for, when it differs from what is enforced here.
+		const named = opts.displayBudgetTokens ?? budget;
 		if (over) {
 			// Never imply a budget was honoured when it was not.
-			return `\n\n---\n_The top chunk alone still exceeds the ${budget} token budget — showing it anyway; raise budgetTokens for more sources. Full content cached for every source — retrieve it via aio-webcontent._`;
+			return `\n\n---\n_The top chunk alone still exceeds the ${named} token budget — showing it anyway; raise budgetTokens for more sources. Full content cached for every source — retrieve it via aio-webcontent._`;
 		}
 		return dropped > 0
-			? `\n\n---\n_${dropped} chunk(s) omitted to fit the ${budget} token budget; showing ${kept} of ${ranked.length}. Full content cached for every source — retrieve it via aio-webcontent._`
+			? `\n\n---\n_${dropped} chunk(s) omitted to fit the ${named} token budget; showing ${kept} of ${ranked.length}. Full content cached for every source — retrieve it via aio-webcontent._`
 			: `\n\n---\n_Full content cached for every source — retrieve it via aio-webcontent._`;
 	};
 

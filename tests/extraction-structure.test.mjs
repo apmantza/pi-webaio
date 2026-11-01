@@ -229,3 +229,28 @@ test("chooseArticleBody: link and image text still counts as prose", () => {
 		"link/image markup was stripped down to nothing and the flat body won",
 	);
 });
+
+test("chooseArticleBody keeps a code-heavy markdown conversion", () => {
+	// CodeRabbit's second pass on this branch (thread src/http-text.ts:205). The
+	// prose-vs-markup comparison added here stripped fenced blocks ENTIRELY, but
+	// in a code sample the code is the content — only the ``` markers are syntax.
+	// An API reference page therefore looked like a conversion that had lost its
+	// prose and was thrown away in favour of flat text with no fences. Measured
+	// pre-fix: markdown raw 553 words, stripped 27, flat 352 -> ratio 0.08.
+	const code = Array.from(
+		{ length: 25 },
+		(_, i) =>
+			`### handler${i}\n\n\`\`\`ts\nfunction handler${i}(req: Request, res: Response) {\n  const value = compute(req.body, ${i});\n  return res.json({ ok: true, value });\n}\n\`\`\``,
+	).join("\n\n");
+	const markdown = `# API reference\n\n${code}`;
+	const flat = `API reference ${Array.from(
+		{ length: 25 },
+		(_, i) =>
+			`function handler${i} req res const value compute req body return res json ok value`,
+	).join(" ")}`;
+	assert.equal(
+		chooseArticleBody(markdown, flat),
+		markdown,
+		"a code-heavy page was downgraded to flat text, losing every code fence",
+	);
+});

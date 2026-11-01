@@ -200,9 +200,12 @@ export function looksBinary(
 export function stripMarkdownSyntax(md: string): string {
 	if (!md) return "";
 	return md
-		// Fenced blocks first: their contents are code, not prose.
-		.replace(/```[\s\S]*?```/g, " ")
-		.replace(/~~~[\s\S]*?~~~/g, " ")
+		// Fenced blocks: drop only the fence lines. The code inside is the content a
+		// reader came for — removing the whole block made a code-heavy page look like a
+		// conversion that had lost its prose, and chooseArticleBody then threw the
+		// markdown away in favour of flat text with no fences (issue #165).
+		.replace(/^```[^\n]*$/gm, " ")
+		.replace(/^~~~[^\n]*$/gm, " ")
 		// Images keep their alt text; links keep the anchor text.
 		.replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
 		.replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
