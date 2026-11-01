@@ -836,6 +836,34 @@ export async function mapGitHubRepo(
 // ─── Repo full map (clone + tree + features) ─────────────────────────
 
 /**
+ * Issue #168: label each summary count with its own denominator.
+ *
+ * `aio-webmap` used to print `Discovered 108 URLs` next to `Total entries: 269`.
+ * The first counted the URL list, whose file URLs are `paths.slice(0, max)` —
+ * capped. The second counted the FULL tree. Neither line said so, and "Discovered"
+ * read as a total: an agent could conclude it had enumerated the repository when
+ * the list had stopped at `max`.
+ *
+ * Exported for unit testing.
+ */
+export function formatRepoMapCounts(opts: {
+	totalUrls: number;
+	treeEntries: number;
+	max: number;
+	fileUrlsIncluded: number;
+}): { discovered: string; entries: string } {
+	const capped = opts.fileUrlsIncluded >= opts.max && opts.treeEntries > opts.max;
+	const discovered = capped
+		? `\nDiscovered ${opts.totalUrls} URLs (file URLs capped at \`max\`=${opts.max} of ${opts.treeEntries} tree entries)`
+		: `\nDiscovered ${opts.totalUrls} URLs`;
+	const entries =
+		opts.treeEntries > 0
+			? `\nTotal entries: ${opts.treeEntries} in the full tree (uncapped; ${opts.fileUrlsIncluded} included as URLs)`
+		: "";
+	return { discovered, entries };
+}
+
+/**
  * Render the repo file tree, bounded to `max` entries.
  *
  * The subdirectory path already caps its listing at `max`; the full-repo
@@ -975,18 +1003,22 @@ async function mapGitHubRepoFull(
 	summaryParts.push(
 		`🗺️  Repo map for ${owner}/${repo}${clonedOk ? " (cloned)" : ""}${truncated ? " (tree truncated by API)" : ""}`,
 	);
-	summaryParts.push(
-		`\nDiscovered ${totalUrls} URLs via ${Object.keys(sources).length} sources:`,
-	);
+	const counts = formatRepoMapCounts({
+		totalUrls,
+		treeEntries: walk ? walk.paths.length : paths.length,
+		max,
+		fileUrlsIncluded: Math.min(paths.length, max),
+	});
+	summaryParts.push(`${counts.discovered} via ${Object.keys(sources).length} sources:`);
 	for (const [src, urls] of Object.entries(sources)) {
 		summaryParts.push(`  • ${src}: ${urls.length} URLs`);
 	}
 	if (walk) {
 		summaryParts.push(
-			`\nFiles: ${walk.files}, Dirs: ${walk.dirs}, Total entries: ${walk.paths.length}`,
+			`\nFiles: ${walk.files}, Dirs: ${walk.dirs},` + counts.entries.replace(/^\n/, ""),
 		);
-	} else if (paths.length > 0) {
-		summaryParts.push(`\nTotal entries: ${paths.length}`);
+	} else if (counts.entries) {
+		summaryParts.push(counts.entries);
 	}
 	if (repoMeta && !repoMeta.message && typeof repoMeta === "object") {
 		const stars = repoMeta.stargazers_count ?? 0;

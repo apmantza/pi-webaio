@@ -22,6 +22,7 @@ import {
 } from "./fetch.ts";
 import { PAYWALL_SITES, PAYWALL_GROUPS } from "./paywall-sites.ts";
 import type { BypassStrategyType, PaywallStrategy } from "./paywall-sites.ts";
+import { stripWww } from "./domain.ts";
 
 // ─── Types ─────────────────────────────────────────────────────────
 // BypassStrategyType and PaywallStrategy now live in paywall-sites.ts
@@ -268,7 +269,7 @@ const GROUP_CACHE = new Map<string, PaywallStrategy | null>();
 export function findStrategy(url: string): PaywallStrategy | null {
 	let hostname: string;
 	try {
-		hostname = new URL(url).hostname.toLowerCase().replace(/^www\./, "");
+		hostname = stripWww(new URL(url).hostname);
 	} catch {
 		return null;
 	}
@@ -311,7 +312,7 @@ export function findStrategy(url: string): PaywallStrategy | null {
 export function isKnownPaywallSite(url: string): boolean {
 	let hostname: string;
 	try {
-		hostname = new URL(url).hostname.toLowerCase().replace(/^www\./, "");
+		hostname = stripWww(new URL(url).hostname);
 	} catch {
 		return false;
 	}
