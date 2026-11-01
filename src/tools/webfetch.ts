@@ -762,7 +762,7 @@ export function composeBudgetedFetchText(opts: {
 	url?: string;
 	note?: string;
 }): { text: string; display: string } {
-	const note = opts.note ?? "";
+	let note = opts.note ?? "";
 	const unbounded = () => ({
 		text: composeFetchText({ ...opts.parts, displayContent: opts.body }) + note,
 		display: opts.body,
@@ -776,27 +776,33 @@ export function composeBudgetedFetchText(opts: {
 	const composeFraming = (extra = "") =>
 		composeFetchText({ ...parts, displayContent: "" }) + note + extra;
 	let framing = composeFraming();
-	if (estimateTokens(framing) > room) {
-		// Priority order: the title is descriptive only, the save path is recoverable
-		// from `details.outPath`, and the URL — also in `details.url` — gives up last.
-		if (parts.title) {
-			const titleCap = Math.max(4, Math.floor(room / 3));
-			parts = { ...parts, title: trimToTokenBudget(parts.title, titleCap) };
-			framing = composeFraming();
-		}
-		if (estimateTokens(framing) > room) {
-			const labelCap = Math.max(
-				8,
-				room -
-					estimateTokens(composeFraming().replace(parts.formatLabel, "")) -
-					estimateTokens(parts.title ?? ""),
-			);
+	// EVERY framing piece is bounded, in priority order: the title is descriptive only,
+	// the save path is recoverable from `details.outPath`, the URL from `details.url`,
+	// and the local-knowledge note from `details.localKnowledge`. Leaving ANY piece
+	// unbounded reintroduces the overflow — the note alone overflowed a 100-token budget
+	// by 242 tokens, and the URL by 159 (issue #169, verify review dlg-4961f07f).
+	for (const piece of ["title", "formatLabel", "url", "note"] as const) {
+		if (estimateTokens(framing) <= room) break;
+		const share = Math.max(8, Math.floor(room / 3));
+		if (piece === "title") {
+			if (!parts.title) continue;
 			parts = {
 				...parts,
-				formatLabel: elideToTokenBudget(parts.formatLabel, labelCap),
+				title: trimToTokenBudget(parts.title, Math.max(4, Math.floor(room / 3))),
 			};
-			framing = composeFraming();
+		} else if (piece === "formatLabel") {
+			parts = {
+				...parts,
+				formatLabel: elideToTokenBudget(parts.formatLabel, share),
+			};
+		} else if (piece === "url") {
+			if (!parts.url) continue;
+			parts = { ...parts, url: elideToTokenBudget(parts.url, share) };
+		} else {
+			if (!note) continue;
+			note = elideToTokenBudget(note, share);
 		}
+		framing = composeFraming();
 	}
 	// If the header still does not fit, the body keeps its share anyway. Flooring it to
 	// 1 token produced a 54-token answer containing a header and NONE of the page, which
@@ -1968,7 +1974,9 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 									browser,
 									os,
 									proxy,
-									truncated: false,
+										truncated:
+											budgetTokens !== undefined &&
+											displayContent !== answerBody,
 									...(localKnowledge ? { localKnowledge } : {}),
 									summarized: false,
 									fullLength: preview.length,

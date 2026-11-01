@@ -240,7 +240,7 @@ export const lazyTools: LazyTool[] = [
 				},
 			),
 			budgetTokens: number(
-				"Hard token budget for the content returned to the agent. When set, the output is guaranteed to fit within this many tokens — heading structure is preserved, lowest-value sections drop first, and a footer notes omitted sections. Full content is always cached before trimming. Min 100.",
+				"Hard token budget for the content returned to the agent. Applies to format: markdown (the default); html/text/json/raw return the body untrimmed by design, since truncating a raw document mid-structure yields an unusable artifact. When set, the output is guaranteed to fit within this many tokens — heading structure is preserved, lowest-value sections drop first, and a footer notes omitted sections. If the identifying header alone cannot fit, the body keeps its share and the answer states the overflow rather than returning a header with none of the page. Full content is always cached before trimming. Min 100.",
 				{
 					minimum: 100,
 				},

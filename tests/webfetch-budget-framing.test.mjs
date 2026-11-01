@@ -166,3 +166,64 @@ test("the overflow notice is stated exactly when the budget is exceeded", () => 
 		}
 	}
 });
+
+// Verify review dlg-4961f07f on d6d15af: the "<= 40" overflow bound was true of my
+// fixtures, not enforced by the code. The local-knowledge note and the URL line were never
+// bounded at all, so a long note overflowed by 240 tokens.
+const EXTREME = {
+	hugeNote: {
+		parts: {
+			formatLabel: "✓ Fetched and saved to /tmp/pi-webaio/x/page.md",
+			title: "T",
+			url: "https://example.com/p",
+			format: "markdown",
+		},
+		body: "word ".repeat(1200),
+		note: `\n\n> ${"local knowledge note words ".repeat(40)}`,
+	},
+	hugeUrl: {
+		parts: {
+			formatLabel: "✓ Fetched and saved to /tmp/pi-webaio/x/page.md",
+			title: "T",
+			url: `https://example.com/${"verylongsegment/".repeat(40)}p`,
+			format: "markdown",
+		},
+		body: "word ".repeat(1200),
+		note: "",
+	},
+	headingsOnlyLongFraming: {
+		parts: {
+			formatLabel: `✓ Fetched and saved to /tmp/pi-webaio/${"deep/seg/".repeat(30)}page.md`,
+			title: `${"word ".repeat(120)}title`,
+			url: `https://example.com/${"x/".repeat(60)}p`,
+			format: "markdown",
+		},
+		body: Array.from({ length: 200 }, (_, i) => `## Heading ${i} line`).join("\n"),
+		note: "\n\n> Local knowledge: 2 related pulled pages exist (corpus: docs.example.com).",
+	},
+};
+
+test("framing overflow stays bounded for extreme notes, URLs and headings-only bodies", () => {
+	for (const [name, { parts, body, note }] of Object.entries(EXTREME)) {
+		for (const budget of [100, 200, 400]) {
+			const out = composeBudgetedFetchText({
+				parts,
+				body,
+				budgetTokens: budget,
+				note,
+			}).text;
+			const over = estimateTokens(out) - budget;
+			if (over > 0) {
+				assert.match(
+					out,
+					/Header needed \d+ of the \d+-token budget/,
+					`${name} budget ${budget}: overflow ${over} not stated`,
+				);
+				assert.ok(
+					over <= 40,
+					`${name} budget ${budget}: overflow ${over} tokens exceeds the 40-token stated-overflow allowance`,
+				);
+			}
+		}
+	}
+});
