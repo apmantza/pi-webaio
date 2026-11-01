@@ -556,7 +556,8 @@ const BROKER_MIN_FALLBACK_BUDGET_MS = 1_000;
 
 function brokerEnabled(): boolean {
 	// The Google CDP broker is the default search path (faster cold start,
-	// tighter p95, 100% Google success under concurrency — see speed.md).
+	// tighter p95, 100% Google success under concurrency — measured in the
+	// local-only speed log, which is a working artifact and not shipped).
 	// Opt out to the legacy CDP path with PI_WEBAIO_CDP_BROKER=0. Any other
 	// value (including unset or empty) keeps the broker default — only the
 	// literal "0" disables it.

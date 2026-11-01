@@ -130,6 +130,27 @@ test("isPrimarySource: does not flag an arbitrary blog domain", () => {
 	assert.ok(!isPrimarySource(undefined));
 });
 
+// Issue #165 F1, third member of the www-asymmetry class. The pattern list
+// hand-writes `^(www\.)?` for the well-known hosts — proof the asymmetry was
+// noticed entry by entry instead of fixed once at the seam — but the generic
+// `^docs\.` / `^developer\.` / `^learn\.` entries are start-anchored, so any
+// other docs host lost primary status purely for carrying a `www.` label.
+test("isPrimarySource: a www label never costs a host its primary tier", () => {
+	for (const [bare, wwww] of [
+		["docs.acme.dev", "www.docs.acme.dev"],
+		["learn.acme.dev", "www.learn.acme.dev"],
+		["developer.acme.dev", "www.developer.acme.dev"],
+		["docs.example.com", "www.docs.example.com"],
+	]) {
+		assert.ok(isPrimarySource(bare), `${bare} should be primary`);
+		assert.equal(
+			isPrimarySource(wwww),
+			true,
+			`${wwww} differs from ${bare} only by the www label`,
+		);
+	}
+});
+
 // ─── rankSources: multi-query merge/dedupe ──────────────────────────────
 
 test("rankSources: dedupes the same URL across sub-queries and boosts consensus", () => {

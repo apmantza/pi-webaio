@@ -404,6 +404,17 @@ export function scoreRelevance(
 }
 
 /**
+ * Tokenize a document the same way the scorer does, so a caller can ask which
+ * query terms a document actually contains without re-implementing the
+ * normalisation (markdown stripping, stop words, min term length). Used by the
+ * corpus ranking floor (issue #165 F15).
+ */
+export function extractTerms(text: string, options: BM25Options = {}): string[] {
+	const { minTermLen = 2, stopWords = DEFAULT_STOP_WORDS } = options;
+	return tokenize(text, minTermLen, stopWords);
+}
+
+/**
  * Convenience: score multiple documents against a query in one call.
  */
 export function scoreAllRelevance(

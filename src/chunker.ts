@@ -8,6 +8,7 @@
 //   - LangChain's RecursiveCharacterTextSplitter (oversized-paragraph split)
 
 import { estimateTokens } from "./token-count.ts";
+import { stripWrapper } from "./markdown-frontmatter.ts";
 
 /** A single chunk of markdown, ready for RAG ingestion. */
 export interface Chunk {
@@ -51,7 +52,14 @@ export function chunkMarkdown(
 		);
 	}
 
-	const normalized = markdown.replace(/\r\n?/g, "\n").trim();
+	// The stored body carries a YAML frontmatter block and the [UNTRUSTED WEB
+	// CONTENT] safety markers. That is storage envelope, not page content: with a
+	// small maxTokens, chunk 0 used to be *entirely* `---\ntitle…\n---`,
+	// `[UNTRUSTED WEB CONTENT START]` and the `URL Source:`/`Warning:` lines, with
+	// zero words of the actual page — and the overlap then repeated it into chunk 1
+	// (issue #165 F19; the same leak reached research quotes as F17). Stripped here
+	// so every caller of the chunker is fixed at once.
+	const normalized = stripWrapper(markdown).replace(/\r\n?/g, "\n").trim();
 	if (!normalized) return [];
 
 	const paragraphs = normalized

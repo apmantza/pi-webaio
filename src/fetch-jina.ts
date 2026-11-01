@@ -16,10 +16,42 @@ const JINA_CHALLENGE_MARKERS = [
 	"challenge-platform",
 	"cf_chl",
 	"cf-chl",
-	"turnstile",
-	"attention required",
 	"verify you are human",
 	"checking your browser",
+];
+
+/**
+ * Phrases that identify an interstitial only in context. `turnstile` is the name
+ * of a bot-defence product and `attention required` is ordinary prose, so an
+ * article ABOUT Cloudflare Turnstile matched the screen that exists to reject the
+ * Turnstile interstitial — and `fetchJina` then skips the remaining pages on that
+ * domain, so one article about bot defence costed the fallback for the whole site
+ * (issue #165, CodeRabbit thread src/fetch-jina.ts:120).
+ */
+const JINA_CHALLENGE_AMBIGUOUS_MARKERS = ["turnstile", "attention required"];
+
+/**
+ * Independent signals that the page IS a challenge interstitial rather than text
+ * describing one.
+ *
+ * These must be evidence only an interstitial produces. The first version of this
+ * list included `access denied` and `blocked because`, which reproduced the defect
+ * the list was written to fix: "Turnstile returns access denied when the sitekey
+ * is wrong" is ordinary troubleshooting prose, and rejecting it makes `fetchJina`
+ * cache the failure for the host and skip later pages (issue #165, CodeRabbit
+ * thread src/fetch-jina.ts:43). Product names and generic error wording are
+ * therefore excluded — and so is `ray id` on its own, since troubleshooting
+ * articles quote Ray IDs when reporting an error.
+ */
+const JINA_CHALLENGE_CONTEXT_MARKERS = [
+	"ray id",
+	"cf-ray",
+	"you are unable to access",
+	"performance & security by cloudflare",
+	"click for more information",
+	"has blocked your access",
+	"unusual traffic from your network",
+	"the security service that protects this website",
 ];
 
 /**
@@ -33,7 +65,15 @@ const JINA_CHALLENGE_MARKERS = [
 function isJinaChallengeBody(body: string): boolean {
 	if (detectBotBlock(body).blocked) return true;
 	const sample = body.slice(0, 8000).toLowerCase();
-	return JINA_CHALLENGE_MARKERS.some((m) => sample.includes(m));
+	if (JINA_CHALLENGE_MARKERS.some((m) => sample.includes(m))) return true;
+	// An ambiguous phrase alone is not enough: it must agree with a signal that is
+	// specific to the interstitial. Plain-text interstitials still land here
+	// because `detectBotBlock()` is structural and does not catch them (measured:
+	// "Just a moment… Ray ID" -> blocked:false), which is why this list stays.
+	return (
+		JINA_CHALLENGE_AMBIGUOUS_MARKERS.some((m) => sample.includes(m)) &&
+		JINA_CHALLENGE_CONTEXT_MARKERS.some((m) => sample.includes(m))
+	);
 }
 
 /** Hostname title fallback, guarded against invalid URLs. */
@@ -43,6 +83,40 @@ function hostnameOf(url: string): string {
 	} catch {
 		return "";
 	}
+}
+
+/**
+ * Jina reader wraps its payload in a header block that is NOT page content:
+ *
+ *   URL Source: https://example.com/
+ *   Published Time: Thu, 29 Oct 2026 09:14:22 GMT
+ *   Warning: This page maybe not yet fully loaded, …
+ *   Markdown Content:
+ *
+ * Returning it verbatim did two damage (issue #165 F7): the agent was served
+ * proxy chrome as the article, and `content.ts` picks Jina over local extraction
+ * by `wordCount(jina.content) > localWords` — a comparison the wrapper inflates,
+ * so on low-word pages Jina won on its own boilerplate.
+ *
+ * Only the LEADING header block is consumed, and `Markdown Content:` terminates
+ * it, so an article that legitimately mentions those words keeps its text.
+ */
+const JINA_HEADER_LINE = /^(?:URL[ ]Source|Published[ ]Time|Retrieved|Warning|Fetched[ ]At|Cache[ ]Status)\s*:/i;
+const JINA_MARKER_LINE = /^Markdown[ ]Content\s*:/i;
+
+export function stripJinaEnvelope(content: string): string {
+	const lines = content.split("\n");
+	let idx = 0;
+	for (; idx < lines.length; idx++) {
+		const trimmed = lines[idx]!.trim();
+		if (JINA_MARKER_LINE.test(trimmed)) {
+			idx++; // everything after the marker is the payload
+			break;
+		}
+		if (trimmed === "" || JINA_HEADER_LINE.test(trimmed)) continue;
+		break; // no marker present: the payload starts here
+	}
+	return lines.slice(idx).join("\n").replace(/^\s+/, "");
 }
 
 /**
@@ -60,36 +134,36 @@ export function parseJinaBody(text: string, url: string): PullResult | null {
 	const body = text.trim();
 	if (!body) return null;
 
-	// Parse Jina's "Title: ...\n\ncontent" format without regex backtracking
-	const titleLine = body.startsWith("Title:")
-		? body.slice(6).split("\n")[0]!.trim()
-		: null;
+	// Presence and value are two different questions. `Title: ` with no value is
+	// Jina saying "no title", not "there is no Title line": conflating them made
+	// `titleLine` an empty string that was neither `null` (so the challenge check
+	// below was skipped) nor truthy (so the branch that slices past the header was
+	// skipped), and the body fell through to the hostname path with its envelope
+	// intact — including Cloudflare challenge pages served as the article.
+	const hasTitleLine = body.startsWith("Title:");
+	const titleValue = hasTitleLine ? body.slice(6).split("\n")[0]!.trim() : "";
 
-	// A genuine Jina reader response begins with a "Title:" line. When it
-	// does not, the body is either clean markdown (acceptable) or a
-	// bot-challenge / HTML garbage page. Reject the latter so the real
-	// pipeline runs — never let a challenge page through with a hostname
-	// title.
-	if (titleLine === null && isJinaChallengeBody(body)) {
-		return null;
-	}
-
-	if (titleLine) {
+	// Everything the reader-proxy added, minus the payload.
+	let payload = body;
+	if (hasTitleLine) {
 		const contentStart = body.indexOf("\n\n", 6);
-		if (contentStart !== -1) {
-			return {
-				ok: true,
-				url,
-				title: titleLine,
-				content: body.slice(contentStart + 2),
-			};
-		}
+		// A Title line with no blank separator has no payload at all.
+		payload = contentStart === -1 ? "" : body.slice(contentStart + 2);
 	}
-
-	// Hostname title fallback is ONLY for genuine reader output that
-	// simply lacks a "Title:" line — never for a challenge page (rejected
-	// above).
-	return { ok: true, url, title: hostnameOf(url), content: body };
+	const content = stripJinaEnvelope(payload);
+	// Nothing behind the envelope: fall through to the real pipeline instead of
+	// returning an empty "successful" page.
+	if (!content.trim()) return null;
+	// The challenge check runs on the PAYLOAD, so it now covers a response that
+	// does carry a Title line — a challenge page has one, and previously only
+	// title-less bodies were screened.
+	if (isJinaChallengeBody(content)) return null;
+	return {
+		ok: true,
+		url,
+		title: titleValue || hostnameOf(url),
+		content,
+	};
 }
 
 // ─── Timeout ───────────────────────────────────────────────────────

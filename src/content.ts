@@ -27,7 +27,13 @@ import {
 import { detectPromptInjection, applyInjectionAction } from "./injection.ts";
 import { compressHtml } from "./html-compress.ts";
 import { extractClientSideRedirect } from "./client-redirect.ts";
-import { cleanText, isJsonContentType, isLikelyJsonBody } from "./http-text.ts";
+import {
+	binarySignature,
+	cleanText,
+	isJsonContentType,
+	isLikelyJsonBody,
+	stripMarkdownSyntax,
+} from "./http-text.ts";
 import { isDangerousUrl, scanForSecrets } from "./security.ts";
 import { BASE_TEMP, getStoredContentAnyAge } from "./session-store.ts";
 import { loadPdfParseCtor } from "./types.ts";
@@ -380,7 +386,7 @@ export function stripCssCruft(markdown: string): string {
 export function extractReadability(
 	html: string,
 	_url: string,
-): { title: string; content: string } | null {
+): { title: string; content: string; html: string } | null {
 	try {
 		const { document } = parseHTML(html);
 		// SAFETY: linkedom's Document implements the DOM Document surface required by Readability
@@ -392,7 +398,7 @@ export function extractReadability(
 
 function extractReadabilityFromDocument(
 	document: Document,
-): { title: string; content: string } | null {
+): { title: string; content: string; html: string } | null {
 	try {
 		// SAFETY: caller guarantees Document is a linkedom Document compatible with Readability
 		const reader = new Readability(document as unknown as Document);
@@ -401,10 +407,102 @@ function extractReadabilityFromDocument(
 		return {
 			title: article.title || extractHeadingTitle(article.textContent || "") || "",
 			content: article.textContent || "",
+			// The selected article as HTML. `textContent` is kept as the flat
+			// fallback, but it must not be the returned body: it destroys every
+			// block boundary (issue #165 F2/F3/F11, see articleHtmlToMarkdown).
+			html: article.content || "",
 		};
 	} catch {
 		return null;
 	}
+}
+
+/**
+ * Serialize the article HTML that Readability already selected into markdown.
+ *
+ * Why this exists (issue #165, cluster A — F2/F3/F11): the dominant extraction
+ * rung returned `article.textContent`, which silently degrades everything that
+ * consumes the body. `textContent` never inserts a separator between sibling
+ * elements, so `<h2>Overview<a>#</a></h2><p>A.</p><p>B.</p>` becomes the single
+ * string `"Overview#A.B."` — headings disappear, adjacent sentences are glued
+ * into one run-on sentence, the anchor permalink is inlined, and code blocks
+ * lose their fences so their `#` comments get reparsed as ATX headings by
+ * `outline.ts`. `outline` mode, `budgetTokens`' heading skeleton, `prune`'s
+ * omitted-sections TOC, answer-mode breadcrumbs and `aio-webresearch` evidence
+ * quotes all read that body, so the damage is system-wide and invisible.
+ *
+ * Defuddle is already this project's HTML→markdown dependency and is already
+ * imported here, so it is reused rather than hand-rolling a serializer. Two
+ * deliberate differences from the whole-page fallback call below:
+ *  - Readability has ALREADY chosen the article, so Defuddle's own scoring,
+ *    content-pattern and hidden-element removal is switched off — re-running
+ *    them over an already-extracted fragment can delete legitimate prose.
+ *  - `useAsync: false` keeps this purely local. A page whose HTML we already
+ *    hold must never gain a third-party fetch hop from inside extraction.
+ *
+ * Returns null on empty input, timeout or any failure so the caller can fall
+ * back to the flat body; a slower or buggier structured pass must never cost
+ * the agent the text it already had.
+ */
+export async function articleHtmlToMarkdown(
+	articleHtml: string,
+	url: string,
+): Promise<string | null> {
+	if (!articleHtml || !articleHtml.trim()) return null;
+	try {
+		const result = await withTimeout(
+			Defuddle(
+				`<!DOCTYPE html><html><head><title></title></head><body>${articleHtml}</body></html>`,
+				url,
+				{
+					markdown: true,
+					removeLowScoring: false,
+					removeContentPatterns: false,
+					removeHiddenElements: false,
+					useAsync: false,
+				},
+			),
+			DEFUDDLE_TIMEOUT,
+		);
+		let md = stripDefuddleComments(result.content || "");
+		md = cleanText(md);
+		return md.trim() ? md : null;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Minimum share of the flat body's words a structured body must retain to be
+ * preferred over it. Markdown syntax costs a few tokens while structure costs
+ * none of the prose, so anything below this means the structured pass lost
+ * content and the flat body is the safer answer.
+ */
+export const ARTICLE_MARKDOWN_MIN_WORD_RATIO = 0.9;
+
+/**
+ * Choose between the structured (markdown) and flat (textContent) rendering of
+ * the same article. Pure and exported so the preference rule itself is testable
+ * without driving the whole pipeline.
+ */
+export function chooseArticleBody(
+	markdown: string | null,
+	flat: string,
+): string {
+	if (!markdown) return flat;
+	const flatWords = wordCount(flat);
+	// Like-for-like: `flat` is plain text, so the markdown side must be counted
+	// with its syntax removed. Counting `##`, `-`, ` ``` ` and table pipes as
+	// words let a conversion that DROPPED a section still clear the ratio, because
+	// the markup tokens replaced the prose they were attached to (issue #165).
+	if (
+		flatWords > 0 &&
+		wordCount(stripMarkdownSyntax(markdown)) <
+			flatWords * ARTICLE_MARKDOWN_MIN_WORD_RATIO
+	) {
+		return flat;
+	}
+	return markdown;
 }
 
 // ─── RSC (React Server Components) extraction ──────────────────────
@@ -896,11 +994,15 @@ async function runLocalExtraction(
 			wordCount(readability.content) >= MIN_LOCAL_WORDS ||
 			!readabilityRatioFailed(readability.content.length, hookedText.length)
 		) {
+			// Prefer the markdown serialization of the selected article; fall back
+			// to the flat textContent only when that pass yields nothing usable
+			// (issue #165 F2/F3/F11).
+			const markdown = await articleHtmlToMarkdown(readability.html, finalUrl);
 			return {
 				ok: true,
 				url: finalUrl,
 				title: readability.title,
-				content: readability.content,
+				content: chooseArticleBody(markdown, readability.content),
 				rawHtml,
 			};
 		}
@@ -1053,19 +1155,27 @@ async function pullPage(
 
 	const binPeek = await fetchBuffer(url, opts);
 	if (binPeek && binPeek.status < 400) {
-		if (url.toLowerCase().endsWith(".pdf")) {
+		const headBytes = binPeek.buffer.subarray(0, 1024);
+		// A PDF is a PDF by its magic bytes, not by its extension: arXiv serves the
+		// paper at `/pdf/2005.11401` with no `.pdf` suffix, so the extension test
+		// alone fell through to the download branch and the caller got a file path
+		// instead of the text it asked for (issue #165 F9). Reuses the shared
+		// signature already used by the content-type path.
+		const isPdf =
+			url.toLowerCase().endsWith(".pdf") ||
+			binarySignature(headBytes) === "pdf";
+		if (isPdf) {
 			const pdf = await extractPDF(binPeek.buffer, url);
 			if (pdf) return finalizePullResult(pdf, redirectNotice);
 			const dl = await downloadToTemp(binPeek.buffer, "application/pdf", "", url);
 			return finalizePullResult(dl, redirectNotice);
 		}
 
-		const headBytes = binPeek.buffer.subarray(0, 1024);
 		const isBinary =
 			headBytes.includes(0) ||
 			headBytes.toString("utf8").replace(/[\x20-\x7E\n\r\t]/g, "").length >
 				headBytes.length * 0.3;
-		if (isBinary && !url.toLowerCase().endsWith(".pdf")) {
+		if (isBinary) {
 			const dl = await downloadToTemp(binPeek.buffer, "", "", url);
 			return finalizePullResult(dl, redirectNotice);
 		}

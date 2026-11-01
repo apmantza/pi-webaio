@@ -8,7 +8,11 @@ import { pullPageEnhanced } from "../content.ts";
 import { discover } from "../discovery.ts";
 import { storeContent, BASE_TEMP } from "../session-store.ts";
 import { compileContextPackage } from "../context-package.ts";
-import { safeResolveInBaseTemp, normalizeInputUrl } from "./utils.ts";
+import {
+	safeResolveInBaseTemp,
+	normalizeInputUrl,
+	normalizeFetchTarget,
+} from "./utils.ts";
 import {
 	RequestQueue,
 	canonicalQueueUrl,
@@ -22,6 +26,7 @@ import {
 	writePage,
 	rewriteLinks,
 	runPullFromQueue,
+	urlToPagePath,
 } from "./utils.ts";
 import { buildIndex } from "../webquery-index.ts";
 
@@ -78,14 +83,10 @@ const PULL_WORKERS_PER_HOST = 10;
 export function countDistinctHosts(targetUrls: string[]): number {
 	const hosts = new Set<string>();
 	for (const raw of targetUrls) {
-		let s = raw;
-		if (!/^https?:\/\//i.test(s)) s = `https://${s}`;
-		try {
-			const host = new URL(s).hostname.toLowerCase();
-			if (host) hosts.add(host);
-		} catch {
-			/* unparsable URL — skip for host counting */
-		}
+		const guard = normalizeFetchTarget(raw);
+		if (!guard.ok) continue; // unparsable or non-http(s): not a host
+		const host = guard.hostname.toLowerCase();
+		if (host) hosts.add(host);
 	}
 	return hosts.size;
 }
@@ -192,7 +193,7 @@ export function registerWebpullTool(pi: ExtensionAPI): void {
 			let priorCompleted = 0;
 			let seedAlreadyCompleted = false;
 			if (resume && hasQueueFile(outDir)) {
-				queue = await RequestQueue.resume(outDir);
+				queue = await RequestQueue.resume(outDir, urlToPagePath);
 				if (queue) {
 					// Repair completed-before-write entries from older queue files,
 					// then backfill the explicitly requested page. RequestQueue
@@ -240,7 +241,7 @@ export function registerWebpullTool(pi: ExtensionAPI): void {
 				const urls = await discover(url.href, max, fetchOpts);
 				if (!urls.length) throw new Error("No pages found.");
 
-				queue = await RequestQueue.create(outDir);
+				queue = await RequestQueue.create(outDir, urlToPagePath);
 				await queue.add(urls);
 
 				// Size workers from the discovered URL set (P4): single-host

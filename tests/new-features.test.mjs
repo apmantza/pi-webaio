@@ -27,7 +27,17 @@ test("RequestQueue.create creates empty queue", async () => {
 	const dir = join(tmpdir(), `rq-test-create-${Date.now()}`);
 	const q = await RequestQueue.create(dir);
 	assert.ok(q);
-	assert.deepStrictEqual(q.stats(), { queued: 0, inProgress: 0, completed: 0, failed: 0, total: 0 });
+	// `duplicates` was added with path-based identity (issue #165 F14): the pull
+	// must be able to report "6 URLs, 4 pages" honestly. This is the only strict
+	// deep-equal consumer of stats(); webpull reads named fields only.
+	assert.deepStrictEqual(q.stats(), {
+		queued: 0,
+		inProgress: 0,
+		completed: 0,
+		failed: 0,
+		total: 0,
+		duplicates: 0,
+	});
 	assert.strictEqual(q.isDone(), true);
 	await q.close();
 	await rm(dir, { recursive: true, force: true });

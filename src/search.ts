@@ -261,7 +261,7 @@ export function parseDuckDuckGoResults(html: string): SearchResult[] {
 	return results;
 }
 
-function parseYahooResults(html: string): SearchResult[] {
+export function parseYahooResults(html: string): SearchResult[] {
 	const { document } = parseHTML(html);
 	const results: SearchResult[] = [];
 
@@ -271,7 +271,15 @@ function parseYahooResults(html: string): SearchResult[] {
 		const a = el.querySelector("a");
 		if (!a) continue;
 		const rawUrl = a.getAttribute("href") || "";
-		const title = a.textContent?.trim() || "";
+		// The anchor wraps the WHOLE citation block on the current SERP (favicon,
+		// site span, breadcrumb URL, then the title), so `a.textContent` came back as
+		// "zustand.sitehttps://zustand.site › en › docsPersist Middleware - …" for
+		// every Yahoo result (issue #165 F1). The clean title is in h3.title;
+		// older/alternate markup has no h3, so the anchor text stays the fallback.
+		const titleEl = a.querySelector("h3.title") || a.querySelector("h3");
+		const title = (titleEl?.textContent || a.textContent || "")
+			.replace(/\s+/g, " ")
+			.trim();
 		if (!title || !rawUrl) continue;
 
 		let url: string | undefined;
@@ -481,7 +489,17 @@ const SOCIAL_HOSTS = [
 	"x.com",
 ];
 
-function stripWww(domain: string): string {
+/**
+ * Collapse the `www` label so a host spelled two ways compares equal.
+ *
+ * Exported because the rule is a matching rule, not a display rule: every seam
+ * that compares or keys on a domain must apply it on both sides, or a pair that
+ * differs only by that label is treated as two sites (issue #165 F1 found this
+ * in `canonicalizeUrl`, then in `dropGoogleRedirectDuplicates`, then in
+ * `isPrimarySource`). Five more private spellings of the same one-liner live in
+ * goggles/firecrawl/parallel/tinyfish/paywall — filed as a consolidation follow-up.
+ */
+export function stripWww(domain: string): string {
 	return domain.replace(/^www\./, "");
 }
 
@@ -921,7 +939,14 @@ export function canonicalizeUrl(url: string): string {
 		: "";
 	// Collapse trailing slashes off the path (keep the root "/" itself).
 	const path = u.pathname.replace(/\/+$/, "") || "/";
-	return `${u.protocol}//${u.host.toLowerCase()}${path}${search}`;
+	// The `www.` label is a spelling, not a different page, and it is the single
+	// most common way two engines disagree on the same URL — so it must share a
+	// bucket or cross-engine corroboration is diluted (issue #165 F1). Only the
+	// literal leading `www.` label collapses: docs.example.com and
+	// example.com stay separate buckets. This is a KEY change only; display and
+	// fetch always use the original URL.
+	const host = stripWww(u.hostname.toLowerCase());
+	return `${u.protocol}//${host}${path}${search}`;
 }
 
 // ─── Google SERP redirect duplicates ───────────────────────────────
@@ -989,12 +1014,16 @@ export function dropGoogleRedirectDuplicates<T extends SearchResult>(
 	return results.filter((r) => {
 		if (!isGoogleRedirectUrl(r.url)) return true;
 		// Only the `<cite>`-derived domain is trustworthy on a goto URL.
-		const host = (r.domain ?? "").toLowerCase();
+		// Engines disagree on the `www` label (Google's `<cite>` keeps it, other
+		// providers report the apex), so both sides of this comparison go through
+		// the same `stripWww` the dedup key uses — otherwise a pair differing only
+		// by that label survives as two results (issue #165 F1, sibling seam).
+		const host = stripWww((r.domain ?? "").toLowerCase());
 		const title = normalizeTitleForDedup(r.title);
 		if (!host || !title) return true;
 		return !direct.some(
 			(d) =>
-				(d.domain ?? "").toLowerCase() === host &&
+				stripWww((d.domain ?? "").toLowerCase()) === host &&
 				titlesOverlap(title, normalizeTitleForDedup(d.title)),
 		);
 	});

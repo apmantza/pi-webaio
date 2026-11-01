@@ -53,18 +53,102 @@ export function resolveBinary(name: string): string | null {
 
 // ─── Frontmatter ────────────────────────────────────────────────────
 /**
+ * Decide the scheme of a user-supplied fetch target. Extracted from the inline
+ * `if (!/^https?:\/\//i.test(x)) x = "https://" + x` that webfetch/webpull each
+ * carried, plus the shared normalizeInputUrl (issue #165 F4). That pattern only
+ * recognised the two-slash form, so `file:///etc/passwd` became
+ * `https://file:///etc/passwd` — a DNS lookup for a host spelled `file`, reported
+ * as a retryable `dns_error` — and `https:/x` became a lookup for host `https`.
+ */
+export type FetchTarget =
+	| { ok: true; url: string; hostname: string; parsed: URL }
+	| {
+			ok: false;
+			code: "unsupported_protocol" | "invalid_url";
+			scheme?: string;
+			url: string;
+	  };
+
+/** Matches a leading `scheme:` so an explicit scheme is never mistaken for a host. */
+const LEADING_SCHEME = /^([a-zA-Z][a-zA-Z0-9+.-]*):/;
+
+/**
+ * A port, optionally followed by the start of a path/query/fragment.
+ * `host:443`, `host:8443/x`, `host:3000?cb=1`.
+ */
+const PORT_LIKE = /^\d{1,5}([/?#]|$)/;
+
+/**
+ * Decide whether a leading `token:` is an explicit scheme or a bare `host:port`.
+ *
+ * RFC 3986 allows `.` in a scheme name, so `example.com:8443/path` matches
+ * `LEADING_SCHEME` with scheme `example.com`. `new URL()` cannot arbitrate
+ * either — it parses `localhost:3000` as protocol `localhost:` — so the rule has
+ * to be stated here. Rejecting the host:port shape was a real regression: the
+ * inline regexes this helper replaced prefixed `https://` onto it and it worked,
+ * and `host:port` is the ordinary way to name a local dev server.
+ *
+ * A dot in the token means host (`schemes` never contain one in practice, and no
+ * dangerous scheme does). A dotless token is a scheme unless what follows the
+ * colon is a port number — the one case that makes `localhost:3000` a host.
+ * The residual risk is a scheme whose payload happens to look like a port
+ * (`javascript:123`), which then becomes `https://javascript:123`: a DNS failure
+ * for a host spelled `javascript`, never a `javascript:` URL. Degradation is
+ * toward a harmless lookup, not toward execution.
+ */
+function isExplicitScheme(token: string, rest: string): boolean {
+	if (token.includes(".")) return false;
+	return !PORT_LIKE.test(rest);
+}
+
+
+export function normalizeFetchTarget(rawInput: string): FetchTarget {
+	const raw = String(rawInput ?? "").trim();
+	if (!raw) return { ok: false, code: "invalid_url", url: rawInput };
+
+	// Parse-first would be tempting, but a bare "example.com" throws in the URL
+	// parser while "file:///x" parses fine, so the two cases cannot be told apart
+	// by a failed parse. Detect the scheme explicitly instead.
+	const schemeMatch = LEADING_SCHEME.exec(raw);
+	// No scheme at all (bare host, or protocol-relative `//host/path`) and a bare
+	// `host:port` both take the default scheme, as the tools always assumed.
+	let candidate = `https://${raw}`;
+	if (schemeMatch) {
+		const scheme = schemeMatch[1]!.toLowerCase();
+		const rest = raw.slice(schemeMatch[1]!.length + 1);
+		if (scheme !== "http" && scheme !== "https" && isExplicitScheme(scheme, rest)) {
+			// The defect this exists for: prefixing `https://` onto a `file:` URL
+			// produced a DNS lookup for a host spelled `file` and a retryable
+			// network error instead of a validation refusal.
+			return {
+				ok: false,
+				code: "unsupported_protocol",
+				scheme: `${schemeMatch[1]}:`,
+				url: raw,
+			};
+		}
+		// Explicit http(s) is used as written — including the single-slash `https:/x`
+		// form the old two-slash regex missed (URL parses it as host `x`).
+		if (scheme === "http" || scheme === "https") candidate = raw;
+	}
+	try {
+		const u = new URL(candidate);
+		if (!u.hostname) return { ok: false, code: "invalid_url", url: rawInput };
+		return { ok: true, url: u.toString(), hostname: u.hostname, parsed: u };
+	} catch {
+		return { ok: false, code: "invalid_url", url: rawInput };
+	}
+}
+
+/**
  * Normalize a user-supplied URL (add https:// when the scheme is missing)
  * and validate it parses. Shared by webpull/webmap/webquery-style tools
  * (dedup, jscpd). Throws Error("Bad URL: <original>") on malformed input.
  */
 export function normalizeInputUrl(rawInput: string): URL {
-	let raw = rawInput;
-	if (!/^https?:\/\//i.test(raw)) raw = `https://${raw}`;
-	try {
-		return new URL(raw);
-	} catch {
-		throw new Error(`Bad URL: ${rawInput}`);
-	}
+	const t = normalizeFetchTarget(rawInput);
+	if (!t.ok) throw new Error(`Bad URL: ${rawInput}`);
+	return t.parsed;
 }
 
 export function frontmatter(
@@ -91,11 +175,24 @@ export function frontmatter(
 }
 
 // ─── Page path helpers ──────────────────────────────────────────────
-function pageToPath(page: Page): string {
-	// new URL throws on malformed page URLs; fall back to a safe stem.
+/**
+ * The canonical output path for a URL. This is the pull's page IDENTITY:
+ * `/learn/`, `/learn/index.html` and `/learn#x` all write `learn/index.md`, so
+ * they are one page.
+ *
+ * There used to be two canonicalizers of different strength (issue #165 F22):
+ * `search.ts` `canonicalizeUrl()` (host case, trailing slash, tracking params)
+ * and `request-queue.ts` `canonicalQueueUrl()` (hash/search only). The pull path
+ * used the weak one while completion was decided by the file, which is how two
+ * queue entries came to write one file. The queue now takes this function as its
+ * `pathFor` rule, so enqueue dedupe and completion answer to the same rule that
+ * actually writes the file.
+ */
+export function urlToPagePath(url: string): string {
+	// new URL throws on malformed URLs; fall back to the root stem.
 	let pathname: string;
 	try {
-		pathname = new URL(page.url).pathname;
+		pathname = new URL(url).pathname;
 	} catch {
 		pathname = "/";
 	}
@@ -104,6 +201,10 @@ function pageToPath(page: Page): string {
 	p = p.replace(/\.html?$/, "").replace(/^\//, "");
 	if (!p.endsWith(".md")) p += ".md";
 	return p;
+}
+
+function pageToPath(page: Page): string {
+	return urlToPagePath(page.url);
 }
 
 /** Normalize a URL to the same stem used by pageToPath for matching. */

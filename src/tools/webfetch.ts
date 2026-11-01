@@ -83,7 +83,13 @@ import {
 	isFetchError,
 	suggestRetryTimeoutMs,
 } from "./fetch-error.ts";
-import { frontmatter, runInBatches, safeResolveInBaseTemp } from "./utils.ts";
+import {
+	frontmatter,
+	normalizeFetchTarget,
+	runInBatches,
+	safeResolveInBaseTemp,
+} from "./utils.ts";
+import { stripWrapper } from "../markdown-frontmatter.ts";
 import { queryIndex } from "../webquery-index.ts";
 import { resolveCorpusDir } from "./webquery.ts";
 
@@ -245,9 +251,9 @@ export async function runLocalKnowledgePreCheck(
 	let hostname: string;
 	let urlDerivedQuery: string;
 	try {
-		let urlStr = first;
-		if (!/^https?:\/\//i.test(urlStr)) urlStr = `https://${urlStr}`;
-		const u = new URL(urlStr);
+		const guard = normalizeFetchTarget(first);
+		if (!guard.ok) return undefined;
+		const u = guard.parsed;
 		hostname = u.hostname;
 		const pathTokens = u.pathname.split(/[/._-]+/).filter(Boolean);
 		urlDerivedQuery = [hostname, ...pathTokens].join(" ");
@@ -351,11 +357,9 @@ function extractJsonPayload(body: string): unknown | null {
 		trimmed = (wrapper as { content: string }).content.trim();
 	}
 
-	trimmed = trimmed.replace(/^---\n[\s\S]*?\n---\n/, "").trim();
-	trimmed = trimmed
-		.replace(/^\[UNTRUSTED WEB CONTENT START\]\n?/, "")
-		.replace(/\n?\[UNTRUSTED WEB CONTENT END\]$/, "")
-		.trim();
+	// Shared parser: the local copy of this was LF-only, so a CRLF page never had
+	// its frontmatter/markers stripped and JSON detection missed it (issue #165 F21).
+	trimmed = stripWrapper(trimmed).trim();
 
 	const fenced = trimmed.match(/^```json\s*\n([\s\S]*?)\n```\s*$/i);
 	if (fenced) return parseJsonCandidate(fenced[1]!.trim());
@@ -708,6 +712,101 @@ export function composeFetchText(parts: FetchTextParts): string {
 	return lines.join("\n");
 }
 
+export interface MultiAnswerTextParts {
+	/** e.g. `Fetched 3/4 URLs.` — the batch tally, printed once. */
+	header: string;
+	/** The echoed query line, or empty string when there is none. */
+	notice: string;
+	/** Output of `formatMultiSourceAnswer()` — owns the cited-answer framing. */
+	displayContent: string;
+	localKnowledgeNote?: string;
+}
+
+/**
+ * Compose the agent-visible text for a multi-source cited answer.
+ *
+ * The library (`formatMultiSourceAnswer`) owns the `Cited answer:` header, the
+ * per-source labels and the verify note; this layer adds only the batch tally
+ * and the echoed query. It used to repeat the library's mode notice and verify
+ * note on top of them (issue #165 F18), doubling framing the call claimed to
+ * keep cheap. Extracted from the handler so that boundary is testable through
+ * assembled output rather than by grepping this file's source.
+ *
+ * @internal Exported for unit tests only.
+ */
+export function composeMultiAnswerText(
+	parts: MultiAnswerTextParts,
+): string {
+	return (
+		parts.header +
+		parts.notice +
+		"\n\n" +
+		parts.displayContent +
+		(parts.localKnowledgeNote ?? "")
+	);
+}
+
+/**
+ * The chunk budget that leaves the COMPOSED answer inside `budgetTokens`.
+ *
+ * `budgetTokens` is documented as a hard output-size ceiling, but the framing
+ * `composeMultiAnswerText` adds — batch tally, echoed query, local-knowledge note
+ * — is not inside `formatMultiSourceAnswer`, so it was being added ON TOP of the
+ * budget it claimed to bound (measured at budget 100: library 98, composed 107;
+ * 119 with a local-knowledge note). The framing is therefore paid for out of the
+ * budget.
+ *
+ * A budget too small for the single best chunk is still exceeded on purpose —
+ * `formatMultiSourceAnswer` shows that chunk with an explicit notice rather than
+ * returning nothing — so this bounds the framing, not the library's floor.
+ */
+function multiAnswerContentBudget(parts: {
+	budgetTokens?: number;
+	header: string;
+	notice: string;
+	localKnowledgeNote?: string;
+}): number | undefined {
+	if (!parts.budgetTokens) return undefined;
+	const framing = estimateTokens(
+		parts.header + parts.notice + (parts.localKnowledgeNote ?? ""),
+	);
+	return Math.max(1, parts.budgetTokens - framing);
+}
+
+/**
+ * Build the agent-visible text of a multi-source cited answer.
+ *
+ * This is the whole boundary: ranking in, final text out. The handler calls it
+ * rather than assembling the pieces itself, so "did the framing get charged
+ * against the budget?" is a question the tests can actually ask — a previous
+ * shape let the handler forget the subtraction with every test still green.
+ *
+ * @internal Exported for unit tests only.
+ */
+export function buildMultiAnswerText(opts: {
+	ranked: Parameters<typeof formatMultiSourceAnswer>[0];
+	query: string;
+	sourcesCount: number;
+	header: string;
+	notice: string;
+	localKnowledgeNote?: string;
+	budgetTokens?: number;
+}): string {
+	return composeMultiAnswerText({
+		header: opts.header,
+		notice: opts.notice,
+		localKnowledgeNote: opts.localKnowledgeNote,
+		displayContent: formatMultiSourceAnswer(opts.ranked, opts.query, {
+			sourcesCount: opts.sourcesCount,
+			budgetTokens: multiAnswerContentBudget(opts),
+			// The value enforced above is the caller's number minus this function's
+			// framing. The footer must name what the caller asked for, not the
+			// remainder it never mentioned.
+			displayBudgetTokens: opts.budgetTokens,
+		}),
+	});
+}
+
 export function registerWebfetchTool(pi: ExtensionAPI): void {
 	pi.registerTool({
 		...TOOL_METADATA["aio-webfetch"],
@@ -946,17 +1045,23 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 							const startedAt = Date.now();
 							updateItem(idx, { status: "fetching", progress: 0.1 });
 
-							let urlStr = raw;
-							if (!/^https?:\/\//i.test(urlStr)) urlStr = `https://${urlStr}`;
-
-							let url: URL;
-							try {
-								url = new URL(urlStr);
-							} catch {
-								const fe = createFetchError("invalid_url", `Bad URL: ${raw}`, {
-									url: raw,
-									phase: "validation",
-								});
+							const guard = normalizeFetchTarget(raw);
+							if (!guard.ok) {
+								// A scheme mistake is a validation refusal, not a network
+								// failure: the old prefix-into-https path turned
+								// `file:///etc/passwd` into a retryable dns_error for a
+								// host spelled `file` (issue #165 F4).
+								const fe =
+									guard.code === "unsupported_protocol"
+										? createFetchError(
+												"unsupported_protocol",
+												`Unsupported protocol ${guard.scheme} for ${raw}. Only http(s) URLs can be fetched.`,
+												{ url: raw, phase: "validation" },
+											)
+										: createFetchError("invalid_url", `Bad URL: ${raw}`, {
+												url: raw,
+												phase: "validation",
+											});
 								markItemError(idx, buildUserFacingFetchErrorSummary(fe), startedAt);
 								return {
 									ok: false,
@@ -965,6 +1070,7 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 									fetchError: fe,
 								};
 							}
+							const url = guard.parsed;
 
 							let outFile: string;
 							if (targets.length === 1 && params.out) {
@@ -1943,36 +2049,28 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 						},
 					});
 					if (ranked.length > 0) {
-						// Render the inner cited-answer text (no markers), apply an
-						// optional hard token budget, THEN wrap in fresh safety
-						// markers so the [UNTRUSTED WEB CONTENT] guard always survives
-						// the budget transform.
-						let inner = formatMultiSourceAnswer(ranked, multiAnswerQuery!, {
-							sourcesCount: sources.length,
-							wrap: false,
-						});
+						// The cited-answer block owns its own framing: it states the
+						// mode, the verify note and the cache pointer once. The tool
+						// layer used to print the same three lines again on top of it
+						// (issue #165 F18), spending the budget it claimed to conserve.
 						const budgetTokens = params.budgetTokens as number | undefined;
-						if (budgetTokens) {
-							inner = applyTokenBudget(inner, budgetTokens, multiAnswerQuery);
-						}
-						const displayContent = wrapUntrusted(inner);
 						const header = `Fetched ${okResults.length}/${targets.length} URLs.`;
-						// Query on its own CJK-capped line: the Markdown wrap path
-						// measures by code points while the host validator measures
-						// visible width — a CJK-mixed query inline in a long line
-						// crashed the host TUI (206 > 205).
 						const notice =
-							`\n[Multi-source answer mode: top ${ranked.length} cited chunk(s) across ` +
-							`${sources.length} sources.]` +
-							`\n[Query: "${truncateVisible(multiAnswerQuery, 64)}"]` +
-							`\n[Each chunk is labeled with its source URL — verify against that ` +
-							`source. Full content for every page is cached — retrieve any page ` +
-							`in full via aio-webcontent by URL.]`;
+							`\n[Query: "${truncateVisible(multiAnswerQuery, 64)}"]`;
+						const answerText = buildMultiAnswerText({
+							ranked,
+							query: multiAnswerQuery!,
+							sourcesCount: sources.length,
+							header,
+							notice,
+							localKnowledgeNote,
+							budgetTokens,
+						});
 						return {
 							content: [
 								{
 									type: "text",
-									text: header + notice + "\n\n" + displayContent + localKnowledgeNote,
+									text: answerText,
 								},
 							],
 							details: {
@@ -1987,7 +2085,11 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 								status: "done",
 								progress: 1,
 								spinnerTick: details.spinnerTick,
-								content: displayContent,
+								// The composed answer, not the bare cited block: the preview
+								// must be the text the agent actually received. Keeping a
+								// separate unframed variant was a second path that could
+								// drift from the one the tool returned.
+								content: answerText,
 								format: "markdown",
 								items: details.items,
 								total: targets.length,
