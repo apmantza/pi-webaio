@@ -648,3 +648,73 @@ test("budgets at or above the schema floor return prose too", () => {
 		assert.ok(estimateTokens(out) <= budget);
 	}
 });
+
+// Independent review of the merged budget work (dlg-cf70d5aa) found a shape every
+// sweep in this session missed: all fixtures used MANY small sections, so at least
+// one always fit the content budget. A body that is ONE section larger than the
+// budget is discarded whole, and the answer was 26 tokens of footer out of a
+// 100-token budget containing none of the document.
+const PLAIN_1200 = "word ".repeat(1200);
+
+test("a single oversized section still yields prose at the schema floor", () => {
+	// Pre-fix (measured on merged master ed7ec3a): budget 100 returned 26 tokens and
+	// the output was only the truncation notice — with a heading present it was 36
+	// tokens and still no prose. The content floor must be satisfied by SOME of the
+	// body even when no whole section fits; partial prose beats a footer.
+	for (const body of [PLAIN_1200, `## Only Section\n\n${PLAIN_1200}`]) {
+		for (const budget of [100, 150, 200]) {
+			const out = applyTokenBudget(
+				body,
+				budget,
+				undefined,
+				"https://example.com/plain",
+			);
+			assert.match(
+				out,
+				/word word word/,
+				`budget ${budget} on a single-section body returned no page prose`,
+			);
+			assert.ok(
+				estimateTokens(out) <= budget,
+				`budget ${budget}: ${estimateTokens(out)} tokens`,
+			);
+		}
+	}
+});
+
+test("frontmatter never survives at the cost of all content", () => {
+	// The stated policy: content is reserved first, and metadata is dropped when it
+	// cannot coexist with the content floor. Pre-fix, a 6-token frontmatter plus a
+	// single oversized section produced frontmatter + notice and zero prose, which
+	// contradicts the policy at the legal minimum budget.
+	const fm = "---\nk0: value words here\n---\n\n";
+	const out = applyTokenBudget(
+		fm + PLAIN_1200,
+		100,
+		undefined,
+		"https://example.com/plain",
+	);
+	assert.match(
+		out,
+		/word word word/,
+		"frontmatter was kept while every page word was dropped",
+	);
+	assert.ok(estimateTokens(out) <= 100);
+});
+
+test("a partial-section fallback is labelled truncated, never as fitting", () => {
+	// The footer says "content fits N-token budget" when zero sections were omitted.
+	// A partial fallback IS a cut, so emitting that sentence would misreport it.
+	const out = applyTokenBudget(
+		PLAIN_1200,
+		100,
+		undefined,
+		"https://example.com/plain",
+	);
+	assert.doesNotMatch(
+		out,
+		/content fits .*token budget/,
+		"a truncated single-section body was labelled as fitting the budget",
+	);
+	assert.match(out, /truncated to fit/);
+});

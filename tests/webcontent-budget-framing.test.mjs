@@ -244,6 +244,37 @@ test("the registered tool enforces the ceiling end to end", async () => {
 		`the tool returned ${estimateTokens(text)} tokens for budgetTokens: 100`,
 	);
 	assert.match(text, /Retrieved content for/);
+	// The ceiling and the source line are both satisfiable by an answer containing
+	// none of the page, so assert the page is actually in there (independent review
+	// dlg-cf70d5aa: this test stayed green through the zero-content defect).
+	assert.match(text, /word word word/, "the tool returned no page prose");
+});
+
+test("the registered tool yields prose for a single-section page at the floor", async () => {
+	// The shape every sweep in this session missed: the stored page is ONE section
+	// larger than the budget, so whole-section pruning kept nothing and the tool
+	// returned ~26 tokens of header plus notice out of 100. Driven through the
+	// registered handler, not the library seam, because the handler is what composes
+	// header and body.
+	const registered = [];
+	registerWebcontentTool({ registerTool: (t) => registered.push(t) });
+	const singleSectionUrl = "https://example.com/plain-article";
+	storeContent(singleSectionUrl, "Plain article", "word ".repeat(1200));
+	const result = await registered[0].execute("call-plain", {
+		url: singleSectionUrl,
+		budgetTokens: 100,
+	});
+	const text = result.content[0].text;
+	assert.ok(
+		estimateTokens(text) <= 100,
+		`returned ${estimateTokens(text)} tokens for budgetTokens: 100`,
+	);
+	assert.match(
+		text,
+		/word word word/,
+		"a single oversized section produced no page prose at the legal minimum",
+	);
+	assert.match(text, /Retrieved content for/);
 });
 
 test("a long URL cannot starve the body, and the ceiling holds", () => {
@@ -288,12 +319,10 @@ test("a long URL cannot starve the body, and the ceiling holds", () => {
 			/Retrieved content for/,
 			`budgetTokens: ${budget} lost the line naming the document`,
 		);
-		if (budget >= 150) {
-			assert.match(
-				out,
-				/word word word/,
-				`budgetTokens: ${budget} returned no page prose`,
-			);
-		}
+		assert.match(
+			out,
+			/word word word/,
+			`budgetTokens: ${budget} returned no page prose`,
+		);
 	}
 });

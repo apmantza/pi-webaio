@@ -598,15 +598,34 @@ export function applyTokenBudget(
 	// footer. Strip it so the budget path emits a SINGLE unified footer (the
 	// budget footer below, which carries the same shared TOC) instead of two
 	// redundant footers back-to-back.
-	const prunedContent = pruned.content.replace(
+	let prunedContent = pruned.content.replace(
 		/\n\n---\n\*Truncated to ~[\s\S]*$/,
 		"",
 	);
+
+	// The content floor is a promise, not a preference. pruneMarkdown admits WHOLE
+	// sections, so a body that is a SINGLE section larger than the content budget is
+	// discarded entirely: at the legal minimum `budgetTokens: 100` the answer was 26
+	// tokens of pure notice (36 with a heading present) containing none of the
+	// document, while frontmatter and the footer both survived. Partial prose beats a
+	// footer, so when pruning kept nothing of a non-empty body, take a measured
+	// prefix of it instead. Every sweep written before this used many small sections,
+	// where at least one always fit, which is why the shape was missed (independent
+	// review dlg-cf70d5aa on merged master ed7ec3a).
+	const partialFallback =
+		prunedContent.trim() === "" && body.trim() !== "" && contentBudget > 0;
+	if (partialFallback) {
+		prunedContent = trimToTokenBudget(body, contentBudget);
+	}
 
 	// Count sections in the original vs kept, and identify WHICH headings were
 	// dropped so the footer can list them (same mini-TOC as the prune path).
 	const originalSections = splitSections(body);
 	const prunedSections = splitSections(prunedContent);
+	// A partial prefix is a cut even when it retains the only section's heading, so
+	// `omitted` alone cannot be trusted to pick the footer wording here.
+	const contentWasCut =
+		partialFallback || estimateTokens(prunedContent) < estimateTokens(body);
 	const omitted = Math.max(0, originalSections.length - prunedSections.length);
 	const keptHeadings = new Set(prunedSections.map((s) => s.heading));
 	const omittedSections = originalSections.filter(
@@ -625,10 +644,16 @@ export function applyTokenBudget(
 	// fit. Previously the TOC was bounded only by entry COUNT, so 14 long headings
 	// produced a 241-token footer on a 250-token budget — the guarantee then
 	// trimmed the body to NOTHING and still landed 2 tokens over (issue #165 F20).
-	const footerBase =
-		omitted > 0
-			? `\n\n---\n_truncated to fit ${effectiveBudget}-token budget: ${omitted} section${omitted === 1 ? "" : "s"} omitted; full content cached — ${retrieveHint}._`
-			: `\n\n---\n_content fits ${effectiveBudget}-token budget; full content cached — ${retrieveHint}._`;
+	let footerText = `\n\n---\n_content fits ${effectiveBudget}-token budget; full content cached — ${retrieveHint}._`;
+	if (contentWasCut) {
+		// A partial prefix is a cut too, so it must not be described as fitting.
+		const cutNote =
+			omitted > 0
+				? `${omitted} section${omitted === 1 ? "" : "s"} omitted`
+				: "part of the remaining section kept";
+			footerText = `\n\n---\n_truncated to fit ${effectiveBudget}-token budget: ${cutNote}; full content cached — ${retrieveHint}._`;
+	}
+	const footerBase = footerText;
 	// Keep the content floor accounted for when sizing the TOC: the omitted-heading
 	// list is the lowest-priority thing in this output.
 	const tocBudget = Math.max(
