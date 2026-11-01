@@ -32,19 +32,26 @@ const JINA_CHALLENGE_AMBIGUOUS_MARKERS = ["turnstile", "attention required"];
 
 /**
  * Independent signals that the page IS a challenge interstitial rather than text
- * describing one. Deliberately excludes product names.
+ * describing one.
+ *
+ * These must be evidence only an interstitial produces. The first version of this
+ * list included `access denied` and `blocked because`, which reproduced the defect
+ * the list was written to fix: "Turnstile returns access denied when the sitekey
+ * is wrong" is ordinary troubleshooting prose, and rejecting it makes `fetchJina`
+ * cache the failure for the host and skip later pages (issue #165, CodeRabbit
+ * thread src/fetch-jina.ts:43). Product names and generic error wording are
+ * therefore excluded — and so is `ray id` on its own, since troubleshooting
+ * articles quote Ray IDs when reporting an error.
  */
 const JINA_CHALLENGE_CONTEXT_MARKERS = [
 	"ray id",
 	"cf-ray",
 	"you are unable to access",
-	"blocked because",
-	"unusual traffic",
-	"access denied",
-	"reference #",
 	"performance & security by cloudflare",
 	"click for more information",
-	"the owner of this website",
+	"has blocked your access",
+	"unusual traffic from your network",
+	"the security service that protects this website",
 ];
 
 /**

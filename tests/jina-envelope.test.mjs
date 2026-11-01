@@ -245,3 +245,60 @@ test("a real interstitial that names turnstile is still rejected", () => {
 		);
 	}
 });
+
+test("a troubleshooting article that says 'access denied' is still kept", () => {
+	// CodeRabbit's third pass on my round-2 fix (thread src/fetch-jina.ts:43). The
+	// corroboration list I added to stop Turnstile articles being rejected contained
+	// `access denied` — a phrase ordinary troubleshooting prose contains, so the
+	// new guard reproduced the defect it was written to fix, and `fetchJina` then
+	// caches the failure for the host and skips later pages.
+	//
+	// Recurrence prevented: a corroboration signal broad enough to appear in prose
+	// about the product is not corroboration.
+	const article = [
+		"Title: Debugging Turnstile on our signup form",
+		"",
+		"URL Source: https://devblog.example.com/turnstile-access-denied",
+		"",
+		"Markdown Content:",
+		"# Turnstile returns access denied",
+		"",
+		"When the sitekey is wrong, Turnstile returns access denied for every user.",
+		"Check the domain allowlist; access denied also appears when the origin",
+		"header is stripped by a proxy.",
+	].join("\n");
+	const r = parseJinaBody(
+		article,
+		"https://devblog.example.com/turnstile-access-denied",
+	);
+	assert.ok(
+		r,
+		"a troubleshooting article was rejected because it used the phrase 'access denied'",
+	);
+	assert.match(r.content, /domain allowlist/);
+});
+
+test("interstitial chrome is still rejected after tightening the context list", () => {
+	// The tightening must not cost the real signal. These carry Cloudflare's own
+	// interstitial wording. The title is part of the shape: a served
+	// interstitial carries "Attention Required! | Cloudflare" or the
+	// "Just a moment" heading, and that is what pairs with the body evidence.
+	//
+	// Recorded gap, deliberately not closed here: a body reading
+	// "You are unable to access example.com / Ray ID: …" with an EMPTY title is
+	// not rejected, because neither "you are unable to access" nor "ray id" is
+	// sufficient on its own — troubleshooting articles routinely quote both. That
+	// behaviour predates this branch and is a detection gap, not a regression;
+	// widening it is a separate call with its own false-positive cost.
+	for (const challenge of [
+		"Title: \n\nA turnstile challenge was presented\nRay ID: 9922ab77\n",
+		"Title: \n\nAttention Required! | Cloudflare\nperformance & security by cloudflare\n",
+		"Title: \n\nAttention Required! | Cloudflare\nYou are unable to access example.com\nRay ID: 8f3ab1c2d3e4\n",
+	]) {
+		assert.equal(
+			parseJinaBody(challenge, "https://example.com/"),
+			null,
+			`interstitial not rejected: ${challenge.slice(0, 55)}`,
+		);
+	}
+});
