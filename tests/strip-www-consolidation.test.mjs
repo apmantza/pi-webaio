@@ -71,6 +71,11 @@ function collectTsFiles(dir, out = []) {
  * so blanking strings is safe and required: the doc comment on `stripWww`
  * mentions the rule in prose.
  */
+async function blankCommentsOnly(path) {
+	const src = await readFile(path, "utf8");
+	return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/[^\n]*/g, "$1");
+}
+
 async function blankCommentsAndStrings(path) {
 	const src = await readFile(path, "utf8");
 	return src
@@ -90,6 +95,21 @@ test("#167: no module re-spells the www-stripping regex", async () => {
 		if (file.endsWith("src/domain.ts")) continue; // the seam itself
 		const blanked = await blankCommentsAndStrings(file);
 		if (/replace\(\s*\/\^www\\?\./.test(blanked)) {
+			offenders.push(file.replace(SRC_DIR + "/", ""));
+			continue;
+		}
+		// Second needle, DIFFERENT blanking policy. The missed spelling was
+		// `domain.startsWith("www.") ? domain.slice(4) : domain` (source-trust.ts,
+		// found in review) — and the string-blanking above rewrites that into
+		// `startsWith("")`, so the regex could never match it. A needle whose
+		// evidence is a string literal must run over string-PRESERVED text.
+		// Trade-off stated: a comment quoting `startsWith("www.")` now trips the
+		// guard. That is the acceptable direction — a false positive reds loudly
+		// and is fixed in seconds, whereas prose silently re-admitting a duplicate
+		// is the failure that costs a round.
+		const commentsOnly = await blankCommentsOnly(file);
+		if (/startsWith\(\s*["'`]www\./.test(commentsOnly) ||
+			/\bslice\(\s*4\s*\)/.test(commentsOnly)) {
 			offenders.push(file.replace(SRC_DIR + "/", ""));
 		}
 	}

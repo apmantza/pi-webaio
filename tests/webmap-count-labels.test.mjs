@@ -135,3 +135,69 @@ test("#168: the repo-map summary builds its counts through formatRepoMapCounts",
 		"the summary must call the labelled seam",
 	);
 });
+
+// ─── Review round 1 on #173: "uncapped" was printed for a capped walk ──
+//
+// The GitHub recursive-tree API answers `truncated: true` for large repos and the
+// code falls back to `walkRepo(clone.path, { maxEntries: maxFiles })`, which stops
+// at `maxEntries` (default 2000). That already-bounded length was then handed to
+// the formatter as `treeEntries`, producing:
+//
+//   🗺️  Repo map for o/r (cloned) (tree truncated by API)
+//   Total entries: 2000 in the full tree (uncapped; 100 included as URLs)
+//
+// "truncated by API" and "full tree (uncapped)" in the same header is not a
+// denominator, it is a contradiction — and an agent reading "uncapped" will treat
+// 2000 as the repository's size. The unit test that should have caught this passed
+// a hand-shaped `{ treeEntries: 269 }` and never touched the fallback path.
+//
+// Recurrence prevented: a count that is a lower bound being reported as exact.
+
+test("#173: a bounded walk is labelled as a lower bound, never as uncapped", () => {
+	const out = formatRepoMapCounts({
+		totalUrls: 300,
+		treeEntries: 2000,
+		max: 100,
+		fileUrlsIncluded: 100,
+		treeEntriesAreLowerBound: true,
+	});
+	assert.doesNotMatch(
+		out.entries,
+		/uncapped/i,
+		`a walk that stopped at the entry limit cannot be called uncapped:\n${out.entries}`,
+	);
+	assert.match(out.entries, /at least/i, "must say the count is a floor");
+	assert.match(out.entries, /2000/);
+});
+
+test("#173: an exact full tree keeps the uncapped wording", () => {
+	const out = formatRepoMapCounts({
+		totalUrls: 269,
+		treeEntries: 269,
+		max: 100,
+		fileUrlsIncluded: 100,
+		treeEntriesAreLowerBound: false,
+	});
+	assert.match(out.entries, /uncapped/i, "a genuinely complete walk should still say so");
+	assert.doesNotMatch(out.entries, /at least/i);
+});
+
+test("#173: walkRepo reports when it stopped at maxEntries", async () => {
+	const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import("node:fs");
+	const { tmpdir } = await import("node:os");
+	const { join } = await import("node:path");
+	const { walkRepo } = await import("../src/github-map.ts");
+	const root = mkdtempSync(join(tmpdir(), "walkrepo-"));
+	try {
+		for (let i = 0; i < 12; i++) {
+			mkdirSync(join(root, `d${i}`), { recursive: true });
+			writeFileSync(join(root, `d${i}`, "f.txt"), "x");
+		}
+		const bounded = await walkRepo(root, { maxEntries: 5 });
+		assert.equal(bounded.hitCap, true, "stopped at 5 of 12 — that is a lower bound");
+		const full = await walkRepo(root, { maxEntries: 1000 });
+		assert.equal(full.hitCap, false, "walked everything; the count is exact");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});

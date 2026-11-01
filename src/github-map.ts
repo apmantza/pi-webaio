@@ -340,6 +340,12 @@ interface WalkResult {
 	paths: string[];
 	files: number;
 	dirs: number;
+	/**
+	 * True when the walk stopped because it reached `maxEntries`, i.e. `paths`
+	 * is a LOWER BOUND on the repository's size and must never be presented as
+	 * the full tree (issue #173).
+	 */
+	hitCap: boolean;
 }
 
 /**
@@ -406,7 +412,7 @@ export async function walkRepo(
 		}
 	}
 	await walk(root, "");
-	return { paths, files, dirs };
+	return { paths, files, dirs, hitCap: paths.length >= maxEntries };
 }
 
 // ─── Cloning ─────────────────────────────────────────────────────────
@@ -851,6 +857,13 @@ export function formatRepoMapCounts(opts: {
 	treeEntries: number;
 	max: number;
 	fileUrlsIncluded: number;
+	/**
+	 * True when `treeEntries` came from a bounded walk (the API tree was
+	 * truncated and the clone fallback stopped at `maxEntries`). The denominator
+	 * is then a floor, and calling it "uncapped" contradicts the
+	 * "(tree truncated by API)" header printed alongside it.
+	 */
+	treeEntriesAreLowerBound?: boolean;
 }): { discovered: string; entries: string } {
 	const capped = opts.fileUrlsIncluded >= opts.max && opts.treeEntries > opts.max;
 	const discovered = capped
@@ -858,8 +871,10 @@ export function formatRepoMapCounts(opts: {
 		: `\nDiscovered ${opts.totalUrls} URLs`;
 	const entries =
 		opts.treeEntries > 0
-			? `\nTotal entries: ${opts.treeEntries} in the full tree (uncapped; ${opts.fileUrlsIncluded} included as URLs)`
-		: "";
+			? opts.treeEntriesAreLowerBound
+				? `\nTotal entries: at least ${opts.treeEntries} (the walk stopped at this limit — the repository may hold more; ${opts.fileUrlsIncluded} included as URLs)`
+				: `\nTotal entries: ${opts.treeEntries} in the full tree (uncapped; ${opts.fileUrlsIncluded} included as URLs)`
+			: "";
 	return { discovered, entries };
 }
 
@@ -1008,6 +1023,10 @@ async function mapGitHubRepoFull(
 		treeEntries: walk ? walk.paths.length : paths.length,
 		max,
 		fileUrlsIncluded: Math.min(paths.length, max),
+		// Two ways the count stops being exact: the clone walk hit its entry
+		// limit, or the API tree itself was truncated so we never saw a complete
+		// listing at all.
+		treeEntriesAreLowerBound: Boolean(walk?.hitCap) || truncated,
 	});
 	summaryParts.push(`${counts.discovered} via ${Object.keys(sources).length} sources:`);
 	for (const [src, urls] of Object.entries(sources)) {
