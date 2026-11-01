@@ -178,3 +178,41 @@ export function looksBinary(
 	}
 	return controls / Math.max(1, decoded.length) > 0.05;
 }
+
+/**
+ * Remove Markdown SYNTAX so a word count measures prose rather than markup.
+ *
+ * `wordCount()` splits on whitespace, so `##`, `-`, ` ``` ` and `|` all count as
+ * words. That inflates a converted article enough to hide prose the converter
+ * dropped: measured against a 200-word flat article, a markdown body holding only
+ * ~101 prose words scored a raw ratio of 2.40 and a stripped ratio of 0.70.
+ *
+ * Deliberately NOT the same function as `markdownToText()` in
+ * `tools/render-result.ts`, which renders text for a human TUI and therefore must
+ * keep fenced code and blank-line structure. Here dropping a fence entirely is
+ * the point: a fence's contents are not prose either. They stay separate because
+ * folding them would make the renderer lossy for display rather than concentrate
+ * complexity — the deciding test for "stay distributed".
+ *
+ * Link and image URL targets are dropped but their text is kept: a page of links
+ * is prose with hyperlinks, not syntax.
+ */
+export function stripMarkdownSyntax(md: string): string {
+	if (!md) return "";
+	return md
+		// Fenced blocks first: their contents are code, not prose.
+		.replace(/```[\s\S]*?```/g, " ")
+		.replace(/~~~[\s\S]*?~~~/g, " ")
+		// Images keep their alt text; links keep the anchor text.
+		.replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
+		.replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+		.replace(/`([^`]*)`/g, "$1")
+		.replace(/^#{1,6}[ \t]+/gm, "")
+		.replace(/^[ \t]*>[ \t]?/gm, "")
+		.replace(/^[-*_]{3,}[ \t]*$/gm, " ")
+		.replace(/^[ \t]*[-*+][ \t]+/gm, "")
+		// Table pipes and the `| - | - |` separator row.
+		.replace(/[|]/g, " ")
+		.replace(/^[\s\-:|]+$/gm, " ")
+		.replace(/[*_~]{1,3}/g, "");
+}

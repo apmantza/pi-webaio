@@ -32,6 +32,7 @@ import {
 	cleanText,
 	isJsonContentType,
 	isLikelyJsonBody,
+	stripMarkdownSyntax,
 } from "./http-text.ts";
 import { isDangerousUrl, scanForSecrets } from "./security.ts";
 import { BASE_TEMP, getStoredContentAnyAge } from "./session-store.ts";
@@ -490,7 +491,15 @@ export function chooseArticleBody(
 ): string {
 	if (!markdown) return flat;
 	const flatWords = wordCount(flat);
-	if (flatWords > 0 && wordCount(markdown) < flatWords * ARTICLE_MARKDOWN_MIN_WORD_RATIO) {
+	// Like-for-like: `flat` is plain text, so the markdown side must be counted
+	// with its syntax removed. Counting `##`, `-`, ` ``` ` and table pipes as
+	// words let a conversion that DROPPED a section still clear the ratio, because
+	// the markup tokens replaced the prose they were attached to (issue #165).
+	if (
+		flatWords > 0 &&
+		wordCount(stripMarkdownSyntax(markdown)) <
+			flatWords * ARTICLE_MARKDOWN_MIN_WORD_RATIO
+	) {
 		return flat;
 	}
 	return markdown;

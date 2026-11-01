@@ -155,3 +155,77 @@ test("chooseArticleBody keeps the flat body when markdown would lose content", (
 	// No structured body at all -> flat body.
 	assert.equal(chooseArticleBody(null, flat), flat);
 });
+
+// ─── The retention ratio must compare prose, not markup ──────────────
+//
+// `chooseArticleBody` falls back to the flat Readability text when the converted
+// markdown would lose more than 10% of the article. It compared `wordCount`
+// of MARKDOWN against `wordCount` of PLAIN TEXT — and `wordCount` splits on
+// whitespace, so `##`, `-`, ` ``` `, `|` and a fence's language tag all count as
+// words. A conversion that dropped a section therefore still cleared the ratio,
+// because markup tokens filled in for the prose that vanished. Measured on a
+// 200-word flat article:
+//
+//   markdown holding ~101 prose words + syntax  -> raw ratio 2.40 (accepted!)
+//   same markdown, syntax stripped              -> ratio 0.70 (correctly rejected)
+//
+// Recurrence prevented: Defuddle dropping a section of a real page and the
+// article-retention guard waving it through because headings and bullets are
+// cheaper to count than to write.
+test("chooseArticleBody: syntax tokens cannot mask dropped prose", () => {
+	const flat = Array.from({ length: 200 }, (_, i) => `word${i}`).join(" ");
+	// Syntax-rich, prose-poor: 20 blocks of headings, bullets, a fence and a table.
+	const syntaxHeavy = Array.from(
+		{ length: 20 },
+		(_, i) =>
+			`## H${i}\n\n- a\n- b\n\n\`\`\`js\nx\n\`\`\`\n\n| a | b |\n| - | - |\n| 1 | 2 |\n`,
+	).join("\n");
+	assert.equal(
+		chooseArticleBody(syntaxHeavy, flat),
+		flat,
+		"syntax tokens offset the lost prose and the markdown was kept",
+	);
+});
+
+// The other direction, because a guard that always rejects is just as wrong:
+// a page whose prose survived conversion must keep its markdown.
+test("chooseArticleBody: prose that survived conversion keeps its markdown", () => {
+	const flat = Array.from({ length: 200 }, (_, i) => `word${i}`).join(" ");
+	const good = Array.from(
+		{ length: 20 },
+		(_, i) => `## Heading ${i}\n\n` + Array.from({ length: 12 }, (_, j) => `word${j}`).join(" "),
+	).join("\n");
+	assert.equal(chooseArticleBody(good, flat), good);
+});
+
+// A page of links and images is prose with media, not syntax: its text must
+// still count, or this guard would start preferring flat text on documentation
+// and index pages.
+test("chooseArticleBody: link and image text still counts as prose", () => {
+	// Same article twice: once as converted markdown, once as the flat text
+	// Readability would produce for it. Real prose, real markup, identical words —
+	// so the ratio must be ~1 and the markdown must win. A fixture where the
+	// markdown has fewer words than the flat text is testing the previous case.
+	const sections = Array.from(
+		{ length: 12 },
+		(_, i) =>
+			Array.from({ length: 10 }, (_, j) => `anchor${i}_${j}`).join(" ") +
+			` alt${i} caption`,
+	);
+	const flat = sections.map((s, i) => `Section ${i} ${s}`).join("\n");
+	const linkHeavy = sections
+		.map(
+			(_section, i) =>
+				`## Section ${i}\n\n` +
+				Array.from(
+					{ length: 10 },
+					(_, j) => `[anchor${i}_${j}](https://x.com/p${j})`,
+				).join(" ") + ` ![alt${i}](https://x.com/i.png) caption`,
+		)
+		.join("\n");
+	assert.equal(
+		chooseArticleBody(linkHeavy, flat),
+		linkHeavy,
+		"link/image markup was stripped down to nothing and the flat body won",
+	);
+});
