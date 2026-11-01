@@ -23,7 +23,12 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
-import { buildIndex, queryIndex, rankChunkEntries } from "../src/webquery-index.ts";
+import {
+	buildIndex,
+	queryIndex,
+	rankChunkEntries,
+	DEFAULT_PER_FILE_CAP,
+} from "../src/webquery-index.ts";
 
 // A chatty page that owns 6 of the 10 chunks — the skew that produced the live
 // monopoly. "benchmark" is the term only this family of pages carries.
@@ -179,6 +184,21 @@ test("F15: the shared queryIndex path gets both guards", async () => {
 			`---\nurl: ${c.url}\ntitle: ${c.heading}\n---\n\n${c.text}\n`,
 		);
 	}
+	// One page long enough that `buildIndex` splits it into many chunks, each of
+	// which mentions `zephyr`, while none of the pages above do. Without this the
+	// per-file cap cannot be exercised through the index at all: writing every
+	// chunk to its own numbered file gives every file a count of exactly 1.
+	await writeFile(
+		join(dir, "zephyr-long.md"),
+		`---\nurl: https://docs.example.com/zephyr\ntitle: Zephyr\n---\n\n` +
+			Array.from(
+				{ length: 40 },
+				(_, i) =>
+					`## Zephyr section ${i}\n\nThe zephyr configuration is documented here at some length so that the indexer splits this page into several chunks, each of which mentions zephyr. Section ${i} adds filler words to push the token count up.`,
+			).join("\n\n") +
+			"\n",
+		"utf8",
+	);
 	await buildIndex(dir);
 
 	const relevant = await queryIndex(dir, "persist localStorage", 8);
@@ -192,16 +212,34 @@ test("F15: the shared queryIndex path gets both guards", async () => {
 	if (!noise.ok) return;
 	assert.equal(noise.hits.length, 0, `the real path must report zero-signal, got ${noise.hits.length}`);
 
-	const skewed = await queryIndex(dir, "benchmark state", 4);
-	assert.equal(skewed.ok, true);
-	if (!skewed.ok) return;
-	const perFile = new Map();
-	for (const h of skewed.hits) {
-		const f = h.file.replace(/^\d+-/, "");
-		perFile.set(f, (perFile.get(f) ?? 0) + 1);
-	}
+	// The per-file cap, asserted through the REAL index path. It used to be
+	// vacuous two ways over: every chunk was written to its own numbered file, so
+	// no file could ever contribute more than one chunk, and the chosen query
+	// ("benchmark state") can return zero hits — `Math.max(...new Map())` is
+	// -Infinity, which passes any `<= 2`.
+	//
+	// `zephyr-long.md` is one page long enough for `buildIndex` to split into many
+	// chunks, each of which mentions the term, while the other six pages never do.
+	// So the term is discriminative (1 of 7 files) and the single file genuinely
+	// has more qualifying chunks than the cap allows.
+	const wide = await queryIndex(dir, "zephyr", 8);
+	assert.equal(wide.ok, true);
+	if (!wide.ok) return;
 	assert.ok(
-		Math.max(...perFile.values()) <= 2,
-		`the real path must cap per file: ${[...perFile].map(([f, n]) => `${f}=${n}`).join(", ")}`,
+		wide.hits.length > 0,
+		"the cap assertion below would be vacuous on an empty result",
+	);
+	const perFile = new Map();
+	for (const h of wide.hits) perFile.set(h.file, (perFile.get(h.file) ?? 0) + 1);
+	assert.equal(
+		perFile.get("zephyr-long.md"),
+		DEFAULT_PER_FILE_CAP,
+		`one page with many matching chunks must be capped at ${DEFAULT_PER_FILE_CAP}, got ${perFile.get("zephyr-long.md")}`,
+	);
+	// topK 8 returning exactly the cap proves the CAP is what bound the result,
+	// not the page simply having few chunks.
+	assert.ok(
+		wide.hits.length < 8,
+		`topK 8 returned a full 8 — cannot tell the cap from a short corpus`,
 	);
 });

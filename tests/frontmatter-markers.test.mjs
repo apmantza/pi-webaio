@@ -323,7 +323,11 @@ test("withFrontmatter re-attaches a stripped block verbatim", () => {
 	const md = storedDoc();
 	const { frontmatter, body } = splitFrontmatter(md);
 	const rebuilt = withFrontmatter(frontmatter, body);
+	// `startsWith(FM)` proved the block came back and nothing else: it cannot see
+	// the body being lost, truncated or reordered, which is the half that matters
+	// when a prune/budget round-trip rewrites a header.
 	assert.ok(rebuilt.startsWith(FM), "rebuilt document does not start with the block");
+	assert.equal(rebuilt, md, "round trip is not byte-for-byte identical");
 });
 
 // ─── A fence is a whole line, or a thematic break eats the page ──────

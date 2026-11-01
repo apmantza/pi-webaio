@@ -92,8 +92,18 @@ test("F9: double-encoded entities decode exactly once", async () => {
 	);
 	const r = await extractArxiv("https://arxiv.org/abs/2005.11401", stub(double));
 	assert.ok(r);
-	// One pass only: "&amp;amp;" must become the literal text "&amp;", not "&".
-	assert.match(r.content, /&amp;/);
+	// One pass only. `/&amp;/` was too weak: it matches the UNDECODED fixture text
+	// too, so the old assertion passed on a decoder that did nothing.
+	//
+	// This fixture is triple-encoded in the source (`&amp;amp;amp;`,
+	// `&amp;lt;b&amp;gt;`), so the three outcomes differ from what a shorter fixture
+	// would give. Measured inside the test, not inferred:
+	//   zero passes -> "Literal &amp;amp;amp; stays &amp;lt;b&amp;gt;"
+	//   one pass    -> "Literal &amp;amp; stays &lt;b&gt;"
+	//   two passes  -> "Literal &amp; stays <b>"
+	// Only the middle form matches, so a decoder that stalls and one that runs
+	// twice are both detected.
+	assert.match(r.content, /Literal &amp;amp; stays &lt;b&gt;/);
 });
 
 test("F9: the metadata shape is otherwise preserved", async () => {

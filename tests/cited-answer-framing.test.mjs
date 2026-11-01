@@ -109,11 +109,16 @@ test("F18: a tight budget drops whole chunks instead of cutting them", () => {
 	const included = RANKED.filter((r) => out.includes(r.text));
 	const excluded = RANKED.filter((r) => !out.includes(r.text));
 	assert.ok(included.length >= 1, "at least the top chunk must survive");
-	assert.equal(
-		included.length + excluded.length,
-		RANKED.length,
-		"a chunk must be either fully present or fully absent — never partial",
-	);
+	// `included.length + excluded.length === RANKED.length` was asserted here and
+	// could not fail: the two filters are complements, so the sum is the length by
+	// construction and says nothing about partial rendering. Check the excluded
+	// chunks directly instead — a dropped chunk must leave no text behind.
+	for (const r of excluded) {
+		assert.ok(
+			!out.includes(r.text.slice(0, 24)),
+			`a dropped chunk left partial text: ${r.url}`,
+		);
+	}
 	// The old behaviour: a section-prune footer that invents "sections".
 	assert.ok(
 		!/section[s]? omitted/i.test(out),
