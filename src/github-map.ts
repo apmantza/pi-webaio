@@ -990,7 +990,7 @@ export async function mapGitHubRepo(
  * Issue #168: label each summary count with its own denominator.
  *
  * `aio-webmap` used to print `Discovered 108 URLs` next to `Total entries: 269`.
- * The first counted the URL list, whose file URLs are `paths.slice(0, max)` —
+ * The first counted the URL list, built from `paths.slice(0, max)` —
  * capped. The second counted the FULL tree. Neither line said so, and "Discovered"
  * read as a total: an agent could conclude it had enumerated the repository when
  * the list had stopped at `max`.
@@ -1001,7 +1001,12 @@ export function formatRepoMapCounts(opts: {
 	totalUrls: number;
 	treeEntries: number;
 	max: number;
-	fileUrlsIncluded: number;
+	/**
+	 * How many tree entries were turned into URLs. NOT "file urls": since #184 the
+	 * entry list carries directories too, so this slice mixes `/blob/` and `/tree/`
+	 * links and a label calling it files misstates its denominator (#168's class).
+	 */
+	entriesIncluded: number;
 	/**
 	 * True when `treeEntries` came from a bounded walk (the API tree was
 	 * truncated and the clone fallback stopped at `maxEntries`). The denominator
@@ -1010,15 +1015,15 @@ export function formatRepoMapCounts(opts: {
 	 */
 	treeEntriesAreLowerBound?: boolean;
 }): { discovered: string; entries: string } {
-	const capped = opts.fileUrlsIncluded >= opts.max && opts.treeEntries > opts.max;
+	const capped = opts.entriesIncluded >= opts.max && opts.treeEntries > opts.max;
 	const discovered = capped
-		? `\nDiscovered ${opts.totalUrls} URLs (file URLs capped at \`max\`=${opts.max} of ${opts.treeEntries} tree entries)`
+		? `\nDiscovered ${opts.totalUrls} URLs (entry URLs capped at \`max\`=${opts.max} of ${opts.treeEntries} tree entries)`
 		: `\nDiscovered ${opts.totalUrls} URLs`;
 	const entries =
 		opts.treeEntries > 0
 			? opts.treeEntriesAreLowerBound
-				? `\nTotal entries: at least ${opts.treeEntries} (the walk stopped at this limit — the repository may hold more; ${opts.fileUrlsIncluded} included as URLs)`
-				: `\nTotal entries: ${opts.treeEntries} in the full tree (uncapped; ${opts.fileUrlsIncluded} included as URLs)`
+				? `\nTotal entries: at least ${opts.treeEntries} (the walk stopped at this limit — the repository may hold more; ${opts.entriesIncluded} included as URLs)`
+				: `\nTotal entries: ${opts.treeEntries} in the full tree (uncapped; ${opts.entriesIncluded} included as URLs)`
 			: "";
 	return { discovered, entries };
 }
@@ -1180,7 +1185,7 @@ async function mapGitHubRepoFull(
 		totalUrls,
 		treeEntries: walk ? walk.paths.length : paths.length,
 		max,
-		fileUrlsIncluded: Math.min(paths.length, max),
+		entriesIncluded: Math.min(paths.length, max),
 		// Whether the count is a floor is decided by the source that actually
 		// produced it. If the clone walk ran, ITS cap bounds the number: a repo
 		// whose API tree was truncated but whose cloned tree walked to

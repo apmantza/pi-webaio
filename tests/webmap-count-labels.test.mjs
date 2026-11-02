@@ -28,7 +28,7 @@ test("#168: a max-capped URL count says it is capped and names the cap", () => {
 		totalUrls: 108,
 		treeEntries: 269,
 		max: 100,
-		fileUrlsIncluded: 100,
+		entriesIncluded: 100,
 	});
 	assert.match(discovered, /Discovered 108 URLs/);
 	assert.match(
@@ -43,7 +43,7 @@ test("#168: the tree count names the full tree as its denominator", () => {
 		totalUrls: 108,
 		treeEntries: 269,
 		max: 100,
-		fileUrlsIncluded: 100,
+		entriesIncluded: 100,
 	});
 	assert.match(entries, /Total entries: 269/);
 	assert.match(
@@ -58,7 +58,7 @@ test("#168: the two lines cannot be mistaken for the same number", () => {
 		totalUrls: 108,
 		treeEntries: 269,
 		max: 100,
-		fileUrlsIncluded: 100,
+		entriesIncluded: 100,
 	});
 	// The reported defect is 108 and 269 sitting side by side unlabelled.
 	assert.doesNotMatch(out.discovered, /^Discovered 108 URLs$/);
@@ -71,7 +71,7 @@ test("#168: nothing is claimed as capped when the cap never bound", () => {
 		totalUrls: 12,
 		treeEntries: 10,
 		max: 100,
-		fileUrlsIncluded: 10,
+		entriesIncluded: 10,
 	});
 	assert.doesNotMatch(
 		out.discovered,
@@ -86,7 +86,7 @@ test("#168: a repo with no tree still reports the URL count", () => {
 		totalUrls: 5,
 		treeEntries: 0,
 		max: 100,
-		fileUrlsIncluded: 0,
+		entriesIncluded: 0,
 	});
 	assert.match(out.discovered, /Discovered 5 URLs/);
 	assert.equal(out.entries, "", "no tree means no entries line");
@@ -158,7 +158,7 @@ test("#173: a bounded walk is labelled as a lower bound, never as uncapped", () 
 		totalUrls: 300,
 		treeEntries: 2000,
 		max: 100,
-		fileUrlsIncluded: 100,
+		entriesIncluded: 100,
 		treeEntriesAreLowerBound: true,
 	});
 	assert.doesNotMatch(
@@ -175,7 +175,7 @@ test("#173: an exact full tree keeps the uncapped wording", () => {
 		totalUrls: 269,
 		treeEntries: 269,
 		max: 100,
-		fileUrlsIncluded: 100,
+		entriesIncluded: 100,
 		treeEntriesAreLowerBound: false,
 	});
 	assert.match(out.entries, /uncapped/i, "a genuinely complete walk should still say so");
@@ -200,4 +200,21 @@ test("#173: walkRepo reports when it stopped at maxEntries", async () => {
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
+});
+
+// #184 followed through to the label. Now that directories are first-class in
+// `paths`, the URL list `paths.slice(0, max)` contains /tree/ links as well as
+// /blob/ links, so a count of that slice is not a count of FILE urls. The field
+// and the sentence it feeds both claimed "file URLs", which is exactly the
+// denominator-mismatch class #168 was about.
+test("#184: the included-URL count no longer claims to be files only", () => {
+	const out = formatRepoMapCounts({
+		totalUrls: 120,
+		treeEntries: 301,
+		max: 100,
+		entriesIncluded: 100,
+	});
+	assert.ok(!/file URLs/i.test(out.discovered), `label still claims files only: ${out.discovered}`);
+	assert.ok(!/file URLs/i.test(out.entries), `label still claims files only: ${out.entries}`);
+	assert.ok(/100/.test(out.entries), "the included count disappeared from the label");
 });
