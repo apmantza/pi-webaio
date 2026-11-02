@@ -1123,3 +1123,47 @@ test("#170: the ceiling is unconditional across shapes", () => {
 		}
 	}
 });
+
+// #182, the part the author's own fix got wrong twice. The first detector used
+// `[a-z0-9]{4,}`, an implicit SCRIPT whitelist: a CJK document produced an empty
+// word set, the detector answered "nothing to carry", the floor pass never ran,
+// and CJK budgets 1-45 still returned "\n\n--" while every Latin test stayed
+// green. A claim about "every budget" must be swept across scripts, or it is a
+// claim about the Latin test corpus.
+test("#182: the content floor holds for non-Latin documents too", () => {
+	const docs = [
+		["CJK", "# 標題\n" + "内容テキストです。".repeat(200), "内"],
+		["Cyrillic", "# Заголовок\n" + "содержимое документа. ".repeat(200), "с"],
+		["Greek", "# Τίτλος\n" + "κείμενο εγγράφου ".repeat(200), "κ"],
+		["Accented Latin", "# Título\n" + "contenido del documento ".repeat(200), "c"],
+		["Arabic", "# عنوان\n" + "محتوى المستند ".repeat(200), "م"],
+	];
+	for (const [name, body, probe] of docs) {
+		for (let budget = 1; budget <= 60; budget++) {
+			const out = applyTokenBudget(body, budget, "x");
+			assert.ok(
+				out.includes(probe),
+				`${name} at budget ${budget} yielded no document text: ${JSON.stringify(out.slice(0, 40))}`,
+			);
+			assert.ok(
+				estimateTokens(out) <= budget,
+				`${name} ceiling violated at ${budget}: ${estimateTokens(out)} tokens`,
+			);
+		}
+	}
+});
+
+test("#182: a heading truncated to a bare marker is not counted as prose", () => {
+	// Substring membership alone was not enough: "#" is literally inside the
+	// document, so a heading cut to "#" passed as content and the floor pass
+	// never fired (budget 4 returned exactly "#"). The line must carry a letter
+	// or a number - a property, not a list of framing shapes.
+	const body = "# Заголовок\n" + "содержимое документа. ".repeat(200);
+	for (let budget = 1; budget <= 60; budget++) {
+		const out = applyTokenBudget(body, budget, "x").trim();
+		assert.ok(
+			!/^[#\s>*~-]+$/.test(out),
+			`budget ${budget} returned markdown punctuation only: ${JSON.stringify(out)}`,
+		);
+	}
+});

@@ -635,25 +635,31 @@ function prosePrefixSource(body: string): string {
 }
 
 /**
- * Does this portion contain any of the DOCUMENT's own words?
+ * Does this portion contain any of the DOCUMENT's own text?
  *
  * Framing is not content: skeleton headings are generated, horizontal rules are
- * separators, and the truncation notice is boilerplate. The test is membership
- * in the document, NOT a blacklist of boilerplate wording — an enumeration of
- * known-bad notice text is the shape that misses the next spelling, and it
- * already failed here: a notice trimmed mid-word (`*Trunc`) is not any known
- * notice, yet it is still not the document. So a line counts as prose only if
- * it carries a word that actually occurs in the document's own prose, which
- * also lets a query-ranked answer from a LATER section pass on its own
- * vocabulary.
+ * separators, and the truncation notice is boilerplate. The test is SUBSTRING
+ * membership in the document, which is both non-enumerative and script-agnostic.
+ *
+ * Two earlier versions failed in structurally different ways, and both are the
+ * reason this formulation is here:
+ *  - filtering known framing shapes (headings, rules, notice wording) passed a
+ *    notice trimmed mid-word (`*Trunc`) as prose — a fragment is not any known
+ *    notice, so the blacklist could not name it;
+ *  - a `[a-z0-9]{4,}` word set was an implicit SCRIPT whitelist. CJK and
+ *    Cyrillic documents produced an empty word set, the detector answered
+ *    "nothing to carry", the floor pass never ran, and CJK budgets 1–45 still
+ *    returned `"\n\n--"`. A word set also fails for scripts without spaces,
+ *    where a one-character answer (`内`) is a PREFIX of the document's only
+ *    token rather than equal to it.
+ *
+ * A notice fragment cannot be a substring of the document unless the document
+ * genuinely contains that text — in which case counting it as content is
+ * correct. Query-ranked answers from a later section pass on their own text
+ * because the whole body is the haystack.
  */
-function docWords(s: string): string[] {
-	return s.toLowerCase().match(/[a-z0-9]{4,}/g) ?? [];
-}
-
 function carriesPageProse(portion: string, body: string): boolean {
-	const known = new Set(docWords(prosePrefixSource(body)));
-	if (known.size === 0) return true; // nothing in the document to carry
+	if (prosePrefixSource(body).trim() === "") return true; // nothing to carry
 	const footerIdx = portion.lastIndexOf("\n\n---\n");
 	const withoutFooter = footerIdx >= 0 ? portion.slice(0, footerIdx) : portion;
 	for (const line of withoutFooter.split("\n")) {
@@ -661,7 +667,16 @@ function carriesPageProse(portion: string, body: string): boolean {
 		if (t === "") continue;
 		if (/^#{1,6}\s/.test(line)) continue; // skeleton heading = framing
 		if (/^[-=*_~]{2,}$/.test(t)) continue; // rule / fence leftover
-		for (const w of docWords(t)) if (known.has(w)) return true;
+		// A line with no letter or number in it is markdown punctuation, not text:
+		// a heading truncated to a bare `#` was passing as prose because "#" is
+		// literally a substring of the document. This is a property of the line, not
+		// an enumeration of framing shapes, so it holds for every script.
+		if (!/[\p{L}\p{N}]/u.test(t)) continue;
+		if (body.includes(t)) return true;
+		// A trimmed tail can end mid-token, so the head of the line is still the
+		// document's text even when the whole line no longer matches.
+		const head = t.slice(0, 8);
+		if (head.length > 0 && body.includes(head)) return true;
 	}
 	return false;
 }
@@ -1029,9 +1044,9 @@ export function applyTokenBudget(
 			prosePrefixSource(body),
 			room,
 		);
-		// Only swap when prose actually fits; if the ceiling leaves no room at all,
-		// the previous portion is the best the contract allows.
-		if (carriesPageProse(prose, body)) result = prose;
+		// The swap candidate is produced FROM the document by the trimmer, so it
+		// needs no detector — only that the ceiling actually left room.
+		if (prose.trim() !== "") result = prose;
 	}
 
 	return assemble(result);
