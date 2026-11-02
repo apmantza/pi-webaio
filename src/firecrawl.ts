@@ -16,6 +16,7 @@
 
 import { debug } from "./debug.ts";
 import { resolveFirecrawlConfigKey } from "./config.ts";
+import { stripWww } from "./domain.ts";
 
 // ─── Rate-limit cooldown (in-memory) ───────────────────────────────
 
@@ -232,7 +233,7 @@ export async function fetchFirecrawl(
 
 function extractDomain(url: string): string {
 	try {
-		return new URL(url).hostname.replace(/^www\./, "");
+		return stripWww(new URL(url).hostname);
 	} catch {
 		return url;
 	}

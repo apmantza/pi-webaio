@@ -9,6 +9,8 @@
 // marker (e.g. "/reference/"), or a title term, with a signed weight
 // that's summed additively into the ranking score.
 
+import { stripWww } from "./domain.ts";
+
 /** A single boost/demote rule. Any of the match fields may be combined;
  * the rule fires (contributing `weight` once) if ANY field matches. */
 interface GogglesRule {
@@ -243,9 +245,7 @@ export async function loadGoggles(
 	}
 }
 
-function stripWwwLocal(domain: string): string {
-	return domain.replace(/^www\./, "");
-}
+
 
 /**
  * Additive score contribution for a single result under an active
@@ -261,7 +261,7 @@ export function computeGogglesBonus(
 ): GogglesScoreResult {
 	if (!profile) return { bonus: 0, matches: [] };
 
-	const d = stripWwwLocal((domain || "").toLowerCase());
+	const d = stripWww((domain || "").toLowerCase());
 	const lowerTitle = title.toLowerCase();
 	const lowerUrl = url.toLowerCase();
 

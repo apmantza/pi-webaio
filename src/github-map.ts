@@ -340,6 +340,12 @@ interface WalkResult {
 	paths: string[];
 	files: number;
 	dirs: number;
+	/**
+	 * True when the walk stopped because it reached `maxEntries`, i.e. `paths`
+	 * is a LOWER BOUND on the repository's size and must never be presented as
+	 * the full tree (issue #173).
+	 */
+	hitCap: boolean;
 }
 
 /**
@@ -406,7 +412,7 @@ export async function walkRepo(
 		}
 	}
 	await walk(root, "");
-	return { paths, files, dirs };
+	return { paths, files, dirs, hitCap: paths.length >= maxEntries };
 }
 
 // ─── Cloning ─────────────────────────────────────────────────────────
@@ -836,6 +842,43 @@ export async function mapGitHubRepo(
 // ─── Repo full map (clone + tree + features) ─────────────────────────
 
 /**
+ * Issue #168: label each summary count with its own denominator.
+ *
+ * `aio-webmap` used to print `Discovered 108 URLs` next to `Total entries: 269`.
+ * The first counted the URL list, whose file URLs are `paths.slice(0, max)` —
+ * capped. The second counted the FULL tree. Neither line said so, and "Discovered"
+ * read as a total: an agent could conclude it had enumerated the repository when
+ * the list had stopped at `max`.
+ *
+ * Exported for unit testing.
+ */
+export function formatRepoMapCounts(opts: {
+	totalUrls: number;
+	treeEntries: number;
+	max: number;
+	fileUrlsIncluded: number;
+	/**
+	 * True when `treeEntries` came from a bounded walk (the API tree was
+	 * truncated and the clone fallback stopped at `maxEntries`). The denominator
+	 * is then a floor, and calling it "uncapped" contradicts the
+	 * "(tree truncated by API)" header printed alongside it.
+	 */
+	treeEntriesAreLowerBound?: boolean;
+}): { discovered: string; entries: string } {
+	const capped = opts.fileUrlsIncluded >= opts.max && opts.treeEntries > opts.max;
+	const discovered = capped
+		? `\nDiscovered ${opts.totalUrls} URLs (file URLs capped at \`max\`=${opts.max} of ${opts.treeEntries} tree entries)`
+		: `\nDiscovered ${opts.totalUrls} URLs`;
+	const entries =
+		opts.treeEntries > 0
+			? opts.treeEntriesAreLowerBound
+				? `\nTotal entries: at least ${opts.treeEntries} (the walk stopped at this limit — the repository may hold more; ${opts.fileUrlsIncluded} included as URLs)`
+				: `\nTotal entries: ${opts.treeEntries} in the full tree (uncapped; ${opts.fileUrlsIncluded} included as URLs)`
+			: "";
+	return { discovered, entries };
+}
+
+/**
  * Render the repo file tree, bounded to `max` entries.
  *
  * The subdirectory path already caps its listing at `max`; the full-repo
@@ -975,18 +1018,34 @@ async function mapGitHubRepoFull(
 	summaryParts.push(
 		`🗺️  Repo map for ${owner}/${repo}${clonedOk ? " (cloned)" : ""}${truncated ? " (tree truncated by API)" : ""}`,
 	);
-	summaryParts.push(
-		`\nDiscovered ${totalUrls} URLs via ${Object.keys(sources).length} sources:`,
-	);
+	const counts = formatRepoMapCounts({
+		totalUrls,
+		treeEntries: walk ? walk.paths.length : paths.length,
+		max,
+		fileUrlsIncluded: Math.min(paths.length, max),
+		// Whether the count is a floor is decided by the source that actually
+		// produced it. If the clone walk ran, ITS cap bounds the number: a repo
+		// whose API tree was truncated but whose cloned tree walked to
+		// completion below `maxEntries` has an EXACT count, and labelling that
+		// "at least" is as wrong as the opposite claim (review #173 round 2).
+		// With no walk the count came from the API tree, which is a floor when
+		// the API said it was truncated OR when our own `filterRepoPaths` walk
+		// stopped at MAX_TREE_PATHS - a third way to be incomplete that the
+		// reviewer's thread surfaced (nodejs/node-sized repos).
+		treeEntriesAreLowerBound: walk
+			? walk.hitCap
+			: truncated || paths.length >= MAX_TREE_PATHS,
+	});
+	summaryParts.push(`${counts.discovered} via ${Object.keys(sources).length} sources:`);
 	for (const [src, urls] of Object.entries(sources)) {
 		summaryParts.push(`  • ${src}: ${urls.length} URLs`);
 	}
 	if (walk) {
 		summaryParts.push(
-			`\nFiles: ${walk.files}, Dirs: ${walk.dirs}, Total entries: ${walk.paths.length}`,
+			`\nFiles: ${walk.files}, Dirs: ${walk.dirs},` + counts.entries.replace(/^\n/, ""),
 		);
-	} else if (paths.length > 0) {
-		summaryParts.push(`\nTotal entries: ${paths.length}`);
+	} else if (counts.entries) {
+		summaryParts.push(counts.entries);
 	}
 	if (repoMeta && !repoMeta.message && typeof repoMeta === "object") {
 		const stars = repoMeta.stargazers_count ?? 0;

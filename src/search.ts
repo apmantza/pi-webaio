@@ -496,12 +496,14 @@ const SOCIAL_HOSTS = [
  * that compares or keys on a domain must apply it on both sides, or a pair that
  * differs only by that label is treated as two sites (issue #165 F1 found this
  * in `canonicalizeUrl`, then in `dropGoogleRedirectDuplicates`, then in
- * `isPrimarySource`). Five more private spellings of the same one-liner live in
- * goggles/firecrawl/parallel/tinyfish/paywall — filed as a consolidation follow-up.
+ * `isPrimarySource`). The remaining private spellings were folded onto the
+ * shared leaf in issue #167.
  */
-export function stripWww(domain: string): string {
-	return domain.replace(/^www\./, "");
-}
+import { stripWww } from "./domain.ts";
+
+// Re-exported so existing importers keep working. `export ... from` alone would
+// NOT create the local binding this module uses in five places.
+export { stripWww };
 
 function matchesHost(domain: string, hosts: string[]): boolean {
 	return hosts.some((host) => domain === host || domain.endsWith(`.${host}`));
