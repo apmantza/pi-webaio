@@ -49,9 +49,30 @@ const scripts = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")).scr
  * one level, and collect the test files reachable from there.
  */
 const ciYaml = readFileSync(join(ROOT, ".github", "workflows", "ci.yml"), "utf8");
-const ciScripts = new Set(
-	[...ciYaml.matchAll(/npm run ([a-zA-Z0-9:_-]+)/g)].map((m) => m[1]),
-);
+/**
+ * `npm run <script>` invocations that CI actually EXECUTES.
+ *
+ * YAML comments are stripped first. A commented-out `# npm run test:cli` is not a
+ * step that runs, and matching raw YAML would let a comment make an unwired suite
+ * look wired - the same false green this file exists to catch, arriving from the
+ * opposite direction: someone un-wires a suite by commenting its step and the
+ * guard keeps reporting coverage.
+ */
+function ciCommands(yaml) {
+	const executable = yaml
+		.split("\n")
+		.filter((line) => !/^[\s-]*#/.test(line))
+		// An inline trailing comment cannot introduce a second `npm run`, because
+		// everything after `#` on a step line is prose.
+		.map((line) => line.replace(/\s#.*$/, ""));
+	const found = new Set();
+	for (const line of executable) {
+		for (const m of line.matchAll(/npm run ([a-zA-Z0-9:_-]+)/g)) found.add(m[1]);
+	}
+	return found;
+}
+
+const ciScripts = ciCommands(ciYaml);
 const ciRanFiles = new Set();
 for (const name of ciScripts) {
 	for (const delegate of [name, scripts[name]]) {
@@ -103,4 +124,40 @@ test("the two #173 suites specifically are wired (the finding this came from)", 
 			`${f} must run in test:all — it is the only guard for the #173 fixes`,
 		);
 	}
+});
+
+// The reachable set must come from EXECUTABLE steps. A commented-out
+// `# npm run test:cli` line is not CI running anything, and matching the raw YAML
+// would let a comment make an unwired suite look wired — the exact false-green
+// this file exists to prevent, arriving from the other direction.
+//
+// Recurrence prevented: a suite quietly unwired by commenting out its step while
+// the guard keeps reporting coverage.
+// The reachable set must come from EXECUTABLE steps. A commented-out
+// `# npm run test:cli` is not CI running anything, and matching the raw YAML
+// would let a comment make an unwired suite look wired — the exact false-green
+// this file exists to prevent, arriving from the other direction.
+//
+// Recurrence prevented: a suite quietly unwired by commenting out its step while
+// the guard keeps reporting coverage.
+test("#173: commented-out workflow commands do not count as CI coverage", () => {
+	const yaml = [
+		"      - run: npm run test:all",
+		"      # npm run test:cli",
+		"      #   npm run test:mcp",
+		"      - run: echo done # npm run test:models",
+		].join("\n");
+	const cmds = ciCommands(yaml);
+	assert.deepEqual(
+		[...cmds].sort(),
+		["test:all"],
+		`expected only the executable step, got ${JSON.stringify([...cmds])} — a commented \`npm run\` must not extend the reachable set`,
+	);
+});
+
+test("#173: the real ci.yml still yields the suites the ratchet depends on", () => {
+	// Guards against "fixed" the extractor into matching nothing.
+	assert.ok(ciScripts.has("test:all"), "test:all must remain reachable from ci.yml");
+	assert.ok(ciRanFiles.has("tests/prune-storage.test.mjs") || ciRanFiles.size > 20,
+		"the extractor must still resolve real test files");
 });
