@@ -142,7 +142,17 @@ for (const section of SECTIONS) {
 			// optional deps legitimately have no top-level resolution, and denying it
 			// would re-break the Dependabot shape this exemption exists for.
 			const resolution = lock.packages?.[`node_modules/${name}`];
-			if (!resolution?.version || pinSatisfiesRange(resolution.version, spec)) {
+			// Absent entry: legitimate, accept. Present but versionless: not a
+			// shape npm produces, and `!resolution?.version` would have skipped the
+			// promised range check entirely - the "absent" branch swallowing corrupt
+			// input is the fail-OPEN direction, so it is refused.
+			if (resolution !== undefined && !parseVersion(String(resolution.version ?? ""))) {
+				problems.push(
+					`${section}.${name}: lock entry "node_modules/${name}" has no usable version (package.json "${spec}")`,
+				);
+				continue;
+			}
+			if (!resolution || pinSatisfiesRange(resolution.version, spec)) {
 				continue;
 			}
 			problems.push(

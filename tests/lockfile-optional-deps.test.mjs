@@ -265,3 +265,24 @@ test("#174: an absent resolution entry does not deny the exemption", () => {
 	const r = pair("^1.55.0", "1.64.1");
 	assert.equal(r.code, 0, `absent node_modules entry must not false-red:\n${r.out}`);
 });
+
+// Fail-closed on a malformed entry. `!resolution?.version` accepted a PRESENT
+// resolution object that carried no version, so the promised range check never
+// ran on it. Absent is a legitimate shape (platform-conditional optional);
+// present-but-versionless is not a shape npm produces and must not pass.
+//
+// Recurrence prevented: a guard whose "absent" branch silently swallows corrupt.
+test("#174: a present resolution with no version is drift, not sync", () => {
+	const r = run(
+		{ name: "x", optionalDependencies: { pw: "^1.55.0" } },
+		{
+			name: "x",
+			packages: {
+				"": { name: "x", dependencies: { pw: "1.64.1" } },
+				"node_modules/pw": {},
+			},
+		},
+	);
+	assert.equal(r.code, 1, "a resolution entry without a version cannot satisfy anything");
+	assert.match(r.out, /pw/);
+});
