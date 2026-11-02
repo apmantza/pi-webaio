@@ -1017,40 +1017,109 @@ test("#170: the spend-order table does not over-claim the content floor", async 
 		!/always survives/i.test(row),
 		`the floor row claims an unconditional guarantee: ${row}`,
 	);
+	assert.ok(
+		/I2|invariant 2/i.test(row),
+		"the floor row must point at the invariant it enforces",
+	);
+	// #182 made the floor unconditional, so the row must also name what ENFORCES
+	// it rather than describing a reservation that prose may not survive. A row
+	// that says only "reserves" while invariant 2 says "every budget >= 1" is the
+	// same two-sentences-disagreeing defect this guard was written for.
 	assert.match(
 		row,
-		/invariant 2/i,
-		"the floor row must point at the invariant that states its domain",
+		/floor pass|takes the room back/i,
+		"the floor row must name the floor pass, now that the floor is enforced rather than reserved",
 	);
 });
 
-test("#170: the content floor holds above its measured domain", () => {
-	// The model states invariant 2 as a DOMAIN, and this test is where the domain
-	// lives. Writing the model down exposed that the step-8 backstop can reclaim
-	// the entire content allocation when even the shortest notice will not fit
-	// beside it: on a plain headed body, budgets 1..27 return framing with no page
-	// prose at all, and the boundary is non-monotonic (20 has prose, 27 does not).
-	// Issue #170 is explicit that this seam gets no sixth patch, so the boundary is
-	// pinned rather than patched: if someone changes the shrink ladder and moves
-	// it, this test says so instead of the model quietly lying.
+test("#182: the content floor holds at EVERY budget, not above a measured boundary", () => {
+	// #170 stated invariant 2 as a DOMAIN because it was false below ~28 and the
+	// seam was frozen for that round. #182 is the named remainder, and the two
+	// decisions it asked for are taken here: a `---` with nothing after it is not
+	// a separator (so the rule belongs to the notice and steps down with it), and
+	// the floor wins outright (a notice that cannot coexist with one token of
+	// prose costs zero). With those, the domain is all budgets >= 1 and the
+	// measured 27 is gone — so this test asserts the unconditional form. It also
+	// asserts the ceiling, because dropping framing can only lower the total.
 	const body = `# Big Heading\n${"word ".repeat(600)}`;
 	const PROSE = /word/;
-	// Above the domain: prose is always present.
-	for (const budget of [28, 40, 60, 120, 400]) {
-		assert.ok(
-			PROSE.test(applyTokenBudget(body, budget, "a")),
-			`budget ${budget} must yield page prose`,
-		);
-	}
-	// Inside the domain: framing-only output is the documented, measured truth.
-	// Asserting the failure too, so "we fixed it" cannot be assumed silently.
-	assert.ok(!PROSE.test(applyTokenBudget(body, 1, "a")), "budget 1 behaviour changed");
-	// The ceiling is NOT affected — that invariant is unconditional.
 	for (let budget = 1; budget <= 60; budget++) {
 		const out = applyTokenBudget(body, budget, "a");
+		assert.ok(
+			PROSE.test(out),
+			`budget ${budget} yielded no page prose: ${JSON.stringify(out.slice(0, 40))}`,
+		);
 		assert.ok(
 			estimateTokens(out) <= budget,
 			`ceiling violated at ${budget}: ${estimateTokens(out)} tokens`,
 		);
+	}
+});
+
+test("#182: a lone horizontal rule is never the answer", () => {
+	// D1: the rule is part of the notice, not content. Pre-fix, budget 1 returned
+	// "\n\n--" — the notice's own separator trimmed to one token — because the
+	// backstop tested `footerIdx > 0` and a footer at index 0 was classified as
+	// content. A rule with nothing after it conveys nothing.
+	const body = `# Big Heading\n${"word ".repeat(600)}`;
+	for (let budget = 1; budget <= 60; budget++) {
+		const out = applyTokenBudget(body, budget, "a").trim();
+		assert.ok(
+			!/^-{3,}$/.test(out) && out !== "--" && out !== "---",
+			`budget ${budget} returned a bare rule: ${JSON.stringify(out)}`,
+		);
+		assert.ok(out.length > 0, `budget ${budget} returned empty output`);
+	}
+});
+
+test("#182: the notice is still emitted when it CAN coexist with prose", () => {
+	// D2 must not become "never show the notice" — that would silently delete a
+	// feature the budget can afford. The mirror of the floor test.
+	const body = `# Heading\n${"alpha ".repeat(400)}`;
+	const out = applyTokenBudget(body, 200, "alpha");
+	assert.match(out, /truncat/i, "an ample budget must still say the content was cut");
+	assert.match(out, /alpha/, "and still carry page prose");
+	assert.ok(estimateTokens(out) <= 200);
+});
+
+test("#182: a document with frontmatter still yields prose at tiny budgets", () => {
+	// S4: frontmatter already yields when it cannot coexist with content; the new
+	// notice rule must not make the frontmatter the whole answer instead.
+	const body = `---\ntitle: A very long frontmatter title that costs several tokens\n---\n\n${"body ".repeat(300)}`;
+	for (const budget of [1, 4, 12, 30]) {
+		const out = applyTokenBudget(body, budget, "body");
+		assert.ok(
+			/body/.test(out),
+			`budget ${budget} yielded no page prose: ${JSON.stringify(out.slice(0, 40))}`,
+		);
+		assert.ok(estimateTokens(out) <= budget, `ceiling violated at ${budget}`);
+	}
+});
+
+test("#170: the ceiling is unconditional across shapes", () => {
+	// Invariant 1 is the one guarantee that was never in doubt, and #182 must not
+	// cost it: the floor pass drops FRAMING, which can only lower the total. Swept
+	// across the shapes that historically broke the ceiling (oversized single
+	// section, frontmatter, heading-less prose, many small sections).
+	const shapes = [
+		["one oversized section", `# Big Heading\n${"word ".repeat(600)}`],
+		[
+			"frontmatter + body",
+			`---\ntitle: A long enough frontmatter title to cost tokens\n---\n\n${"body ".repeat(300)}`,
+		],
+		["heading-less prose", "plain prose ".repeat(400)],
+		[
+			"many small sections",
+			Array.from({ length: 60 }, (_, i) => `## S${i}\nsmall body ${i}`).join("\n\n"),
+		],
+	];
+	for (const [name, body] of shapes) {
+		for (let budget = 1; budget <= 60; budget++) {
+			const out = applyTokenBudget(body, budget, "a");
+			assert.ok(
+				estimateTokens(out) <= budget,
+				`ceiling violated (${name}) at ${budget}: ${estimateTokens(out)} tokens`,
+			);
+		}
 	}
 });
