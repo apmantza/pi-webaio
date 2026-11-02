@@ -27,6 +27,7 @@ import { join } from "node:path";
 
 import { stripWww } from "../src/domain.ts";
 import { stripWww as stripWwwViaSearch } from "../src/search.ts";
+import { blankCommentsAndStrings, blankCommentsOnly } from "./helpers.mjs";
 
 // ─── Behaviour of the canonical rule ──────────────────────────────────
 
@@ -67,33 +68,10 @@ function collectTsFiles(dir, out = []) {
 }
 
 /**
- * Blank comments and string literals so a comment that QUOTES the needle can
- * never satisfy or defeat the scan. The needle here is a regex literal in code,
- * so blanking strings is safe and required: the doc comment on `stripWww`
- * mentions the rule in prose.
- *
- * Blank LINE comments first, then block comments. The opposite order silently
- * eats code: `src/research.ts:5` is a line comment containing `reports/` plus a
- * stray star, and a block-comment regex run first takes that as an opening
- * delimiter and sweeps everything up to the next closing delimiter — so real
- * source disappears and the guard passes because there is nothing left to match.
- * A detector that blanks too much looks identical to one that found nothing.
+ * The blanking helpers live in `tests/helpers.mjs` so every source-shape scan in
+ * the suite shares one implementation — a detector that blanks differently in two
+ * files is two detectors, and only one of them can be believed.
  */
-function stripComments(src) {
-	return src.replace(/(^|[^:])\/\/[^\n]*/g, "$1").replace(/\/\*[\s\S]*?\*\//g, "");
-}
-
-async function blankCommentsOnly(path) {
-	return stripComments(await readFile(path, "utf8"));
-}
-
-async function blankCommentsAndStrings(path) {
-	const src = await readFile(path, "utf8");
-	return stripComments(src)
-		.replace(/"(?:[^"\\]|\\.)*"/g, '""')
-		.replace(/'(?:[^'\\]|\\.)*'/g, "''")
-		.replace(/`(?:[^`\\]|\\.)*`/g, "``");
-}
 
 test("#167: no module re-spells the www-stripping regex", async () => {
 	const files = collectTsFiles(SRC_DIR);
