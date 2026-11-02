@@ -14,6 +14,7 @@
 
 import { debug } from "./debug.ts";
 import { resolveTinyfishConfigKey } from "./config.ts";
+import { stripWww } from "./domain.ts";
 
 // ─── API key resolution ────────────────────────────────────────────
 
@@ -208,7 +209,7 @@ export async function fetchTinyfish(
 
 function extractDomain(url: string): string {
   try {
-    return new URL(url).hostname.replace(/^www\./, "");
+    return stripWww(new URL(url).hostname);
   } catch {
     return url;
   }

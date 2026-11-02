@@ -23,6 +23,7 @@
 
 import { debug } from "./debug.ts";
 import { resolveParallelConfigKey } from "./config.ts";
+import { stripWww } from "./domain.ts";
 
 /** Default search mode: `basic` balances latency and quality (turbo is fastest but shallow; advanced is highest quality but slower). */
 const DEFAULT_SEARCH_MODE = "basic";
@@ -330,7 +331,7 @@ export async function fetchParallel(
 
 function extractDomain(url: string): string {
 	try {
-		return new URL(url).hostname.replace(/^www\./, "");
+		return stripWww(new URL(url).hostname);
 	} catch {
 		return url;
 	}

@@ -9,6 +9,7 @@
 // Everything here is pure and deterministic — no network, no LLM calls.
 
 import { classifySourceType, extractDomain } from "./search.ts";
+import { stripWww } from "./domain.ts";
 import type { SourceType } from "./types.ts";
 
 /**
@@ -167,9 +168,11 @@ const CONFLICT_STOP_TOKENS = new Set([
 	"main",
 ]);
 
-function stripWww(domain: string): string {
-	return domain.startsWith("www.") ? domain.slice(4) : domain;
-}
+// `stripWww` comes from the shared leaf (issue #167). This module previously
+// carried a seventh private spelling of the rule
+// (`domain.startsWith("www.") ? domain.slice(4) : domain`), which is equivalent
+// here only because both call sites lowercase first — the kind of "equivalent for
+// the inputs I happen to have" agreement the seam exists to end.
 
 /**
  * Identity-bearing tokens of a domain: drop the TLD, split on non-alphanumerics,
