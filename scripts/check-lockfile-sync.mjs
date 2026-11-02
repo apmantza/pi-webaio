@@ -133,8 +133,21 @@ for (const section of SECTIONS) {
 			elsewhere &&
 			pinSatisfiesRange(elsewhere.spec, spec)
 		) {
-			// Declared optional, recorded under another lock section, and the
-			// resolved pin satisfies the declared range: npm's own shape (#161).
+			// Declared optional, recorded under another lock section, and the pin
+			// satisfies the declared range: npm's own shape (#161).
+			//
+			// If the lock ALSO records the resolved package, that resolution must
+			// satisfy the range too - a root mirror saying 2.4.0 over a recorded
+			// 1.64.1 is drift. An ABSENT entry is not denied: platform-conditional
+			// optional deps legitimately have no top-level resolution, and denying it
+			// would re-break the Dependabot shape this exemption exists for.
+			const resolution = lock.packages?.[`node_modules/${name}`];
+			if (!resolution?.version || pinSatisfiesRange(resolution.version, spec)) {
+				continue;
+			}
+			problems.push(
+				`${section}.${name}: lock resolution "${resolution.version}" does not satisfy package.json "${spec}" (root mirror says "${elsewhere.spec}")`,
+			);
 			continue;
 		}
 		problems.push(

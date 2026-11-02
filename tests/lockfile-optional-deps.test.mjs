@@ -28,12 +28,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-const SCRIPT = new URL("../scripts/check-lockfile-sync.mjs", import.meta.url)
-	.pathname;
+// `fileURLToPath`, not `.pathname`: on Windows `.pathname` yields `/C:/Users/...`
+// and leaves spaces percent-encoded, so `spawnSync` cannot find the script and
+// every test here fails before it exercises the checker. Not reproducible on
+// Linux — named as an unverified-on-this-platform fix rather than claimed green.
+const SCRIPT = fileURLToPath(new URL("../scripts/check-lockfile-sync.mjs", import.meta.url));
 
 function run(pkg, lock) {
 	const dir = mkdtempSync(join(tmpdir(), "lockfile-sync-"));
@@ -114,7 +118,7 @@ test("#161: drift on an OPTIONAL dep's own section is still caught", () => {
 });
 
 test("#161: the real repo state passes (regression guard on the fix itself)", () => {
-	const repo = new URL("..", import.meta.url).pathname;
+	const repo = fileURLToPath(new URL("..", import.meta.url));
 	const r = spawnSync(process.execPath, [SCRIPT], { cwd: repo, encoding: "utf8" });
 	assert.equal(r.status, 0, `repo lockfile must pass:\n${r.stdout}${r.stderr}`);
 });
@@ -213,4 +217,51 @@ test("#174: unreasonably-shaped ranges FAIL CLOSED rather than passing", () => {
 
 test("#174: the wildcard range accepts any pin", () => {
 	assert.equal(pair("*", "1.64.1").code, 0, "* declares no constraint");
+});
+
+// ─── Review round 2 on #174 ───────────────────────────────────────────
+
+// The reviewer asked to also require lock.packages["node_modules/<name>"].version
+// to EQUAL the root mirror. Taken literally that false-reds whenever an optional
+// package has no top-level resolution entry (platform-conditional optionals,
+// pruned locks) — i.e. it would re-break the Dependabot shape this fix exists for.
+// Adopted in softened form: when a resolution entry IS present it must satisfy
+// the declared range; when it is absent nothing is denied.
+test("#174: a recorded resolution outside the declared range is drift", () => {
+	const r = run(
+		{ name: "x", optionalDependencies: { pw: "^2.0.0" } },
+		{
+			name: "x",
+			packages: {
+				"": { name: "x", dependencies: { pw: "2.4.0" } },
+				"node_modules/pw": { version: "1.64.1" },
+			},
+		},
+	);
+	assert.equal(
+		r.code,
+		1,
+		"root mirror says 2.4.0 but the recorded resolution is 1.64.1 — that is drift",
+	);
+	assert.match(r.out, /pw/);
+});
+
+test("#174: a matching resolution is still in sync", () => {
+	const r = run(
+		{ name: "x", optionalDependencies: { pw: "^1.55.0" } },
+		{
+			name: "x",
+			packages: {
+				"": { name: "x", dependencies: { pw: "1.64.1" } },
+				"node_modules/pw": { version: "1.64.1" },
+			},
+		},
+	);
+	assert.equal(r.code, 0, `expected sync:\n${r.out}`);
+});
+
+test("#174: an absent resolution entry does not deny the exemption", () => {
+	// Platform-conditional optional deps legitimately have no top-level entry.
+	const r = pair("^1.55.0", "1.64.1");
+	assert.equal(r.code, 0, `absent node_modules entry must not false-red:\n${r.out}`);
 });
