@@ -57,18 +57,23 @@ const _googleCache = new Map<string, { at: number; results: SearchResult[] }>();
 const _GOOGLE_CACHE_TTL_MS = 90_000;
 const _GOOGLE_CACHE_MAX = 64;
 
-const SEARCH_DEADLINE_MS = 3500; // life-depends: hard cap 3.5s (was 7s)
+// Exported because `scripts/bench-full-search.mjs` measures THIS budget. It
+// used to keep its own copies, production moved the hard cap 7000 -> 3500, and
+// the harness went on reporting "FULL aio-websearch benchmark" tables against a
+// contract that no longer existed. A benchmark may not own the number it
+// measures; `tests/search-bench-constants.test.mjs` fails the shape.
+export const SEARCH_DEADLINE_MS = 3500; // life-depends: hard cap 3.5s (was 7s)
 // Public response target — 2.9s budget keeps p50 <3.0s even with scheduling
 // overhead. With 3.5s hard deadline, 600ms grace remains for Google beyond
 // response target.
-const SEARCH_RESPONSE_TARGET_MS = 2900;
+export const SEARCH_RESPONSE_TARGET_MS = 2900;
 // HTTP engines get a small cushion before response target so timeout statuses
 // are parsed instead of racing the provider collector at same ms.
-const HTTP_ENGINE_RESPONSE_DEADLINE_MS = 2700;
+export const HTTP_ENGINE_RESPONSE_DEADLINE_MS = 2700;
 // Google is first-class citizen — hard upper bound for Google lane itself
 // (measured after chromeReady). 3000ms fits inside 3.5s hard deadline while
 // still covering broker pagination (2s floor + 2.5s page). Tight p95, life-depends.
-const GOOGLE_LANE_MAX_MS = 3000;
+export const GOOGLE_LANE_MAX_MS = 3000;
 
 type WebsearchDependencies = {
 	loadGoggles?: typeof loadGoggles;
@@ -78,6 +83,18 @@ type WebsearchDependencies = {
 	searchReddit?: typeof searchReddit;
 	cdpAvailable?: typeof cdpAvailableGA;
 	providerAvailable?: typeof isProviderAvailable;
+	/**
+	 * Bonus API lanes. These are dependencies because they are NETWORK calls that
+	 * a benchmark or test cannot opt out of otherwise: `firecrawlEnabled` was
+	 * `true` unconditionally, so every supposedly-offline sample issued a real
+	 * FireCrawl request and waited for it, which is what made an "instant" bench
+	 * row measure ~300ms and made the same number appear for a 0ms lane and a
+	 * 120ms lane. TinyFish and Parallel default to "no key configured" so they
+	 * were only latent; they get the same seam so the whole fan-out is injectable.
+	 */
+	searchFirecrawl?: typeof searchFirecrawl;
+	searchTinyfish?: typeof searchTinyfish;
+	searchParallel?: typeof searchParallel;
 	/** Test/benchmark seam for the hard safety ceiling. Defaults to 7s. */
 	searchDeadlineMs?: number;
 	/** Test/benchmark seam for the public response target. Defaults to 3s. */
@@ -193,6 +210,9 @@ export function registerWebsearchTool(
 	const cdpAvailableImpl = dependencies.cdpAvailable ?? cdpAvailableGA;
 	const providerAvailableImpl =
 		dependencies.providerAvailable ?? isProviderAvailable;
+	const searchFirecrawlImpl = dependencies.searchFirecrawl ?? searchFirecrawl;
+	const searchTinyfishImpl = dependencies.searchTinyfish ?? searchTinyfish;
+	const searchParallelImpl = dependencies.searchParallel ?? searchParallel;
 	const searchDeadlineMs = Math.max(
 		1,
 		dependencies.searchDeadlineMs ?? SEARCH_DEADLINE_MS,
@@ -677,7 +697,7 @@ export function registerWebsearchTool(
 			const firecrawlPromise = firecrawlEnabled
 				? runBonusSearchLane(
 						"firecrawl",
-						() => searchFirecrawl(query, { maxResults: 15 }),
+						() => searchFirecrawlImpl(query, { maxResults: 15 }),
 						setProvider,
 					)
 				: Promise.resolve({
@@ -690,7 +710,7 @@ export function registerWebsearchTool(
 			const tinyfishPromise = tinyfishEnabled
 				? runBonusSearchLane(
 						"tinyfish",
-						() => searchTinyfish(query, { maxResults: 15 }),
+						() => searchTinyfishImpl(query, { maxResults: 15 }),
 						setProvider,
 					)
 				: Promise.resolve({
@@ -704,7 +724,7 @@ export function registerWebsearchTool(
 			const parallelPromise = parallelEnabled
 				? runBonusSearchLane(
 						"parallel",
-						() => searchParallel(query, { maxResults: 15 }),
+						() => searchParallelImpl(query, { maxResults: 15 }),
 						setProvider,
 					)
 				: Promise.resolve({

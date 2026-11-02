@@ -1,12 +1,20 @@
 #!/usr/bin/env node
 // bench-full-search.mjs — full aio-websearch benchmark (legacy vs broker).
 //
-// Mirrors the real tool's orchestration exactly: searchWeb (HTTP engines,
-// 2.7s per-engine deadline in the public tool path) + googleSearch (CDP lane)
-// + searchReddit (CDP companion, serialized after Google), collected under
-// the ~3s public response target with a 7s hard safety deadline. Records total
-// latency, per-provider status/counts, and Windows process/commit deltas around
-// each sample.
+// Re-implements the tool's orchestration: searchWeb (HTTP engines, per-engine
+// deadline in the public tool path) + googleSearch (CDP lane) + searchReddit
+// (CDP companion, serialized after Google), collected under the tool's public
+// response target and hard cap — which it now IMPORTS from
+// `src/tools/websearch.ts` instead of copying, because copied budgets drift.
+//
+// LIMITATION, stated rather than implied: this mirrors the orchestration, it
+// does not drive `registerWebsearchTool.execute`. It therefore measures real
+// provider and Chrome latency, but it cannot see a regression inside the tool
+// itself (aggregation, dedup, ranking, status mapping). For that, use
+// `scripts/bench-search.mjs`, which drives the real registered execute against
+// faked providers offline and asserts on orchestration cost and deadline
+// containment. Records total latency, per-provider status/counts, and Windows
+// process/commit deltas around each sample.
 //
 // Usage:
 //   node --experimental-strip-types scripts/bench-full-search.mjs <legacy|broker> [samples] [query...]
@@ -21,6 +29,15 @@ import {
 import { searchWeb } from "../src/search.ts";
 import { searchReddit } from "../src/verticals/reddit_search.ts";
 import { collectProviderResults } from "../src/search-orchestration.ts";
+// The budget belongs to the tool, not to the harness. These used to be local
+// copies; they drifted (7000 vs the tool's 3500, 2900 vs 3000) and every table
+// this script printed described a tool that no longer existed.
+import {
+	GOOGLE_LANE_MAX_MS,
+	HTTP_ENGINE_RESPONSE_DEADLINE_MS,
+	SEARCH_DEADLINE_MS,
+	SEARCH_RESPONSE_TARGET_MS,
+} from "../src/tools/websearch.ts";
 
 const mode = process.argv[2] ?? "legacy";
 const samples = Number.parseInt(process.argv[3] ?? "10", 10);
@@ -46,10 +63,6 @@ const QUERIES = [
 	`${baseQuery} configuration reference`,
 	`${baseQuery} package publishing`,
 ];
-const SEARCH_DEADLINE_MS = 7000;
-const SEARCH_RESPONSE_TARGET_MS = 2900;
-const HTTP_ENGINE_RESPONSE_DEADLINE_MS = 2700;
-const GOOGLE_LANE_MAX_MS = 2900;
 
 process.env.PI_WEBAIO_CDP_BROKER = mode === "broker" ? "1" : "0";
 console.log(
