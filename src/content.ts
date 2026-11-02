@@ -70,6 +70,13 @@ export const MIN_LOCAL_WORDS = 50;
 // See `shouldPreferJinaFallback`.
 export const JINA_MIN_LOCAL_PRESERVATION = 0.5;
 
+// How many distinctive words the local body needs before its overlap ratio is
+// evidence of anything. Below this the ratio is noise: a placeholder body of
+// `## loading` is a single word, so one shared word scores 1.0 and one
+// unshared word scores 0.0 — and 0.0 would keep the placeholder and reject the
+// proxy's real article, trading a wrong-article bug for a no-article bug.
+export const JINA_MIN_PRESERVATION_SAMPLE = 6;
+
 /**
  * Should the reader-proxy body replace the local extraction?
  *
@@ -95,7 +102,9 @@ export function shouldPreferJinaFallback(
 	jinaContent: string,
 ): boolean {
 	const localWords = significantWords(localContent);
-	if (localWords.size === 0) return true;
+	// Vacuous when there is nothing to preserve, and also when there is too
+	// little to have an identity: see JINA_MIN_PRESERVATION_SAMPLE.
+	if (localWords.size < JINA_MIN_PRESERVATION_SAMPLE) return true;
 	const jinaWords = significantWords(jinaContent);
 	let preserved = 0;
 	for (const w of localWords) if (jinaWords.has(w)) preserved++;

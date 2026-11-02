@@ -32,6 +32,7 @@ import { dirname, join } from "node:path";
 import {
 	MIN_LOCAL_WORDS,
 	JINA_MIN_LOCAL_PRESERVATION,
+	JINA_MIN_PRESERVATION_SAMPLE,
 	runLocalExtraction,
 	preCleanHtml,
 	wordCount,
@@ -128,6 +129,7 @@ test("#154: a page where local extraction found nothing still escalates", async 
 
 test("#154: the preservation bar is a majority and is exported for tuning", () => {
 	assert.equal(JINA_MIN_LOCAL_PRESERVATION, 0.5);
+	assert.equal(JINA_MIN_PRESERVATION_SAMPLE, 6);
 	// Just over the bar preserves; just under does not. Derived from the real
 	// local article (12 significant words) rather than an invented string.
 	const local = "nocheck disable full type checking only critical parse emit errors will reported";
@@ -137,6 +139,39 @@ test("#154: the preservation bar is a majority and is exported for tuning", () =
 	const justUnder = words.slice(0, 5).join(" ") + " prose continues here";
 	assert.equal(shouldPreferJinaFallback(local, justOver), true);
 	assert.equal(shouldPreferJinaFallback(local, justUnder), false);
+});
+
+test("#154: a degenerate local body never blocks a real article", () => {
+	// Below the sample floor the overlap ratio is not evidence of anything: a
+	// one-word placeholder scores 0.0 against an unrelated article and would keep
+	// the placeholder while rejecting the proxy's real text — turning this fix into
+	// a no-article bug. Recurrence prevented: a spinner/placeholder body outranking
+	// the only copy of the article we can reach.
+	const article =
+		"## noCheck\nDisable full type checking (only critical parse and emit errors will be reported). " +
+		"Skip type checking project-wide while keeping syntax diagnostics.";
+	for (const junk of ["", "## loading", "## loading spinner", "## nocheck disabled fully"]) {
+		const words = new Set((junk.toLowerCase().match(/[a-z][a-z-]{3,}/g) ?? []));
+		assert.ok(
+			words.size < JINA_MIN_PRESERVATION_SAMPLE,
+			`fixture sanity: "${junk}" has ${words.size} significant words, expected below the floor`,
+		);
+		assert.equal(
+			shouldPreferJinaFallback(junk, article),
+			true,
+			`placeholder body ${JSON.stringify(junk)} blocked the real article`,
+		);
+	}
+});
+
+test("#154: the real page sits above the sample floor, so the guard still applies", async () => {
+	// Without this, raising the floor would silently disable the fix for #154.
+	const local = await localResult();
+	const words = new Set((local.content.toLowerCase().match(/[a-z][a-z-]{3,}/g) ?? []));
+	assert.ok(
+		words.size >= JINA_MIN_PRESERVATION_SAMPLE,
+		`the #154 body has ${words.size} significant words; the floor must stay at or below it`,
+	);
 });
 
 // ─── Wiring: the ladder must actually consult the guard ───
