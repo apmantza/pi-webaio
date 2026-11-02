@@ -1219,13 +1219,64 @@ export function trimToTokenBudgetWithClosedFence(
 	maxTokens: number,
 ): string {
 	const closed = closeFencesWithin(trimToTokenBudget(text, maxTokens), maxTokens, true);
-	// Only a fence whose BODY is empty is framing. The first version asked whether
-	// the string contained any letter or number at all, which is a different claim
-	// and it destroyed real content: a body of `---` came back as a run of
-	// horizontal rules and `+++` came back bare, because the delimiters are exactly
-	// what makes symbol content code rather than markdown. The delimiters of an
-	// empty body are removed; anything with a body keeps them, in both fence styles.
-	return closed.replace(/^(?:(`{3,}|~{3,})[^\n]*\n[ \t]*\n*)\1[ \t]*$/gm, "");
+	// Only a fence whose BODY is empty is framing. The first version asked whether the
+	// string contained any letter or number at all, which is a different claim and it
+	// destroyed real content: a body of `---` came back as a run of horizontal rules.
+	// The regex that replaced it was also wrong — the opener capture backtracked from
+	// four markers to three, so a shorter marker BODY line inside a longer block read
+	// as an empty fence and the block's delimiters were deleted.
+	return dropEmptyFences(closed);
+}
+
+/**
+ * Remove the delimiters of fenced blocks whose body is entirely blank.
+ *
+ * Done by scanning fence boundaries rather than matching a pattern, because fence
+ * identity is a property of the parse and not of one line: a marker run shorter
+ * than the opener is BODY content, a run of equal or greater length closes, and an
+ * info string containing the marker character cannot open that fence style. Every
+ * thing the regex got wrong — marker-length backtracking, a `---` body losing its
+ * code semantics, a blank body spread over several lines — falls out of tracking
+ * the opener length and checking every body line.
+ */
+function dropEmptyFences(text: string): string {
+	const lines = text.split("\n");
+	const kept: string[] = [];
+	let i = 0;
+	while (i < lines.length) {
+		const open = /^ {0,3}(`{3,}|~{3,})([^\n]*)$/.exec(lines[i]);
+		const marker = open ? open[1] : "";
+		const info = open ? open[2] : "";
+		if (!open || info.includes(marker[0])) {
+			kept.push(lines[i]);
+			i += 1;
+			continue;
+		}
+		const ch = marker[0];
+		const len = marker.length;
+		let j = i + 1;
+		let bodyBlank = true;
+		while (j < lines.length) {
+			const close = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(lines[j]);
+			if (close && close[1][0] === ch && close[1].length >= len) break;
+			if (lines[j].trim() !== "") bodyBlank = false;
+			j += 1;
+		}
+		if (j < lines.length && bodyBlank) {
+			// An empty fenced block: the delimiters are the only thing standing there.
+			i = j + 1;
+			continue;
+		}
+		// Not dropped. Copy through the closer (or to the end when unclosed) so the scan
+		// resumes OUTSIDE the block and a marker line inside the body is never mistaken
+		// for a new opener.
+		for (let k = i; k < lines.length; k += 1) {
+			kept.push(lines[k]);
+			if (k === j) break;
+		}
+		i = j + 1;
+	}
+	return kept.join("\n");
 }
 
 /**

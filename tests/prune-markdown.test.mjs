@@ -14,6 +14,7 @@ import {
 	pruneByRelevance,
 	buildOmittedSectionsToc,
 	applyTokenBudget,
+	trimToTokenBudgetWithClosedFence,
 } from "../src/prune-markdown.ts";
 import { estimateTokens } from "../src/token-count.ts";
 
@@ -1291,5 +1292,110 @@ test("#182 regression: four-space-indented code is not a heading run", () => {
 			out.includes("critical"),
 			`budget ${budget} dropped the indented code comment: ${JSON.stringify(out.slice(0, 60))}`,
 		);
+	}
+});
+
+// --- Found by the verify round on the previous commit. The empty-fence rule was a
+// regex, and the opener capture backtracks from four backticks to three while
+// `[^\n]*` eats the remaining one. A literal three-backtick BODY line inside a
+// four-backtick block therefore satisfied the backreference, both lines were
+// deleted, and the surviving four-backtick closer became a new unclosed opener.
+//
+// Markers are built with escapes rather than written inline: a literal ``` inside
+// a template literal terminates it, and the first version of this block failed to
+// parse for exactly that reason.
+const BT = "`";
+const F3 = BT.repeat(3);
+const F4 = BT.repeat(4);
+
+test("#182 regression: a shorter marker inside a longer fence is body, not a delimiter", () => {
+	// Valid CommonMark: a triple-backtick example inside a quadruple-backtick block.
+	const doc = "# T\n" + F4 + "\n" + F3 + "\n" + "jxqv kzpw ".repeat(100) + "\n" + F3 + "\n" + F4;
+	const out = applyTokenBudget(doc, 20, "a");
+	const fours = (out.match(/`{4}/g) || []).length;
+	assert.ok(
+		fours > 0 && fours % 2 === 0,
+		"the outer four-backtick opener was consumed: " + JSON.stringify(out),
+	);
+	// The helper isolated: an outer block whose only body line is a shorter marker.
+	const kept = trimToTokenBudgetWithClosedFence(F4 + "\n" + F3 + "\n" + F4, 20);
+	assert.ok(kept.includes(F3), "the literal three-backtick body line was deleted: " + JSON.stringify(kept));
+	// A shorter marker line on its own is body text, not an empty fence.
+	const alone = trimToTokenBudgetWithClosedFence(F4 + "\n" + F3, 20);
+	assert.ok(alone.includes(F3), "a shorter marker line was eaten as a closer: " + JSON.stringify(alone));
+});
+
+// The empty-body test must consider EVERY body line, not just the one right after
+// the opener: a tab line and a space line are still an empty fence, and their
+// delimiters are framing.
+test("#182: a whitespace-only body across several lines is still an empty fence", () => {
+	const out = trimToTokenBudgetWithClosedFence(F3 + "\n\t\n \n" + F3, 20);
+	assert.ok(!out.includes(F3), "whitespace-only fence kept its delimiters: " + JSON.stringify(out));
+});
+
+// The verify round found that removing the fallback's post-trim marker strip was
+// GREEN: no test exercised a SHORT fenced document. It is load-bearing. The
+// fallback strips the leading opener from the SOURCE before trimming, so on a short
+// block the trimmed result keeps the TRAILING closer and the opener is gone — the
+// answer ends with a lone ``` that opens a block nothing closes.
+test("#182 regression: a short fenced block never leaves a lone closer", () => {
+	const docs = [
+		"# T\n" + F3 + "\nab cd ef gh ij kl mn op qr\n" + F3,
+		"# T\n" + F3 + "\nab cd\n" + F3,
+		F3 + "\nab cd\n" + F3,
+		"# T\n~~~\nab cd ef gh ij\n~~~",
+	];
+	for (const doc of docs) {
+		for (let budget = 1; budget <= 40; budget++) {
+			const out = applyTokenBudget(doc, budget, "a");
+			for (const marker of [BT.repeat(3), "~~~"]) {
+				const runs = (out.match(new RegExp(marker, "g")) || []).length;
+				assert.equal(
+					runs % 2,
+					0,
+					`budget ${budget} on ${JSON.stringify(doc.slice(0, 24))} left an unbalanced ${marker}: ${JSON.stringify(out)}`,
+				);
+			}
+		}
+	}
+});
+
+// Four branches of dropEmptyFences survived mutation: the code had them, no test
+// reached them. A branch with no test is either a defect or dead weight, so each
+// now has one.
+test("#182: fence-boundary branches the mutation run found untested", () => {
+	// (a) A LONGER marker run closes a shorter opener. With a blank body the block is
+	// still framing, so the delimiters go; an equality check would not close it.
+	assert.equal(
+		trimToTokenBudgetWithClosedFence(F3 + "\n \n" + F4, 20).indexOf(BT),
+		-1,
+		"a longer closer did not close the shorter opener, so its framing survived",
+	);
+	// (b) A blank FIRST body line does not make the block empty: content can follow.
+	const later = trimToTokenBudgetWithClosedFence(F3 + "\n\nkeepme\n" + F3, 20);
+	assert.ok(later.includes("keepme"), "content after a blank line was dropped");
+	assert.ok(later.includes(F3), "the fence around real content lost its delimiters");
+	// (c) An info string containing the marker character cannot open that fence
+	// style, so the line is ordinary content. The body must be BLANK for this to
+	// decide anything: with content in the block both paths keep it, and the first
+	// version of this case passed whether the guard was present or not.
+	const info = trimToTokenBudgetWithClosedFence(F3 + " " + F4 + "\n\n" + F3, 20);
+	assert.ok(
+		info.includes(F4),
+		`a marker-bearing info string was treated as an opener and its framing dropped: ${JSON.stringify(info)}`,
+	);
+	// (d) Two sequential fences: the scan must resume OUTSIDE the first block. If it
+	// does not, the second block is re-scanned from inside and lines duplicate.
+	const two = trimToTokenBudgetWithClosedFence(
+		F3 + "\nalpha\n" + F3 + "\nmiddle\n" + F3 + "\nbeta\n" + F3,
+		60,
+	);
+	assert.equal(
+		(two.match(new RegExp(F3, "g")) || []).length,
+		4,
+		`sequential fences were mis-paired: ${JSON.stringify(two)}`,
+	);
+	for (const w of ["alpha", "middle", "beta"]) {
+		assert.equal(two.split(w).length - 1, 1, `${w} duplicated or lost: ${JSON.stringify(two)}`);
 	}
 });
