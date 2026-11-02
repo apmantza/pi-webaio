@@ -2,13 +2,27 @@
 // ─── Extraction quality benchmark harness ──────────────────────────
 // Runs a fixed corpus of URLs through the real extraction pipeline and
 // reports a scorecard (success rate, marker hits, token counts, latency).
-// Compares against a committed baseline to catch quality regressions.
+//
+// WHAT THIS IS NOT: a regression gate. The corpus is live-network by
+// construction, so a site being down reads as an extraction failure and a busy
+// hour moves p95 (two runs inside the same hour on identical code gave the same
+// quality columns and p95 2.5s vs 3.8s — #162). The offline drift gate that
+// actually blocks a PR is `tests/markdown-shape.test.mjs`, wired into
+// `test:all`. `--baseline` compares QUALITY only (success flips, marker loss,
+// token swing >30%); latency is deliberately not an axis, and must not become
+// one.
+//
+// No baseline is committed. `--baseline` without one is a hard error that names
+// the generator, so the flag cannot quietly advertise a capability the
+// repository does not ship (#177: the usage block pointed at
+// `scripts/bench-baseline.json`, which was never in the tree, and the
+// comparison path was unreachable).
 //
 // Usage:
 //   npm run bench
 //   npm run bench -- --json
+//   npm run bench -- --update-baseline            # writes the baseline first
 //   npm run bench -- --baseline scripts/bench-baseline.json
-//   npm run bench -- --update-baseline
 //   npm run bench -- --filter wikipedia,arxiv
 //   npm run bench -- --concurrency 2 --timeout 30000
 
@@ -64,10 +78,13 @@ function printHelp() {
 		`  --json                  Output full results as JSON to stdout\n`,
 	);
 	process.stdout.write(
-		`  --baseline <path>       Compare results against a baseline JSON file\n`,
+		`  --baseline <path>       Compare QUALITY against a baseline JSON file.\n` +
+			`                          None is committed; run --update-baseline\n` +
+			`                          first. Latency is never a regression axis.\n`,
 	);
 	process.stdout.write(
-		`  --update-baseline       Write current results as the new baseline\n`,
+		`  --update-baseline       Write current results as the new baseline\n` +
+			`                          (live-network run; not committed to the repo)\n`,
 	);
 	process.stdout.write(
 		`  --filter <cat1,cat2>    Run only entries with matching category\n`,
@@ -514,8 +531,15 @@ async function main() {
 			const raw = await readFile(args.baseline, "utf8");
 			baseline = JSON.parse(raw);
 		} catch (err) {
+			// A missing baseline is the #177 trap: the flag looked available
+			// because the usage block named a path that was never committed.
+			// Name the generator instead of letting the caller hunt for it.
 			process.stderr.write(
-				`Failed to load baseline from ${args.baseline}: ${err.message}\n`,
+				`Failed to load baseline from ${args.baseline}: ${err.message}\n` +
+					`No baseline is committed to this repository. Create one with:\n` +
+					`  npm run bench -- --update-baseline\n` +
+					`It performs a live-network run, so its absolute numbers depend on the\n` +
+					`hour; only quality columns (success, markers, token swing) are compared.\n`,
 			);
 			process.exit(1);
 		}

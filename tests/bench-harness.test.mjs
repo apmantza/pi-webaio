@@ -357,3 +357,92 @@ test("formatScorecard: shows no regressions message when empty", () => {
 	const output = formatScorecard(sc, []);
 	assert.ok(output.includes("No regressions"));
 });
+
+// ─── #177: documented capability must exist ────────────────────────
+// Recurrence this guards: the bench header advertised
+// `npm run bench -- --baseline scripts/bench-baseline.json` for a file that was
+// never in the tree. The comparison path was unreachable, the flags advertised a
+// gate that did not exist, and `.github/workflows/bench.yml` ended the run with
+// `|| true`, so the scheduled job could report but never fail. It also cost time
+// during #162: the one artefact that looked like a drift gate was not one.
+
+const BENCH_SCRIPT = join(__dirname, "..", "scripts", "bench-extraction.mjs");
+const BENCH_WF = join(__dirname, "..", ".github", "workflows", "bench.yml");
+
+test("#177: a documented baseline path either exists or the docs name the generator", async () => {
+	const src = await readFile(BENCH_SCRIPT, "utf8");
+	let committed = true;
+	try {
+		await readFile(join(__dirname, "..", "scripts", "bench-baseline.json"), "utf8");
+	} catch {
+		committed = false;
+	}
+	if (committed) return; // a real baseline makes the documented path honest
+	// No baseline in the tree: every place the path is advertised must also say
+	// how it comes to exist, or the flag is a trap.
+	const advertises = src.includes("bench-baseline.json");
+	assert.ok(
+		!advertises || /--update-baseline/.test(src),
+		"the bench names a baseline path that does not exist without documenting --update-baseline",
+	);
+	assert.match(
+		src,
+		/[Nn]o baseline is committed/,
+		"the bench must say plainly that no baseline ships, so a reader does not run --baseline expecting a gate",
+	);
+});
+
+test("#177: a missing baseline error names the generator", async () => {
+	const src = await readFile(BENCH_SCRIPT, "utf8");
+	const loadBlock = src.slice(
+		src.indexOf("Failed to load baseline"),
+		src.indexOf("Failed to load baseline") + 900,
+	);
+	assert.ok(
+		loadBlock.includes("--update-baseline"),
+		"the failure path must tell the caller how to create a baseline",
+	);
+});
+
+test("#177: the scheduled bench cannot swallow its own exit status", async () => {
+	const wf = await readFile(BENCH_WF, "utf8");
+	// Join backslash continuations FIRST. The step wraps across lines, so a
+	// same-line scan for `|| true` misses exactly the shape that ships:
+	//   node ... bench-extraction.mjs \
+	//     "${ARGS[@]}" || true
+	// That was the first version of this test, and it passed green while the
+	// swallow was restored under it.
+	const joined = wf.replace(/\\[ \t]*\n[ \t]*/g, " ");
+	const offenders = joined
+		.split("\n")
+		.map((l, i) => ({ l, i }))
+		.filter(
+			({ l }) => /bench-extraction\.mjs/.test(l) && /\|\|\s*true/.test(l),
+		);
+	assert.deepEqual(
+		offenders.map((o) => o.l.trim()),
+		[],
+		"bench.yml must not `|| true` the bench invocation: a job that cannot fail is not a signal",
+	);
+});
+
+test("#177: baseline diffing compares quality, never latency", async () => {
+	// #162 measured identical quality columns and p95 2.5s vs 3.8s on the same
+	// code inside one hour, so timing must never become the pass/fail axis.
+	// This asserts the axis set, so adding a latency rule is a deliberate edit.
+	const src = await readFile(BENCH_SCRIPT, "utf8");
+	const fn = src.slice(
+		src.indexOf("export function diffAgainstBaseline"),
+		src.indexOf("export function diffAgainstBaseline") + 2000,
+	);
+	for (const type of ['"success-failure"', '"marker-loss"', '"token-swing"']) {
+		assert.ok(
+			fn.includes(type),
+			`the quality axis ${type} must stay in the baseline diff`,
+		);
+	}
+	assert.ok(
+		!/type:\s*"(latency|timing|slow)/.test(fn),
+		"latency must not become a regression axis (live-network flaps, #162)",
+	);
+});

@@ -63,9 +63,12 @@ jobs:
           fi
           node --experimental-strip-types scripts/bench-extraction.mjs \
             "${ARGS[@]}" --json > bench-results.json
-          # Also print human-readable scorecard
+          # Also print human-readable scorecard. No `|| true` (#177): with no
+          # committed baseline the comparison never runs, so this cannot fail on
+          # a quality flap — it can only fail on a real crash, which is the
+          # signal the swallow was hiding.
           node --experimental-strip-types scripts/bench-extraction.mjs \
-            "${ARGS[@]}" || true
+            "${ARGS[@]}"
 
       - name: Upload scorecard artifact
         # yamllint disable-line rule:line-length
