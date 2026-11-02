@@ -1,0 +1,138 @@
+// ─── #184 review round 1: making directories first-class must not leak into
+// every consumer that assumed `paths` held only files.
+//
+// Findings from the adversarial review of PR #191 at 0ee5c4b:
+//  * file-oriented architecture regexes accepted directory names, so an excluded
+//    asset directory fabricated a framework signal;
+//  * the 20 000-entry local cap now spends slots on directories, so a repo that
+//    was complete before silently lost half its files;
+//  * the counts were asserted by re-implementing the counter's rule in the test,
+//    so `countDirs` could return 0 with the whole suite green;
+//  * the third source (the clone walk) still emitted files only, while #184 asks
+//    that all three sources obey one convention;
+//  * the exclusion comments and fixture named `symlink`/`submodule` as Git Trees
+//    entry TYPES. They are not. Verified live: a real symlink is
+//    {mode:"120000", type:"blob"} and its /blob/ URL returns 200, while a gitlink
+//    is {type:"commit"} and its /blob/ URL returns 404.
+import assert from "node:assert";
+import test from "node:test";
+import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+
+import {
+	detectArchitectureSignals,
+	dropExcludedPaths,
+	capRepoPaths,
+	repoEntryCensus,
+	recursiveTreePaths,
+	walkRepo,
+	MAX_TREE_PATHS,
+} from "../src/github-map.ts";
+
+// P2: directory existence is evidence of a DIRECTORY, not of a framework. An
+// asset directory whose files were excluded must not establish Jest, and an empty
+// .github/workflows/ must not establish GitHub Actions.
+test("#184 review: directories never fabricate a file-oriented architecture signal", () => {
+	const dirsOnly = [".github/", ".github/workflows/", "jest.config.assets/", "Dockerfiles/"];
+	const md = detectArchitectureSignals(dirsOnly);
+	assert.ok(!/CI\/CD/.test(md), `directory invented a CI signal: ${md}`);
+	assert.ok(!/Jest/.test(md), `directory invented a test-framework signal: ${md}`);
+	assert.ok(!/Docker:/.test(md), `directory invented a Docker signal: ${md}`);
+});
+
+test("#184 review: the same detection still fires on the files themselves", () => {
+	const md = detectArchitectureSignals([
+		".github/",
+		".github/workflows/ci.yml",
+		"jest.config.js",
+		"Dockerfile",
+	]);
+	assert.ok(/CI\/CD/.test(md), "the real workflow file no longer establishes CI/CD");
+	assert.ok(/Jest/.test(md), "the real config no longer establishes Jest");
+	assert.ok(/Docker:/.test(md), "the real Dockerfile no longer establishes Docker");
+});
+
+// Directory presence is still a legitimate signal for the one label that means
+// "a test directory exists".
+test("#184 review: a bare test directory still counts as a test directory", () => {
+	const md = detectArchitectureSignals(["tests/", "src/index.ts"]);
+	assert.ok(/[Tt]ests?/.test(md), `bare tests/ produced no test signal: ${md}`);
+});
+
+// P3: the counters were only ever asserted by copying their rule into the test.
+// A named census is the thing the dispatcher actually calls.
+test("#184 review: the census is the dispatcher's own counter, not a copy of its rule", () => {
+	assert.deepEqual(repoEntryCensus(["src/", "src/tools/", "src/a.ts", "README.md"]), {
+		files: 2,
+		dirs: 2,
+	});
+	assert.deepEqual(repoEntryCensus([]), { files: 0, dirs: 0 });
+	// A directory is never a file, and a file is never a directory.
+	const one = repoEntryCensus(["docs/"]);
+	assert.equal(one.files, 0);
+	assert.equal(one.dirs, 1);
+});
+
+// P2: the local cap must bound what is RETAINED, not what is COUNTED. 11 000
+// directories each holding one file was a complete map before this PR; it must
+// not silently become a 10 000-file repository.
+test("#184 review: the entry cap bounds retained entries without corrupting the census", () => {
+	const many = [];
+	for (let i = 0; i < MAX_TREE_PATHS + 1000; i++) {
+		many.push(`d${i}/`);
+		many.push(`d${i}/f.ts`);
+	}
+	const eligible = dropExcludedPaths(many);
+	const census = repoEntryCensus(eligible);
+	assert.equal(census.files, MAX_TREE_PATHS + 1000, "files were lost from the census");
+	assert.equal(census.dirs, MAX_TREE_PATHS + 1000, "directories were lost from the census");
+
+	const { kept, capped } = capRepoPaths(eligible);
+	assert.equal(kept.length, MAX_TREE_PATHS, "the retained list is not bounded");
+	assert.equal(capped, true, "a truncated retained list must report itself as capped");
+});
+
+test("#184 review: a list that fits the cap is not labelled capped", () => {
+	const { kept, capped } = capRepoPaths(["src/", "src/a.ts"]);
+	assert.equal(kept.length, 2);
+	assert.equal(capped, false, "a complete list must not be reported as a lower bound");
+});
+
+// P2: the Git Trees endpoint's entry types are blob / tree / commit. Symlinks are
+// blobs with mode 120000 and are reachable at /blob/ (verified 200 on
+// torvalds/linux/blob/master/AGENTS.md); gitlinks are type commit and 404
+// (verified on git/git/blob/master/sha1collisiondetection).
+test("#184 review: real Git Trees shapes — symlink blob kept, gitlink excluded", () => {
+	const paths = recursiveTreePaths([
+		{ path: "RelNotes", mode: "120000", type: "blob" },
+		{ path: "bin/run", mode: "100755", type: "blob" },
+		{ path: "docs", mode: "040000", type: "tree" },
+		{ path: "sha1collisiondetection", mode: "160000", type: "commit" },
+	]);
+	assert.ok(paths.includes("RelNotes"), "a reachable symlink was dropped");
+	assert.ok(paths.includes("bin/run"));
+	assert.ok(paths.includes("docs/"));
+	assert.ok(!paths.includes("sha1collisiondetection"), "a gitlink leaked — its /blob/ URL 404s");
+});
+
+// P2: #184 asks that all three sources obey the one convention. The clone walk is
+// the third.
+test("#184 review: the clone walk emits directories in the same representation", async () => {
+	const root = await mkdtemp(join(tmpdir(), "webmap-walk-"));
+	try {
+		await mkdir(join(root, "src/nested"), { recursive: true });
+		await mkdir(join(root, "empty-dir"), { recursive: true });
+		await writeFile(join(root, "README.md"), "x");
+		await writeFile(join(root, "src/nested/a.ts"), "y");
+		const walk = await walkRepo(root, { skipHidden: false, skipDirs: new Set() });
+		assert.ok(walk.paths.includes("src/"), `clone walk has no directory entry: ${walk.paths}`);
+		assert.ok(walk.paths.includes("src/nested/"));
+		assert.ok(walk.paths.includes("src/nested/a.ts"));
+		assert.equal(walk.files, 2);
+		// Directories are counted once each, and the census agrees with the counter.
+		assert.deepEqual(repoEntryCensus(walk.paths), { files: walk.files, dirs: walk.dirs });
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});

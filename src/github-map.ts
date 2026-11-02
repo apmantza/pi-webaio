@@ -213,23 +213,34 @@ function matched(patterns: [RegExp, string][], paths: string[]): string[] {
 }
 
 /**
- * Detect architecture signals from a list of repo file paths.
+ * Detect architecture signals from a repo path list.
+ *
+ * The list is the repo-map representation, which since #184 carries directories as
+ * well as files. Every signal below except `hasTestDir` is a claim about a FILE
+ * (a workflow, a config, a lockfile, a Dockerfile), so each one reads `files`
+ * only. Handing directories to those regexes invented signals: a
+ * `jest.config.assets/` directory established Jest, and a `.github/workflows/`
+ * directory whose only contents were excluded images established GitHub Actions
+ * (review of PR #191). Directory presence remains the right evidence for the one
+ * label that means "a test directory exists", so `hasTestDir` reads the whole list.
+ *
  * Pure function — exported for unit testing.
  */
 export function detectArchitectureSignals(paths: string[]): string {
 	const lines: string[] = [];
+	const files = paths.filter((p) => !p.endsWith("/"));
 
 	if (
-		paths.some((p) =>
+		files.some((p) =>
 			/^(Dockerfile|docker-compose\.(yml|yaml)|\.dockerignore)$/.test(p),
 		)
 	)
 		lines.push("- 🐳 **Docker:** yes");
 
-	const ciCd = matched(CI_PATTERNS, paths);
+	const ciCd = matched(CI_PATTERNS, files);
 	if (ciCd.length) lines.push(`- 🔄 **CI/CD:** ${ciCd.join(", ")}`);
 
-	const tests = matched(TEST_PATTERNS, paths);
+	const tests = matched(TEST_PATTERNS, files);
 	const hasTestDir = paths.some(
 		(p) =>
 			p.startsWith("__tests__/") ||
@@ -240,22 +251,22 @@ export function detectArchitectureSignals(paths: string[]): string {
 	if (hasTestDir && !tests.length) tests.push("(test dir present)");
 	if (tests.length) lines.push(`- 🧪 **Tests:** ${tests.join(", ")}`);
 
-	const monorepo = matched(MONOREPO_PATTERNS, paths);
-	const pkgJsons = paths.filter((p) => p.endsWith("/package.json"));
+	const monorepo = matched(MONOREPO_PATTERNS, files);
+	const pkgJsons = files.filter((p) => p.endsWith("/package.json"));
 	if (pkgJsons.length > 1 && !monorepo.length) monorepo.push("multi-package");
 	if (monorepo.length) lines.push(`- 📦 **Monorepo:** ${monorepo.join(", ")}`);
 
 	const pms = new Set<string>();
 	for (const [file, pm] of Object.entries(LOCKFILE_MAP)) {
-		if (paths.some((p) => p === file || p.endsWith(`/${file}`))) pms.add(pm);
+		if (files.some((p) => p === file || p.endsWith(`/${file}`))) pms.add(pm);
 	}
 	if (pms.size) lines.push(`- 📋 **Package managers:** ${[...pms].join(", ")}`);
 
 	const secSignals: string[] = [];
-	if (paths.some((p) => p === "SECURITY.md")) secSignals.push("SECURITY.md");
-	if (paths.some((p) => p === ".env")) secSignals.push("⚠ .env committed");
+	if (files.some((p) => p === "SECURITY.md")) secSignals.push("SECURITY.md");
+	if (files.some((p) => p === ".env")) secSignals.push("⚠ .env committed");
 	if (
-		paths.some(
+		files.some(
 			(p) => p === ".github/dependabot.yml" || p === ".github/dependabot.yaml",
 		)
 	)
@@ -407,8 +418,16 @@ export async function walkRepo(
 			}
 			if (e.isDirectory()) {
 				if (skipDirs.has(e.name)) continue;
+				// Directories are entries here exactly as they are in the other two
+				// sources (#184 asks that all three obey one convention): slash-terminated,
+				// so `repoEntryCensus`, `buildTree` and `repoTreeEntryUrl` read them the same
+				// way, and a cloned map reports the same denominators as an API map of the
+				// same repository. They consume `maxEntries` slots, which is deliberate — the
+				// bound is on retained entries, and `hitCap` says when it bit.
+				const relDir = rel ? `${rel}/${e.name}` : e.name;
+				paths.push(`${relDir}/`);
 				dirs++;
-				await walk(join(dir, e.name), rel ? `${rel}/${e.name}` : e.name);
+				await walk(join(dir, e.name), relDir);
 			} else if (e.isFile()) {
 				const relPath = rel ? `${rel}/${e.name}` : e.name;
 				paths.push(relPath);
@@ -557,10 +576,19 @@ async function listContents(
  * API, a constant presented as a shape signal.
  *
  * Directories are therefore kept, slash-terminated, which is the one spelling
- * those three consumers already share (see `contentEntryPaths`). `symlink`,
- * `submodule` and the `commit` entry a gitlink becomes are excluded rather than
- * guessed: a `/blob/` link for any of them is a 404, so an entry whose in-repo URL
- * we cannot state gets no link — the same fail-closed rule #176 settled.
+ * those three consumers already share (see `contentEntryPaths`).
+ *
+ * What this endpoint actually emits, verified live rather than assumed: entry
+ * `type` is only ever `blob`, `tree` or `commit`. `symlink` and `submodule` are
+ * contents-API type names and never appear here — an earlier revision of this
+ * comment, and a fixture, claimed to exclude them and tested a shape that cannot
+ * occur. A symlink is a blob carrying mode `120000` (observed on `git/git` and
+ * `torvalds/linux`) and its `/blob/` URL resolves — `torvalds/linux/blob/master/AGENTS.md`
+ * returns 200 — so symlinks are kept, and dropping them would discard reachable
+ * entries. A gitlink is `type: "commit"` and its `/blob/` URL 404s
+ * (`git/git/blob/master/sha1collisiondetection`), so only THAT kind is excluded:
+ * an entry whose in-repo URL we cannot state gets no link, the fail-closed rule
+ * #176 settled, applied to the one case where it is actually true.
  *
  * Extracted as a pure leaf for the reason `normalizeContentEntryType` was: the
  * behaviour is here, the enclosing function is a network call, and a permanently
@@ -598,7 +626,7 @@ async function fetchRecursiveTree(
 }
 
 /** Hard cap on repo-tree size to keep the map response sane. */
-const MAX_TREE_PATHS = 20_000;
+export const MAX_TREE_PATHS = 20_000;
 
 /** Substring patterns to exclude from repo trees (asset files, builds, deps). */
 const REPO_PATH_EXCLUSIONS = [
@@ -757,8 +785,17 @@ export function repoTreeEntryUrl(
 	return path ? `${base}/${path}` : base;
 }
 
-/** Filter noisy asset/build/dep paths out of a repo tree. */
-export function filterRepoPaths(paths: string[]): string[] {
+/**
+ * Drop asset/build/dependency paths, WITHOUT bounding the result.
+ *
+ * Split out of `filterRepoPaths` because the two jobs it was doing have different
+ * consequences now that directories are entries too. Exclusion decides what the
+ * counts mean; the cap decides only what is retained. Applying the cap first made
+ * it corrupt the census: a repository of 11 000 directories holding one file each
+ * was a complete map before #184 and became a 10 000-file repository afterwards,
+ * because half the cap's slots went to directories (review of PR #191).
+ */
+export function dropExcludedPaths(paths: string[]): string[] {
 	// Lowercase all patterns once up front for case-insensitive matching
 	const loweredExclusions = REPO_PATH_EXCLUSIONS.map((p) => p.toLowerCase());
 	const filtered: string[] = [];
@@ -766,23 +803,45 @@ export function filterRepoPaths(paths: string[]): string[] {
 		const lower = p.toLowerCase();
 		if (loweredExclusions.some((sub) => lower.includes(sub))) continue;
 		filtered.push(p);
-		if (filtered.length >= MAX_TREE_PATHS) break;
 	}
 	return filtered;
 }
 
-/** Count distinct file paths (entries without trailing slash). */
-function countFiles(paths: string[]): number {
-	let n = 0;
-	for (const p of paths) if (!p.endsWith("/")) n++;
-	return n;
+/**
+ * Bound a path list to `MAX_TREE_PATHS`, reporting whether the bound bit.
+ *
+ * `capped` is what makes a count honest: a retained list that stopped at the limit
+ * is a lower bound, and the caller must say so rather than print the number as a
+ * census.
+ */
+export function capRepoPaths(paths: string[]): { kept: string[]; capped: boolean } {
+	return {
+		kept: paths.length > MAX_TREE_PATHS ? paths.slice(0, MAX_TREE_PATHS) : paths,
+		capped: paths.length > MAX_TREE_PATHS,
+	};
 }
 
-/** Count distinct directory paths (entries with trailing slash). */
-function countDirs(paths: string[]): number {
-	let n = 0;
-	for (const p of paths) if (p.endsWith("/")) n++;
-	return n;
+/** Filter noisy asset/build/dep paths out of a repo tree, then bound the result. */
+export function filterRepoPaths(paths: string[]): string[] {
+	return capRepoPaths(dropExcludedPaths(paths)).kept;
+}
+
+/**
+ * Count files and directories in a repo-map path list.
+ *
+ * Exported because the counts are the thing #184 was about, and until now they
+ * were asserted by re-implementing their rule inside the test — so replacing the
+ * body of `countDirs` with `return 0` left the entire suite green (review of
+ * PR #191). A named census is a seam the dispatcher actually calls.
+ */
+export function repoEntryCensus(paths: string[]): { files: number; dirs: number } {
+	let files = 0;
+	let dirs = 0;
+	for (const p of paths) {
+		if (p.endsWith("/")) dirs++;
+		else files++;
+	}
+	return { files, dirs };
 }
 
 /**
@@ -1044,13 +1103,23 @@ export function renderRepoTreeMarkdown(
 	paths: string[],
 	max: number,
 	truncatedByApi: boolean,
+	/**
+	 * The map stopped at OUR OWN retention cap rather than at the API's. Distinct
+	 * from `truncatedByApi`: with directories now sharing the cap's slots, a repo
+	 * whose API tree arrived complete can still be cut here, and labelling that
+	 * "(uncapped)" would be false (review of PR #191).
+	 */
+	boundedByLocalCap = false,
 ): string {
 	const budget = Math.max(1, Math.min(paths.length, max));
 	const shownPaths = paths.length > budget ? paths.slice(0, budget) : paths;
 	const rendered = renderTree(buildTree(shownPaths));
-	const label = truncatedByApi
-		? `## File Tree (${paths.length} entries, truncated by API)`
-		: `## File Tree (${paths.length} entries)`;
+	const bound = truncatedByApi
+		? ", truncated by API"
+		: boundedByLocalCap
+			? `, bounded by the ${MAX_TREE_PATHS}-entry retention cap`
+			: "";
+	const label = `## File Tree (${paths.length} entries${bound})`;
 	const note =
 		shownPaths.length < paths.length
 			? `\n_showing first ${shownPaths.length} of ${paths.length} entries; raise \`max\` for more_\n`
@@ -1090,13 +1159,21 @@ async function mapGitHubRepoFull(
 	let walk: WalkResult | null = null;
 
 	const treeResult = await fetchRecursiveTree(owner, repo, defaultBranch);
+	// Census of everything that survived EXCLUSION, taken before the retention cap.
+	// Counting after the cap is what turned a complete map into a silently smaller
+	// repository once directories started consuming cap slots.
+	let census: { files: number; dirs: number } | null = null;
+	let localCapped = false;
 	if (treeResult && !treeResult.truncated) {
 		paths = treeResult.paths;
 		// Re-apply our own exclusion filter on top of the API result
 		// (the API doesn't filter; we want to drop noise like
 		// node_modules, .git, asset files before building the tree).
-		const filtered = filterRepoPaths(paths);
-		paths = filtered;
+		const eligible = dropExcludedPaths(paths);
+		census = repoEntryCensus(eligible);
+		const bounded = capRepoPaths(eligible);
+		paths = bounded.kept;
+		localCapped = bounded.capped;
 	} else if (treeResult?.truncated) {
 		truncated = true;
 		// Tree too large — fall back to cloning and walking
@@ -1138,7 +1215,7 @@ async function mapGitHubRepoFull(
 	let architecture: string | undefined;
 
 	if (paths.length > 0) {
-		treeMarkdown = renderRepoTreeMarkdown(paths, max, truncated);
+		treeMarkdown = renderRepoTreeMarkdown(paths, max, truncated, localCapped);
 		architecture = detectArchitectureSignals(paths);
 
 		// Generate a blob/tree URL per entry (cap at max)
@@ -1197,7 +1274,7 @@ async function mapGitHubRepoFull(
 		// reviewer's thread surfaced (nodejs/node-sized repos).
 		treeEntriesAreLowerBound: walk
 			? walk.hitCap
-			: truncated || paths.length >= MAX_TREE_PATHS,
+			: truncated || localCapped,
 	});
 	summaryParts.push(`${counts.discovered} via ${Object.keys(sources).length} sources:`);
 	for (const [src, urls] of Object.entries(sources)) {
@@ -1239,8 +1316,8 @@ async function mapGitHubRepoFull(
 			owner,
 			repo,
 			ref: defaultBranch,
-			totalFiles: walk?.files ?? countFiles(paths),
-			totalDirs: walk?.dirs ?? countDirs(paths),
+			totalFiles: census?.files ?? repoEntryCensus(paths).files,
+			totalDirs: census?.dirs ?? repoEntryCensus(paths).dirs,
 			description: repoMeta?.description,
 			topics: repoMeta?.topics,
 			language: repoMeta?.language,
