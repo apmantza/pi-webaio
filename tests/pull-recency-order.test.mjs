@@ -225,3 +225,71 @@ test("#132 review: a calendar-impossible lastmod is treated as absent", () => {
 	const ordered = rankByRecency(entries).map((e) => e.loc);
 	assert.equal(ordered[0], "https://x/real", `impossible date outranked a real one: ${ordered}`);
 });
+
+// ─── CodeRabbit round 1 on PR #178 (4 findings, all real) ─────────────
+
+test("#132 cr1: bare <loc> BEFORE a wrapped one keeps document order", () => {
+	// The additive fix appended bare entries after wrapped ones, so a sitemap
+	// that lists a bare <loc> first no longer round-trips its own order — and
+	// when the majority gate preserves input order, a small budget picks the
+	// wrong page.
+	const xml = `<urlset><loc>https://x/first</loc><url><loc>https://x/second</loc><lastmod>2024-01-01</lastmod></url></urlset>`;
+	assert.deepEqual(parseLocs(xml).map((e) => e.loc), ["https://x/first", "https://x/second"]);
+});
+
+test("#132 cr1: wrapped spans lookup stays linear on a large sitemap", () => {
+	// `wrapped.some(...)` restarted a scan per bare <loc>, which is O(bare x
+	// wrapped). With 50k wrapped entries that is billions of comparisons before
+	// any cap runs. Time-boxed so a quadratic regression fails rather than hangs.
+	// Measured on the quadratic version: 20k -> 237ms, 40k -> 758ms,
+	// 80k -> 3263ms. A 20k fixture sat just below the knee and passed, so the
+	// threshold has to sit above it to actually catch the regression.
+	const n = 60000;
+	const parts = [];
+	for (let i = 0; i < n; i++) parts.push(`<url><loc>https://x/${i}</loc></url>`);
+	const xml = `<urlset>${parts.join("")}<loc>https://x/bare</loc></urlset>`;
+	const t0 = Date.now();
+	const entries = parseLocs(xml);
+	const ms = Date.now() - t0;
+	assert.equal(entries.length, n + 1);
+	assert.equal(entries[entries.length - 1].loc, "https://x/bare");
+	assert.ok(ms < 1200, `parseLocs took ${ms}ms on ${n} wrapped entries — quadratic scan`);
+});
+
+test("#132 cr1: ranking happens before the MAX_SITEMAP_URLS cap, not after", async () => {
+	// The cap predates this PR, but ranking only the survivors means a sitemap
+	// larger than the cap loses its newest pages before rankByRecency ever sees
+	// them — the same bug class as #132, one level up.
+	const { capRanked, MAX_SITEMAP_URLS } = await import("../src/discovery.ts");
+	const total = MAX_SITEMAP_URLS + 50;
+	const entries = [];
+	for (let i = 0; i < total; i++) {
+		// Oldest first, so a cap-before-rank keeps only ancient pages.
+		const y = 1990 + Math.floor(i / 12);
+		const mo = String((i % 12) + 1).padStart(2, "0");
+		entries.push({ loc: `https://x/p/${i}`, lastmod: `${y}-${mo}-01` });
+	}
+	const capped = capRanked(entries);
+	assert.equal(capped.length, MAX_SITEMAP_URLS);
+	// The single newest entry must survive the cap.
+	assert.ok(
+		capped.some((e) => e.loc === `https://x/p/${total - 1}`),
+		"newest page was cut by the cap before ranking could promote it",
+	);
+});
+
+test("#132 cr1: two strategies of equal length are chosen by recency, not by arrival order", async () => {
+	// `discover` kept the FIRST candidate on a length tie, so an earlier
+	// strategy serving max old pages beat a later one serving max newer pages.
+	const { newestRecency } = await import("../src/discovery.ts");
+	const oldPages = [
+		{ loc: "https://x/a", lastmod: "2001-01-01" },
+		{ loc: "https://x/b", lastmod: "2002-01-01" },
+	];
+	const newPages = [
+		{ loc: "https://x/c", lastmod: "2026-05-05" },
+		{ loc: "https://x/d", lastmod: "2019-01-01" },
+	];
+	assert.ok(newestRecency(newPages) > newestRecency(oldPages));
+	assert.equal(newestRecency([{ loc: "https://x/undated" }]), undefined);
+});

@@ -16,7 +16,7 @@ const IGNORED =
 // hostile site can't exhaust sockets/memory or crash the process.
 const MAX_CHILD_SITEMAPS = 50;
 const SITEMAP_CONCURRENCY = 5;
-const MAX_SITEMAP_URLS = 5000;
+export const MAX_SITEMAP_URLS = 5000;
 const MAX_SITEMAP_FETCHES = 100;
 
 const NAV_SELECTORS = [
@@ -58,42 +58,75 @@ async function tryFetch(
 export type SitemapEntry = { loc: string; lastmod?: string };
 
 export function parseLocs(xml: string): SitemapEntry[] {
-	const out: SitemapEntry[] = [];
-	// Spans covered by a <url>/<sitemap> block. Anything matched outside them is a
-	// bare <loc>, which the pre-#132 parser tolerated and still must.
-	const wrapped: Array<[number, number]> = [];
+	// One ascending pass over every <loc>, with a cursor over the already-ordered
+	// <url>/<sitemap> spans. That single shape buys three properties at once:
+	//
+	//  * document order is preserved across bare and wrapped locations (the
+	//    additive "wrapped first, then bare" merge put a leading bare <loc> last,
+	//    which is wrong whenever the majority gate preserves input order);
+	//  * lookup is linear, where `wrapped.some(...)` per location was O(bare x
+	//    wrapped) — measured 237ms / 758ms / 3263ms at 20k / 40k / 80k entries;
+	//  * every <loc> in a block is emitted, not just the first.
+	//
+	// Pairing stays inside the block: zipping a global loc list against a global
+	// lastmod list would hand an undated entry its neighbour's date and silently
+	// invent recency.
+	type Span = { start: number; end: number; lastmod?: string };
+	const spans: Span[] = [];
 	for (const item of xml.matchAll(/<(?:url|sitemap)\b[^>]*>([\s\S]*?)<\/(?:url|sitemap)>/gi)) {
-		const block = item[1] ?? "";
-		wrapped.push([item.index, item.index + item[0].length]);
-		// One <lastmod> per block, applied to every <loc> inside it. Pairing must
-		// stay inside the block: zipping a global loc list against a global
-		// lastmod list would hand an undated entry its neighbour's date and
-		// silently invent recency.
-		const lastmod = /<lastmod>([^<]*)<\/lastmod>/i.exec(block)?.[1]?.trim();
-		// Every <loc> in the block, not just the first. The old global regex
-		// returned all of them, so keeping only the first turned malformed
-		// multi-<loc> input into a silent discovery loss.
-		for (const locMatch of block.matchAll(/<loc>([^<]*)<\/loc>/gi)) {
-			const loc = locMatch[1]?.trim();
-			if (!loc) continue;
-			out.push(lastmod ? { loc, lastmod } : { loc });
-		}
+		const start = item.index;
+		spans.push({
+			start,
+			end: start + item[0].length,
+			lastmod: /<lastmod>([^<]*)<\/lastmod>/i.exec(item[1] ?? "")?.[1]?.trim(),
+		});
 	}
-	// Bare <loc> entries that sit outside every block. The fallback used to be
-	// `if (out.length > 0) return out`, so it only ran when NOTHING wrapped
-	// parsed and a sitemap mixing both shapes silently dropped every bare entry.
-	// Real malformed sitemaps mix, so collection is additive rather than exclusive.
-	const isWrapped = (index: number) =>
-		wrapped.some(([start, end]) => index >= start && index < end);
+
+	const out: SitemapEntry[] = [];
+	let cursor = 0;
 	for (const locMatch of xml.matchAll(/<loc>([^<]*)<\/loc>/gi)) {
-		if (isWrapped(locMatch.index)) continue;
 		const loc = locMatch[1]?.trim();
 		if (!loc) continue;
-		// No enclosing block means no reliable pairing: emit undated so it ranks
-		// after dated entries instead of guessing at a date.
-		out.push({ loc });
+		const pos = locMatch.index;
+		// Spans are ascending and matchAll scans ascending, so the cursor only
+		// ever moves forward.
+		while (cursor < spans.length && pos >= spans[cursor]!.end) cursor++;
+		const span = cursor < spans.length && pos >= spans[cursor]!.start ? spans[cursor] : undefined;
+		// A loc with no enclosing block has nothing to pair it with, so it is
+		// emitted undated and ranks after dated entries instead of guessing.
+		out.push(span?.lastmod ? { loc, lastmod: span.lastmod } : { loc });
 	}
 	return out;
+}
+
+/**
+ * Rank, THEN truncate. Order matters and is the whole point of this helper.
+ *
+ * `MAX_SITEMAP_URLS` predates issue #132, but ranking only the entries that
+ * survive it reintroduces the original bug one level up: a sitemap larger than
+ * the cap loses its newest pages before `rankByRecency` ever sees them. Every
+ * sitemap path (direct, nested index, robots.txt) must go through here.
+ */
+export function capRanked(entries: SitemapEntry[]): SitemapEntry[] {
+	return rankByRecency(entries).slice(0, MAX_SITEMAP_URLS);
+}
+
+/**
+ * Newest usable timestamp among a strategy's entries, or undefined.
+ *
+ * `discover` runs several discovery strategies and keeps the best candidate. The
+ * old rule was "longest wins, first on a tie", which is arbitrary once ordering
+ * carries meaning: an earlier strategy serving `max` old pages beat a later one
+ * serving `max` newer pages purely on arrival order. Ties are now broken by
+ * recency.
+ */
+export function newestRecency(entries: SitemapEntry[]): number | undefined {
+	let newest: number | undefined;
+	for (const entry of entries) {
+		const t = recencyTime(entry);
+		if (t !== undefined && (newest === undefined || t > newest)) newest = t;
+	}
+	return newest;
 }
 
 /**
@@ -236,9 +269,9 @@ async function fetchSitemap(
 		const nested = await runInBatches(children, SITEMAP_CONCURRENCY, (u) =>
 			fetchSitemap(u, depth + 1, allowedOrigins, budget),
 		);
-		return nested.flat().slice(0, MAX_SITEMAP_URLS);
+		return capRanked(nested.flat());
 	}
-	return entries.slice(0, MAX_SITEMAP_URLS);
+	return capRanked(entries);
 }
 
 async function sitemapFromRobots(
@@ -266,7 +299,7 @@ async function sitemapFromRobots(
 	const results = await runInBatches(sitemaps, SITEMAP_CONCURRENCY, (u) =>
 		fetchSitemap(u, 0, allowedOrigins, budget),
 	);
-	return results.flat().slice(0, MAX_SITEMAP_URLS);
+	return capRanked(results.flat());
 }
 
 // ─── Navigation link extraction ────────────────────────────────────
@@ -520,6 +553,7 @@ export async function discover(
 	const results = await Promise.all(strategies);
 
 	let best: string[] = [];
+	let bestNewest: number | undefined;
 	for (const entries of results) {
 		if (!entries.length) continue;
 		// Rank BEFORE filtering/capping: `filterAndDedupe` truncates to `max`, so
@@ -534,9 +568,23 @@ export async function discover(
 			scope,
 			max,
 		);
-		if (filtered.length > 0) {
-			const candidate = includeSeed(filtered);
-			if (candidate.length > best.length) best = candidate;
+		if (filtered.length === 0) continue;
+		const candidate = includeSeed(filtered);
+		// Length still decides. What changed is the TIE: "keep the first" was
+		// arbitrary once ordering carried meaning, so an earlier strategy serving
+		// `max` stale pages used to beat a later one serving `max` fresh ones.
+		// Ties now go to the strategy with the newest usable date; a strategy
+		// with no dates at all keeps the previous candidate (no date is not
+		// evidence of staleness).
+		const newest = newestRecency(entries);
+		const longer = candidate.length > best.length;
+		const newerOnTie =
+			candidate.length === best.length &&
+			newest !== undefined &&
+			(bestNewest === undefined || newest > bestNewest);
+		if (longer || newerOnTie) {
+			best = candidate;
+			bestNewest = newest;
 		}
 	}
 
