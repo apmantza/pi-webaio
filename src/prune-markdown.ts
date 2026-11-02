@@ -1069,30 +1069,42 @@ export function applyTokenBudget(
 	if (body.trim() !== "" && !carriesPageProse(result, body)) {
 		const room = Math.max(0, effectiveBudget - frontmatterTokens);
 		const source = prosePrefixSource(body);
-		let prose = trimToTokenBudgetWithClosedFence(source, room);
-		// The fence-aware trim can legitimately return nothing at all: at one or two
-		// tokens the only thing that fits is the fence marker itself, and the rule
-		// above correctly refuses to hand back an empty balanced fence. That must not
-		// fall through to the framing we were trying to replace, so ask the plain
-		// trimmer for whatever fragment of the document actually fits.
-		if (prose.trim() === "") {
-			// Two things the plain trimmer must not do here. It does not close what it
-			// opens, and a bare opener is worse than the character it replaced — a
-			// complete delimiter changes the markdown parsing context for everything
-			// rendered after it — so marker lines come off. And when the prose STARTS with a
-			// fence, the opener alone can consume the whole small room: at room 10 the trim
-			// returned "```\n" and nothing else, which is why this fallback kept falling
-			// through to the framing it was meant to replace. Dropping the leading opener
-			// first lets the room be spent on the code text itself.
-			const codeFirst = source.replace(/^[ \t]*(?:`{3,}|~{3,})[^\n]*\n?/, "");
-			prose = trimToTokenBudget(codeFirst, room).replace(
-				/^[ \t]*(?:`{3,}|~{3,})[^\n]*$/gm,
-				"",
+		// The candidate is held to the same test as the result it replaces. The
+		// trimmers emit framing at tiny budgets — a balanced pair of empty fence
+		// markers, a lone opener — and installing one would only swap a piece of
+		// NOTICE framing for a piece of MARKUP framing. Deciding that here, at the one
+		// site that needs a content-bearing answer, is what replaced three rounds of
+		// fence rewriting in the shared trim helper.
+		const candidates = [
+			trimToTokenBudgetWithClosedFence(source, room),
+			// At one or two tokens a fence-led document yields only its marker: the opener
+			// alone consumes the whole room (at room 10 the trim returned "```\n" and
+			// nothing else). So ask for the code text itself — every leading fence-marker and
+			// blank line is dropped first, because a document can open with a stack of them
+			// before any text appears — and remaining marker lines come off, because the
+			// plain trimmer does not close what it opens and a bare delimiter changes the
+			// parsing context for everything rendered after it.
+			trimToTokenBudget(
+				source.replace(/^(?:[ \t]*(?:`{3,}|~{3,})[^\n]*\n|[ \t]*\n)+/, ""),
+				room,
+			).replace(/^[ \t]*(?:`{3,}|~{3,})[^\n]*$/gm, ""),
+		];
+		// A candidate is rejected only for the one thing that makes it useless: being
+		// nothing but fence delimiters. `carriesPageProse` is the wrong test here — it
+		// skips lines with no letter in them, which is right for a whole result but
+		// rejects a legitimate one-character answer, and "-" taken from a list is the
+		// document's own text. Deciding whether a fence is EMPTY needs pairing and
+		// marker-length semantics and belongs to the closure parser; deciding whether a
+		// fragment is ALL delimiters needs neither, and that is all this site requires.
+		const allDelimiters = (t: string): boolean =>
+			t.trim() !== "" &&
+			t.split("\n").every(
+				(l: string) => l.trim() === "" || /^[ \t]*(?:`{3,}|~{3,})[^\n]*$/.test(l),
 			);
-		}
-		// The swap candidate is produced FROM the document by the trimmer, so it
-		// needs no detector — only that the ceiling actually left room.
-		if (prose.trim() !== "") result = prose;
+		const chosen = candidates.find((c) => c.trim() !== "" && !allDelimiters(c));
+		// Nothing in the document fits the room. Leave the framing rather than install
+		// a candidate that carries none of the document either.
+		if (chosen !== undefined) result = chosen;
 	}
 
 	return assemble(result);
@@ -1218,65 +1230,18 @@ export function trimToTokenBudgetWithClosedFence(
 	text: string,
 	maxTokens: number,
 ): string {
-	const closed = closeFencesWithin(trimToTokenBudget(text, maxTokens), maxTokens, true);
-	// Only a fence whose BODY is empty is framing. The first version asked whether the
-	// string contained any letter or number at all, which is a different claim and it
-	// destroyed real content: a body of `---` came back as a run of horizontal rules.
-	// The regex that replaced it was also wrong — the opener capture backtracked from
-	// four markers to three, so a shorter marker BODY line inside a longer block read
-	// as an empty fence and the block's delimiters were deleted.
-	return dropEmptyFences(closed);
-}
-
-/**
- * Remove the delimiters of fenced blocks whose body is entirely blank.
- *
- * Done by scanning fence boundaries rather than matching a pattern, because fence
- * identity is a property of the parse and not of one line: a marker run shorter
- * than the opener is BODY content, a run of equal or greater length closes, and an
- * info string containing the marker character cannot open that fence style. Every
- * thing the regex got wrong — marker-length backtracking, a `---` body losing its
- * code semantics, a blank body spread over several lines — falls out of tracking
- * the opener length and checking every body line.
- */
-function dropEmptyFences(text: string): string {
-	const lines = text.split("\n");
-	const kept: string[] = [];
-	let i = 0;
-	while (i < lines.length) {
-		const open = /^ {0,3}(`{3,}|~{3,})([^\n]*)$/.exec(lines[i]);
-		const marker = open ? open[1] : "";
-		const info = open ? open[2] : "";
-		if (!open || info.includes(marker[0])) {
-			kept.push(lines[i]);
-			i += 1;
-			continue;
-		}
-		const ch = marker[0];
-		const len = marker.length;
-		let j = i + 1;
-		let bodyBlank = true;
-		while (j < lines.length) {
-			const close = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(lines[j]);
-			if (close && close[1][0] === ch && close[1].length >= len) break;
-			if (lines[j].trim() !== "") bodyBlank = false;
-			j += 1;
-		}
-		if (j < lines.length && bodyBlank) {
-			// An empty fenced block: the delimiters are the only thing standing there.
-			i = j + 1;
-			continue;
-		}
-		// Not dropped. Copy through the closer (or to the end when unclosed) so the scan
-		// resumes OUTSIDE the block and a marker line inside the body is never mistaken
-		// for a new opener.
-		for (let k = i; k < lines.length; k += 1) {
-			kept.push(lines[k]);
-			if (k === j) break;
-		}
-		i = j + 1;
-	}
-	return kept.join("\n");
+	// Closing is all this helper does. It briefly also REMOVED fences it judged empty,
+	// in three successive forms — a character-class test, a regex pairing, then a
+	// boundary scanner — and each form deleted real code content in a different way:
+	// a `---` body became horizontal rules, a shorter marker line inside a longer
+	// block was eaten as a closer, a tilde info string containing tildes hid a whole
+	// body, and JS `trim()` erased NBSP/EM/VTAB bodies that Markdown treats as
+	// content. Three rounds finding three classes of the same deletion is the
+	// signature of a wrong seam, not a wrong patch: deciding what a fence MEANS is
+	// the job of the one closure parser in this module, not of a second opinion
+	// bolted onto its output. The budget path that actually needed a content-bearing
+	// answer now validates its own swap candidate with the detector it already had.
+	return closeFencesWithin(trimToTokenBudget(text, maxTokens), maxTokens, true);
 }
 
 /**
