@@ -18,6 +18,14 @@ export interface Chunk {
 	tokenCount: number;
 	/** 0-based position in the chunk sequence. */
 	index: number;
+	/**
+	 * The exact span this chunk was PREPENDED by the overlap pass (the tail of the
+	 * previous chunk). Overlap exists to help SCORING, so it must not leak into
+	 * DISPLAY: when two adjacent chunks are both selected, the shared span would
+	 * otherwise render twice (issue #131). Recording it lets a composer trim
+	 * precisely what the chunker added, and nothing else.
+	 */
+	overlapPrefix?: string;
 }
 
 export interface ChunkOptions {
@@ -71,10 +79,11 @@ export function chunkMarkdown(
 	const rawChunks = buildParagraphChunks(paragraphs, maxTokens);
 	const withOverlap = applyOverlap(rawChunks, overlapTokens, maxTokens);
 
-	return withOverlap.map((text, index) => ({
-		text,
-		tokenCount: estimateTokens(text),
+	return withOverlap.map((piece, index) => ({
+		text: piece.text,
+		tokenCount: estimateTokens(piece.text),
 		index,
+		...(piece.overlapPrefix ? { overlapPrefix: piece.overlapPrefix } : {}),
 	}));
 }
 
@@ -186,18 +195,30 @@ function packUnits(
 	});
 }
 
-/** Prepend the tail of each previous chunk to the next, for context overlap. */
+/**
+ * Prepend the tail of each previous chunk to the next, for context overlap.
+ * Returns the prepended span alongside the text so a DISPLAY consumer can remove
+ * exactly what this SCORING aid added (issue #131).
+ */
 function applyOverlap(
 	chunks: string[],
 	overlapTokens: number,
 	maxTokens: number,
-): string[] {
-	if (overlapTokens <= 0 || chunks.length <= 1) return chunks;
+): Array<{ text: string; overlapPrefix?: string }> {
+	if (overlapTokens <= 0 || chunks.length <= 1) {
+		return chunks.map((text) => ({ text }));
+	}
 
-	const out: string[] = [chunks[0]];
+	const out: Array<{ text: string; overlapPrefix?: string }> = [
+		{ text: chunks[0] },
+	];
 	for (let i = 1; i < chunks.length; i++) {
 		const tail = takeTailForTokens(chunks[i - 1], overlapTokens, maxTokens);
-		out.push(tail ? `${tail}\n\n${chunks[i]}` : chunks[i]);
+		out.push(
+			tail
+				? { text: `${tail}\n\n${chunks[i]}`, overlapPrefix: tail }
+				: { text: chunks[i] },
+		);
 	}
 	return out;
 }
