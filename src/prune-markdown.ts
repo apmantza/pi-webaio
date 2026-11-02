@@ -516,23 +516,22 @@ export function pruneByRelevance(
 /**
  * ## The budget model
  *
- * Five consumers share one number. This is the model that decides who spends
- * first and what each reserve guarantees — written because the seam was patched
- * five rounds in a row and each round after the first fixed a defect the
- * previous round introduced (issue #170). The caps below are stated once here so
- * a change to one is a change to the model, not to a branch.
+ * Seven consumers share one number, in this order, plus two decision points that
+ * spend nothing but belong in the contract:
  *
  * Spend order, each step spending only what the previous steps left:
  *
  * | # | Consumer        | Cap                                                        | Guarantees |
  * |---|-----------------|------------------------------------------------------------|------------|
+ * | 0 | (no-op)         | content already fits                                    | nothing is spent; the input is returned verbatim |
  * | 1 | caller's budget | `effectiveBudget = max(1, floor(budget))`                  | the number handed in is the contract; no hidden 100-token floor |
  * | 2 | **content floor** | `MIN_CONTENT_SHARE × effectiveBudget`                    | I2 — some of the document always survives |
  * | 3 | frontmatter     | kept only if it fits in `effectiveBudget − content floor`  | metadata never crowds out content; dropped whole otherwise |
- * | 4 | truncation notice | `min(MAX_NOTICE_RESERVE, effectiveBudget − frontmatter − content floor)` | I1 — the notice may only spend what the floor does not need |
+ * | 4 | truncation notice | `min(MAX_NOTICE_RESERVE, effectiveBudget − frontmatter − content floor)` | I1 — the notice may only spend what the floor does not need. This sizes `contentBudget` only; the footer actually emitted is rebuilt as `footerBase + omittedToc` and re-measured at step 8, so it is not the notice's final size |
  * | 5 | outline (skeleton) | `outlineShare(contentBudget)`, and `prependOutlineShare` on the assembled-result path | structure survives heavy pruning, but never at the prose's expense |
  * | 6 | prose           | `contentBudget − outline − selected heading`               | whatever is left, which is what the floor protected it for |
- * | 7 | omitted-sections TOC | `effectiveBudget − frontmatter − notice − content floor` | lowest priority; the first thing to go |
+ * | 7 | omitted-sections TOC | `effectiveBudget − frontmatter − estimateTokens(footerBase) − content floor` | lowest priority; the first thing to go, and step 8 may still drop it |
+ * | 8 | (backstop)      | re-measure the whole result; shrink the notice, then hard-trim the body | I1 — the ceiling is enforced here, not by the reservations above |
  *
  * Three invariants, and the guard that enforces each:
  *
@@ -541,10 +540,19 @@ export function pruneByRelevance(
  *    (`shrinkNoticeToRoom`) and the body hard-trimmed with a closed fence.
  *    Reserving in the order above is what makes the re-measure a backstop rather
  *    than the mechanism.
- * 2. **Content floor** — a non-empty body always yields page prose, never only
- *    framing. Enforced by reserving the floor *before* frontmatter and the
- *    notice, and by the partial-prefix fallback for a body that is one section
- *    larger than the content budget.
+ * 2. **Content floor** — a non-empty body yields page prose **for any budget
+ *    large enough to contain prose**. This is a real limit, not a hedge, and it
+ *    is the model's first finding: writing the invariant down exposed that the
+ *    step-8 backstop can reclaim the whole content allocation when even the
+ *    shortest notice will not fit beside it. Measured on a plain headed body:
+ *    budgets 1–27 return framing with no page prose at all (budget 1 returns
+ *    `"\n\n--"` — a stray rule and nothing else), and the boundary is
+ *    **non-monotonic** (budget 20 yields prose, budget 27 does not). The
+ *    invariant is stated as a domain rather than patched around, because issue
+ *    #170 is explicit that this seam needs a sixth round not at all, and a
+ *    boundary nobody can assert is a bug that reads as a policy. See
+ *    `#170: the content floor holds above its measured domain` for the test that
+ *    pins where the domain starts.
  * 3. **Attribution** — prose is never preceded by a heading it did not come
  *    from. Enforced by putting heading-less prose FIRST, and by the rule that a
  *    heading the outline refused to carry is not re-emitted for the prose that
@@ -561,15 +569,15 @@ export function pruneByRelevance(
  */
 
 /** Share of the budget the returned body must keep, whatever else fits. */
-export const MIN_CONTENT_SHARE = 0.5;
+const MIN_CONTENT_SHARE = 0.5;
 /** Upper bound on what the truncation notice may reserve when there is room. */
-export const MAX_NOTICE_RESERVE = 30;
+const MAX_NOTICE_RESERVE = 30;
 /** Share of the content budget the heading outline may take. */
-export const OUTLINE_SHARE = 0.4;
+const OUTLINE_SHARE = 0.4;
 /** Floor on the outline share so a tiny budget still carries some structure. */
-export const MIN_OUTLINE_TOKENS = 10;
+const MIN_OUTLINE_TOKENS = 10;
 /** Same rule as `OUTLINE_SHARE`, measured against the whole budget. */
-export const PREPEND_OUTLINE_SHARE = 0.25;
+const PREPEND_OUTLINE_SHARE = 0.25;
 
 /** Whole-heading outline budget: `share × denominator`, never under the floor. */
 function outlineBudget(denominator: number, share: number): number {
