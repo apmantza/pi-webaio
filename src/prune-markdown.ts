@@ -639,9 +639,27 @@ function outlineBudget(denominator: number, share: number): number {
  * heading still stops the match.
  */
 function prosePrefixSource(body: string): string {
-	return body
-		.replace(/^\s+/, "")
-		.replace(/^(?:[ \t]*#{1,6}[ \t].*(?:\n|$)|\s)+/, "");
+	const lines = body.split("\n");
+	let i = 0;
+	while (i < lines.length) {
+		const line = lines[i];
+		if (/^[ \t]*$/.test(line)) {
+			i++;
+			continue;
+		}
+		// A heading starts within three spaces of the margin. Four spaces (or a tab)
+		// after a blank line is an indented CODE block in Markdown, and its `#` is a
+		// comment. The regex this replaces ate the blank line, then the indentation,
+		// then matched the comment as one more heading and dropped a real line of
+		// code from the answer. Line-by-line, so indentation is never consumed on its
+		// way to a heading.
+		if (/^ {0,3}#{1,6}[ \t]/.test(line)) {
+			i++;
+			continue;
+		}
+		break;
+	}
+	return lines.slice(i).join("\n");
 }
 
 /**
@@ -1057,7 +1075,21 @@ export function applyTokenBudget(
 		// above correctly refuses to hand back an empty balanced fence. That must not
 		// fall through to the framing we were trying to replace, so ask the plain
 		// trimmer for whatever fragment of the document actually fits.
-		if (prose.trim() === "") prose = trimToTokenBudget(source, room);
+		if (prose.trim() === "") {
+			// Two things the plain trimmer must not do here. It does not close what it
+			// opens, and a bare opener is worse than the character it replaced — a
+			// complete delimiter changes the markdown parsing context for everything
+			// rendered after it — so marker lines come off. And when the prose STARTS with a
+			// fence, the opener alone can consume the whole small room: at room 10 the trim
+			// returned "```\n" and nothing else, which is why this fallback kept falling
+			// through to the framing it was meant to replace. Dropping the leading opener
+			// first lets the room be spent on the code text itself.
+			const codeFirst = source.replace(/^[ \t]*(?:`{3,}|~{3,})[^\n]*\n?/, "");
+			prose = trimToTokenBudget(codeFirst, room).replace(
+				/^[ \t]*(?:`{3,}|~{3,})[^\n]*$/gm,
+				"",
+			);
+		}
 		// The swap candidate is produced FROM the document by the trimmer, so it
 		// needs no detector — only that the ceiling actually left room.
 		if (prose.trim() !== "") result = prose;
@@ -1187,17 +1219,13 @@ export function trimToTokenBudgetWithClosedFence(
 	maxTokens: number,
 ): string {
 	const closed = closeFencesWithin(trimToTokenBudget(text, maxTokens), maxTokens, true);
-	// Balancing a fence is right; balancing one around NOTHING is not. When the
-	// room cannot hold any of the code inside, the closer still appended a closing
-	// marker and the answer to a document that plainly has content was
-	// "```\n```\n" — balanced framing around an empty body is still framing, and it
-	// is exactly the #182 defect shape arriving through the fence rule instead of
-	// the notice rule. If the fence holds no letter or number, the markers are not
-	// buying anything and come off.
-	if (!/[\p{L}\p{N}]/u.test(closed.replace(/`+/g, ""))) {
-		return closed.replace(/`+[ \t]*(?=\n|$)/g, "").replace(/\n{3,}/g, "\n\n").trim();
-	}
-	return closed;
+	// Only a fence whose BODY is empty is framing. The first version asked whether
+	// the string contained any letter or number at all, which is a different claim
+	// and it destroyed real content: a body of `---` came back as a run of
+	// horizontal rules and `+++` came back bare, because the delimiters are exactly
+	// what makes symbol content code rather than markdown. The delimiters of an
+	// empty body are removed; anything with a body keeps them, in both fence styles.
+	return closed.replace(/^(?:(`{3,}|~{3,})[^\n]*\n[ \t]*\n*)\1[ \t]*$/gm, "");
 }
 
 /**

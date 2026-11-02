@@ -1199,27 +1199,97 @@ test("#182: a blank-line-separated heading stack does not block the content floo
 // nothing between them, and the answer to a document that clearly has content was
 // "```\n```\n". Balanced framing around an empty body is still framing.
 test("#182: a closed fence that holds no content is not an answer", () => {
-	const body = "# T\n" + "```\n" + "codefence body ".repeat(60);
+	// The payload is deliberately rare. With "codefence body" as the content, the
+	// notice wording "*Truncated" shares the 2-gram "nc" with "codefence" and the
+	// assertion passed on a framing-only answer — a 2-gram criterion is only as
+	// strict as the rarity of the document's tokens.
+	const payload = "jxqv kzpw ";
+	const body = "# T\n" + "```\n" + payload.repeat(60) + "```";
+	const docGrams = body.replace(/^[ \t]*#{1,6}[ \t].*$/gm, "");
+	const carriesDoc = (out) => {
+		for (let i = 0; i + 1 < out.length; i++) {
+			const g = out.slice(i, i + 2);
+			if (/[\p{L}\p{N}]/u.test(g) && docGrams.includes(g)) return true;
+		}
+		return false;
+	};
 	for (let budget = 1; budget <= 40; budget++) {
 		const out = applyTokenBudget(body, budget, "a");
-		// The contract is about framing standing in for content, so assert exactly
-		// that: the truncation notice must never be the whole answer, and a fence
-		// must never be closed around nothing. A single truncated marker at budget 1
-		// ("`") is UNDER-FILL — the estimator spending one token on the first
-		// character of the fence instead of the first character of the code — and is
-		// recorded as a residual below rather than papered over here.
+		const bare = out.replace(/[\s`~]/g, "");
+		// One character is the documented UNDER-FILL residual: the estimator spends its
+		// conservative first token on whatever comes first. Recorded, not papered over.
 		assert.ok(
-			!/^[\s\-–—]*(_?truncated[^\n]*|full content cached[^\n]*)?[\s_\-*]*$/i.test(out),
-			`budget ${budget} returned notice framing as the whole answer: ${JSON.stringify(out)}`,
+			bare.length <= 1 || carriesDoc(out),
+			`budget ${budget} returned framing with no document text: ${JSON.stringify(out)}`,
 		);
-		const fencePair = out.match(/`{3,}[^`\n]*\n\s*`{3,}/);
 		assert.ok(
-			!fencePair,
+			!/`{3,}[^`\n]*\n\s*`{3,}/.test(out),
 			`budget ${budget} closed a fence around nothing: ${JSON.stringify(out)}`,
 		);
 		assert.ok(
 			estimateTokens(out) <= budget,
 			`ceiling violated at ${budget}: ${estimateTokens(out)} tokens`,
+		);
+	}
+});
+
+// --- Regressions introduced by the two fixes above, found by adversarial review
+// of the PR that shipped them. Each is reproduced through the exported budget API.
+
+// "No letter or number anywhere in the string" is not "the fence is empty".
+// Before the fix: applyTokenBudget('# A\n```\n' + '+++\n'.repeat(100) + '```', 20, 'a')
+// returned "```" fenced "+++"; after it returned the bare "+++", and a body of
+// "---" came back as a run of horizontal rules. Fence delimiters carry meaning:
+// they are what makes symbol content code instead of markdown.
+test("#182 regression: a non-empty symbol-only fence keeps its delimiters", () => {
+	for (const body of ["+++", "...", "| | |", "---"]) {
+		const doc = "# A\n```\n" + body + "\n".repeat(1) + body.repeat(1) + "\n".repeat(1) + "```";
+		const out = applyTokenBudget(doc, 60, "a");
+		assert.ok(
+			/```/.test(out),
+			`fence around ${JSON.stringify(body)} was removed: ${JSON.stringify(out)}`,
+		);
+	}
+	const rules = applyTokenBudget("# A\n```\n" + "---\n".repeat(100) + "```", 20, "a");
+	assert.ok(/```/.test(rules), `--- fence body lost its delimiters: ${JSON.stringify(rules)}`);
+});
+
+// The plain-trimmer fallback could return a bare opening delimiter: budget 10 on
+// a fence document returned "```" — three tokens, one unclosed opener, no page
+// text. A complete opener changes the markdown parsing context for everything the
+// caller renders after it, which is worse than the single character it replaced.
+test("#182 regression: no budget yields an unclosed fence", () => {
+	const doc = "# T\n```\n" + "codefence body ".repeat(60);
+	for (let budget = 1; budget <= 60; budget++) {
+		const out = applyTokenBudget(doc, budget, "a");
+		const ticks = (out.match(/`{3,}/g) || []).length;
+		assert.equal(
+			ticks % 2,
+			0,
+			`budget ${budget} returned an unclosed backtick fence: ${JSON.stringify(out)}`,
+		);
+		const tildes = (out.match(/~{3,}/g) || []).length;
+		assert.equal(
+			tildes % 2,
+			0,
+			`budget ${budget} returned an unclosed tilde fence: ${JSON.stringify(out)}`,
+		);
+	}
+});
+
+// The blank-line-crossing strip ate the indentation of the NEXT line and then
+// matched a four-space-indented `# critical code comment` as a heading. In
+// Markdown, four spaces after a blank line is an indented code block and the `#`
+// is a comment, not a heading — the line vanished from the answer.
+test("#182 regression: four-space-indented code is not a heading run", () => {
+	const doc =
+		"# A\n\n    # critical code comment\n    return original_value;\n" +
+		"    more code here;\n".repeat(60);
+	for (const budget of [10, 20, 40]) {
+		const out = applyTokenBudget(doc, budget, "a");
+		assert.ok(
+			out.includes("critical"),
+			`budget ${budget} dropped the indented code comment: ${JSON.stringify(out.slice(0, 60))}`,
 		);
 	}
 });
