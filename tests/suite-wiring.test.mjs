@@ -15,7 +15,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { join, dirname, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -160,4 +160,34 @@ test("#173: the real ci.yml still yields the suites the ratchet depends on", () 
 	assert.ok(ciScripts.has("test:all"), "test:all must remain reachable from ci.yml");
 	assert.ok(ciRanFiles.has("tests/prune-storage.test.mjs") || ciRanFiles.size > 20,
 		"the extractor must still resolve real test files");
+});
+
+// `node --test <path>` does NOT fail on a path that does not exist — it reports
+// the other files' results and exits 0. Observed directly while resolving a merge
+// conflict: `node --test tests/lockfile-optional-deps.test.mjs
+// tests/suite-wiring.test.mjs` returned "18 pass, 0 fail" with the second file
+// absent from disk, because 18 was the first file's count alone.
+//
+// So a typo'd or renamed suite inside `test:all` is a silent hole: CI stays green
+// and the suite stops running. Reachability alone cannot see it — the name is
+// present in the script, it just points at nothing.
+//
+// Recurrence prevented: a suite renamed in one place and not the other, leaving
+// the guard counting a file that is not there.
+test("#173: every suite named by a package.json script exists on disk", () => {
+	const present = new Set(readdirSync(TESTS));
+	const missing = [];
+	for (const [name, body] of Object.entries(scripts)) {
+		if (typeof body !== "string") continue;
+		for (const m of body.matchAll(/tests\/[\w.-]+\.test\.mjs/g)) {
+			if (!present.has(basename(m[0]))) missing.push(`${name} -> ${m[0]}`);
+		}
+	}
+	assert.deepEqual(
+		missing,
+		[],
+		`${missing.length} script(s) name a test file that does not exist: ` +
+			`${missing.join(", ")}. node --test ignores missing paths and still ` +
+			`exits 0, so CI would keep passing while that suite silently stops running.`,
+	);
 });
