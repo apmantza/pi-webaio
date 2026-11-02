@@ -547,6 +547,30 @@ async function listContents(
 }
 
 /**
+ * Map a recursive Git Trees API response to the repo-map path representation.
+ *
+ * This is the NORMAL source for a repo map — the last-resort contents listing in
+ * `listContents` is the fallback — and until #184 it kept only `type === "blob"`,
+ * so `paths` could not contain a directory on the common path while `countDirs`,
+ * `buildTree` and `repoTreeEntryUrl` all read the trailing-slash convention from
+ * it. The result was `repo.totalDirs: 0` for every repository mapped through the
+ * API, a constant presented as a shape signal.
+ *
+ * Directories are therefore kept, slash-terminated, which is the one spelling
+ * those three consumers already share (see `contentEntryPaths`). `symlink`,
+ * `submodule` and the `commit` entry a gitlink becomes are excluded rather than
+ * guessed: a `/blob/` link for any of them is a 404, so an entry whose in-repo URL
+ * we cannot state gets no link — the same fail-closed rule #176 settled.
+ *
+ * Extracted as a pure leaf for the reason `normalizeContentEntryType` was: the
+ * behaviour is here, the enclosing function is a network call, and a permanently
+ * zero counter survived precisely because nothing could be run over this mapping.
+ */
+export function recursiveTreePaths(tree: Array<{ path?: unknown; type?: unknown }>): string[] {
+	return entryPaths(tree, { dir: "tree", file: "blob" });
+}
+
+/**
  * Fetch the entire repo tree in one API call using the Git Trees endpoint
  * with `?recursive=1`. Returns flat paths plus a `truncated` flag from
  * the API — if the repo has >100k entries, GitHub returns the first
@@ -566,12 +590,7 @@ async function fetchRecursiveTree(
 			message?: string;
 		};
 		if (!data || !Array.isArray(data.tree)) return null;
-		const paths: string[] = [];
-		for (const item of data.tree) {
-			if (typeof item.path === "string" && item.type === "blob") {
-				paths.push(item.path);
-			}
-		}
+		const paths = recursiveTreePaths(data.tree);
 		return { paths, truncated: data.truncated === true };
 	} catch {
 		return null;
@@ -669,12 +688,42 @@ const REPO_PATH_EXCLUSIONS = [
 export function contentEntryPaths(
 	entries: Array<{ path: string; type?: string }>,
 ): string[] {
+	return entryPaths(entries, { dir: "dir", file: "file" });
+}
+
+/**
+ * The one place the repo-map path representation is written: a file is its path,
+ * a directory is its path plus a trailing slash, and anything else is dropped.
+ *
+ * Two GitHub endpoints spell the same concept with different words — the contents
+ * API says `dir`/`file`, the recursive trees API says `tree`/`blob` — and #176 and
+ * #184 were both the same defect arriving through one of them: the count, the tree
+ * renderer and the URL builder each read the trailing slash, so a source that
+ * spelled it differently (or not at all) silently produced `/blob/` links for
+ * directories, or a `totalDirs` of 0. Keeping the vocabulary difference in the two
+ * thin callers above and the convention here is what stops them drifting again.
+ *
+ * Entries of any other kind are excluded rather than guessed; see the fail-closed
+ * note on `contentEntryPaths`.
+ */
+function entryPaths(
+	entries: Array<{ path?: unknown; type?: unknown }>,
+	kinds: { dir: string; file: string },
+): string[] {
 	const out: string[] = [];
-	for (const e of entries) {
-		if (e.type === "dir") {
-			out.push(e.path.endsWith("/") ? e.path : `${e.path}/`);
-		} else if (e.type === "file") {
-			out.push(e.path);
+	for (const item of entries) {
+		// Fail closed on anything that is not a usable path: the field arrives off the
+		// network, and an empty or non-string value must not reach the URL builder (an
+		// empty path would render as the bare repo URL, presenting the repository itself
+		// as one of its own entries).
+		if (typeof item.path !== "string" || item.path === "") continue;
+		if (item.type === kinds.file) {
+			out.push(item.path);
+		} else if (item.type === kinds.dir) {
+			// Neither endpoint ever returns a trailing slash of its own, so there is no
+			// "already terminated" branch here: a mutation of it is untestable, and an
+			// untestable branch is not allowed to sit inside the one writer of a convention.
+			out.push(`${item.path}/`);
 		}
 	}
 	return out;
