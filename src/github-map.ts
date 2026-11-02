@@ -1023,10 +1023,14 @@ async function mapGitHubRepoFull(
 		treeEntries: walk ? walk.paths.length : paths.length,
 		max,
 		fileUrlsIncluded: Math.min(paths.length, max),
-		// Two ways the count stops being exact: the clone walk hit its entry
-		// limit, or the API tree itself was truncated so we never saw a complete
-		// listing at all.
-		treeEntriesAreLowerBound: Boolean(walk?.hitCap) || truncated,
+		// Whether the count is a floor is decided by the source that actually
+		// produced it. If the clone walk ran, ITS cap bounds the number: a repo
+		// whose API tree was truncated but whose cloned tree walked to
+		// completion below `maxEntries` has an EXACT count, and labelling that
+		// "at least" is as wrong as the opposite claim (review #173 round 2).
+		// With no walk the count came from the API tree, which `truncated` says
+		// was incomplete.
+		treeEntriesAreLowerBound: walk ? walk.hitCap : truncated,
 	});
 	summaryParts.push(`${counts.discovered} via ${Object.keys(sources).length} sources:`);
 	for (const [src, urls] of Object.entries(sources)) {

@@ -19,6 +19,7 @@
 // IDN handling, case folding) silently not reaching six call sites.
 
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { readdirSync } from "node:fs";
@@ -54,7 +55,7 @@ test("#167: search.ts re-exports the same function object (no second copy)", () 
 
 // ─── Detector: nobody re-spells the rule ──────────────────────────────
 
-const SRC_DIR = new URL("../src", import.meta.url).pathname;
+const SRC_DIR = fileURLToPath(new URL("../src", import.meta.url));
 
 function collectTsFiles(dir, out = []) {
 	for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -70,17 +71,25 @@ function collectTsFiles(dir, out = []) {
  * never satisfy or defeat the scan. The needle here is a regex literal in code,
  * so blanking strings is safe and required: the doc comment on `stripWww`
  * mentions the rule in prose.
+ *
+ * Blank LINE comments first, then block comments. The opposite order silently
+ * eats code: `src/research.ts:5` is a line comment containing `reports/` plus a
+ * stray star, and a block-comment regex run first takes that as an opening
+ * delimiter and sweeps everything up to the next closing delimiter — so real
+ * source disappears and the guard passes because there is nothing left to match.
+ * A detector that blanks too much looks identical to one that found nothing.
  */
+function stripComments(src) {
+	return src.replace(/(^|[^:])\/\/[^\n]*/g, "$1").replace(/\/\*[\s\S]*?\*\//g, "");
+}
+
 async function blankCommentsOnly(path) {
-	const src = await readFile(path, "utf8");
-	return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/[^\n]*/g, "$1");
+	return stripComments(await readFile(path, "utf8"));
 }
 
 async function blankCommentsAndStrings(path) {
 	const src = await readFile(path, "utf8");
-	return src
-		.replace(/\/\*[\s\S]*?\*\//g, "")
-		.replace(/(^|[^:])\/\/[^\n]*/g, "$1")
+	return stripComments(src)
 		.replace(/"(?:[^"\\]|\\.)*"/g, '""')
 		.replace(/'(?:[^'\\]|\\.)*'/g, "''")
 		.replace(/`(?:[^`\\]|\\.)*`/g, "``");
@@ -95,7 +104,7 @@ test("#167: no module re-spells the www-stripping regex", async () => {
 		if (file.endsWith("src/domain.ts")) continue; // the seam itself
 		const blanked = await blankCommentsAndStrings(file);
 		if (/replace\(\s*\/\^www\\?\./.test(blanked)) {
-			offenders.push(file.replace(SRC_DIR + "/", ""));
+			offenders.push(file.replace(`${SRC_DIR}/`, ""));
 			continue;
 		}
 		// Second needle, DIFFERENT blanking policy. The missed spelling was
@@ -108,9 +117,14 @@ test("#167: no module re-spells the www-stripping regex", async () => {
 		// and is fixed in seconds, whereas prose silently re-admitting a duplicate
 		// is the failure that costs a round.
 		const commentsOnly = await blankCommentsOnly(file);
-		if (/startsWith\(\s*["'`]www\./.test(commentsOnly) ||
-			/\bslice\(\s*4\s*\)/.test(commentsOnly)) {
-			offenders.push(file.replace(SRC_DIR + "/", ""));
+		// `slice(4)` on its own is far too broad — any unrelated `array.slice(4)`
+		// would red this guard. Require it to co-occur with the `www.` literal on
+		// the same line, which is the actual shape of the missed spelling.
+		const startsWithWww = /startsWith\(\s*["'`]www\./.test(commentsOnly);
+		const sliceFourWithWww =
+			/\.slice\(\s*4\s*\)/.test(commentsOnly) && /www\./.test(commentsOnly);
+		if (startsWithWww || sliceFourWithWww) {
+			offenders.push(file.replace(`${SRC_DIR}/`, ""));
 		}
 	}
 	assert.deepEqual(
@@ -127,5 +141,35 @@ test("#167: the detector can actually fail (self-check on the blanking)", async 
 	assert.ok(
 		/export function|function |=>/.test(blanked),
 		"the blanker removed too much — the detector would pass vacuously",
+	);
+});
+
+// Self-check on the blanker itself. `src/research.ts:5` is a line comment that
+// contains a `reports/` path followed by a star; with block comments blanked
+// FIRST the regex treats that as an opening delimiter and sweeps real code away,
+// so the scan reports "clean" because it is looking at an emptied file. A guard
+// that passes by destroying its input is the worst kind of green.
+test("#167: the blanker preserves code in the file that trips it", async () => {
+	const file = join(SRC_DIR, "research.ts");
+	const blanked = await blankCommentsOnly(file);
+	const original = await readFile(file, "utf8");
+	// Every non-comment line of the original must survive blanking.
+	const codeLines = original
+		.split("\n")
+		.map((l) => l.trim())
+		.filter((l) => l && !l.startsWith("//") && !l.startsWith("*") && !l.startsWith("/*"));
+	const blankedSet = new Set(blanked.split("\n").map((l) => l.trim()));
+	// Compare the CODE part of each line: a trailing `// note` is legitimately
+	// blanked, so exact line equality would report a false loss on every line
+	// that carries an end-of-line comment.
+	const codePart = (l) => l.replace(/(^|[^:])\/\/[^\n]*/g, "$1").trim();
+	const lost = codeLines.filter((l) => {
+		const want = codePart(l);
+		return want !== "" && !blankedSet.has(want);
+	});
+	assert.deepEqual(
+		lost.slice(0, 3),
+		[],
+		`blanking deleted ${lost.length} real code line(s) from research.ts, e.g.: ${lost[0]}`,
 	);
 });
