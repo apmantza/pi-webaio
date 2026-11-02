@@ -2,6 +2,8 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { blankCommentsOnly } from "./helpers.mjs";
 import {
 	createBM25Scorer,
 	scoreRelevance,
@@ -920,4 +922,55 @@ test("prose from a section whose heading was dropped for size is not relabelled"
 		`prose from the oversized-heading section was credited to a kept heading — ${JSON.stringify(out.slice(0, 90))}`,
 	);
 	assert.ok(estimateTokens(out) <= 150);
+});
+
+// ─── Issue #170: the budget model is written, and the code uses it ───
+//
+// `applyTokenBudget` was patched five consecutive rounds, each round fixing a
+// defect the previous round wrote, because nothing stated who spends the budget
+// in what order or what each reserve guarantees. The fix is the model itself:
+// the caps are named constants and the prose above the function is the authority
+// they are derived from. These guards keep the two from drifting apart again —
+// a model nobody can check against the code is a comment, not a model.
+//
+// Recurrence prevented: a sixth round introducing a cap that appears in no model.
+
+test("#170: the budget model names the three invariants it enforces", async () => {
+	const src = await readFile(
+		new URL("../src/prune-markdown.ts", import.meta.url),
+		"utf8",
+	);
+	const model = src.slice(0, src.indexOf("export function applyTokenBudget("));
+	for (const invariant of ["Ceiling", "Content floor", "Attribution"]) {
+		assert.ok(
+			model.includes(`**${invariant}**`),
+			`the model block must state the ${invariant} invariant`,
+		);
+	}
+});
+
+test("#170: no bare budget share survives inside applyTokenBudget", async () => {
+	// Comments are REMOVED (not just strings blanked): the file's prose mentions
+	// "0.4 × contentBudget" throughout, and a comment must not be able to satisfy
+	// this scan. Comment-only blanking is also the safe choice here — blanking
+	// string literals after comments are gone lets a leftover quote pair with a
+	// later one and swallow the function body, which is what this test originally
+	// did to itself.
+	const src = await blankCommentsOnly(
+		new URL("../src/prune-markdown.ts", import.meta.url),
+	);
+	const start = src.indexOf("export function applyTokenBudget(");
+	const end = src.indexOf("function shrinkNoticeToRoom", start);
+	assert.ok(start > 0 && end > start, "could not isolate the function body");
+	const body = src.slice(start, end);
+	for (const literal of ["* 0.4", "* 0.25", "* 0.5", "Math.max(10,"]) {
+		assert.ok(
+			!body.includes(literal),
+			`bare budget literal ${literal} reintroduced — add it to the model instead`,
+		);
+	}
+	const uses = (body.match(/outlineBudget\(/g) ?? []).length;
+	// The outline share was spelled twice as two independent literals; one rule
+	// now has one expression, called from both places.
+	assert.ok(uses >= 2, `both outline sites must share one budget expression, got ${uses}`);
 });
