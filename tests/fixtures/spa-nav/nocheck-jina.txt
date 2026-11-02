@@ -1,0 +1,71 @@
+Title: TSConfig Option: noCheck
+
+URL Source: https://www.typescriptlang.org/tsconfig/noCheck.html
+
+Published Time: Wed, 28 Oct 2026 23:26:31 GMT
+
+Markdown Content:
+### Customize
+
+Site Colours:
+
+ 
+Code Font:
+
+ 
+### Popular Documentation Pages
+
+*   [Everyday Types](https://www.typescriptlang.org/docs/handbook/2/everyday-types.html)
+All of the common types in TypeScript
+
+*   [Creating Types from Types](https://www.typescriptlang.org/docs/handbook/2/types-from-types.html)
+Techniques to make more elegant types
+
+*   [More on Functions](https://www.typescriptlang.org/docs/handbook/2/functions.html)
+How to provide types to functions in JavaScript
+
+*   [More on Objects](https://www.typescriptlang.org/docs/handbook/2/objects.html)
+How to provide a type shape to JavaScript objects
+
+*   [Narrowing](https://www.typescriptlang.org/docs/handbook/2/narrowing.html)
+How TypeScript infers types based on runtime behavior
+
+*   [Variable Declarations](https://www.typescriptlang.org/docs/handbook/variable-declarations.html)
+How to create and type JavaScript variables
+
+*   [TypeScript in 5 minutes](https://www.typescriptlang.org/docs/handbook/typescript-in-5-minutes.html)
+An overview of building a TypeScript web app
+
+*   [TSConfig Options](https://www.typescriptlang.org/tsconfig/)
+All the configuration options for a project
+
+*   [Classes](https://www.typescriptlang.org/docs/handbook/2/classes.html)
+How to provide types to JavaScript ES6 classes
+
+Made with ♥ in Redmond, Boston, SF & Dublin
+
+[![Image 1: Microsoft Logo](blob:http://localhost/2233237a60988239109640648f750c18)](https://www.typescriptlang.org/tsconfig/noCheck.html)
+© 2012-2026 Microsoft  
+[Privacy](https://go.microsoft.com/fwlink/?LinkId=521839 "Microsoft Privacy Policy")[Terms of Use](https://go.microsoft.com/fwlink/?LinkID=206977)
+
+### Using TypeScript
+
+*   [Get Started](https://www.typescriptlang.org/docs/)
+*   [Download](https://www.typescriptlang.org/download/)
+*   [Community](https://www.typescriptlang.org/community/)
+*   [Playground](https://www.typescriptlang.org/play/)
+*   [TSConfig Ref](https://www.typescriptlang.org/tsconfig/)
+*   [Code Samples](https://www.typescriptlang.org/play/#show-examples)
+*   [Why TypeScript](https://www.typescriptlang.org/why-create-typescript/)
+*   [Design](https://www.typescriptlang.org/branding/)
+
+### Community
+
+*   [Get Help](https://www.typescriptlang.org/community)
+*   [Blog](https://devblogs.microsoft.com/typescript/)
+*   [GitHub Repo](https://github.com/microsoft/TypeScript/#readme)
+*   [Community Chat](https://discord.gg/typescript)
+*   [@TypeScript](https://twitter.com/TypeScript)
+*   [Mastodon](https://fosstodon.org/@TypeScript)
+*   [Stack Overflow](https://stackoverflow.com/questions/tagged/typescript)
+*   [Web Repo](https://github.com/microsoft/TypeScript-Website)

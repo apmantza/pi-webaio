@@ -11,6 +11,34 @@
  */
 
 import { parseHTML } from "linkedom";
+import { readFile } from "node:fs/promises";
+
+/**
+ * Blank comments (and optionally string literals) so a comment that QUOTES the
+ * needle can never satisfy or defeat a source-shape scan.
+ *
+ * Blank LINE comments first, then block comments. The opposite order silently
+ * eats code: `src/research.ts:5` is a line comment containing `reports/` plus a
+ * stray star, and a block-comment regex run first takes that as an opening
+ * delimiter and sweeps everything up to the next closing delimiter — so real
+ * source disappears and the guard passes because there is nothing left to match.
+ * A detector that blanks too much looks identical to one that found nothing.
+ */
+export function stripComments(src) {
+	return src.replace(/(^|[^:])\/\/[^\n]*/g, "$1").replace(/\/\*[\s\S]*?\*\//g, "");
+}
+
+export async function blankCommentsOnly(path) {
+	return stripComments(await readFile(path, "utf8"));
+}
+
+export async function blankCommentsAndStrings(path) {
+	const src = await readFile(path, "utf8");
+	return stripComments(src)
+		.replace(/"(?:[^"\\]|\\.)*"/g, '""')
+		.replace(/'(?:[^'\\]|\\.)*'/g, "''")
+		.replace(/`(?:[^`\\]|\\.)*`/g, "``");
+}
 
 // ─── Consent banner stripping (for testing) ─────────────────────────
 // Mirrors CONSENT_SELECTORS in src/content.ts. Not exported from there

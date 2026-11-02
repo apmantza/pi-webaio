@@ -65,6 +65,48 @@ const MIN_ALTERNATE_FALLBACK_WORDS = 30;
 // page is likely JS-heavy and we fall back to the Jina proxy reader.
 export const MIN_LOCAL_WORDS = 50;
 
+// Fraction of the local article's distinctive words the reader-proxy body must
+// still contain to count as "more content" rather than "different content".
+// See `shouldPreferJinaFallback`.
+export const JINA_MIN_LOCAL_PRESERVATION = 0.5;
+
+/**
+ * Should the reader-proxy body replace the local extraction?
+ *
+ * The ladder's stated intent is "prefer Jina only when it actually recovered
+ * more content" (issue #165 F7 removed the envelope words that used to inflate
+ * that comparison). Volume alone still gets it backwards on short-article
+ * pages: `typescriptlang.org/tsconfig/noCheck.html` extracts a correct 15-word
+ * article locally, while Jina serves the SPA's sidebar — 177 words of
+ * navigation that omit the option's own definition entirely. Comparing lengths
+ * hands the page to the navigation.
+ *
+ * So require the fallback to *contain* what the page's own extraction already
+ * found. A body that drops the article to add a sidebar is not "more", it is a
+ * different document, and the local one came from the page itself with
+ * nav/header/footer stripped by `preCleanHtml`.
+ *
+ * When local extraction found nothing at all the requirement is vacuous and
+ * returns true: on a genuinely JS-heavy page the proxy is the only path to the
+ * article, and that is exactly what the escalation exists for.
+ */
+export function shouldPreferJinaFallback(
+	localContent: string,
+	jinaContent: string,
+): boolean {
+	const localWords = significantWords(localContent);
+	if (localWords.size === 0) return true;
+	const jinaWords = significantWords(jinaContent);
+	let preserved = 0;
+	for (const w of localWords) if (jinaWords.has(w)) preserved++;
+	return preserved / localWords.size >= JINA_MIN_LOCAL_PRESERVATION;
+}
+
+/** Words that identify a document: alphabetic, 4+ chars, lowercased, deduped. */
+function significantWords(text: string): Set<string> {
+	return new Set((text.toLowerCase().match(/[a-z][a-z-]{3,}/g) ?? []) as string[]);
+}
+
 // Readability is accepted unless its output is a suspiciously tiny
 // fraction of a large HTML document (a sign it latched onto boilerplate
 // rather than the article). Lowered from 1% to 0.5% so more pages resolve
@@ -959,8 +1001,14 @@ export async function runHtmlPipeline(
 		const jina = await fetchJina(url);
 		// Prefer Jina only when it actually recovered more content than the
 		// local pass — never downgrade a thin Jina body over a usable local
-		// extraction.
-		if (jina && wordCount(jina.content || "") > localWords) {
+		// extraction. "More content" is containment, not length: a longer body
+		// that omits the local article is navigation, not a better article
+		// (issue #154).
+		if (
+			jina &&
+			wordCount(jina.content || "") > localWords &&
+			shouldPreferJinaFallback(local.content || "", jina.content || "")
+		) {
 			chosen = jina;
 		}
 	}
@@ -979,7 +1027,7 @@ export async function runHtmlPipeline(
  * unfinalized PullResult; the caller decides whether to fall back to Jina
  * and applies finalization / alternate-link handling.
  */
-async function runLocalExtraction(
+export async function runLocalExtraction(
 	cleaned: string,
 	hookedText: string,
 	finalUrl: string,
