@@ -41,7 +41,7 @@ function mkResults(n, tag) {
  * `shouldRunGoogle`/`shouldRunReddit` path rather than bypassing it.
  */
 export function makeFakes({ latency = {}, cdp = true, perEngine = 8 } = {}) {
-	const calls = { http: 0, google: 0, reddit: 0 };
+	const calls = { http: 0, google: 0, reddit: 0, firecrawl: 0, tinyfish: 0, parallel: 0 };
 	const engineStatus = Object.fromEntries(
 		PROVIDERS.map((id) => [id, { status: "ok", count: perEngine }]),
 	);
@@ -70,6 +70,28 @@ export function makeFakes({ latency = {}, cdp = true, perEngine = 8 } = {}) {
 			return { results: mkResults(4, "reddit"), status: "ok" };
 		},
 		cdpAvailable: () => cdp,
+		// The bonus API lanes are real network calls and FireCrawl is enabled
+		// unconditionally in the tool, so without these fakes every "instant"
+		// sample here issued a live FireCrawl request and waited on it. That is
+		// where the ~300ms floor came from: the number a 0ms lane and a 120ms lane
+		// both measured was this lane, not orchestration. TinyFish and Parallel
+		// default to "no key configured" and so were latent, but they are faked for
+		// the same reason: a benchmark that reaches the network is not offline.
+		searchFirecrawl: async () => {
+			calls.firecrawl++;
+			if (latency.firecrawl) await sleep(latency.firecrawl);
+			return { results: mkResults(6, "firecrawl") };
+		},
+		searchTinyfish: async () => {
+			calls.tinyfish++;
+			if (latency.tinyfish) await sleep(latency.tinyfish);
+			return { results: mkResults(6, "tinyfish") };
+		},
+		searchParallel: async () => {
+			calls.parallel++;
+			if (latency.parallel) await sleep(latency.parallel);
+			return { results: mkResults(6, "parallel") };
+		},
 		// Google and Reddit are gated on BOTH Chrome eligibility and provider
 		// availability; stubbing this false silently measures nothing, which is
 		// exactly how a first draft of this harness reported a 0.1ms p50 for a
@@ -128,9 +150,13 @@ export async function run({ n = 15 } = {}) {
 	};
 
 	console.log("--- orchestration cost (instant fakes: no provider latency at all) ---");
-	const off = await run1("all lanes off", { cdp: false }, { google: false, reddit: false });
-	const http = await run1("http only", { cdp: false }, { google: false, reddit: false });
-	const warm = await run1("http + google + reddit", { cdp: true }, { google: true, reddit: true });
+	// Two rows, and they differ in exactly one axis: whether the Chrome-dependent
+	// lanes are eligible. An earlier draft had an "all lanes off" row that passed
+	// the same fakes and the same arguments as "http only", so the two baselines
+	// were the same measurement printed twice — a comparison that can only ever
+	// report zero difference.
+	const noCdp = await run1("http + bonus (CDP off)", { cdp: false }, { google: false, reddit: false });
+	const warm = await run1("http + bonus + google + reddit", { cdp: true }, { google: true, reddit: true });
 
 	console.log("\n--- does a slow lane delay the whole tool? ---");
 	await run1("google 2500ms", { cdp: true, latency: { google: 2500 } }, { google: true });
@@ -142,7 +168,7 @@ export async function run({ n = 15 } = {}) {
 
 	return {
 		rows,
-		orchestration: { off, http, warm },
+		orchestration: { noCdp, warm },
 		runaway: { google: runaway, reddit: runawayReddit },
 	};
 }
