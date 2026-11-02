@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en"><head><title>Comparison Matrix</title></head>
+<body>
+<article>
+<h1>Comparison Matrix</h1>
+<p>The table below compares the three extraction strategies available to the
+pipeline. Tables are the single most fragile markdown structure to convert,
+because the pipe syntax, the alignment row and the escaping of pipes inside
+cells are all separate decisions a converter makes.</p>
+<table>
+  <thead>
+    <tr><th>Strategy</th><th>Speed</th><th>Fidelity</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Readability</td><td>Fast</td><td>Medium</td></tr>
+    <tr><td>Defuddle</td><td>Slow</td><td>High</td></tr>
+    <tr><td>Jina</td><td>Network</td><td>Variable</td></tr>
+  </tbody>
+</table>
+<p>Below the table, a list that contains a table-shaped phrase
+<code>a | b</code> to check escaping does not leak into plain prose.</p>
+<ul>
+  <li>Item mentioning <code>a | b</code></li>
+  <li>Plain item</li>
+</ul>
+</article>
+</body></html>

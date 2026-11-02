@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en"><head><title>Attention, Explained</title></head>
+<body>
+<article>
+<h1>Attention, Explained</h1>
+<p>This page contains inline mathematics, which extraction pipelines render
+either as MathML, as the original LaTeX source, or as mangled plain text. Each
+of those is a different markdown shape and a dependency bump can move between
+them without any test in the repository noticing.</p>
+<p>The attention function is defined as
+<span class="math">\( \mathrm{softmax}(QK^{\top}/\sqrt{d_k})V \)</span>
+where <span class="math">\(d_k\)</span> is the key dimension.</p>
+<h2>Derivation</h2>
+<p>Expanding the definition gives the following, which is displayed as a block
+equation on the page and must not vanish entirely during conversion:</p>
+<p class="math display">\[ \mathrm{Attention}(Q,K,V) = \mathrm{softmax}\left(\frac{QK^{\top}}{\sqrt{d_k}}\right)V \]</p>
+<p>After the equation the prose continues, because a converter that treats math
+as the end of the article would lose the rest of the page, and that is the
+regression this fixture is here to catch.</p>
+<h2>Implementation notes</h2>
+<p>The reference implementation keeps the numerically unstable term out:</p>
+<pre><code class="language-python">def attention(q, k, v):
+    scores = q @ k.T / math.sqrt(d_k)
+    return softmax(scores) @ v</code></pre>
+<p>Final paragraph with a <a href="https://example.com/ref">reference</a> so the
+tail of the document still contains structure.</p>
+</article>
+</body></html>

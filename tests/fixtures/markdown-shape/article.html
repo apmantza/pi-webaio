@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en"><head><title>The Shape of Markdown Output | Example Blog</title>
+<style>.sidebar{color:red}</style></head>
+<body>
+<header class="site"><a href="/">Home</a><a href="/blog">Blog</a></header>
+<article>
+  <h1>The Shape of Markdown Output</h1>
+  <p>By <strong>A. Maintainer</strong> on <time>2026-01-01</time>.</p>
+  <p>The first paragraph carries <em>emphasis</em> and a
+  <a href="https://example.com/spec">link to the spec</a>. It has to be long
+  enough that the extraction pipeline treats it as a real article rather than a
+  stub, so the sentence keeps going with several more clauses that add nothing
+  but word count for the local extraction threshold.</p>
+  <h2>List behaviour</h2>
+  <p>Unordered lists are the most common structure a markdown converter has to
+  reproduce, and the marker character is precisely the kind of thing a patch
+  release of a converter changes without any functional intent whatsoever.</p>
+  <ul>
+    <li>First item with <code>inline code</code></li>
+    <li>Second item with <a href="https://example.com/two">a nested link</a></li>
+    <li>Third item that is plain</li>
+  </ul>
+  <h2>Ordered lists</h2>
+  <p>Ordered lists drift in the other direction, because some converters emit
+  asterisks and others emit the literal number followed by a parenthesis.</p>
+  <ol>
+    <li>Alpha step</li>
+    <li>Beta step</li>
+  </ol>
+  <blockquote><p>A quoted passage that must survive as a quote and not flatten
+  into an ordinary paragraph.</p></blockquote>
+  <h2>Images</h2>
+  <figure><img src="/img/diagram.png" alt="A diagram of the pipeline"></figure>
+  <p>Closing paragraph with <strong>bold</strong> to finish the article body.</p>
+</article>
+<aside class="promo">Subscribe to our newsletter for more content.</aside>
+<footer>Copyright 2026 Example Blog. All rights reserved.</footer>
+</body></html>
