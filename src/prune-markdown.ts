@@ -627,11 +627,50 @@ function outlineBudget(denominator: number, share: number): number {
  * not cosmetic, because after a frontmatter block the body starts with "\n" and
  * a `^`-anchored regex never matched, which returned the heading fragment
  * verbatim. One implementation so the two fallbacks cannot drift.
+ *
+ * The heading run must cross BLANK LINES. The first version repeated a single
+ * heading line, and the `+` stopped at the blank line between `# A` and `## B`,
+ * so for a document whose prose follows a blank-line-separated heading stack the
+ * "prose" handed to the swap was still headings — trimmed to `""`, rejected for
+ * lack of room, and the notice fragment came back as the answer. That is how the
+ * #182 P1 shape survived in the one document shape the fix's own sweep never
+ * built. Whitespace between headings is part of the heading run, not prose, so it
+ * is consumed with it; a line whose first non-whitespace character is not a
+ * heading still stops the match.
  */
 function prosePrefixSource(body: string): string {
-	return body
-		.replace(/^\s+/, "")
-		.replace(/^(?:[ \t]*#{1,6}[ \t].*(?:\n|$))+/, "");
+	const lines = body.split("\n");
+	let i = 0;
+	while (i < lines.length) {
+		const line = lines[i];
+		// A CRLF document reaches the budget path without LF normalisation, so a blank
+		// line between two headings is "   \r". Without the \r this test answered "not
+		// blank", the heading run stopped there, and the prose behind it was never
+		// reached (CodeRabbit on this PR).
+		if (/^[ \t\r]*$/.test(line)) {
+			i++;
+			continue;
+		}
+		// A heading starts within three spaces of the margin. Four spaces (or a tab)
+		// after a blank line is an indented CODE block in Markdown, and its `#` is a
+		// comment. The regex this replaces ate the blank line, then the indentation,
+		// then matched the comment as one more heading and dropped a real line of
+		// code from the answer. Line-by-line, so indentation is never consumed on its
+		// way to a heading.
+		if (/^ {0,3}#{1,6}[ \t]/.test(line)) {
+			i++;
+			continue;
+		}
+		break;
+	}
+	// The first line's leading whitespace still has to go, exactly as the regex
+	// version did. Without it a document that OPENS with four-space-indented
+	// fence-looking text keeps that indentation, the closure parser still reads that
+	// line as an opener and appends a margin-level closer — and at the 0..3-space
+	// boundary the indented line is CODE while the appended marker is an unclosed
+	// OPENING fence (verify round 3 on 78b334a). Only the first line: the indentation
+	// of everything after it is the document's own code structure.
+	return lines.slice(i).join("\n").replace(/^[ \t]+/, "");
 }
 
 /**
@@ -1040,13 +1079,50 @@ export function applyTokenBudget(
 	// here rather than by a second guard.
 	if (body.trim() !== "" && !carriesPageProse(result, body)) {
 		const room = Math.max(0, effectiveBudget - frontmatterTokens);
-		const prose = trimToTokenBudgetWithClosedFence(
-			prosePrefixSource(body),
-			room,
-		);
-		// The swap candidate is produced FROM the document by the trimmer, so it
-		// needs no detector — only that the ceiling actually left room.
-		if (prose.trim() !== "") result = prose;
+		const source = prosePrefixSource(body);
+		// The candidate is held to the same test as the result it replaces. The
+		// trimmers emit framing at tiny budgets — a balanced pair of empty fence
+		// markers, a lone opener — and installing one would only swap a piece of
+		// NOTICE framing for a piece of MARKUP framing. Deciding that here, at the one
+		// site that needs a content-bearing answer, is what replaced three rounds of
+		// fence rewriting in the shared trim helper.
+		const candidates = [
+			trimToTokenBudgetWithClosedFence(source, room),
+			// At one or two tokens a fence-led document yields only its marker: the opener
+			// alone consumes the whole room (at room 10 the trim returned "```\n" and
+			// nothing else). So ask for the code text itself — every leading fence-marker and
+			// blank line is dropped first, because a document can open with a stack of them
+			// before any text appears — and remaining marker lines come off, because the
+			// plain trimmer does not close what it opens and a bare delimiter changes the
+			// parsing context for everything rendered after it.
+			trimToTokenBudget(
+				source.replace(/^(?:[ \t]*(?:`{3,}|~{3,})[^\n]*\n|[ \t]*\n)+/, ""),
+				room,
+			// Only an ORPHAN closer comes off: a marker line that is the last thing in
+			// the candidate, left behind because its opener was removed from the source.
+			// Stripping every marker line would also delete a ``` line that is the
+			// document's own content — a page documenting fences — which is the same
+			// content-loss class this seam has produced three times already.
+			).replace(/\n+[ \t]*(?:`{3,}|~{3,})[^\n]*\s*$/, ""),
+		];
+		// Prefer a candidate that actually carries the document's words. Order alone was
+		// not enough: on a fence-led document at budget 1 the closed-fence trim yields a
+		// lone backtick, which was installed while the second candidate — the real code
+		// text with its markers removed — sat unused. A letter-less fragment is still a
+		// legitimate last resort ("-" taken from a list is the document's own text), so
+		// it is accepted only when nothing that carries prose was available.
+		//
+		// An earlier version also rejected candidates that were "nothing but fence
+		// delimiters". That guard was deleted: once the prose preference exists, it can
+		// only fire when NO candidate carries prose, i.e. when the document itself has no
+		// letter-or-number content, and then the delimiters are the document's own text.
+		// A guard that no input can require does not stay in the file.
+		const chosen =
+			candidates.find((c) => carriesPageProse(c, body)) ??
+			candidates.find((c) => c.trim() !== "");
+		// Nothing in the document fits the room, or the document has no prose to fit.
+		// Leave the framing rather than install a blank candidate.
+		if (chosen !== undefined) result = chosen;
 	}
 
 	return assemble(result);
@@ -1172,6 +1248,17 @@ export function trimToTokenBudgetWithClosedFence(
 	text: string,
 	maxTokens: number,
 ): string {
+	// Closing is all this helper does. It briefly also REMOVED fences it judged empty,
+	// in three successive forms — a character-class test, a regex pairing, then a
+	// boundary scanner — and each form deleted real code content in a different way:
+	// a `---` body became horizontal rules, a shorter marker line inside a longer
+	// block was eaten as a closer, a tilde info string containing tildes hid a whole
+	// body, and JS `trim()` erased NBSP/EM/VTAB bodies that Markdown treats as
+	// content. Three rounds finding three classes of the same deletion is the
+	// signature of a wrong seam, not a wrong patch: deciding what a fence MEANS is
+	// the job of the one closure parser in this module, not of a second opinion
+	// bolted onto its output. The budget path that actually needed a content-bearing
+	// answer now validates its own swap candidate with the detector it already had.
 	return closeFencesWithin(trimToTokenBudget(text, maxTokens), maxTokens, true);
 }
 

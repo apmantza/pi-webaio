@@ -14,6 +14,7 @@ import {
 	pruneByRelevance,
 	buildOmittedSectionsToc,
 	applyTokenBudget,
+	trimToTokenBudgetWithClosedFence,
 } from "../src/prune-markdown.ts";
 import { estimateTokens } from "../src/token-count.ts";
 
@@ -1164,6 +1165,376 @@ test("#182: a heading truncated to a bare marker is not counted as prose", () =>
 		assert.ok(
 			!/^[#\s>*~-]+$/.test(out),
 			`budget ${budget} returned markdown punctuation only: ${JSON.stringify(out)}`,
+		);
+	}
+});
+
+// #182 residual, surfaced by re-running the PR #181 reviewer's P1 probe against
+// the merged fix. The floor pass was correct; its INPUT was not.
+// `prosePrefixSource` stripped leading headings with
+// `/^(?:[ \t]*#{1,6}[ \t].*(?:\n|$))+/`, and the repetition stops at the blank
+// line between `# A` and `## B`. So for a document whose prose follows a
+// blank-line-separated heading stack, the "prose" handed to the swap was still
+// headings, `trimToTokenBudget` cut it to `""`, the swap was rejected for lack of
+// room, and the budget-1 answer was the notice fragment "\n\n--" — the exact
+// shape #182 was filed for, surviving in the one document shape the fix's own
+// sweep never built.
+test("#182: a blank-line-separated heading stack does not block the content floor", () => {
+	const skeleton = "# A\n\n## B\n\n### C\n\n" + "leaftext more ".repeat(60);
+	for (let budget = 1; budget <= 60; budget++) {
+		const out = applyTokenBudget(skeleton, budget, "a");
+		assert.ok(
+			/leaftext|leaftex|leaft|leaf|lea|le/.test(out),
+			`budget ${budget} returned framing with no document text: ${JSON.stringify(out.slice(0, 40))}`,
+		);
+		assert.ok(
+			estimateTokens(out) <= budget,
+			`ceiling violated at ${budget}: ${estimateTokens(out)} tokens`,
+		);
+	}
+});
+
+// Second residual from the same re-run. `trimToTokenBudgetWithClosedFence` keeps
+// the fence balanced, which is right — but when the room is too small for any of
+// the code inside, it balanced an OPENING fence against a CLOSING one with
+// nothing between them, and the answer to a document that clearly has content was
+// "```\n```\n". Balanced framing around an empty body is still framing.
+test("#182: a closed fence that holds no content is not an answer", () => {
+	// The payload is deliberately rare. With "codefence body" as the content, the
+	// notice wording "*Truncated" shares the 2-gram "nc" with "codefence" and the
+	// assertion passed on a framing-only answer — a 2-gram criterion is only as
+	// strict as the rarity of the document's tokens.
+	const payload = "jxqv kzpw ";
+	const body = "# T\n" + "```\n" + payload.repeat(60) + "```";
+	const docGrams = body.replace(/^[ \t]*#{1,6}[ \t].*$/gm, "");
+	const carriesDoc = (out) => {
+		for (let i = 0; i + 1 < out.length; i++) {
+			const g = out.slice(i, i + 2);
+			if (/[\p{L}\p{N}]/u.test(g) && docGrams.includes(g)) return true;
+		}
+		return false;
+	};
+	for (let budget = 1; budget <= 40; budget++) {
+		const out = applyTokenBudget(body, budget, "a");
+		const bare = out.replace(/[\s`~]/g, "");
+		// One character is the documented UNDER-FILL residual, but it must be the
+		// DOCUMENT's character: accepting any single character (or empty output) made
+		// the assertion pass on a lone fence marker, which is exactly the framing this
+		// test exists to reject.
+		assert.ok(
+			(bare.length === 1 && body.includes(bare)) || carriesDoc(out),
+			`budget ${budget} returned framing with no document text: ${JSON.stringify(out)}`,
+		);
+		assert.ok(
+			!/`{3,}[^`\n]*\n\s*`{3,}/.test(out),
+			`budget ${budget} closed a fence around nothing: ${JSON.stringify(out)}`,
+		);
+		assert.ok(
+			estimateTokens(out) <= budget,
+			`ceiling violated at ${budget}: ${estimateTokens(out)} tokens`,
+		);
+	}
+});
+
+// --- Regressions introduced by the two fixes above, found by adversarial review
+// of the PR that shipped them. Each is reproduced through the exported budget API.
+
+// "No letter or number anywhere in the string" is not "the fence is empty".
+// Before the fix: applyTokenBudget('# A\n```\n' + '+++\n'.repeat(100) + '```', 20, 'a')
+// returned "```" fenced "+++"; after it returned the bare "+++", and a body of
+// "---" came back as a run of horizontal rules. Fence delimiters carry meaning:
+// they are what makes symbol content code instead of markdown.
+test("#182 regression: a non-empty symbol-only fence keeps its delimiters", () => {
+	for (const body of ["+++", "...", "| | |", "---"]) {
+		const doc = "# A\n```\n" + body + "\n".repeat(1) + body.repeat(1) + "\n".repeat(1) + "```";
+		const out = applyTokenBudget(doc, 60, "a");
+		assert.ok(
+			/```/.test(out),
+			`fence around ${JSON.stringify(body)} was removed: ${JSON.stringify(out)}`,
+		);
+	}
+	const rules = applyTokenBudget("# A\n```\n" + "---\n".repeat(100) + "```", 20, "a");
+	assert.ok(/```/.test(rules), `--- fence body lost its delimiters: ${JSON.stringify(rules)}`);
+});
+
+// The plain-trimmer fallback could return a bare opening delimiter: budget 10 on
+// a fence document returned "```" — three tokens, one unclosed opener, no page
+// text. A complete opener changes the markdown parsing context for everything the
+// caller renders after it, which is worse than the single character it replaced.
+test("#182 regression: no budget yields an unclosed fence", () => {
+	const doc = "# T\n```\n" + "codefence body ".repeat(60);
+	for (let budget = 1; budget <= 60; budget++) {
+		const out = applyTokenBudget(doc, budget, "a");
+		const ticks = (out.match(/`{3,}/g) || []).length;
+		assert.equal(
+			ticks % 2,
+			0,
+			`budget ${budget} returned an unclosed backtick fence: ${JSON.stringify(out)}`,
+		);
+		const tildes = (out.match(/~{3,}/g) || []).length;
+		assert.equal(
+			tildes % 2,
+			0,
+			`budget ${budget} returned an unclosed tilde fence: ${JSON.stringify(out)}`,
+		);
+	}
+});
+
+// The blank-line-crossing strip ate the indentation of the NEXT line and then
+// matched a four-space-indented `# critical code comment` as a heading. In
+// Markdown, four spaces after a blank line is an indented code block and the `#`
+// is a comment, not a heading — the line vanished from the answer.
+test("#182 regression: four-space-indented code is not a heading run", () => {
+	const doc =
+		"# A\n\n    # critical code comment\n    return original_value;\n" +
+		"    more code here;\n".repeat(60);
+	for (const budget of [10, 20, 40]) {
+		const out = applyTokenBudget(doc, budget, "a");
+		assert.ok(
+			out.includes("critical"),
+			`budget ${budget} dropped the indented code comment: ${JSON.stringify(out.slice(0, 60))}`,
+		);
+	}
+});
+
+// --- Found by the verify round on the previous commit. The empty-fence rule was a
+// regex, and the opener capture backtracks from four backticks to three while
+// `[^\n]*` eats the remaining one. A literal three-backtick BODY line inside a
+// four-backtick block therefore satisfied the backreference, both lines were
+// deleted, and the surviving four-backtick closer became a new unclosed opener.
+//
+// Markers are built with escapes rather than written inline: a literal ``` inside
+// a template literal terminates it, and the first version of this block failed to
+// parse for exactly that reason.
+const BT = "`";
+const F3 = BT.repeat(3);
+const F4 = BT.repeat(4);
+
+test("#182 regression: a shorter marker inside a longer fence is body, not a delimiter", () => {
+	// Valid CommonMark: a triple-backtick example inside a quadruple-backtick block.
+	const doc = "# T\n" + F4 + "\n" + F3 + "\n" + "jxqv kzpw ".repeat(100) + "\n" + F3 + "\n" + F4;
+	const out = applyTokenBudget(doc, 20, "a");
+	const fours = (out.match(/`{4}/g) || []).length;
+	assert.ok(
+		fours > 0 && fours % 2 === 0,
+		"the outer four-backtick opener was consumed: " + JSON.stringify(out),
+	);
+	// The helper isolated: an outer block whose only body line is a shorter marker.
+	const kept = trimToTokenBudgetWithClosedFence(F4 + "\n" + F3 + "\n" + F4, 20);
+	assert.ok(kept.includes(F3), "the literal three-backtick body line was deleted: " + JSON.stringify(kept));
+	// A shorter marker line on its own is body text, not an empty fence.
+	const alone = trimToTokenBudgetWithClosedFence(F4 + "\n" + F3, 20);
+	assert.ok(alone.includes(F3), "a shorter marker line was eaten as a closer: " + JSON.stringify(alone));
+});
+
+// The shared trim helper no longer decides what a fence MEANS. It closes fences and
+// nothing else. Deleting "empty" ones was tried three ways and each way deleted real
+// code content in a new way, so the rule moved to the one caller that needed a
+// content-bearing answer, which validates its own swap candidate. What is asserted
+// here is therefore PRESERVATION: a fence that fits is returned untouched.
+test("#182: the trim helper preserves fences verbatim instead of judging them", () => {
+	const docs = [
+		F3 + "\n\t\n \n" + F3, // whitespace-only body
+		F3 + "\n" + F4, // opener closed by a longer run
+		F3 + " " + F4.repeat(0) + "\n\n" + F3, // marker-bearing info string
+		"~~~ ~\n" + F3 + "\n\n" + F3 + "\n~~~", // tilde fence with tilde info
+		F3 + "\n\u00a0\n" + F3, // Unicode whitespace body
+		F4 + "\n" + F3 + "\n" + F4, // shorter marker as body
+	];
+	for (const doc of docs) {
+		const out = trimToTokenBudgetWithClosedFence(doc, 200);
+		assert.equal(out, doc, `the helper rewrote a fence that fits: ${JSON.stringify(out)}`);
+	}
+});
+
+// The public budget API still must not answer with framing. That guarantee now lives
+// in the floor pass's candidate check, not in the trim helper, so it is asserted
+// through the public API where it is actually owed.
+test("#182: the public budget path never answers with framing-only output", () => {
+	const docs = [
+		"# T\n" + F3 + "\n\t\n \n" + F3 + "\n" + "jxqv kzpw ".repeat(100),
+		"# T\n" + F3 + "\n\n" + F4 + "\n" + "jxqv kzpw ".repeat(100),
+		"# T\n~~~ ~\n" + F3 + "\n\n" + F3 + "\n~~~\n" + "jxqv kzpw ".repeat(100),
+		"# T\n" + F3 + "\n\u00a0\n" + F3 + "\n" + "jxqv kzpw ".repeat(100),
+	];
+	for (const doc of docs) {
+		for (const budget of [10, 14, 20, 30, 60]) {
+			const out = applyTokenBudget(doc, budget, "a");
+			// 2-gram membership in the rare payload, the same criterion used everywhere
+			// else in this lane. Requiring the whole payload string was too strict: a
+			// truncated "jxqv " is document text, and at budget 30 the fence plus two
+			// payload characters is a legitimate answer, not framing.
+			const grams = "jxqv kzpw";
+			let shares = false;
+			for (let i = 0; i + 1 < out.length; i++) {
+				const g = out.slice(i, i + 2);
+				if (/[\p{L}\p{N}]/u.test(g) && grams.includes(g)) shares = true;
+			}
+			const bare = out.replace(/[\s`~]/g, "");
+			assert.ok(
+				shares || (bare.length === 1 && doc.includes(bare)),
+				`budget ${budget} answered with framing: ${JSON.stringify(out)}`,
+			);
+			assert.ok(
+				estimateTokens(out) <= budget,
+				`ceiling violated at ${budget}: ${estimateTokens(out)} tokens`,
+			);
+		}
+	}
+});
+
+// The verify round found that removing the fallback's post-trim marker strip was
+// GREEN: no test exercised a SHORT fenced document. It is load-bearing. The
+// fallback strips the leading opener from the SOURCE before trimming, so on a short
+// block the trimmed result keeps the TRAILING closer and the opener is gone — the
+// answer ends with a lone ``` that opens a block nothing closes.
+test("#182 regression: a short fenced block never leaves a lone closer", () => {
+	const docs = [
+		"# T\n" + F3 + "\nab cd ef gh ij kl mn op qr\n" + F3,
+		"# T\n" + F3 + "\nab cd\n" + F3,
+		F3 + "\nab cd\n" + F3,
+		"# T\n~~~\nab cd ef gh ij\n~~~",
+	];
+	for (const doc of docs) {
+		for (let budget = 1; budget <= 40; budget++) {
+			const out = applyTokenBudget(doc, budget, "a");
+			for (const marker of [BT.repeat(3), "~~~"]) {
+				const runs = (out.match(new RegExp(marker, "g")) || []).length;
+				assert.equal(
+					runs % 2,
+					0,
+					`budget ${budget} on ${JSON.stringify(doc.slice(0, 24))} left an unbalanced ${marker}: ${JSON.stringify(out)}`,
+				);
+			}
+		}
+	}
+});
+
+// Four branches of the old scanner survived mutation; the scanner is now gone, and
+// what replaces the coverage is the invariant it was trying to express: fences are
+// never rewritten, and the budget path only installs a candidate that carries
+// document words.
+test("#182: fence-boundary shapes survive the budget path unchanged or with prose", () => {
+	// (a) A LONGER marker run closes a shorter opener. The helper no longer judges
+	// whether the body is empty, so the block is returned untouched.
+	assert.equal(
+		trimToTokenBudgetWithClosedFence(F3 + "\n \n" + F4, 200),
+		F3 + "\n \n" + F4,
+		"the helper rewrote a fence closed by a longer run",
+	);
+	// (b) A blank FIRST body line does not make the block empty: content can follow.
+	const later = trimToTokenBudgetWithClosedFence(F3 + "\n\nkeepme\n" + F3, 20);
+	assert.ok(later.includes("keepme"), "content after a blank line was dropped");
+	assert.ok(later.includes(F3), "the fence around real content lost its delimiters");
+	// (c) An info string containing the marker character cannot open that fence
+	// style, so the line is ordinary content. The body must be BLANK for this to
+	// decide anything: with content in the block both paths keep it, and the first
+	// version of this case passed whether the guard was present or not.
+	const info = trimToTokenBudgetWithClosedFence(F3 + " " + F4 + "\n\n" + F3, 200);
+	assert.equal(info, F3 + " " + F4 + "\n\n" + F3, "a marker-bearing info string was rewritten");
+	// (d) Two sequential fences: the scan must resume OUTSIDE the first block. If it
+	// does not, the second block is re-scanned from inside and lines duplicate.
+	const two = trimToTokenBudgetWithClosedFence(
+		F3 + "\nalpha\n" + F3 + "\nmiddle\n" + F3 + "\nbeta\n" + F3,
+		60,
+	);
+	assert.equal(
+		(two.match(new RegExp(F3, "g")) || []).length,
+		4,
+		`sequential fences were mis-paired: ${JSON.stringify(two)}`,
+	);
+	for (const w of ["alpha", "middle", "beta"]) {
+		assert.equal(two.split(w).length - 1, 1, `${w} duplicated or lost: ${JSON.stringify(two)}`);
+	}
+});
+
+// Verify round 2 on d42f04d. Both of these delete real code content through the
+// exported helper AND the production budget API, and both are regressions against
+// origin/master. They are the reason the fence-rewriting rule is being removed from
+// the shared helper rather than patched a third time: character-class stripping,
+// regex pairing and a boundary scanner have each exposed another class of the same
+// literal-body deletion, which is the signature of a wrong seam, not a wrong patch.
+test("#182 regression: a tilde fence whose info string contains tildes is valid", () => {
+	// CommonMark restricts marker characters in the info string for BACKTICK fences
+	// only. `~~~ ~` opens a block whose body is literal, so the ``` lines are content.
+	const doc = "~~~ ~\n```\n\n```\n~~~";
+	const out = trimToTokenBudgetWithClosedFence(doc, 100);
+	assert.ok(out.includes("```\n\n```"), `literal body deleted: ${JSON.stringify(out)}`);
+	const pub = applyTokenBudget("# T\n" + doc + "\n" + "jxqv kzpw ".repeat(100), 20, "a");
+	assert.ok(pub.includes("```"), `public path deleted the body: ${JSON.stringify(pub)}`);
+});
+
+// Markdown blankness is ASCII spaces and tabs. JavaScript trim() also eats NBSP,
+// EM SPACE and VTAB, and fenced code is literal, so a body holding one of those is
+// real content.
+test("#182 regression: Unicode whitespace inside a fence is content, not a blank line", () => {
+	for (const [name, ch] of [["NBSP", "\u00a0"], ["EM SPACE", "\u2003"], ["VTAB", "\u000b"]]) {
+		const doc = F3 + "\n" + ch + "\n" + F3;
+		const out = trimToTokenBudgetWithClosedFence(doc, 100);
+		assert.ok(out.includes(ch), `${name} body erased: ${JSON.stringify(out)}`);
+		const pub = applyTokenBudget("# T\n" + doc + "\n" + "jxqv kzpw ".repeat(100), 20, "a");
+		assert.ok(pub.includes(ch), `${name} erased on the public path: ${JSON.stringify(pub)}`);
+	}
+});
+
+// Verify round 3 on 78b334a. Real regression versus origin/master, introduced by
+// THIS PR: the line-based prosePrefixSource dropped master's leading-whitespace
+// strip, so a document opening with four-space-indented fence-looking text keeps
+// its indentation, the closure parser still treats that line as an opener and
+// appends a margin-level closer — and at the Markdown 0..3-space boundary the
+// indented line is CODE while the appended marker is an unclosed OPENING fence.
+//
+//   master: "```literal code\njxqv kzp\n```\n"          balanced
+//   78b334a:"    ```literal code\njxqv\n```\n"          newly unclosed
+test("#182 regression: an indented fence-like opening line is not left unclosed", () => {
+	const doc = "    ```literal code\n" + "jxqv kzpw ".repeat(100);
+	for (let budget = 1; budget <= 120; budget++) {
+		const out = applyTokenBudget(doc, budget, "a");
+		const margin = (out.match(/^(?:`{3,}|~{3,})[^\n]*$/gm) || []).length;
+		assert.equal(
+			margin % 2,
+			0,
+			`budget ${budget} left a margin-level marker unclosed: ${JSON.stringify(out.slice(0, 60))}`,
+		);
+	}
+});
+
+// CodeRabbit on this PR. Both are the content-loss class again, reached through
+// the fallback rather than through a fence parser.
+test("#182 regression: only the ORPHAN closer is dropped, not marker lines that are data", () => {
+	// The fallback removes the leading opener from the source, so the trimmed result
+	// can keep a trailing closer with nothing to close it. Removing EVERY marker line
+	// also deletes a ``` line that is the document's own content — a page documenting
+	// fences. Only a marker line that is the last thing in the candidate is an orphan.
+	const doc =
+		F3 + "\n" + "jxqv kzpw ".repeat(4) + "\n" + F3 + "\n" + "zqvk wpmx data line\n".repeat(40);
+	for (const budget of [10, 14, 20, 30]) {
+		const out = applyTokenBudget(doc, budget, "a");
+		const runs = (out.match(/`{3,}/g) || []).length;
+		assert.equal(runs % 2, 0, `budget ${budget} left an unbalanced fence: ${JSON.stringify(out)}`);
+	}
+	// A marker line can carry text: a caption, a language, a reference. Stripping every
+	// marker line deletes that line wholesale, which is document content. This is the
+	// differential that pins the orphan-only rule — with the strip widened to every
+	// marker line the answer at budget 10 is "intro\n\ntai" and the caption is gone.
+	const captioned =
+		"```\nintro\n" + "``` caption: the fence example\n" + "tail body text\n".repeat(40);
+	assert.ok(
+		applyTokenBudget(captioned, 10, "a").includes("caption"),
+		"a marker line carrying text was deleted instead of kept",
+	);
+});
+
+// A CRLF document reaches the budget path without LF normalisation, and a blank
+// line between two headings is "   \r" — not blank under /^[ \t]*$/, so the heading
+// run stopped there and the prose behind it was never reached.
+test("#182 regression: CRLF blank lines do not stop the heading run", () => {
+	const doc = "# A\r\n\r\n## B\r\n\r\n" + "leaftext more ".repeat(60);
+	for (let budget = 1; budget <= 60; budget++) {
+		const out = applyTokenBudget(doc, budget, "a");
+		assert.ok(
+			/leaftext|leaftex|leaft|leaf|lea|le|l/.test(out),
+			`budget ${budget} returned no document text: ${JSON.stringify(out.slice(0, 40))}`,
 		);
 	}
 });
