@@ -382,6 +382,39 @@ function isInScopePath(pathname: string, scope: string): boolean {
 
 // ─── Filtering / dedup ─────────────────────────────────────────────
 
+/**
+ * The one eligibility rule: is this URL pullable, and under what dedupe key?
+ *
+ * Returns the normalized pathname (hash and query stripped) when the URL passes
+ * host / scope / IGNORED / scheme, otherwise undefined. `filterAndDedupe` and
+ * `selectRankedEntries` BOTH consult this, because matching a filtered result
+ * back to a source entry by pathname alone is not enough: if a disallowed entry
+ * shares a pathname with an eligible one, pathname matching selects whichever
+ * came first, and a foreign-host URL can be emitted as a result while the
+ * in-scope page is suppressed.
+ */
+function eligibleUrl(
+	raw: string,
+	hosts: Set<string>,
+	scope: string,
+): { pathname: string; href: string } | undefined {
+	try {
+		const u = new URL(raw);
+		if (
+			(u.protocol !== "http:" && u.protocol !== "https:") ||
+			!hosts.has(u.hostname) ||
+			!isInScopePath(u.pathname, scope) ||
+			IGNORED.test(u.pathname)
+		)
+			return undefined;
+		// Normalized the same way as before: hash and query stripped.
+		u.hash = u.search = "";
+		return { pathname: u.pathname, href: u.href };
+	} catch {
+		return undefined;
+	}
+}
+
 export function filterAndDedupe(
 	urls: string[],
 	hosts: Set<string>,
@@ -391,23 +424,10 @@ export function filterAndDedupe(
 	const seen = new Set<string>();
 	const out: string[] = [];
 	for (const raw of urls) {
-		try {
-			const u = new URL(raw);
-			if (
-				(u.protocol !== "http:" && u.protocol !== "https:") ||
-				!hosts.has(u.hostname) ||
-				!isInScopePath(u.pathname, scope) ||
-				IGNORED.test(u.pathname)
-			)
-				continue;
-			u.hash = u.search = "";
-			if (!seen.has(u.pathname)) {
-				seen.add(u.pathname);
-				out.push(u.href);
-			}
-		} catch {
-			/* ignore */
-		}
+		const hit = eligibleUrl(raw, hosts, scope);
+		if (hit === undefined || seen.has(hit.pathname)) continue;
+		seen.add(hit.pathname);
+		out.push(hit.href);
 	}
 	return out.slice(0, max);
 }
@@ -435,36 +455,54 @@ export function selectRankedEntries(
 	scope: string,
 	max: number,
 ): SitemapEntry[] {
-	const eligible = filterAndDedupe(
-		entries.map((e) => e.loc),
-		hosts,
-		scope,
-		Number.MAX_SAFE_INTEGER,
-	);
-	const wanted = new Set<string>();
-	for (const url of eligible) {
-		try {
-			wanted.add(new URL(url).pathname);
-		} catch {
-			/* filterAndDedupe already rejected this shape */
-		}
-	}
+	// Eligibility is evaluated on the SOURCE entry with the same rule
+	// `filterAndDedupe` uses, rather than matching a filtered result back by
+	// pathname afterwards — so a disallowed entry that shares a pathname with an
+	// eligible one cannot take its place.
 	const kept: SitemapEntry[] = [];
 	const emitted = new Set<string>();
 	for (const entry of entries) {
-		let pathname: string;
-		try {
-			const u = new URL(entry.loc);
-			u.hash = u.search = "";
-			pathname = u.pathname;
-		} catch {
-			continue;
-		}
-		if (!wanted.has(pathname) || emitted.has(pathname)) continue;
-		emitted.add(pathname);
+		const hit = eligibleUrl(entry.loc, hosts, scope);
+		if (hit === undefined || emitted.has(hit.pathname)) continue;
+		emitted.add(hit.pathname);
 		kept.push(entry);
 	}
 	return rankByRecency(kept).slice(0, max);
+}
+
+/**
+ * Recency of the pages that ACTUALLY survive to the candidate.
+ *
+ * `includeSeed` may insert the caller's requested page and evict the last picked
+ * one. Scoring the pre-seed pick therefore let a strategy win a tie on a page it
+ * was never going to serve — and when the majority gate preserves document
+ * order, the evicted page is exactly the kind that carried the newest date.
+ */
+export function newestRecencyForUrls(
+	urls: string[],
+	entries: SitemapEntry[],
+): number | undefined {
+	const want = new Set<string>();
+	for (const url of urls) {
+		try {
+			const u = new URL(url);
+			u.hash = u.search = "";
+			want.add(u.href);
+		} catch {
+			/* not a candidate we produced */
+		}
+	}
+	const surviving: SitemapEntry[] = [];
+	for (const entry of entries) {
+		try {
+			const u = new URL(entry.loc);
+			u.hash = u.search = "";
+			if (want.has(u.href)) surviving.push(entry);
+		} catch {
+			/* ignore */
+		}
+	}
+	return newestRecency(surviving);
 }
 
 /** Ensure a pull always includes the page the caller explicitly requested. */
@@ -628,7 +666,7 @@ export async function discover(
 		// SELECTED entries — a page that was filtered out is not evidence that
 		// this strategy is fresh. A strategy with no dates at all keeps the
 		// previous candidate, because no date is not evidence of staleness.
-		const newest = newestRecency(picked);
+		const newest = newestRecencyForUrls(candidate, entries);
 		const longer = candidate.length > best.length;
 		const newerOnTie =
 			candidate.length === best.length &&

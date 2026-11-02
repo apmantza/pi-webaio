@@ -366,3 +366,38 @@ test("#132 cr2: dedupe by pathname still keeps only the first variant", async ()
 		"https://d.example/docs/b",
 	]);
 });
+
+// ─── CodeRabbit round 3 on PR #178 ────────────────────────────────────
+
+test("#132 cr3: a disallowed entry cannot suppress the eligible one it shares a pathname with", async () => {
+	// Matching the filtered result back by pathname alone picks whichever entry
+	// appears FIRST with that pathname — here an out-of-host entry, which then
+	// goes out as a real result while the in-scope page is suppressed.
+	const { selectRankedEntries } = await import("../src/discovery.ts");
+	const entries = [
+		{ loc: "https://evil.example/docs/a", lastmod: "2026-01-01" },
+		{ loc: "https://d.example/docs/a", lastmod: "2025-01-01" },
+		{ loc: "https://d.example/docs/b", lastmod: "2024-01-01" },
+	];
+	const picked = selectRankedEntries(entries, new Set(["d.example"]), "/docs/", 5);
+	assert.deepEqual(picked.map((e) => e.loc), [
+		"https://d.example/docs/a",
+		"https://d.example/docs/b",
+	]);
+});
+
+test("#132 cr3: the tie-break scores only pages that survive seed insertion", async () => {
+	// includeSeed can insert the requested page and drop the last picked one.
+	// Scoring `picked` rather than what survived let a strategy win a tie on a
+	// page it is not actually going to serve.
+	const { newestRecencyForUrls, newestRecency } = await import("../src/discovery.ts");
+	const entries = [
+		{ loc: "https://d.example/a", lastmod: "2020-01-01" },
+		{ loc: "https://d.example/b", lastmod: "2026-01-01" },
+	];
+	// Candidate only contains /a (b was dropped to make room for the seed).
+	const candidate = ["https://d.example/a"];
+	const scored = newestRecencyForUrls(candidate, entries);
+	assert.equal(scored, Date.UTC(2020, 0, 1));
+	assert.notEqual(scored, newestRecency(entries), "score must come from surviving pages");
+});
