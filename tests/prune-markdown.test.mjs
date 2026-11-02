@@ -998,6 +998,32 @@ test("#170: every budget cap inside applyTokenBudget is a named constant", async
 	);
 });
 
+test("#170: the spend-order table does not over-claim the content floor", async () => {
+	// The table row and invariant 2 are two sentences about the same guarantee, and
+	// the first draft of this PR had them disagreeing: the row said the floor means
+	// "some of the document always survives" while the invariant and a test had just
+	// established budgets 1..27 yield framing only. A model that contradicts itself
+	// in two places is worse than no model, because a reader cannot tell which half
+	// the code honours.
+	const src = await readFile(
+		new URL("../src/prune-markdown.ts", import.meta.url),
+		"utf8",
+	);
+	const row = src
+		.split("\n")
+		.find((l) => l.includes("**content floor**") && l.trim().includes("|"));
+	assert.ok(row, "the spend-order table must carry a content-floor row");
+	assert.ok(
+		!/always survives/i.test(row),
+		`the floor row claims an unconditional guarantee: ${row}`,
+	);
+	assert.match(
+		row,
+		/invariant 2/i,
+		"the floor row must point at the invariant that states its domain",
+	);
+});
+
 test("#170: the content floor holds above its measured domain", () => {
 	// The model states invariant 2 as a DOMAIN, and this test is where the domain
 	// lives. Writing the model down exposed that the step-8 backstop can reclaim

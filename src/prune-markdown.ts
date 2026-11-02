@@ -525,7 +525,7 @@ export function pruneByRelevance(
  * |---|-----------------|------------------------------------------------------------|------------|
  * | 0 | (no-op)         | content already fits                                    | nothing is spent; the input is returned verbatim |
  * | 1 | caller's budget | `effectiveBudget = max(1, floor(budget))`                  | the number handed in is the contract; no hidden 100-token floor |
- * | 2 | **content floor** | `MIN_CONTENT_SHARE × effectiveBudget`                    | I2 — some of the document always survives |
+ * | 2 | **content floor** | `MIN_CONTENT_SHARE × effectiveBudget`                    | I2 — reserves the space prose is cut from; it is a reservation, not a promise that prose survives (see invariant 2 for the domain where it holds) |
  * | 3 | frontmatter     | kept only if it fits in `effectiveBudget − content floor`  | metadata never crowds out content; dropped whole otherwise |
  * | 4 | truncation notice | `min(MAX_NOTICE_RESERVE, effectiveBudget − frontmatter − content floor)` | I1 — the notice may only spend what the floor does not need. This sizes `contentBudget` only; the footer actually emitted is rebuilt as `footerBase + omittedToc` and re-measured at step 8, so it is not the notice's final size |
  * | 5 | outline (skeleton) | `outlineShare(contentBudget)`, and `prependOutlineShare` on the assembled-result path | structure survives heavy pruning, but never at the prose's expense |
