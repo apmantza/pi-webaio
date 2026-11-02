@@ -788,7 +788,8 @@ export function repoTreeEntryUrl(
 /**
  * Drop asset/build/dependency paths, WITHOUT bounding the result.
  *
- * Split out of `filterRepoPaths` because the two jobs it was doing have different
+ * Split out of the old `filterRepoPaths` because the two jobs it was doing have
+ * different
  * consequences now that directories are entries too. Exclusion decides what the
  * counts mean; the cap decides only what is retained. Applying the cap first made
  * it corrupt the census: a repository of 11 000 directories holding one file each
@@ -819,11 +820,6 @@ export function capRepoPaths(paths: string[]): { kept: string[]; capped: boolean
 		kept: paths.length > MAX_TREE_PATHS ? paths.slice(0, MAX_TREE_PATHS) : paths,
 		capped: paths.length > MAX_TREE_PATHS,
 	};
-}
-
-/** Filter noisy asset/build/dep paths out of a repo tree, then bound the result. */
-export function filterRepoPaths(paths: string[]): string[] {
-	return capRepoPaths(dropExcludedPaths(paths)).kept;
 }
 
 /**
@@ -1269,8 +1265,8 @@ async function mapGitHubRepoFull(
 		// completion below `maxEntries` has an EXACT count, and labelling that
 		// "at least" is as wrong as the opposite claim (review #173 round 2).
 		// With no walk the count came from the API tree, which is a floor when
-		// the API said it was truncated OR when our own `filterRepoPaths` walk
-		// stopped at MAX_TREE_PATHS - a third way to be incomplete that the
+		// the API said it was truncated OR when our own retention cap stopped the
+		// list at MAX_TREE_PATHS - a third way to be incomplete that the
 		// reviewer's thread surfaced (nodejs/node-sized repos).
 		treeEntriesAreLowerBound: walk
 			? walk.hitCap

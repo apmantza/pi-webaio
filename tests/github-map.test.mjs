@@ -18,7 +18,7 @@ import { test } from "node:test";
 import {
 	buildTree,
 	detectArchitectureSignals,
-	filterRepoPaths,
+	dropExcludedPaths,
 	isGitHubUrl,
 	mapGitHubRepo,
 	parseGitHubMapUrl,
@@ -487,41 +487,41 @@ test("mapGitHubRepo on repo URL returns a usable map structure", async () => {
 	}
 });
 
-// ─── filterRepoPaths ──────────────────────────────────────────────
+// ─── dropExcludedPaths ─────────────────────────────────────────────
 
-test("filterRepoPaths drops node_modules entries", () => {
+test("dropExcludedPaths drops node_modules entries", () => {
 	const paths = [
 		"src/index.ts",
 		"node_modules/lib/foo.js",
 		"node_modules/@types/node/index.d.ts",
 	];
-	const out = filterRepoPaths(paths);
+	const out = dropExcludedPaths(paths);
 	assert.deepStrictEqual(out, ["src/index.ts"]);
 });
 
-test("filterRepoPaths drops asset files", () => {
+test("dropExcludedPaths drops asset files", () => {
 	const paths = [
 		"src/index.ts",
 		"docs/logo.png",
 		"docs/banner.svg",
 		"docs/screenshot.jpeg",
 	];
-	const out = filterRepoPaths(paths);
+	const out = dropExcludedPaths(paths);
 	assert.deepStrictEqual(out, ["src/index.ts"]);
 });
 
-test("filterRepoPaths drops lockfiles (huge)", () => {
+test("dropExcludedPaths drops lockfiles (huge)", () => {
 	const paths = [
 		"src/index.ts",
 		"yarn.lock",
 		"package-lock.json",
 		"Cargo.lock",
 	];
-	const out = filterRepoPaths(paths);
+	const out = dropExcludedPaths(paths);
 	assert.deepStrictEqual(out, ["src/index.ts"]);
 });
 
-test("filterRepoPaths drops build outputs", () => {
+test("dropExcludedPaths drops build outputs", () => {
 	const paths = [
 		"src/index.ts",
 		"dist/bundle.js",
@@ -529,31 +529,27 @@ test("filterRepoPaths drops build outputs", () => {
 		"target/release/app",
 		"app.min.js",
 	];
-	const out = filterRepoPaths(paths);
+	const out = dropExcludedPaths(paths);
 	assert.deepStrictEqual(out, ["src/index.ts"]);
 });
 
-test("filterRepoPaths drops vendored / venv dirs", () => {
+test("dropExcludedPaths drops vendored / venv dirs", () => {
 	const paths = [
 		"src/index.ts",
 		"vendor/lib/foo.php",
 		"venv/bin/python",
 		".venv/lib/python3/site-packages/foo.py",
 	];
-	const out = filterRepoPaths(paths);
+	const out = dropExcludedPaths(paths);
 	assert.deepStrictEqual(out, ["src/index.ts"]);
 });
 
-test("filterRepoPaths respects max cap", () => {
-	// Build more than MAX_TREE_PATHS — verify it caps (we don't generate
-	// the full list, just enough to confirm the cap is honored).
-	const paths = [];
-	for (let i = 0; i < 25; i++) paths.push(`src/file${i}.ts`);
-	const out = filterRepoPaths(paths);
-	assert.strictEqual(out.length, 25);
-});
+// The old version of this test fed 25 entries to a 20 000-entry cap and asserted
+// the length came back 25 — it could not fail. The real bound is pinned in
+// tests/webmap-dir-entries.test.mjs, which crosses MAX_TREE_PATHS and asserts both
+// that the retained list stops and that `capped` reports it.
 
-test("filterRepoPaths keeps README and source files", () => {
+test("dropExcludedPaths keeps README and source files", () => {
 	const paths = [
 		"README.md",
 		"src/index.ts",
@@ -561,7 +557,7 @@ test("filterRepoPaths keeps README and source files", () => {
 		"tests/auth.test.ts",
 		"package.json",
 	];
-	const out = filterRepoPaths(paths);
+	const out = dropExcludedPaths(paths);
 	assert.strictEqual(out.length, 5);
 	assert.ok(out.includes("README.md"));
 	assert.ok(out.includes("package.json"));
@@ -608,19 +604,19 @@ test("renderRepoTreeMarkdown keeps the API-truncated label and can both truncate
 	assert.match(md, /first 5 of 50 entries/);
 });
 
-test("filterRepoPaths is case-insensitive", () => {
+test("dropExcludedPaths is case-insensitive", () => {
 	const paths = ["src/index.ts", "docs/Logo.PNG", "docs/banner.SVG"];
-	const out = filterRepoPaths(paths);
+	const out = dropExcludedPaths(paths);
 	assert.deepStrictEqual(out, ["src/index.ts"]);
 });
 
-test("filterRepoPaths returns empty for noisy trees", () => {
+test("dropExcludedPaths returns empty for noisy trees", () => {
 	const paths = [
 		"node_modules/lib/foo.js",
 		"vendor/lib/foo.php",
 		"docs/logo.png",
 	];
-	const out = filterRepoPaths(paths);
+	const out = dropExcludedPaths(paths);
 	assert.deepStrictEqual(out, []);
 });
 
