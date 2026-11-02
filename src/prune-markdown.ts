@@ -514,6 +514,77 @@ export function pruneByRelevance(
 }
 
 /**
+ * ## The budget model
+ *
+ * Seven consumers share one number, in this order, plus two decision points that
+ * spend nothing but belong in the contract:
+ *
+ * Spend order, each step spending only what the previous steps left:
+ *
+ * | # | Consumer        | Cap                                                        | Guarantees |
+ * |---|-----------------|------------------------------------------------------------|------------|
+ * | 0 | (no-op)         | content already fits                                    | nothing is spent; the input is returned verbatim |
+ * | 1 | caller's budget | `effectiveBudget = max(1, floor(budget))`                  | the number handed in is the contract; no hidden 100-token floor |
+ * | 2 | **content floor** | `MIN_CONTENT_SHARE × effectiveBudget`                    | I2 — reserves the space prose is cut from; it is a reservation, not a promise that prose survives (see invariant 2 for the domain where it holds) |
+ * | 3 | frontmatter     | kept only if it fits in `effectiveBudget − content floor`  | metadata never crowds out content; dropped whole otherwise |
+ * | 4 | truncation notice | `min(MAX_NOTICE_RESERVE, effectiveBudget − frontmatter − content floor)` | I1 — the notice may only spend what the floor does not need. This sizes `contentBudget` only; the footer actually emitted is rebuilt as `footerBase + omittedToc` and re-measured at step 8, so it is not the notice's final size |
+ * | 5 | outline (skeleton) | `outlineShare(contentBudget)`, and `prependOutlineShare` on the assembled-result path | structure survives heavy pruning, but never at the prose's expense |
+ * | 6 | prose           | `contentBudget − outline − selected heading`               | whatever is left, which is what the floor protected it for |
+ * | 7 | omitted-sections TOC | `effectiveBudget − frontmatter − estimateTokens(footerBase) − content floor` | lowest priority; the first thing to go, and step 8 may still drop it |
+ * | 8 | (backstop)      | re-measure the whole result; shrink the notice, then hard-trim the body | I1 — the ceiling is enforced here, not by the reservations above |
+ *
+ * Three invariants, and the guard that enforces each:
+ *
+ * 1. **Ceiling** — the returned text measures ≤ `effectiveBudget` for every
+ *    input shape. Enforced by the final re-measure: the notice is stepped down
+ *    (`shrinkNoticeToRoom`) and the body hard-trimmed with a closed fence.
+ *    Reserving in the order above is what makes the re-measure a backstop rather
+ *    than the mechanism.
+ * 2. **Content floor** — a non-empty body yields page prose **for any budget
+ *    large enough to contain prose**. This is a real limit, not a hedge, and it
+ *    is the model's first finding: writing the invariant down exposed that the
+ *    step-8 backstop can reclaim the whole content allocation when even the
+ *    shortest notice will not fit beside it. Measured on a plain headed body:
+ *    budgets 1–27 return framing with no page prose at all (budget 1 returns
+ *    `"\n\n--"` — a stray rule and nothing else), and the boundary is
+ *    **non-monotonic** (budget 20 yields prose, budget 27 does not). The
+ *    invariant is stated as a domain rather than patched around, because issue
+ *    #170 is explicit that this seam needs a sixth round not at all, and a
+ *    boundary nobody can assert is a bug that reads as a policy. See
+ *    `#170: the content floor holds above its measured domain` for the test that
+ *    pins where the domain starts.
+ * 3. **Attribution** — prose is never preceded by a heading it did not come
+ *    from. Enforced by putting heading-less prose FIRST, and by the rule that a
+ *    heading the outline refused to carry is not re-emitted for the prose that
+ *    sat behind it. This is the invariant that cost three rounds to chase
+ *    because it had never been stated: misattribution produces a *wrong*
+ *    citation, not an ugly one.
+ *
+ * The two outline shares have different denominators on purpose:
+ * `outlineShare` budgets against `contentBudget` (what is left for the body),
+ * `prependOutlineShare` against `effectiveBudget`, because that path runs on the
+ * already-assembled result. They are the same rule — whole headings only, and a
+ * heading larger than the outline's share is dropped rather than emitted
+ * unbounded — not two different policies.
+ */
+
+/** Share of the budget the returned body must keep, whatever else fits. */
+const MIN_CONTENT_SHARE = 0.5;
+/** Upper bound on what the truncation notice may reserve when there is room. */
+const MAX_NOTICE_RESERVE = 30;
+/** Share of the content budget the heading outline may take. */
+const OUTLINE_SHARE = 0.4;
+/** Floor on the outline share so a tiny budget still carries some structure. */
+const MIN_OUTLINE_TOKENS = 10;
+/** Same rule as `OUTLINE_SHARE`, measured against the whole budget. */
+const PREPEND_OUTLINE_SHARE = 0.25;
+
+/** Whole-heading outline budget: `share × denominator`, never under the floor. */
+function outlineBudget(denominator: number, share: number): number {
+	return Math.max(MIN_OUTLINE_TOKENS, Math.floor(denominator * share));
+}
+
+/**
  * Apply a hard token-budget contract to already-processed content.
  *
  * Unlike `pruneMarkdown` (which operates on raw source), this function is
@@ -564,7 +635,10 @@ export function applyTokenBudget(
 	// headings plus a notice with no prose at all. That is worse than going over
 	// budget, because the output looks complete (issue #165, CodeRabbit threads
 	// src/prune-markdown.ts:568 and src/tools/webcontent.ts:56).
-	const MIN_CONTENT_TOKENS = Math.max(1, Math.floor(effectiveBudget * 0.5));
+	const MIN_CONTENT_TOKENS = Math.max(
+		1,
+		Math.floor(effectiveBudget * MIN_CONTENT_SHARE),
+	);
 	const rawFrontmatterTokens =
 		rawFrontmatter === "" ? 0 : estimateTokens(rawFrontmatter);
 	const keepFrontmatter =
@@ -574,7 +648,7 @@ export function applyTokenBudget(
 	const frontmatterTokens = keepFrontmatter ? rawFrontmatterTokens : 0;
 	// Spend what is left on the notice, never at the cost of the content floor.
 	const FOOTER_TOKEN_RESERVE = Math.min(
-		30,
+		MAX_NOTICE_RESERVE,
 		Math.max(0, effectiveBudget - frontmatterTokens - MIN_CONTENT_TOKENS),
 	);
 	const contentBudget = Math.max(
@@ -698,7 +772,7 @@ export function applyTokenBudget(
 		// The skeleton is capped so it cannot crowd the prose back out.
 		const skelLines = selectSkeletonLines(
 			headingLines,
-			Math.max(10, Math.floor(contentBudget * 0.4)),
+			outlineBudget(contentBudget, OUTLINE_SHARE),
 		);
 		const skeleton = skelLines.join("\n");
 		const skeletonTokens = skeleton ? estimateTokens(skeleton) : 0;
@@ -710,7 +784,7 @@ export function applyTokenBudget(
 		// re-emitting it separately would hand it that room back and leave the prose with
 		// nothing (the exact shape the skeleton rule exists to prevent). Same rule, same
 		// cap: if it did not fit the outline, it does not get a second chance.
-		const outlineCap = Math.max(10, Math.floor(contentBudget * 0.4));
+		const outlineCap = outlineBudget(contentBudget, OUTLINE_SHARE);
 		if (selectedHeading && estimateTokens(selectedHeading) > outlineCap) {
 			selectedHeading = "";
 			// The prose came from behind a heading the outline refused to carry. Without
@@ -804,7 +878,7 @@ export function applyTokenBudget(
 			// prose at all (issue #169, CodeRabbit thread src/prune-markdown.ts:666).
 			const skeleton = selectSkeletonLines(
 				headingLines,
-				Math.max(10, Math.floor(effectiveBudget * 0.25)),
+				outlineBudget(effectiveBudget, PREPEND_OUTLINE_SHARE),
 			).join("\n");
 			if (skeleton !== "") {
 				// Heading-less prose goes FIRST. Prepending the outline always attributed

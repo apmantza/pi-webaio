@@ -2,6 +2,8 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { blankCommentsOnly } from "./helpers.mjs";
 import {
 	createBM25Scorer,
 	scoreRelevance,
@@ -920,4 +922,135 @@ test("prose from a section whose heading was dropped for size is not relabelled"
 		`prose from the oversized-heading section was credited to a kept heading — ${JSON.stringify(out.slice(0, 90))}`,
 	);
 	assert.ok(estimateTokens(out) <= 150);
+});
+
+// ─── Issue #170: the budget model is written, and the code uses it ───
+//
+// `applyTokenBudget` was patched five consecutive rounds, each round fixing a
+// defect the previous round wrote, because nothing stated who spends the budget
+// in what order or what each reserve guarantees. The fix is the model itself:
+// the caps are named constants and the prose above the function is the authority
+// they are derived from. These guards keep the two from drifting apart again —
+// a model nobody can check against the code is a comment, not a model.
+//
+// Recurrence prevented: a sixth round introducing a cap that appears in no model.
+
+test("#170: the budget model names the three invariants it enforces", async () => {
+	const src = await readFile(
+		new URL("../src/prune-markdown.ts", import.meta.url),
+		"utf8",
+	);
+	const model = src.slice(0, src.indexOf("export function applyTokenBudget("));
+	for (const invariant of ["Ceiling", "Content floor", "Attribution"]) {
+		assert.ok(
+			model.includes(`**${invariant}**`),
+			`the model block must state the ${invariant} invariant`,
+		);
+	}
+});
+
+test("#170: every budget cap inside applyTokenBudget is a named constant", async () => {
+	// Comments are REMOVED (not just strings blanked): the file's prose mentions
+	// "0.4 × contentBudget" throughout, so a comment must not be able to satisfy
+	// this scan. Comment-only blanking is also the safe choice — blanking string
+	// literals after comments are gone lets a leftover quote pair with a later one
+	// and swallow the function body, which is what this test originally did to
+	// itself. It failed loudly, which is the good direction.
+	//
+	// Fail-closed on the SHAPE of a cap, not on a list of bad spellings. An
+	// earlier version of this guard looked for the exact strings "* 0.4" and
+	// "Math.max(10,", which passes "*0.4", "* 0.40" and "0.400" — an enumeration
+	// of known-bad spellings, the exact anti-pattern this repo calls out. Instead:
+	// nothing may be multiplied by a numeric literal, and no Math.max/min may take
+	// a numeric bound other than 0 or 1 (the two structural floors: "no budget",
+	// "no room"). Any new cap therefore has to be a named constant in the model.
+	const src = await blankCommentsOnly(
+		new URL("../src/prune-markdown.ts", import.meta.url),
+	);
+	const start = src.indexOf("export function applyTokenBudget(");
+	const end = src.indexOf("function shrinkNoticeToRoom", start);
+	assert.ok(start > 0 && end > start, "could not isolate the function body");
+	const body = src.slice(start, end);
+
+	const mult = body.match(/\*\s*[\d.]/g) ?? [];
+	assert.deepEqual(mult, [], `numeric multiplier reintroduced: ${mult.join(", ")}`);
+
+	const bounds = body.match(/Math\.(?:max|min)\(\s*(?!0\b|1\b)[\d.]+/g) ?? [];
+	assert.deepEqual(bounds, [], `numeric budget bound reintroduced: ${bounds.join(", ")}`);
+
+	// A cap can also be smuggled in as an ARGUMENT to the helper rather than a
+	// literal in an expression — `outlineBudget(contentBudget, 0.4)` keeps both
+	// call sites and the multiplier check never sees it. Every argument to a budget
+	// helper must be a name, so the number always lives in the model.
+	const helperArgs = body.match(/outlineBudget\([^)]*[\d.]/g) ?? [];
+	assert.deepEqual(
+		helperArgs,
+		[],
+		`numeric argument passed to a budget helper: ${helperArgs.join(", ")}`,
+	);
+
+	const uses = (body.match(/outlineBudget\(/g) ?? []).length;
+	// The outline share was spelled twice as two independent literals; one rule
+	// now has one expression, called from both places.
+	assert.ok(
+		uses >= 2,
+		`both outline sites must share one budget expression, got ${uses}`,
+	);
+});
+
+test("#170: the spend-order table does not over-claim the content floor", async () => {
+	// The table row and invariant 2 are two sentences about the same guarantee, and
+	// the first draft of this PR had them disagreeing: the row said the floor means
+	// "some of the document always survives" while the invariant and a test had just
+	// established budgets 1..27 yield framing only. A model that contradicts itself
+	// in two places is worse than no model, because a reader cannot tell which half
+	// the code honours.
+	const src = await readFile(
+		new URL("../src/prune-markdown.ts", import.meta.url),
+		"utf8",
+	);
+	const row = src
+		.split("\n")
+		.find((l) => l.includes("**content floor**") && l.trim().includes("|"));
+	assert.ok(row, "the spend-order table must carry a content-floor row");
+	assert.ok(
+		!/always survives/i.test(row),
+		`the floor row claims an unconditional guarantee: ${row}`,
+	);
+	assert.match(
+		row,
+		/invariant 2/i,
+		"the floor row must point at the invariant that states its domain",
+	);
+});
+
+test("#170: the content floor holds above its measured domain", () => {
+	// The model states invariant 2 as a DOMAIN, and this test is where the domain
+	// lives. Writing the model down exposed that the step-8 backstop can reclaim
+	// the entire content allocation when even the shortest notice will not fit
+	// beside it: on a plain headed body, budgets 1..27 return framing with no page
+	// prose at all, and the boundary is non-monotonic (20 has prose, 27 does not).
+	// Issue #170 is explicit that this seam gets no sixth patch, so the boundary is
+	// pinned rather than patched: if someone changes the shrink ladder and moves
+	// it, this test says so instead of the model quietly lying.
+	const body = `# Big Heading\n${"word ".repeat(600)}`;
+	const PROSE = /word/;
+	// Above the domain: prose is always present.
+	for (const budget of [28, 40, 60, 120, 400]) {
+		assert.ok(
+			PROSE.test(applyTokenBudget(body, budget, "a")),
+			`budget ${budget} must yield page prose`,
+		);
+	}
+	// Inside the domain: framing-only output is the documented, measured truth.
+	// Asserting the failure too, so "we fixed it" cannot be assumed silently.
+	assert.ok(!PROSE.test(applyTokenBudget(body, 1, "a")), "budget 1 behaviour changed");
+	// The ceiling is NOT affected — that invariant is unconditional.
+	for (let budget = 1; budget <= 60; budget++) {
+		const out = applyTokenBudget(body, budget, "a");
+		assert.ok(
+			estimateTokens(out) <= budget,
+			`ceiling violated at ${budget}: ${estimateTokens(out)} tokens`,
+		);
+	}
 });
