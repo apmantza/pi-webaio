@@ -1028,9 +1028,13 @@ async function mapGitHubRepoFull(
 		// whose API tree was truncated but whose cloned tree walked to
 		// completion below `maxEntries` has an EXACT count, and labelling that
 		// "at least" is as wrong as the opposite claim (review #173 round 2).
-		// With no walk the count came from the API tree, which `truncated` says
-		// was incomplete.
-		treeEntriesAreLowerBound: walk ? walk.hitCap : truncated,
+		// With no walk the count came from the API tree, which is a floor when
+		// the API said it was truncated OR when our own `filterRepoPaths` walk
+		// stopped at MAX_TREE_PATHS - a third way to be incomplete that the
+		// reviewer's thread surfaced (nodejs/node-sized repos).
+		treeEntriesAreLowerBound: walk
+			? walk.hitCap
+			: truncated || paths.length >= MAX_TREE_PATHS,
 	});
 	summaryParts.push(`${counts.discovered} via ${Object.keys(sources).length} sources:`);
 	for (const [src, urls] of Object.entries(sources)) {
