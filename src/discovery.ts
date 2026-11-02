@@ -46,8 +46,99 @@ async function tryFetch(
 	}
 }
 
-export function parseLocs(xml: string): string[] {
-	return [...xml.matchAll(/<loc>([^<]*)<\/loc>/gi)].map((m) => m[1]!.trim());
+/**
+ * A `<url>` entry from a sitemap urlset (or a `<sitemap>` from an index).
+ *
+ * `lastmod` is retained deliberately. `parseLocs` used to return bare strings and
+ * threw it away, which is the root cause of issue #132: the recency information
+ * was present in the response body and discarded at the parse step, so a
+ * budget-limited pull could not rank by it and landed entirely on the archive
+ * floor.
+ */
+export type SitemapEntry = { loc: string; lastmod?: string };
+
+export function parseLocs(xml: string): SitemapEntry[] {
+	const out: SitemapEntry[] = [];
+	// Pair each <loc> with the <lastmod> that belongs to the SAME <url>/<sitemap>
+	// element. Matching the two independently would let an entry with no lastmod
+	// inherit its neighbour's date, which would silently invent recency.
+	for (const item of xml.matchAll(/<(?:url|sitemap)\b[^>]*>([\s\S]*?)<\/(?:url|sitemap)>/gi)) {
+		const block = item[1] ?? "";
+		const loc = /<loc>([^<]*)<\/loc>/i.exec(block)?.[1]?.trim();
+		if (!loc) continue;
+		const lastmod = /<lastmod>([^<]*)<\/lastmod>/i.exec(block)?.[1]?.trim();
+		out.push(lastmod ? { loc, lastmod } : { loc });
+	}
+	if (out.length > 0) return out;
+	// Malformed-loose fallback. The pre-#132 parser matched bare <loc> tags with
+	// no wrapper, and real-world sitemaps that are not strictly valid still get
+	// served today; dropping them would turn a ranking improvement into a
+	// discovery regression. No wrapper means no reliable pairing, so these come
+	// back undated and rank below dated entries instead of guessing.
+	return [...xml.matchAll(/<loc>([^<]*)<\/loc>/gi)]
+		.map((m) => m[1]!.trim())
+		.filter((loc) => loc.length > 0)
+		.map((loc) => ({ loc }));
+}
+
+/**
+ * Newest first, using only cheap signals, and degrading to "we do not know".
+ *
+ * Order of preference is the one issue #132 specifies: sitemap `lastmod`, then a
+ * conservative `/YYYY/MM/` URL pattern, then the document order the site gave us.
+ * The non-goal is equally load-bearing: no content-based recency guessing, because
+ * a wrong "recency" guess is worse than serving an old page.
+ *
+ * Entries with no usable date sort AFTER dated ones and keep their relative
+ * order (a stable partition, not an alphabetical or random tiebreak).
+ */
+export function rankByRecency(entries: SitemapEntry[]): SitemapEntry[] {
+	const dated: Array<{ entry: SitemapEntry; time: number; i: number }> = [];
+	const undated: SitemapEntry[] = [];
+	entries.forEach((entry, i) => {
+		const time = recencyTime(entry);
+		if (time === undefined) undated.push(entry);
+		else dated.push({ entry, time, i });
+	});
+	dated.sort((a, b) => b.time - a.time || a.i - b.i);
+	return [...dated.map((d) => d.entry), ...undated];
+}
+
+/**
+ * Milliseconds for the recency of one entry, or undefined when nothing cheap
+ * establishes it.
+ *
+ * Sitemaps are untrusted input, so a `lastmod` that does not parse to a real date
+ * (`not-a-date`, `0000-00-00`, epoch zero) is treated as ABSENT rather than as a
+ * very old or very new value — otherwise a malformed stamp could outrank a real
+ * one.
+ */
+function recencyTime(entry: SitemapEntry): number | undefined {
+	const stamp = entry.lastmod;
+	if (stamp) {
+		// Only accept a date-shaped prefix; sitemaps legally carry full ISO
+		// datetimes with offsets as well as bare dates.
+		const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(stamp);
+		if (m) {
+			const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+			if (y >= 1970 && mo >= 1 && mo <= 12 && d >= 1 && d <= 31) {
+				const t = Date.UTC(y, mo - 1, d);
+				if (Number.isFinite(t) && t > 0) return t;
+			}
+		}
+	}
+	// Conservative fallback: a `/YYYY/MM/` blog-style slug. Deliberately requires
+	// both year and month so a bare `/2014/` archive index is not mistaken for a
+	// dated post.
+	const slug = /\/((?:19|20)\d{2})\/(\d{1,2})(?:\/|$)/.exec(entry.loc);
+	if (slug) {
+		const [y, mo] = [Number(slug[1]), Number(slug[2])];
+		if (mo >= 1 && mo <= 12) {
+			const t = Date.UTC(y, mo - 1, 1);
+			if (Number.isFinite(t) && t > 0) return t;
+		}
+	}
+	return undefined;
 }
 
 // ─── Sitemap fetching (recursive, handles index sitemaps) ──────────
@@ -80,7 +171,7 @@ async function fetchSitemap(
 	depth: number,
 	allowedOrigins: Set<string>,
 	budget: SitemapBudget,
-): Promise<string[]> {
+): Promise<SitemapEntry[]> {
 	if (
 		depth > 3 ||
 		!isApprovedSitemapUrl(url, allowedOrigins) ||
@@ -90,7 +181,7 @@ async function fetchSitemap(
 
 	const r = await tryFetch(url);
 	if (!r?.text.includes("<")) return [];
-	const locs = parseLocs(r.text);
+	const entries = parseLocs(r.text);
 	const isIndex =
 		r.text.includes("<sitemapindex") ||
 		(r.text.includes("<sitemap>") && !r.text.includes("<urlset"));
@@ -99,7 +190,8 @@ async function fetchSitemap(
 		// Cap fan-out width and run with bounded concurrency — an index
 		// listing thousands of nested sitemaps must not spawn an
 		// unbounded (and at depth 3, exponential) burst of fetches.
-		const children = locs
+		const children = entries
+			.map((e) => e.loc)
 			.filter((child) => isApprovedSitemapUrl(child, allowedOrigins))
 			.slice(0, MAX_CHILD_SITEMAPS);
 		const nested = await runInBatches(children, SITEMAP_CONCURRENCY, (u) =>
@@ -107,14 +199,14 @@ async function fetchSitemap(
 		);
 		return nested.flat().slice(0, MAX_SITEMAP_URLS);
 	}
-	return locs.slice(0, MAX_SITEMAP_URLS);
+	return entries.slice(0, MAX_SITEMAP_URLS);
 }
 
 async function sitemapFromRobots(
 	origin: string,
 	allowedOrigins: Set<string>,
 	budget: SitemapBudget,
-): Promise<string[]> {
+): Promise<SitemapEntry[]> {
 	const robotsUrl = `${origin}/robots.txt`;
 	if (
 		!isApprovedSitemapUrl(robotsUrl, allowedOrigins) ||
@@ -374,7 +466,7 @@ export async function discover(
 		...new Set([actual.pathname.replace(/\/[^/]*$/, "/"), "/"]),
 	];
 
-	const strategies: Promise<string[]>[] = [];
+	const strategies: Promise<SitemapEntry[]>[] = [];
 	for (const o of origins) {
 		strategies.push(sitemapFromRobots(o, allowedSitemapOrigins, sitemapBudget));
 		for (const bp of basePaths) {
@@ -389,12 +481,20 @@ export async function discover(
 	const results = await Promise.all(strategies);
 
 	let best: string[] = [];
-	for (const urls of results) {
-		if (!urls.length) continue;
+	for (const entries of results) {
+		if (!entries.length) continue;
+		// Rank BEFORE filtering/capping: `filterAndDedupe` truncates to `max`, so
+		// ordering after it would rank only the pages that already survived —
+		// which is exactly how issue #132's budget landed on the 2014 archive.
 		// Sitemap contents are untrusted data. Keep the allow-list restricted to
 		// the requested and redirect destination hosts; never authorize a host
 		// merely because it appeared in a sitemap.
-		const filtered = filterAndDedupe(urls, hosts, scope, max);
+		const filtered = filterAndDedupe(
+			rankByRecency(entries).map((e) => e.loc),
+			hosts,
+			scope,
+			max,
+		);
 		if (filtered.length > 0) {
 			const candidate = includeSeed(filtered);
 			if (candidate.length > best.length) best = candidate;

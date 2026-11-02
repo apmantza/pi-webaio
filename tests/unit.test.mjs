@@ -694,18 +694,22 @@ test("parseLocs extracts URLs from sitemap XML", () => {
 			<url><loc>https://example.com/contact</loc></url>
 		</urlset>
 	`;
-	const locs = parseLocs(xml);
-	assert.deepStrictEqual(locs, [
-		"https://example.com/",
-		"https://example.com/about",
-		"https://example.com/contact",
-	]);
+	// Shape is {loc, lastmod?} since #132 — lastmod was previously discarded.
+	assert.deepStrictEqual(
+		parseLocs(xml).map((e) => e.loc),
+		[
+			"https://example.com/",
+			"https://example.com/about",
+			"https://example.com/contact",
+		],
+	);
 });
 
 test("parseLocs handles whitespace in loc tags", () => {
+	// Loose wrapperless XML used to work and still must: dropping it would turn a
+	// ranking improvement into a discovery regression on malformed sitemaps.
 	const xml = "<loc>  https://example.com/path  </loc>";
-	const locs = parseLocs(xml);
-	assert.strictEqual(locs[0], "https://example.com/path");
+	assert.strictEqual(parseLocs(xml)[0].loc, "https://example.com/path");
 });
 
 test("parseLocs returns empty for no loc tags", () => {
