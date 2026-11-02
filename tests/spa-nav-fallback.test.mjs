@@ -205,6 +205,49 @@ test("#154: the real page sits above the sample floor and carries its title", as
 	);
 });
 
+test("#154: a non-Latin article is protected too", () => {
+	// Recurrence prevented (CodeRabbit on PR #180): the tokenizer was ASCII-only,
+	// so `型検査を無効にする` produced an EMPTY significant-word set, which reads as
+	// "nothing to preserve" and handed the page to the navigation body — the exact
+	// #154 failure, silently reintroduced for every non-Latin page.
+	const cases = [
+		{
+			title: "設定",
+			local: "## 設定\n型検査を無効にする。構文エラーのみが報告されます。",
+			nav: "### カスタマイズ\nサイトカラー\nコードフォント\n人気ドキュメントページ\n一覧へ戻る",
+		},
+		{
+			title: "설정",
+			local: "## 설정\n전체 유형 검사를 비활성화합니다. 구문 오류만 보고됩니다.",
+			nav: "### 사용자 지정\n사이트 색상\n코드 글꼴\n인기 문서 페이지\n목록으로 돌아가기",
+		},
+	];
+	for (const { title, local, nav } of cases) {
+		// `false` is only reachable if the body produced at least
+		// JINA_MIN_PRESERVATION_SAMPLE identity tokens AND carried a token of its
+		// own title — an empty set short-circuits to `true`. So the decision itself
+		// proves identity was established, without re-spelling the tokenizer here.
+		assert.equal(
+			shouldPreferJinaFallback(local, nav, title),
+			false,
+			`navigation displaced the ${title} article (no identity tokens, or no title anchor)`,
+		);
+	}
+});
+
+test("#154: a non-Latin placeholder still yields to a non-Latin article", () => {
+	// The other direction, same script: an unanchored placeholder must not shield
+	// itself, and an anchored body must still be allowed to grow.
+	const title = "コンパイラオプション";
+	const placeholder = "読み込み中 スピナー ページ 内容を お待ちください";
+	const article =
+		"コンパイラオプションのハンドブックでは、診断、増分ビルド、プロジェクト参照、" +
+		"ソリューション全体での診断の報告方法について説明します。";
+	assert.equal(shouldPreferJinaFallback(placeholder, article, title), true);
+	const anchored = "コンパイラオプションの概要";
+	assert.equal(shouldPreferJinaFallback(anchored, anchored + "詳細な説明が続きます", title), true);
+});
+
 test("#154: the preservation bar is a majority and is exported for tuning", () => {
 	assert.equal(JINA_MIN_LOCAL_PRESERVATION, 0.5);
 	assert.equal(JINA_MIN_PRESERVATION_SAMPLE, 6);

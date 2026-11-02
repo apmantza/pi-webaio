@@ -130,14 +130,33 @@ export function shouldPreferJinaFallback(
 }
 
 /**
- * Words used to identify a document: alphabetic, 4+ chars, lowercased, deduped.
+ * Words used to identify a document: letters of any script, 4+ chars,
+ * lowercased, deduped — plus character bigrams for scripts that do not use word
+ * separators.
+ *
+ * Script coverage is not a nicety. A pure-ASCII `[a-z][a-z-]{3,}` tokenizer
+ * returns an EMPTY set for `型検査を無効にする`, which reads as "nothing to
+ * preserve" and lets the navigation body win — the exact #154 failure, silently
+ * reintroduced for every non-Latin page. Bigram indexing is the standard answer
+ * for Han/Kana/Hangul, where there are no spaces to split on.
+ *
  * Deliberately NOT stemmed and NOT stopword-filtered — it is a coarse identity
  * fingerprint, and the title anchor above is what decides whether a body is
  * identified at all.
  */
 function significantWords(text: string): Set<string> {
-	return new Set((text.toLowerCase().match(/[a-z][a-z-]{3,}/g) ?? []) as string[]);
+	const out = new Set<string>();
+	const lowered = text.toLowerCase();
+	for (const m of lowered.matchAll(/[\p{L}][\p{L}\p{M}-]{3,}/gu)) out.add(m[0]);
+	for (const run of lowered.match(WORDLESS_SCRIPT_RUN) ?? []) {
+		for (let i = 0; i + 1 < run.length; i++) out.add(run.slice(i, i + 2));
+	}
+	return out;
 }
+
+/** Runs of Han / Hiragana / Katakana / Hangul, long enough to yield bigrams. */
+const WORDLESS_SCRIPT_RUN =
+	/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]{2,}/gu;
 
 // Readability is accepted unless its output is a suspiciously tiny
 // fraction of a large HTML document (a sign it latched onto boilerplate
