@@ -96,22 +96,45 @@ export const JINA_MIN_PRESERVATION_SAMPLE = 6;
  * When local extraction found nothing at all the requirement is vacuous and
  * returns true: on a genuinely JS-heavy page the proxy is the only path to the
  * article, and that is exactly what the escalation exists for.
+ *
+ * A body is only worth protecting if it carries the page's OWN title. Counting
+ * words is not identity: `loading spinner content page please wait` is six
+ * generic UI words, and shielding it would throw away the proxy's real article
+ * — the same wrong-body-wins outcome this guard exists to prevent, just with a
+ * placeholder instead of a sidebar (found reviewing PR #180). So the guard
+ * protects a body it can positively identify as this page's article, and
+ * otherwise stands aside. Deliberately not a list of placeholder words: that
+ * would be an enumeration of known-bad spellings, which finds the next one
+ * every review.
  */
 export function shouldPreferJinaFallback(
 	localContent: string,
 	jinaContent: string,
+	localTitle = "",
 ): boolean {
 	const localWords = significantWords(localContent);
 	// Vacuous when there is nothing to preserve, and also when there is too
 	// little to have an identity: see JINA_MIN_PRESERVATION_SAMPLE.
 	if (localWords.size < JINA_MIN_PRESERVATION_SAMPLE) return true;
+	// No title, or a title the local body does not carry, means we cannot
+	// positively identify this body as the page's article — so do not shield it.
+	const anchor = significantWords(localTitle);
+	if (anchor.size === 0) return true;
+	let anchored = false;
+	for (const w of anchor) if (localWords.has(w)) anchored = true;
+	if (!anchored) return true;
 	const jinaWords = significantWords(jinaContent);
 	let preserved = 0;
 	for (const w of localWords) if (jinaWords.has(w)) preserved++;
 	return preserved / localWords.size >= JINA_MIN_LOCAL_PRESERVATION;
 }
 
-/** Words that identify a document: alphabetic, 4+ chars, lowercased, deduped. */
+/**
+ * Words used to identify a document: alphabetic, 4+ chars, lowercased, deduped.
+ * Deliberately NOT stemmed and NOT stopword-filtered — it is a coarse identity
+ * fingerprint, and the title anchor above is what decides whether a body is
+ * identified at all.
+ */
 function significantWords(text: string): Set<string> {
 	return new Set((text.toLowerCase().match(/[a-z][a-z-]{3,}/g) ?? []) as string[]);
 }
@@ -1016,7 +1039,7 @@ export async function runHtmlPipeline(
 		if (
 			jina &&
 			wordCount(jina.content || "") > localWords &&
-			shouldPreferJinaFallback(local.content || "", jina.content || "")
+			shouldPreferJinaFallback(local.content || "", jina.content || "", local.title || "")
 		) {
 			chosen = jina;
 		}
@@ -1035,6 +1058,11 @@ export async function runHtmlPipeline(
  * DEFUDDLE_TIMEOUT), then a last-resort text fallback. Returns an
  * unfinalized PullResult; the caller decides whether to fall back to Jina
  * and applies finalization / alternate-link handling.
+ *
+ * Exported for tests only — the #154 premise ("local extraction already reads
+ * this page correctly") is only checkable by running this exact chain, and it
+ * is not a published surface: `package.json` exports `.` and `./webfetch`,
+ * neither of which maps to `src/content.ts`.
  */
 export async function runLocalExtraction(
 	cleaned: string,

@@ -21,6 +21,10 @@
 // Recurrence prevented: a short, correct local article being displaced by a
 // longer, wrong fallback body on any page whose prose is genuinely brief
 // (reference pages, option/flag docs, changelog one-liners).
+//
+// The mirror-image recurrence is prevented too, and matters just as much: a
+// local body that is NOT this page's article must never shield itself from a
+// fallback that has the real text. Both directions are tested below.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -46,8 +50,15 @@ const FIX = (f) => join(HERE, "fixtures", "spa-nav", f);
 const PAGE_URL = "https://www.typescriptlang.org/tsconfig/noCheck.html";
 const DEFINITION = "Disable full type checking";
 
+/** The same significant-word rule the guard uses, so tests can state their own premises. */
+const sigWords = (t) => new Set((t.toLowerCase().match(/[a-z][a-z-]{3,}/g) ?? []));
+
+async function pageHtml() {
+	return gunzipSync(await readFile(FIX("nocheck.html.gz"))).toString("utf8");
+}
+
 async function localResult() {
-	const raw = gunzipSync(await readFile(FIX("nocheck.html.gz"))).toString("utf8");
+	const raw = await pageHtml();
 	return runLocalExtraction(preCleanHtml(raw), raw, PAGE_URL, raw, null);
 }
 
@@ -66,6 +77,16 @@ test("#154 premise: the local chain extracts the real article, correctly", async
 	assert.equal(local.title, "TSConfig Option: noCheck");
 });
 
+test("#154 premise: the fixture pins the definition to exactly one occurrence", async () => {
+	// The fixture IS the evidence. If it is ever re-captured or hand-edited into
+	// carrying the phrase twice (or zero times), every premise below silently
+	// changes meaning — so the count is asserted, not assumed.
+	const raw = await pageHtml();
+	assert.equal(raw.split(DEFINITION).length - 1, 1, "definition occurrence count drifted");
+	const jina = await jinaResult();
+	assert.equal(jina.content.split(DEFINITION).length - 1, 0, "reader body must omit the definition");
+});
+
 test("#154 premise: that correct article is short enough to trigger escalation", async () => {
 	const local = await localResult();
 	const words = wordCount(local.content);
@@ -82,20 +103,16 @@ test("#154 premise: the captured reader body is navigation that omits the defini
 		words > wordCount((await localResult()).content),
 		"the wrong body must out-volume the right one, or this fixture tests nothing",
 	);
-	assert.ok(
-		!jina.content.includes(DEFINITION),
-		"the captured reader body unexpectedly contains the definition — re-capture the fixture",
-	);
 	assert.match(jina.content, /Customize|Site Colours|Popular Documentation Pages/);
 });
 
-// ─── The decision ───
+// ─── The decision: navigation must not displace the article ───
 
 test("#154: navigation never displaces a correct short article", async () => {
 	const local = await localResult();
 	const jina = await jinaResult();
 	assert.equal(
-		shouldPreferJinaFallback(local.content, jina.content),
+		shouldPreferJinaFallback(local.content, jina.content, local.title),
 		false,
 		"the sidebar was chosen over the article",
 	);
@@ -104,6 +121,7 @@ test("#154: navigation never displaces a correct short article", async () => {
 test("#154: a reader body that genuinely recovered the article is still preferred", async () => {
 	// The escalation exists for JS-heavy pages. When the proxy body CONTAINS
 	// what the local pass found, plus more, it is more content and must win.
+	const title = "noCheck";
 	const local = "## noCheck\nDisable full type checking (only critical parse and emit errors).";
 	const better = [
 		"## noCheck",
@@ -116,15 +134,75 @@ test("#154: a reader body that genuinely recovered the article is still preferre
 		wordCount(better) > wordCount(local),
 		"sanity: the fallback must be longer for the ladder to consider it",
 	);
-	assert.equal(shouldPreferJinaFallback(local, better), true);
+	assert.equal(shouldPreferJinaFallback(local, better, title), true);
 });
 
-test("#154: a page where local extraction found nothing still escalates", async () => {
-	// The requirement is vacuous when there is nothing to preserve. Blocking
-	// here would disable the reader proxy on exactly the JS-heavy pages it
-	// exists for, turning a wrong-article bug into a no-article bug.
-	assert.equal(shouldPreferJinaFallback("", "Full article text from the proxy reader."), true);
-	assert.equal(shouldPreferJinaFallback("## \n\n- - -", "Full article text."), true);
+// ─── The mirror image: a body that is not the article must not be shielded ───
+
+test("#154: a degenerate local body never blocks a real article", () => {
+	// Below the sample floor the overlap ratio is not evidence of anything: a
+	// one-word placeholder scores 0.0 against an unrelated article and would keep
+	// the placeholder while rejecting the proxy's real text.
+	const title = "TSConfig Option: noCheck";
+	const article =
+		"## noCheck\nDisable full type checking (only critical parse and emit errors will be reported). " +
+		"Skip type checking project-wide while keeping syntax diagnostics.";
+	for (const junk of ["", "## loading", "## loading spinner", "## nocheck disabled fully"]) {
+		assert.ok(
+			sigWords(junk).size < JINA_MIN_PRESERVATION_SAMPLE,
+			`fixture sanity: "${junk}" has ${sigWords(junk).size} significant words, expected below the floor`,
+		);
+		assert.equal(
+			shouldPreferJinaFallback(junk, article, title),
+			true,
+			`placeholder body ${JSON.stringify(junk)} blocked the real article`,
+		);
+	}
+});
+
+test("#154: a generic placeholder AT the sample floor still yields to the article", () => {
+	// Adversarial review of PR #180 found the floor was tested from one side only:
+	// six generic UI words sit exactly ON the floor and are then judged by the
+	// majority rule, scoring 0 and keeping the placeholder over the real article.
+	// The count is not identity, so identity is what decides: the body carries no
+	// token of the page's own title, so it is not shielded.
+	const title = "Compiler Options Handbook";
+	const placeholder = "loading spinner content page please wait";
+	const article =
+		"The handbook explains compiler options, diagnostics, incremental builds, " +
+		"project references, and how diagnostics are reported across a solution.";
+	assert.equal(
+		sigWords(placeholder).size,
+		JINA_MIN_PRESERVATION_SAMPLE,
+		"the case must sit exactly on the floor, or it no longer tests the boundary",
+	);
+	assert.equal(shouldPreferJinaFallback(placeholder, article, title), true);
+});
+
+test("#154: with no title to anchor on, the fallback is not blocked", () => {
+	// Identity cannot be established, so the guard stands aside rather than
+	// protecting an arbitrary short body.
+	const local = "compiler options diagnostics incremental builds project references";
+	assert.ok(sigWords(local).size >= JINA_MIN_PRESERVATION_SAMPLE);
+	assert.equal(shouldPreferJinaFallback(local, "unrelated proxy text entirely", ""), true);
+	assert.equal(shouldPreferJinaFallback(local, "unrelated proxy text entirely", "Totally Other"), true);
+});
+
+test("#154: the real page sits above the sample floor and carries its title", async () => {
+	// Without this, raising the floor or tightening the anchor would silently
+	// disable the fix for #154 and the suite would stay green.
+	const local = await localResult();
+	const words = sigWords(local.content);
+	assert.ok(
+		words.size >= JINA_MIN_PRESERVATION_SAMPLE,
+		`the #154 body has ${words.size} significant words; the floor must stay at or below it`,
+	);
+	const anchor = sigWords(local.title);
+	assert.ok(anchor.size > 0, "the captured page must expose a title to anchor on");
+	assert.ok(
+		[...anchor].some((w) => words.has(w)),
+		`the article body must carry a token of its own title (${[...anchor].join(",")})`,
+	);
 });
 
 test("#154: the preservation bar is a majority and is exported for tuning", () => {
@@ -137,53 +215,30 @@ test("#154: the preservation bar is a majority and is exported for tuning", () =
 	assert.equal(words.length, 12);
 	const justOver = words.slice(0, 7).join(" ") + " prose continues here";
 	const justUnder = words.slice(0, 5).join(" ") + " prose continues here";
-	assert.equal(shouldPreferJinaFallback(local, justOver), true);
-	assert.equal(shouldPreferJinaFallback(local, justUnder), false);
-});
-
-test("#154: a degenerate local body never blocks a real article", () => {
-	// Below the sample floor the overlap ratio is not evidence of anything: a
-	// one-word placeholder scores 0.0 against an unrelated article and would keep
-	// the placeholder while rejecting the proxy's real text — turning this fix into
-	// a no-article bug. Recurrence prevented: a spinner/placeholder body outranking
-	// the only copy of the article we can reach.
-	const article =
-		"## noCheck\nDisable full type checking (only critical parse and emit errors will be reported). " +
-		"Skip type checking project-wide while keeping syntax diagnostics.";
-	for (const junk of ["", "## loading", "## loading spinner", "## nocheck disabled fully"]) {
-		const words = new Set((junk.toLowerCase().match(/[a-z][a-z-]{3,}/g) ?? []));
-		assert.ok(
-			words.size < JINA_MIN_PRESERVATION_SAMPLE,
-			`fixture sanity: "${junk}" has ${words.size} significant words, expected below the floor`,
-		);
-		assert.equal(
-			shouldPreferJinaFallback(junk, article),
-			true,
-			`placeholder body ${JSON.stringify(junk)} blocked the real article`,
-		);
-	}
-});
-
-test("#154: the real page sits above the sample floor, so the guard still applies", async () => {
-	// Without this, raising the floor would silently disable the fix for #154.
-	const local = await localResult();
-	const words = new Set((local.content.toLowerCase().match(/[a-z][a-z-]{3,}/g) ?? []));
-	assert.ok(
-		words.size >= JINA_MIN_PRESERVATION_SAMPLE,
-		`the #154 body has ${words.size} significant words; the floor must stay at or below it`,
-	);
+	assert.equal(shouldPreferJinaFallback(local, justOver, "noCheck"), true);
+	assert.equal(shouldPreferJinaFallback(local, justUnder, "noCheck"), false);
 });
 
 // ─── Wiring: the ladder must actually consult the guard ───
 
-test("#154: the fetch ladder gates the length comparison on preservation", async () => {
-	// Blanked so this comment and any doc prose cannot satisfy the scan.
-	// Recurrence prevented: someone restoring the bare `wordCount(jina) > localWords`
-	// condition, which reads as harmless but re-opens the whole bug.
+test("#154: the fetch ladder gates the Jina assignment on the guard", async () => {
+	// Formatting-tolerant on purpose (adversarial review of PR #180): an earlier
+	// version of this guard matched the length test and the call adjacently, and
+	// reddened when someone merely reordered the boolean operands — a detector
+	// that reds on formatting is a false-positive machine. What must hold is
+	// semantic: whatever controls `chosen = jina` consults the guard.
 	const src = await blankCommentsAndStrings(join(HERE, "..", "src", "content.ts"));
-	const m = src.match(/wordCount\(jina\.content[^)]*\)\s*>\s*localWords\s*&&\s*shouldPreferJinaFallback\(/);
-	assert.ok(
-		m,
-		"the reader-proxy branch must require preservation alongside the length test",
+	const at = src.indexOf("chosen = jina;");
+	assert.ok(at > 0, "the Jina assignment is gone — update this guard deliberately, not accidentally");
+	const preceding = src.slice(Math.max(0, at - 800), at);
+	assert.match(
+		preceding,
+		/shouldPreferJinaFallback\(/,
+		"the reader-proxy branch must consult the guard before assigning Jina",
+	);
+	assert.match(
+		preceding,
+		/wordCount\(jina\.content/,
+		"the length comparison is still part of the decision",
 	);
 });
