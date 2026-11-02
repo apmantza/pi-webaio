@@ -19,7 +19,18 @@ const TIMEOUT = 30000;
 // Statuses that indicate "the external service refused/us" rather than a bug in
 // our code. 404 is deliberately NOT here — a 404 on an endpoint we expect to
 // exist is a real signal and should still fail.
-const SKIP_STATUSES = new Set([401, 403, 429, 500, 502, 503, 504]);
+//
+// 202 is DDG's bot-challenge/queue answer from `html.duckduckgo.com`: the request
+// is accepted but no result page is served, and CI on GitHub runners gets it
+// intermittently from datacenter IPs. It belongs with 403/429 for the same reason
+// the others do — the service chose not to answer, which says nothing about
+// whether wreq-js can carry a request.
+//
+// Stated limitation: this is an enumeration of known refusals, so the next new
+// challenge status reddens this suite again. That is the acceptable direction for
+// a skip-list (loud, and it forces the judgement), unlike the fail-open direction
+// of "skip anything unexpected".
+const SKIP_STATUSES = new Set([202, 401, 403, 429, 500, 502, 503, 504]);
 
 async function fetchOrSkip(t, label, url, opts) {
 	let res;
