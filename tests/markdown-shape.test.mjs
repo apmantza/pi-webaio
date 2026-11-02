@@ -216,3 +216,21 @@ test("#175: a normal fence still closes normally", async () => {
 	assert.ok(/^after$/m.test(out), `closing fence stopped working:\n${out}`);
 	assert.match(out, /^ {0}const a = 1;$/m);
 });
+
+// The "normal fence still closes" test asserted `/^after$/m`, which passes EVEN IF
+// the fence never closes: an unclosed fence returns its content verbatim, and
+// "after" is still in there. Same vacuous-test class as the adjacency guard and
+// the blanker self-check earlier in this session — an assertion that is true under
+// both the fix and its absence pins nothing.
+//
+// Make the prose differ between the two states: outside a fence whitespace
+// collapses, inside one it is verbatim. `after  text` only becomes `after text` if
+// the closing fence was recognised.
+test("#175: the closing-fence test fails when the fence is not recognised", async () => {
+	const { cleanMarkdown } = await import("../src/markdown-clean.ts");
+	const out = cleanMarkdown("```js\nconst a = 1;\n```\nafter  text");
+	assert.ok(
+		out.includes("after text") && !out.includes("after  text"),
+		`prose after the closing fence was not normalised — the fence never closed:\n${out}`,
+	);
+});
