@@ -412,6 +412,61 @@ export function filterAndDedupe(
 	return out.slice(0, max);
 }
 
+/**
+ * Eligibility FIRST, then recency, then the budget.
+ *
+ * `filterAndDedupe` and `rankByRecency` each make sense alone, but the ORDER of
+ * the two decides whether recency works at all. Ranking the raw sitemap made
+ * `rankByRecency`'s majority gate count entries that can never be pulled —
+ * out-of-scope hosts and ignored paths — so a sitemap with a few hundred
+ * undated foreign entries refused to reorder a scoped set that was entirely
+ * dated, and `newestRecency` let an excluded page win a strategy tie.
+ *
+ * So: filter to what is actually eligible, rank THAT (which is what the majority
+ * gate should be judging), and only then spend the `max` budget.
+ *
+ * Entries are matched back to the filtered result by the same key
+ * `filterAndDedupe` uses — pathname after stripping hash and query — keeping the
+ * first variant, so dedupe behaviour is unchanged.
+ */
+export function selectRankedEntries(
+	entries: SitemapEntry[],
+	hosts: Set<string>,
+	scope: string,
+	max: number,
+): SitemapEntry[] {
+	const eligible = filterAndDedupe(
+		entries.map((e) => e.loc),
+		hosts,
+		scope,
+		Number.MAX_SAFE_INTEGER,
+	);
+	const wanted = new Set<string>();
+	for (const url of eligible) {
+		try {
+			wanted.add(new URL(url).pathname);
+		} catch {
+			/* filterAndDedupe already rejected this shape */
+		}
+	}
+	const kept: SitemapEntry[] = [];
+	const emitted = new Set<string>();
+	for (const entry of entries) {
+		let pathname: string;
+		try {
+			const u = new URL(entry.loc);
+			u.hash = u.search = "";
+			pathname = u.pathname;
+		} catch {
+			continue;
+		}
+		if (!wanted.has(pathname) || emitted.has(pathname)) continue;
+		emitted.add(pathname);
+		kept.push(entry);
+	}
+	return rankByRecency(kept).slice(0, max);
+}
+
 /** Ensure a pull always includes the page the caller explicitly requested. */
 export function includeDiscoverySeed(
 	seedUrl: string,
@@ -556,27 +611,24 @@ export async function discover(
 	let bestNewest: number | undefined;
 	for (const entries of results) {
 		if (!entries.length) continue;
-		// Rank BEFORE filtering/capping: `filterAndDedupe` truncates to `max`, so
-		// ordering after it would rank only the pages that already survived —
-		// which is exactly how issue #132's budget landed on the 2014 archive.
+		// Eligibility, then recency, then budget — see `selectRankedEntries`. The
+		// earlier shape ranked the raw sitemap, so the majority gate judged
+		// entries that could never be pulled.
 		// Sitemap contents are untrusted data. Keep the allow-list restricted to
 		// the requested and redirect destination hosts; never authorize a host
 		// merely because it appeared in a sitemap.
-		const filtered = filterAndDedupe(
-			rankByRecency(entries).map((e) => e.loc),
-			hosts,
-			scope,
-			max,
-		);
-		if (filtered.length === 0) continue;
+		const picked = selectRankedEntries(entries, hosts, scope, max);
+		if (picked.length === 0) continue;
+		const filtered = picked.map((e) => e.loc);
 		const candidate = includeSeed(filtered);
 		// Length still decides. What changed is the TIE: "keep the first" was
 		// arbitrary once ordering carried meaning, so an earlier strategy serving
 		// `max` stale pages used to beat a later one serving `max` fresh ones.
-		// Ties now go to the strategy with the newest usable date; a strategy
-		// with no dates at all keeps the previous candidate (no date is not
-		// evidence of staleness).
-		const newest = newestRecency(entries);
+		// Ties now go to the strategy with the newest usable date AMONG THE
+		// SELECTED entries — a page that was filtered out is not evidence that
+		// this strategy is fresh. A strategy with no dates at all keeps the
+		// previous candidate, because no date is not evidence of staleness.
+		const newest = newestRecency(picked);
 		const longer = candidate.length > best.length;
 		const newerOnTie =
 			candidate.length === best.length &&

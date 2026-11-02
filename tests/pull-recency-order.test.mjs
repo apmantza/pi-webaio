@@ -293,3 +293,76 @@ test("#132 cr1: two strategies of equal length are chosen by recency, not by arr
 	assert.ok(newestRecency(newPages) > newestRecency(oldPages));
 	assert.equal(newestRecency([{ loc: "https://x/undated" }]), undefined);
 });
+
+// ─── CodeRabbit round 2 on PR #178 ────────────────────────────────────
+// Both findings are one root cause: recency was computed over the RAW sitemap
+// entries while eligibility (host/scope/IGNORED) and the `max` cap are applied
+// afterwards. So the majority gate could see hundreds of out-of-scope undated
+// entries and refuse to reorder a scoped set that was entirely dated.
+
+test("#132 cr2: the majority gate evaluates the SCOPED entries, not the whole sitemap", async () => {
+	const { selectRankedEntries } = await import("../src/discovery.ts");
+	const entries = [];
+	// 30 out-of-scope undated entries on another host. These are what broke the
+	// global gate: counted in the majority, they made a wholly dated scoped set
+	// look "not date-structured" and left it un-reordered.
+	for (let i = 0; i < 30; i++) entries.push({ loc: `https://other.example/x/${i}` });
+	// The scoped set: 2 undated + 5 dated = a strict MAJORITY dated, so this is a
+	// date-structured sitemap even though the raw file is not.
+	entries.push({ loc: "https://d.example/docs/intro" });
+	entries.push({ loc: "https://d.example/docs/faq" });
+	for (const [name, year] of [
+		["a", 2015],
+		["e", 2018],
+		["c", 2020],
+		["d", 2023],
+		["b", 2026],
+	]) {
+		entries.push({ loc: `https://d.example/docs/${name}`, lastmod: `${year}-01-01` });
+	}
+
+	const picked = selectRankedEntries(
+		entries,
+		new Set(["d.example"]),
+		"/docs/",
+		3,
+	).map((e) => e.loc);
+	// Newest first among the scoped entries; the two undated ones fall behind.
+	assert.deepEqual(picked, [
+		"https://d.example/docs/b",
+		"https://d.example/docs/d",
+		"https://d.example/docs/c",
+	]);
+});
+
+test("#132 cr2: strategy recency comes from the SELECTED entries", async () => {
+	const { selectRankedEntries, newestRecency } = await import("../src/discovery.ts");
+	const entries = [
+		// Out of scope, and much newer — must not be able to win a tie.
+		{ loc: "https://other.example/2099", lastmod: "2099-01-01" },
+		{ loc: "https://d.example/docs/old", lastmod: "2001-01-01" },
+		{ loc: "https://d.example/docs/newer", lastmod: "2020-01-01" },
+	];
+	const picked = selectRankedEntries(entries, new Set(["d.example"]), "/docs/", 5);
+	assert.deepEqual(picked.map((e) => e.loc), [
+		"https://d.example/docs/newer",
+		"https://d.example/docs/old",
+	]);
+	// The excluded 2099 page must not leak into the tie-break score.
+	const newest = newestRecency(picked);
+	assert.ok(newest < Date.UTC(2099, 0, 1), "an out-of-scope page drove the tie-break");
+});
+
+test("#132 cr2: dedupe by pathname still keeps only the first variant", async () => {
+	const { selectRankedEntries } = await import("../src/discovery.ts");
+	const entries = [
+		{ loc: "https://d.example/docs/a?utm=1", lastmod: "2026-01-01" },
+		{ loc: "https://d.example/docs/a#frag", lastmod: "2026-01-01" },
+		{ loc: "https://d.example/docs/b", lastmod: "2024-01-01" },
+	];
+	const picked = selectRankedEntries(entries, new Set(["d.example"]), "/docs/", 5);
+	assert.deepEqual(picked.map((e) => e.loc), [
+		"https://d.example/docs/a?utm=1",
+		"https://d.example/docs/b",
+	]);
+});
