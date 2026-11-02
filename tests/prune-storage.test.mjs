@@ -1,0 +1,414 @@
+// ─── Issue #171: `prune` must bound what is RETURNED, not what is STORED ───
+//
+// The tool description groups `prune`, `budgetTokens` and `max_length` as
+// "output-limit knobs (pick one)" where "output" means what the agent gets, and
+// promises "Full content is ALWAYS saved to disk + cached".
+//
+// `prune` did the opposite of both: it reassigned `contentBody` to the pruned
+// text BEFORE the file write and `storeContent()`, so the durable copy held the
+// excerpt while the returned text kept the full body.
+//
+// Reproduced on the installed extension, real page, no stubs:
+//
+//   aio-webfetch(https://expressjs.com/en/guide/routing.html, prune: 300)
+//   aio-webcontent(same url)  -> Length: 1134 chars   (page is 13160)
+//
+//   aio-webfetch(same page, budgetTokens: 120)
+//   aio-webcontent(same url)  -> Length: 13160 chars  (correct)
+//
+// A 13-section, 1937-word document was stored as 1 section, and the truncation
+// footer tells the agent to go and read that record back.
+//
+// Recurrence prevented: a `prune`d fetch silently degrading the content cache
+// that `aio-webcontent` and `aio-webresult` retrieve from.
+
+import { test } from "node:test";
+import assert from "node:assert/strict";
+
+import {
+	splitPrunedDisplay,
+	displayBodyForFormat,
+	projectResultsForPrune,
+} from "../src/tools/webfetch.ts";
+import { estimateTokens } from "../src/token-count.ts";
+import { registerWebfetchTool } from "../src/tools/webfetch.ts";
+import { getStoredContent, normalizeCacheKey, sessionStore } from "../src/session-store.ts";
+import { maybeChunkMarkdown } from "../src/tools/webfetch.ts";
+
+// ─── Pure seam: the storage/display split ─────────────────────────────
+
+/** Two clearly separable sections, big enough that a small budget must drop one. */
+function twoSectionBody() {
+	return [
+		"## Kept section",
+		"",
+		"keepme ".repeat(400),
+		"",
+		"## Dropped section",
+		"",
+		"dropme ".repeat(400),
+	].join("\n");
+}
+
+test("#171: pruning leaves the stored copy byte-identical to the full body", () => {
+	const body = twoSectionBody();
+	const split = splitPrunedDisplay(body, 300);
+
+	assert.equal(
+		split.stored,
+		body,
+		"stored content must not be pruned — the file and the content cache are the durable record",
+	);
+	assert.ok(
+		/dropme/.test(split.stored),
+		"the dropped section must still be present in what is stored",
+	);
+});
+
+test("#171: pruning still bounds the returned text", () => {
+	const body = twoSectionBody();
+	const split = splitPrunedDisplay(body, 300);
+
+	assert.ok(
+		estimateTokens(split.returned) <= estimateTokens(body),
+		"the returned text must not grow",
+	);
+	assert.ok(
+		!/dropme/.test(split.returned),
+		"the returned text must be the bounded excerpt, not the whole page",
+	);
+});
+
+test("#171: no prune, or a body already inside the budget, is a no-op on both sides", () => {
+	const body = "## Small\n\njust a little text";
+	assert.deepEqual(splitPrunedDisplay(body, 300), {
+		stored: body,
+		returned: body,
+		pruned: false,
+	});
+	const big = twoSectionBody();
+	const split = splitPrunedDisplay(big, undefined);
+	assert.equal(split.stored, big);
+	assert.equal(split.returned, big);
+});
+
+test("#171: the split reports that it pruned, so the caller can say so", () => {
+	const split = splitPrunedDisplay(twoSectionBody(), 300);
+	assert.equal(split.pruned, true, "the caller must be able to tell the user it pruned");
+	const noop = splitPrunedDisplay("tiny", 300);
+	assert.equal(noop.pruned, false);
+});
+
+// ─── Production path: the invariant that actually broke ───────────────
+//
+// The pure test above pins the seam, but the defect lived in the wiring: which
+// of the two values reached `writeFile`/`storeContent`. This test drives the
+// registered tool and asserts the cache holds at least as much as was returned.
+//
+// It needs the network, so it skips when unavailable rather than pretending.
+
+function captureWebfetchTool() {
+	let tool;
+	registerWebfetchTool({
+		registerTool(t) {
+			tool = t;
+		},
+	});
+	return tool;
+}
+
+const LIVE_URL = "https://expressjs.com/en/guide/routing/";
+
+test("#171: a pruned fetch stores the full body (live)", async (t) => {
+	const tool = captureWebfetchTool();
+	let result;
+	try {
+		result = await tool.execute(
+			"p171",
+			{ url: `${LIVE_URL}?p171=${Date.now()}`, prune: 200 },
+			undefined,
+			undefined,
+			{},
+		);
+	} catch (err) {
+		t.skip(`network unavailable: ${err?.message}`);
+		return;
+	}
+	if (!result?.details?.url) {
+		t.skip("fetch did not complete (network or bot protection)");
+		return;
+	}
+
+	const stored = getStoredContent(result.details.url);
+	if (!stored) {
+		t.skip("nothing was cached for this URL");
+		return;
+	}
+
+	const returned = result.content[0].text;
+	assert.ok(
+		stored.content.length >= returned.length,
+		`the cache holds ${stored.content.length} chars but the tool returned ${returned.length} — pruning leaked into the durable record`,
+	);
+	// The page is ~13k chars; a 200-token prune must not be all that survives.
+	assert.ok(
+		stored.content.length > 2000,
+		`stored content is only ${stored.content.length} chars — the durable copy looks pruned`,
+	);
+
+	sessionStore.delete(normalizeCacheKey(result.details.url));
+});
+
+// ─── CodeRabbit on #172: `prune` + `chunks` bypassed the bound ──────────
+//
+// Reviewer finding, verified before accepting: all three `maybeChunkMarkdown`
+// call sites chunk `(r as any).body` — the FULL body — while `prune` was moved to
+// the preview. With both params set, the returned chunk list is generated from the
+// unpruned page, so the requested reduction is bypassed by the largest part of the
+// output.
+//
+// Pre-existing (the chunk path always read the full body), but the #171 fix made
+// the inconsistency explicit: if `prune` bounds what is returned, it must bound the
+// chunks too, because chunks ARE returned.
+//
+// Recurrence prevented: `prune: 300` on a 13k-char page returning 40 chunks of the
+// whole document because the knob only ever touched the preview.
+
+test("#171 follow-up: chunks are generated from the bounded display body", () => {
+	const body = twoSectionBody();
+	const errors = [];
+	const chunks = maybeChunkMarkdown(
+		body,
+		{ chunks: true, prune: 300, maxTokens: 120 },
+		errors,
+	);
+	assert.ok(chunks && chunks.length > 0, "chunking should have produced chunks");
+	assert.equal(errors.length, 0, `chunking reported errors: ${errors.join("; ")}`);
+
+	const joined = chunks.map((c) => c.text).join("\n");
+	const totalTokens = chunks.reduce((n, c) => n + c.tokenCount, 0);
+	assert.ok(
+		!/dropme/.test(joined),
+		"a chunk still carries the section `prune` was asked to drop",
+	);
+	assert.ok(
+		totalTokens <= 400,
+		`chunks total ${totalTokens} tokens against a 300-token prune budget`,
+	);
+});
+
+test("#171 follow-up: without prune, chunks still cover the whole page", () => {
+	const body = twoSectionBody();
+	const chunks = maybeChunkMarkdown(body, { chunks: true, maxTokens: 120 }, []);
+	assert.ok(chunks && chunks.length > 0);
+	assert.ok(
+		/dropme/.test(chunks.map((c) => c.text).join("\n")),
+		"no prune means no reduction — chunking must still see the full page",
+	);
+});
+
+// ─── CodeRabbit on #172 (thread 2): multi-URL mode ignored `prune` ──────
+//
+// `details: { results }` returns each worker result, and every result carries
+// `body: formatted.body` — the FULL markdown. Nothing in the multi-URL path ever
+// consulted `prune`, so on a batch fetch the knob did nothing whatsoever: the
+// agent asked for a 300-token-per-page reduction and got every page whole.
+//
+// The projection must CLONE. The original result objects are what the file write,
+// the content cache and chunking read, so mutating them in place would reintroduce
+// exactly the #171 defect from the other side.
+//
+// Recurrence prevented: `prune` silently doing nothing on `urls: [...]` fetches.
+
+test("#171 follow-up: multi-URL results are projected with bounded bodies", () => {
+	const results = [
+		{ ok: true, url: "https://a.test/x", body: twoSectionBody() },
+		{ ok: true, url: "https://b.test/y", body: twoSectionBody() },
+	];
+	const projected = projectResultsForPrune(results, 300, undefined);
+
+	assert.equal(projected.length, 2);
+	for (const r of projected) {
+		assert.ok(
+			!/dropme/.test(r.body),
+			`the returned body for ${r.url} still carries the dropped section`,
+		);
+	}
+	// The originals must be untouched: they feed the file write and the cache.
+	for (const r of results) {
+		assert.ok(
+			/dropme/.test(r.body),
+			`projecting mutated the original result for ${r.url} — that is the #171 defect again`,
+		);
+	}
+});
+
+test("#171 follow-up: no prune means results are returned as-is", () => {
+	const results = [{ ok: true, url: "https://a.test/x", body: twoSectionBody() }];
+	assert.equal(projectResultsForPrune(results, undefined, undefined), results);
+});
+
+test("#171 follow-up: failed results pass through untouched", () => {
+	const results = [{ ok: false, url: "https://a.test/x", error: "404" }];
+	const projected = projectResultsForPrune(results, 300, undefined);
+	assert.deepEqual(projected, results);
+});
+
+// ─── CodeRabbit on #172 round 2 ───────────────────────────────────────
+
+// Thread 1: `pruneMarkdown` is a MARKDOWN pruner. Running it over serialized
+// JSON or raw HTML can invalidate the document (cutting mid-structure), which is
+// the same reason `budgetTokens` is documented as markdown-only. An absent
+// format means the default markdown path.
+test("#172: prune never touches non-markdown result bodies", () => {
+	const json = `{"a":1,"b":"${"x".repeat(4000)}"}`;
+	const results = [
+		{ ok: true, url: "https://a.test/1", body: json, format: "json" },
+		{ ok: true, url: "https://a.test/2", body: `<p>${"y".repeat(4000)}</p>`, format: "html" },
+		{ ok: true, url: "https://a.test/3", body: "z".repeat(4000), format: "text" },
+		{ ok: true, url: "https://a.test/4", body: "w".repeat(4000), format: "raw" },
+	];
+	const projected = projectResultsForPrune(results, 300, undefined);
+	projected.forEach((r, i) => {
+		assert.equal(
+			r.body,
+			results[i].body,
+			`${results[i].format} body was pruned — trimming a raw document mid-structure yields an unusable artifact`,
+		);
+	});
+});
+
+test("#172: an absent format is the default markdown path and IS pruned", () => {
+	const results = [{ ok: true, url: "https://a.test/x", body: twoSectionBody() }];
+	const projected = projectResultsForPrune(results, 300, undefined);
+	assert.ok(!/dropme/.test(projected[0].body));
+});
+
+// Thread 2: the worker populates BOTH `body` and `diffResult` from the same diff
+// text. Bounding only `body` left the structured result still exposing the text
+// `prune` removed.
+test("#172: a projected result bounds diffResult alongside body", () => {
+	const results = [
+		{
+			ok: true,
+			url: "https://a.test/x",
+			body: twoSectionBody(),
+			diffResult: twoSectionBody(),
+			format: "markdown",
+		},
+	];
+	const projected = projectResultsForPrune(results, 300, undefined);
+	assert.ok(!/dropme/.test(projected[0].body), "body should be bounded");
+	assert.ok(
+		!/dropme/.test(projected[0].diffResult),
+		"diffResult still carries the text `prune` removed — the structured result contradicts the body",
+	);
+	// The original must still hold both, untouched, for the durable record.
+	assert.ok(/dropme/.test(results[0].diffResult));
+});
+
+// ─── Review round 3, P1: the single-URL path pruned non-markdown ──────
+//
+// The batch projection guarded `format` but the single-URL preview did not, so
+// `aio-webfetch(url, format: "json", prune: 300)` returned 4014 chars of JSON
+// truncated to 1104 with a markdown footer appended — not valid JSON. Reproduced
+// before the fix:
+//
+//   { pruned: true, original: 4014, returned: 1104,
+//     ends: '"xxxxxxxxxx\\n\\n[...content truncated]"' }
+//   still valid JSON: NO — corrupted
+//
+// Both paths now share `displayBodyForFormat`, so the guard cannot exist in one
+// and not the other again.
+//
+// Recurrence prevented: a format-specific rule added at one call site and missed
+// at the sibling.
+
+test("#172: the shared display seam leaves non-markdown bodies byte-identical", () => {
+	const json = `{"a":1,"b":"${"x".repeat(4000)}"}`;
+	for (const format of ["json", "html", "text", "raw"]) {
+		const out = displayBodyForFormat(json, format, 300, undefined);
+		assert.equal(out.pruned, false, `${format} was reported as pruned`);
+		assert.equal(out.returned, json, `${format} body was altered`);
+	}
+	// The corruption is gone for real, not just flagged: JSON still parses.
+	assert.deepEqual(JSON.parse(displayBodyForFormat(json, "json", 300).returned), {
+		a: 1,
+		b: "x".repeat(4000),
+	});
+});
+
+test("#172: markdown and an absent format still prune through the shared seam", () => {
+	const body = twoSectionBody();
+	for (const format of ["markdown", undefined]) {
+		const out = displayBodyForFormat(body, format, 300, undefined);
+		assert.equal(out.pruned, true, `format=${format} should prune`);
+		assert.ok(!/dropme/.test(out.returned), `format=${format} kept the dropped section`);
+	}
+});
+
+test("#172: no prune request returns the body unchanged for every format", () => {
+	const body = twoSectionBody();
+	for (const format of ["markdown", "json", undefined]) {
+		for (const tokens of [undefined, 0, -5]) {
+			const out = displayBodyForFormat(body, format, tokens, undefined);
+			assert.equal(out.returned, body, `format=${format} tokens=${tokens} altered the body`);
+			assert.equal(out.pruned, false);
+		}
+	}
+});
+
+// ─── Review round 4: `chunks` honoured `prune` but not `budgetTokens` ──
+//
+// `budgetTokens` is documented as a hard ceiling on what the agent is handed.
+// `chunks: true` puts every chunk body into `details.chunks`, which is returned
+// too — and the chunk source was the full body, bounded only by `prune`. So
+// `budgetTokens: 300` with `chunks: true` returned a chunk list far above 300
+// tokens while the tool claimed it had fitted.
+//
+// Recurrence prevented: a knob that bounds one returned surface and not another,
+// so the documented ceiling is false for the larger surface.
+
+test("#172: chunks are generated from budget-fitted content", () => {
+	const body = [
+		"## Alpha",
+		"",
+		"alpha sentence. ".repeat(300),
+		"## Beta",
+		"",
+		"dropme section content ".repeat(300),
+	].join("\n");
+	const errors = [];
+	const chunks = maybeChunkMarkdown(
+		body,
+		{ chunks: true, budgetTokens: 300 },
+		errors,
+	);
+	assert.ok(chunks && chunks.length > 0, "expected chunks");
+	const total = chunks.reduce((n, c) => n + estimateTokens(c.text), 0);
+	assert.ok(
+		total <= 400,
+		`chunks carry ${total} tokens with budgetTokens=300 — the ceiling must apply to the chunk surface too`,
+	);
+});
+
+// Bounding the chunk SOURCE was not enough: `chunkMarkdown` re-adds up to
+// `overlapTokens` to every chunk after the split, so a small `maxTokens`
+// re-inflates the total. Measured on the fix above, before this one:
+//
+//   { maxTokens: 10, chunks: 45, chunkTokens: 436 }   // budgetTokens was 300
+//
+// Recurrence prevented: a ceiling enforced on the input to a transform that adds
+// output afterwards.
+test("#172: the chunk SURFACE stays inside budgetTokens despite overlap", () => {
+	const body = `## S\n\n${"word ".repeat(3000)}`;
+	for (const maxTokens of [10, 64, 512]) {
+		const errors = [];
+		const chunks = maybeChunkMarkdown(body, { chunks: true, budgetTokens: 300, maxTokens }, errors);
+		const total = chunks.reduce((n, c) => n + estimateTokens(c.text), 0);
+		assert.ok(
+			total <= 300,
+			`maxTokens=${maxTokens}: chunks carry ${total} tokens against budgetTokens=300`,
+		);
+	}
+});
