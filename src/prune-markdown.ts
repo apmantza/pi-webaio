@@ -627,11 +627,21 @@ function outlineBudget(denominator: number, share: number): number {
  * not cosmetic, because after a frontmatter block the body starts with "\n" and
  * a `^`-anchored regex never matched, which returned the heading fragment
  * verbatim. One implementation so the two fallbacks cannot drift.
+ *
+ * The heading run must cross BLANK LINES. The first version repeated a single
+ * heading line, and the `+` stopped at the blank line between `# A` and `## B`,
+ * so for a document whose prose follows a blank-line-separated heading stack the
+ * "prose" handed to the swap was still headings — trimmed to `""`, rejected for
+ * lack of room, and the notice fragment came back as the answer. That is how the
+ * #182 P1 shape survived in the one document shape the fix's own sweep never
+ * built. Whitespace between headings is part of the heading run, not prose, so it
+ * is consumed with it; a line whose first non-whitespace character is not a
+ * heading still stops the match.
  */
 function prosePrefixSource(body: string): string {
 	return body
 		.replace(/^\s+/, "")
-		.replace(/^(?:[ \t]*#{1,6}[ \t].*(?:\n|$))+/, "");
+		.replace(/^(?:[ \t]*#{1,6}[ \t].*(?:\n|$)|\s)+/, "");
 }
 
 /**
@@ -1040,10 +1050,14 @@ export function applyTokenBudget(
 	// here rather than by a second guard.
 	if (body.trim() !== "" && !carriesPageProse(result, body)) {
 		const room = Math.max(0, effectiveBudget - frontmatterTokens);
-		const prose = trimToTokenBudgetWithClosedFence(
-			prosePrefixSource(body),
-			room,
-		);
+		const source = prosePrefixSource(body);
+		let prose = trimToTokenBudgetWithClosedFence(source, room);
+		// The fence-aware trim can legitimately return nothing at all: at one or two
+		// tokens the only thing that fits is the fence marker itself, and the rule
+		// above correctly refuses to hand back an empty balanced fence. That must not
+		// fall through to the framing we were trying to replace, so ask the plain
+		// trimmer for whatever fragment of the document actually fits.
+		if (prose.trim() === "") prose = trimToTokenBudget(source, room);
 		// The swap candidate is produced FROM the document by the trimmer, so it
 		// needs no detector — only that the ceiling actually left room.
 		if (prose.trim() !== "") result = prose;
@@ -1172,7 +1186,18 @@ export function trimToTokenBudgetWithClosedFence(
 	text: string,
 	maxTokens: number,
 ): string {
-	return closeFencesWithin(trimToTokenBudget(text, maxTokens), maxTokens, true);
+	const closed = closeFencesWithin(trimToTokenBudget(text, maxTokens), maxTokens, true);
+	// Balancing a fence is right; balancing one around NOTHING is not. When the
+	// room cannot hold any of the code inside, the closer still appended a closing
+	// marker and the answer to a document that plainly has content was
+	// "```\n```\n" — balanced framing around an empty body is still framing, and it
+	// is exactly the #182 defect shape arriving through the fence rule instead of
+	// the notice rule. If the fence holds no letter or number, the markers are not
+	// buying anything and come off.
+	if (!/[\p{L}\p{N}]/u.test(closed.replace(/`+/g, ""))) {
+		return closed.replace(/`+[ \t]*(?=\n|$)/g, "").replace(/\n{3,}/g, "\n\n").trim();
+	}
+	return closed;
 }
 
 /**

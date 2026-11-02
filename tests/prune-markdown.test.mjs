@@ -1167,3 +1167,59 @@ test("#182: a heading truncated to a bare marker is not counted as prose", () =>
 		);
 	}
 });
+
+// #182 residual, surfaced by re-running the PR #181 reviewer's P1 probe against
+// the merged fix. The floor pass was correct; its INPUT was not.
+// `prosePrefixSource` stripped leading headings with
+// `/^(?:[ \t]*#{1,6}[ \t].*(?:\n|$))+/`, and the repetition stops at the blank
+// line between `# A` and `## B`. So for a document whose prose follows a
+// blank-line-separated heading stack, the "prose" handed to the swap was still
+// headings, `trimToTokenBudget` cut it to `""`, the swap was rejected for lack of
+// room, and the budget-1 answer was the notice fragment "\n\n--" — the exact
+// shape #182 was filed for, surviving in the one document shape the fix's own
+// sweep never built.
+test("#182: a blank-line-separated heading stack does not block the content floor", () => {
+	const skeleton = "# A\n\n## B\n\n### C\n\n" + "leaftext more ".repeat(60);
+	for (let budget = 1; budget <= 60; budget++) {
+		const out = applyTokenBudget(skeleton, budget, "a");
+		assert.ok(
+			/leaftext|leaftex|leaft|leaf|lea|le/.test(out),
+			`budget ${budget} returned framing with no document text: ${JSON.stringify(out.slice(0, 40))}`,
+		);
+		assert.ok(
+			estimateTokens(out) <= budget,
+			`ceiling violated at ${budget}: ${estimateTokens(out)} tokens`,
+		);
+	}
+});
+
+// Second residual from the same re-run. `trimToTokenBudgetWithClosedFence` keeps
+// the fence balanced, which is right — but when the room is too small for any of
+// the code inside, it balanced an OPENING fence against a CLOSING one with
+// nothing between them, and the answer to a document that clearly has content was
+// "```\n```\n". Balanced framing around an empty body is still framing.
+test("#182: a closed fence that holds no content is not an answer", () => {
+	const body = "# T\n" + "```\n" + "codefence body ".repeat(60);
+	for (let budget = 1; budget <= 40; budget++) {
+		const out = applyTokenBudget(body, budget, "a");
+		// The contract is about framing standing in for content, so assert exactly
+		// that: the truncation notice must never be the whole answer, and a fence
+		// must never be closed around nothing. A single truncated marker at budget 1
+		// ("`") is UNDER-FILL — the estimator spending one token on the first
+		// character of the fence instead of the first character of the code — and is
+		// recorded as a residual below rather than papered over here.
+		assert.ok(
+			!/^[\s\-–—]*(_?truncated[^\n]*|full content cached[^\n]*)?[\s_\-*]*$/i.test(out),
+			`budget ${budget} returned notice framing as the whole answer: ${JSON.stringify(out)}`,
+		);
+		const fencePair = out.match(/`{3,}[^`\n]*\n\s*`{3,}/);
+		assert.ok(
+			!fencePair,
+			`budget ${budget} closed a fence around nothing: ${JSON.stringify(out)}`,
+		);
+		assert.ok(
+			estimateTokens(out) <= budget,
+			`ceiling violated at ${budget}: ${estimateTokens(out)} tokens`,
+		);
+	}
+});
