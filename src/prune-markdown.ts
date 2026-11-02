@@ -659,7 +659,14 @@ function prosePrefixSource(body: string): string {
 		}
 		break;
 	}
-	return lines.slice(i).join("\n");
+	// The first line's leading whitespace still has to go, exactly as the regex
+	// version did. Without it a document that OPENS with four-space-indented
+	// fence-looking text keeps that indentation, the closure parser still reads that
+	// line as an opener and appends a margin-level closer — and at the 0..3-space
+	// boundary the indented line is CODE while the appended marker is an unclosed
+	// OPENING fence (verify round 3 on 78b334a). Only the first line: the indentation
+	// of everything after it is the document's own code structure.
+	return lines.slice(i).join("\n").replace(/^[ \t]+/, "");
 }
 
 /**
@@ -1089,21 +1096,23 @@ export function applyTokenBudget(
 				room,
 			).replace(/^[ \t]*(?:`{3,}|~{3,})[^\n]*$/gm, ""),
 		];
-		// A candidate is rejected only for the one thing that makes it useless: being
-		// nothing but fence delimiters. `carriesPageProse` is the wrong test here — it
-		// skips lines with no letter in them, which is right for a whole result but
-		// rejects a legitimate one-character answer, and "-" taken from a list is the
-		// document's own text. Deciding whether a fence is EMPTY needs pairing and
-		// marker-length semantics and belongs to the closure parser; deciding whether a
-		// fragment is ALL delimiters needs neither, and that is all this site requires.
-		const allDelimiters = (t: string): boolean =>
-			t.trim() !== "" &&
-			t.split("\n").every(
-				(l: string) => l.trim() === "" || /^[ \t]*(?:`{3,}|~{3,})[^\n]*$/.test(l),
-			);
-		const chosen = candidates.find((c) => c.trim() !== "" && !allDelimiters(c));
-		// Nothing in the document fits the room. Leave the framing rather than install
-		// a candidate that carries none of the document either.
+		// Prefer a candidate that actually carries the document's words. Order alone was
+		// not enough: on a fence-led document at budget 1 the closed-fence trim yields a
+		// lone backtick, which was installed while the second candidate — the real code
+		// text with its markers removed — sat unused. A letter-less fragment is still a
+		// legitimate last resort ("-" taken from a list is the document's own text), so
+		// it is accepted only when nothing that carries prose was available.
+		//
+		// An earlier version also rejected candidates that were "nothing but fence
+		// delimiters". That guard was deleted: once the prose preference exists, it can
+		// only fire when NO candidate carries prose, i.e. when the document itself has no
+		// letter-or-number content, and then the delimiters are the document's own text.
+		// A guard that no input can require does not stay in the file.
+		const chosen =
+			candidates.find((c) => carriesPageProse(c, body)) ??
+			candidates.find((c) => c.trim() !== "");
+		// Nothing in the document fits the room, or the document has no prose to fit.
+		// Leave the framing rather than install a blank candidate.
 		if (chosen !== undefined) result = chosen;
 	}
 

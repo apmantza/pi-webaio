@@ -1217,10 +1217,12 @@ test("#182: a closed fence that holds no content is not an answer", () => {
 	for (let budget = 1; budget <= 40; budget++) {
 		const out = applyTokenBudget(body, budget, "a");
 		const bare = out.replace(/[\s`~]/g, "");
-		// One character is the documented UNDER-FILL residual: the estimator spends its
-		// conservative first token on whatever comes first. Recorded, not papered over.
+		// One character is the documented UNDER-FILL residual, but it must be the
+		// DOCUMENT's character: accepting any single character (or empty output) made
+		// the assertion pass on a lone fence marker, which is exactly the framing this
+		// test exists to reject.
 		assert.ok(
-			bare.length <= 1 || carriesDoc(out),
+			(bare.length === 1 && body.includes(bare)) || carriesDoc(out),
 			`budget ${budget} returned framing with no document text: ${JSON.stringify(out)}`,
 		);
 		assert.ok(
@@ -1368,8 +1370,9 @@ test("#182: the public budget path never answers with framing-only output", () =
 				const g = out.slice(i, i + 2);
 				if (/[\p{L}\p{N}]/u.test(g) && grams.includes(g)) shares = true;
 			}
+			const bare = out.replace(/[\s`~]/g, "");
 			assert.ok(
-				shares || out.replace(/[\s`~]/g, "").length <= 1,
+				shares || (bare.length === 1 && doc.includes(bare)),
 				`budget ${budget} answered with framing: ${JSON.stringify(out)}`,
 			);
 			assert.ok(
@@ -1471,5 +1474,27 @@ test("#182 regression: Unicode whitespace inside a fence is content, not a blank
 		assert.ok(out.includes(ch), `${name} body erased: ${JSON.stringify(out)}`);
 		const pub = applyTokenBudget("# T\n" + doc + "\n" + "jxqv kzpw ".repeat(100), 20, "a");
 		assert.ok(pub.includes(ch), `${name} erased on the public path: ${JSON.stringify(pub)}`);
+	}
+});
+
+// Verify round 3 on 78b334a. Real regression versus origin/master, introduced by
+// THIS PR: the line-based prosePrefixSource dropped master's leading-whitespace
+// strip, so a document opening with four-space-indented fence-looking text keeps
+// its indentation, the closure parser still treats that line as an opener and
+// appends a margin-level closer — and at the Markdown 0..3-space boundary the
+// indented line is CODE while the appended marker is an unclosed OPENING fence.
+//
+//   master: "```literal code\njxqv kzp\n```\n"          balanced
+//   78b334a:"    ```literal code\njxqv\n```\n"          newly unclosed
+test("#182 regression: an indented fence-like opening line is not left unclosed", () => {
+	const doc = "    ```literal code\n" + "jxqv kzpw ".repeat(100);
+	for (let budget = 1; budget <= 120; budget++) {
+		const out = applyTokenBudget(doc, budget, "a");
+		const margin = (out.match(/^(?:`{3,}|~{3,})[^\n]*$/gm) || []).length;
+		assert.equal(
+			margin % 2,
+			0,
+			`budget ${budget} left a margin-level marker unclosed: ${JSON.stringify(out.slice(0, 60))}`,
+		);
 	}
 });
