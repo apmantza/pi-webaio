@@ -8,6 +8,7 @@ import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { blankCommentsAndStrings } from "./helpers.mjs";
 import test from "node:test";
 
 import {
@@ -390,6 +391,11 @@ test("#177: a missing baseline and a broken baseline get different guidance", as
 		const a = run(missing);
 		assert.notEqual(a.status, 0, "a missing baseline must fail, not silently proceed");
 		assert.match(a.stderr, /No baseline at /, "missing must read as missing");
+		assert.match(
+			a.stderr,
+			new RegExp(`--update-baseline --baseline ${missing.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`),
+			"the fix command must name the path the caller asked for — telling them to generate the default leaves their own command still failing",
+		);
 		assert.match(a.stderr, /--update-baseline/, "missing must name the generator");
 
 		const b = run(broken);
@@ -438,6 +444,22 @@ test("#177: the scorecard artifact survives a failing second invocation", async 
 		upload.slice(0, 1200),
 		/if-no-files-found: ignore/,
 		"a failed FIRST invocation must not replace the real red with an upload error",
+	);
+});
+
+test("#177: creating a baseline may not be blocked by loading it first", async () => {
+	// `--update-baseline` writes to the path named by `--baseline`, so the command
+	// the missing-baseline message tells the caller to run must actually run. With
+	// the load unguarded, `--baseline X --update-baseline` died on ENOENT before
+	// it could write X — the advice was self-defeating. Behavioural coverage would
+	// need a live-network run, so the guard is pinned by shape over blanked source
+	// (comments and strings cannot satisfy it).
+	const src = await blankCommentsAndStrings(BENCH_SCRIPT);
+	const m = src.match(/if \(args\.baseline([^)]*)\) \{/);
+	assert.ok(m, "the baseline load block must exist");
+	assert.ok(
+		m[1].includes("!args.updateBaseline"),
+		"the load must be skipped when the caller is creating the baseline",
 	);
 });
 

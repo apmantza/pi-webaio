@@ -537,7 +537,11 @@ async function main() {
 
 	// Load baseline if requested
 	let baseline = null;
-	if (args.baseline) {
+	// `--update-baseline` CREATES the file it is pointed at, so loading it first
+	// is backwards: `--baseline /tmp/x.json --update-baseline` — the exact command
+	// the missing-baseline message tells you to run — died on ENOENT before it
+	// could write anything (#177 review).
+	if (args.baseline && !args.updateBaseline) {
 		try {
 			const raw = await readFile(args.baseline, "utf8");
 			baseline = JSON.parse(raw);
@@ -551,8 +555,10 @@ async function main() {
 			if (err.code === "ENOENT") {
 				process.stderr.write(
 					`No baseline at ${args.baseline}.\n` +
-						`None is committed to this repository. Create one with:\n` +
-						`  npm run bench -- --update-baseline\n` +
+						`None is committed to this repository. Create it AT THAT PATH with:\n` +
+						`  npm run bench -- --update-baseline --baseline ${args.baseline}\n` +
+						`--update-baseline writes to the path you named, so the next run of\n` +
+						`your original command then compares against it.\n` +
 						`It performs a live-network run, so its absolute numbers depend on the\n` +
 						`hour; only quality columns (success, markers, token swing) are compared.\n`,
 				);
