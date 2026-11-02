@@ -16,7 +16,11 @@
 // feature bucket silently duplicating another.
 import assert from "node:assert";
 import test from "node:test";
-import { mapFeatureItems } from "../src/github-map.ts";
+import {
+	contentEntryPaths,
+	mapFeatureItems,
+	repoTreeEntryUrl,
+} from "../src/github-map.ts";
 
 const O = "apmantza";
 const R = "pi-webaio";
@@ -167,4 +171,100 @@ test("actions: the workflow_runs object body unwraps instead of yielding nothing
 test("non-array payloads yield no links", () => {
 	assert.deepEqual(mapFeatureItems(O, R, "issues", null, 5), []);
 	assert.deepEqual(mapFeatureItems(O, R, "issues", { message: "Not Found" }, 5), []);
+});
+
+// #176 — the repo map emitted `${repoUrl}/blob/${branch}/${p}` for EVERY tree
+// entry. The recursive Git Trees API returns directory entries (trailing slash)
+// alongside blobs, and GitHub serves /blob/ only for files, so every directory
+// URL in an aio-webmap repo result was a 404. The clone-walk path pushes only
+// `e.isFile()` results, so the two sources feeding the same `fileUrls` field
+// disagreed: the same directory was a URL from one path and absent from the
+// other. Recurrence: any caller that clicks a directory URL from a repo map.
+test("#176: a directory entry maps to /tree/, never to /blob/", () => {
+	assert.equal(
+		repoTreeEntryUrl(`https://github.com/${O}/${R}`, "main", "src/"),
+		`https://github.com/${O}/${R}/tree/main/src`,
+	);
+	assert.equal(
+		repoTreeEntryUrl(`https://github.com/${O}/${R}`, "main", "src/tools/"),
+		`https://github.com/${O}/${R}/tree/main/src/tools`,
+	);
+});
+
+test("#176: a file entry keeps /blob/", () => {
+	assert.equal(
+		repoTreeEntryUrl(`https://github.com/${O}/${R}`, "main", "README.md"),
+		`https://github.com/${O}/${R}/blob/main/README.md`,
+	);
+	assert.equal(
+		repoTreeEntryUrl(`https://github.com/${O}/${R}`, "main", "src/tools/webfetch.ts"),
+		`https://github.com/${O}/${R}/blob/main/src/tools/webfetch.ts`,
+	);
+});
+
+test("#176: the tree URL carries no trailing slash and no double slash", () => {
+	// GitHub's canonical directory URL is /tree/<branch>/<path>; a trailing
+	// slash redirects, and a doubled one from the entry's own slash is a
+	// malformed URL that some clients refuse.
+	const url = repoTreeEntryUrl(`https://github.com/${O}/${R}`, "main", "docs/");
+	assert.ok(!url.endsWith("/"), `tree URL must not end in a slash: ${url}`);
+	assert.ok(!url.includes("//docs"), `no doubled slash: ${url}`);
+});
+
+test("#176: the root tree entry maps to the repo tree, not a bare path", () => {
+	// The recursive API never yields "" for the root, but listContents can
+	// return odd shapes; a URL of /tree/main/ is a redirect to the repo home.
+	assert.equal(
+		repoTreeEntryUrl(`https://github.com/${O}/${R}`, "main", "/"),
+		`https://github.com/${O}/${R}/tree/main`,
+	);
+});
+
+test("#176: non-ASCII and space-bearing paths stay escapable", () => {
+	// The builder must not pre-encode: GitHub accepts the literal path and the
+	// caller decides encoding, so encoding here would double-encode %25.
+	const url = repoTreeEntryUrl(`https://github.com/${O}/${R}`, "main", "my dir/");
+	assert.equal(url, `https://github.com/${O}/${R}/tree/main/my dir`);
+});
+
+// #176, second half: the contents-listing fallback was the ONLY reachable way a
+// directory entered `paths` (the recursive API filters `type === "blob"`, the
+// clone walk filters `e.isFile()`), and it filtered nothing. Reproduced through
+// the production call path, not assumed: the issue's own premise that the API
+// emits directories turned out to be false, so a fix aimed only at the URL
+// builder would have left the live bug in place — a dir from this source has no
+// trailing slash, so no slash-based rule can recognise it.
+test("#176: the contents fallback keeps files only", () => {
+	assert.deepEqual(
+		contentEntryPaths([
+			{ path: "README.md", type: "file" },
+			{ path: "src", type: "dir" },
+			{ path: "docs/guide", type: "dir" },
+			{ path: "package.json", type: "file" },
+		]),
+		["README.md", "package.json"],
+	);
+});
+
+test("#176: a symlink/submodule entry is not passed through as a file", () => {
+	// GitHub also reports `type: "symlink"` and `type: "submodule"`. Neither is
+	// a blob whose contents `/blob/` can render, so neither may become a URL.
+	assert.deepEqual(
+		contentEntryPaths([
+			{ path: "link", type: "symlink" },
+			{ path: "vendor/lib", type: "submodule" },
+			{ path: "keep.ts", type: "file" },
+		]),
+		["keep.ts"],
+	);
+});
+
+test("#176: an all-directory listing yields no URLs rather than directory URLs", () => {
+	assert.deepEqual(
+		contentEntryPaths([
+			{ path: "a", type: "dir" },
+			{ path: "b", type: "dir" },
+		]),
+		[],
+	);
 });

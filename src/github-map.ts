@@ -612,6 +612,48 @@ const REPO_PATH_EXCLUSIONS = [
 	".jar",
 ];
 
+/**
+ * Turn a contents-listing response into repo-tree `paths`.
+ *
+ * The contents endpoint is the only tree source that returns directories, and
+ * `paths` feeds the URL list, the markdown tree and the file/dir counts, all of
+ * which assume files-only (the recursive API keeps `type === "blob"`, the clone
+ * walk keeps `e.isFile()`). Passing dirs through is #176: a directory reached
+ * the URL builder and became `<repo>/blob/<branch>/<dir>`, which GitHub 404s.
+ * Exported as a leaf so the convention has a detector without a network call.
+ */
+export function contentEntryPaths(
+	entries: Array<{ path: string; type?: string }>,
+): string[] {
+	return entries.filter((e) => e.type === "file").map((e) => e.path);
+}
+
+/**
+ * Build the GitHub URL for one tree entry of a repo map.
+ *
+ * GitHub serves `/blob/` only for files, so a directory emitted as `/blob/` is
+ * a 404 (#176). The canonical directory URL is `/tree/<branch>/<path>` with no
+ * trailing slash, so an entry's own slash is dropped rather than left to
+ * redirect, and the path is not pre-encoded (GitHub accepts the literal path,
+ * and encoding here would double-encode a path already carrying `%XX`).
+ *
+ * Reachability, stated honestly: after #176 all three tree sources yield
+ * files-only, so the `/tree/` branch is a convention guard rather than a live
+ * path today. It exists so that adding directories as first-class entries —
+ * which #184 may decide to do — cannot reintroduce the 404 by forgetting this
+ * rule; `tests/github-map-urls.test.mjs` keeps it red if it is broken.
+ */
+export function repoTreeEntryUrl(
+	repoUrl: string,
+	branch: string,
+	p: string,
+): string {
+	const isDir = p.endsWith("/");
+	const path = isDir ? p.replace(/\/+$/, "") : p;
+	const base = `${repoUrl}/${isDir ? "tree" : "blob"}/${branch}`;
+	return path ? `${base}/${path}` : base;
+}
+
 /** Filter noisy asset/build/dep paths out of a repo tree. */
 export function filterRepoPaths(paths: string[]): string[] {
 	// Lowercase all patterns once up front for case-insensitive matching
@@ -968,10 +1010,17 @@ async function mapGitHubRepoFull(
 			walk = await walkRepo(clone.path, { maxEntries: maxFiles });
 			paths = walk?.paths ?? [];
 		} else {
-			// Last resort: top-level contents listing
+			// Last resort: top-level contents listing. Unlike the recursive tree
+			// API (`type === "blob"`) and the clone walk (`e.isFile()`), this
+			// endpoint returns directories too — and `paths` feeds the URL list,
+			// the markdown tree and the file/dir counts, all of which assume
+			// files-only. That mismatch is #176: a directory reaching the URL
+			// builder became `<repo>/blob/<branch>/<dir>`, which GitHub 404s. Keep
+			// the three sources consistent instead of teaching every consumer
+			// about a fourth shape.
 			const contents = await listContents(owner, repo, defaultBranch, "");
 			if (contents && contents.length > 0) {
-				paths = contents.map((e) => e.path);
+				paths = contentEntryPaths(contents);
 			}
 		}
 	}
@@ -985,9 +1034,14 @@ async function mapGitHubRepoFull(
 
 		// Generate a blob/tree URL per entry (cap at max)
 		const repoUrl = `https://github.com/${owner}/${repo}`;
-		const fileEntries = paths.slice(0, max);
-		for (const p of fileEntries) {
-			allUrls.push(`${repoUrl}/blob/${defaultBranch}/${p}`);
+		// One URL per entry. Directories are part of this list when the count
+		// came from the API tree (the clone walk yields files only), which is why
+		// the shape is decided per entry by `repoTreeEntryUrl` and the variable is
+		// not called `files` — that name is what made the #176 `/blob/`-for-every-
+		// entry bug look correct.
+		const urlEntries = paths.slice(0, max);
+		for (const p of urlEntries) {
+			allUrls.push(repoTreeEntryUrl(repoUrl, defaultBranch, p));
 		}
 		sources[clonedOk ? "repo-clone" : "github-api:tree"] = [...allUrls];
 	}
