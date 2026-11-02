@@ -311,12 +311,17 @@ export function buildTree(paths: string[]): TreeNode {
 	const root: TreeNode = { name: "", path: "", type: "dir", children: [] };
 	for (const p of paths) {
 		const segs = p.split("/").filter(Boolean);
+		// A slash-terminated path names a DIRECTORY, not a file whose last segment
+		// happens to be its name. Without this, the trailing slash that
+		// `contentEntryPaths` carries (and that `countDirs` reads) silently became a
+		// file leaf in the rendered tree.
+		const lastIsDir = p.endsWith("/");
 		let cur = root;
 		let acc = "";
 		for (let i = 0; i < segs.length; i++) {
 			const seg = segs[i]!;
 			acc = acc ? `${acc}/${seg}` : seg;
-			const isFile = i === segs.length - 1;
+			const isFile = i === segs.length - 1 && !lastIsDir;
 			cur.children ??= [];
 			let next = cur.children.find((c) => c.name === seg);
 			if (!next) {
@@ -479,10 +484,19 @@ export async function cloneRepo(
 
 // ─── API helpers ─────────────────────────────────────────────────────
 
+/** The entry shapes this file knows how to turn into an in-repo URL. */
+export type ContentEntryType = "file" | "dir" | "symlink" | "submodule" | "unknown";
+
 interface ApiEntry {
 	name: string;
 	path: string;
-	type: "file" | "dir";
+	/**
+	 * The shapes the contents endpoint actually returns, plus `unknown` for
+	 * anything else. Declaring only `"file" | "dir"` is what let the collapse
+	 * `type === "dir" ? "dir" : "file"` type-check at all: the type said no other
+	 * entry could exist, so inventing a `file` for a `submodule` looked legal.
+	 */
+	type: "file" | "dir" | "symlink" | "submodule" | "unknown";
 	html_url?: string;
 }
 
@@ -490,6 +504,25 @@ interface ApiEntry {
  * List a directory's contents via the GitHub API. Returns entries with
  * {name, path, type} — caller is responsible for recursion control.
  */
+/**
+ * Map a contents-API entry type to the shape `contentEntryPaths` consumes.
+ *
+ * Extracted as a pure leaf because the interesting behaviour lives here and
+ * `listContents` itself is a network call: collapsing everything that is not
+ * `dir` to `file` (which this used to do) invented `file` entries for `symlink`
+ * and `submodule`, those then reached the URL builder and became `/blob/` links,
+ * and a submodule path does not exist as a blob in this repository so the link
+ * 404s — #176's defect shape arriving through the door the first #176 fix
+ * opened. Anything unrecognised maps to `unknown` rather than to `file`, so a
+ * new GitHub entry type is excluded from URLs by default instead of being
+ * guessed at.
+ */
+export function normalizeContentEntryType(type: unknown): ContentEntryType {
+	return type === "dir" || type === "file" || type === "symlink" || type === "submodule"
+		? type
+		: "unknown";
+}
+
 async function listContents(
 	owner: string,
 	repo: string,
@@ -505,7 +538,7 @@ async function listContents(
 		return data.map((e) => ({
 			name: e.name,
 			path: e.path,
-			type: e.type === "dir" ? "dir" : "file",
+			type: normalizeContentEntryType(e.type),
 			html_url: e.html_url,
 		}));
 	} catch {
@@ -611,6 +644,69 @@ const REPO_PATH_EXCLUSIONS = [
 	".whl",
 	".jar",
 ];
+
+/**
+ * Turn a contents-listing response into repo-tree `paths`.
+ *
+ * The contents endpoint is the only tree source that returns directories, and
+ * directories are KEPT (#176 asks for the directory-inclusive count and names
+ * the emitted URLs as the defect, not the entries). They are kept
+ * slash-terminated because that is already the representation this file uses
+ * for "directory" everywhere else: `countDirs`/`countFiles` test the trailing
+ * slash, `buildTree` marks the last segment as a directory only when the slash
+ * says so, and `repoTreeEntryUrl` picks `/tree/` over `/blob/` on it. One
+ * representation, four consumers — the #176 bug was one consumer (the URL
+ * builder) being handed an entry whose shape it could not see.
+ *
+ * `symlink` and `submodule` are excluded deliberately. Both used to be renamed
+ * to `file` and emitted as `/blob/`, and a `/blob/` link for a submodule is a
+ * 404 because the path resolves in another repository. This is the fail-closed
+ * side of the rule: an entry whose canonical in-repo URL we cannot state is not
+ * given a guessed one. The contents API does carry an authoritative `html_url`
+ * per entry, so a later round that wants them should use that field rather than
+ * re-deriving a path shape here.
+ */
+export function contentEntryPaths(
+	entries: Array<{ path: string; type?: string }>,
+): string[] {
+	const out: string[] = [];
+	for (const e of entries) {
+		if (e.type === "dir") {
+			out.push(e.path.endsWith("/") ? e.path : `${e.path}/`);
+		} else if (e.type === "file") {
+			out.push(e.path);
+		}
+	}
+	return out;
+}
+
+/**
+ * Build the GitHub URL for one tree entry of a repo map.
+ *
+ * GitHub serves `/blob/` only for files, so a directory emitted as `/blob/` is
+ * a 404 (#176). The canonical directory URL is `/tree/<branch>/<path>` with no
+ * trailing slash, so an entry's own slash is dropped rather than left to
+ * redirect, and the path is not pre-encoded (GitHub accepts the literal path,
+ * and encoding here would double-encode a path already carrying `%XX`).
+ *
+ * Reachability, stated honestly: the last-resort contents listing keeps
+ * directory entries (#176 asks for the directory-inclusive count), so the
+ * `/tree/` branch below is a LIVE path, not a convention guard. An earlier
+ * revision of this comment called it unreachable because that round had made
+ * every source files-only; that is the case this function exists to prevent and
+ * it was wrong to describe the fix that way. `tests/github-map-urls.test.mjs`
+ * keeps both branches red.
+ */
+export function repoTreeEntryUrl(
+	repoUrl: string,
+	branch: string,
+	p: string,
+): string {
+	const isDir = p.endsWith("/");
+	const path = isDir ? p.replace(/\/+$/, "") : p;
+	const base = `${repoUrl}/${isDir ? "tree" : "blob"}/${branch}`;
+	return path ? `${base}/${path}` : base;
+}
 
 /** Filter noisy asset/build/dep paths out of a repo tree. */
 export function filterRepoPaths(paths: string[]): string[] {
@@ -968,10 +1064,18 @@ async function mapGitHubRepoFull(
 			walk = await walkRepo(clone.path, { maxEntries: maxFiles });
 			paths = walk?.paths ?? [];
 		} else {
-			// Last resort: top-level contents listing
+			// Last resort: top-level contents listing. Unlike the recursive tree
+			// API (`type === "blob"`) and the clone walk (`e.isFile()`), this
+			// endpoint also returns directories, and dropping them here is what
+			// made a repo whose root is mostly directories map to an empty tree.
+			// #176 asks for the directory-inclusive count and names the URLs as the
+			// defect, so directories are kept — slash-terminated, which is how this
+			// file already spells "directory" to `countDirs`, `buildTree` and
+			// `repoTreeEntryUrl`. The URL shape is then decided per entry rather
+			// than assumed for the whole list.
 			const contents = await listContents(owner, repo, defaultBranch, "");
 			if (contents && contents.length > 0) {
-				paths = contents.map((e) => e.path);
+				paths = contentEntryPaths(contents);
 			}
 		}
 	}
@@ -985,9 +1089,14 @@ async function mapGitHubRepoFull(
 
 		// Generate a blob/tree URL per entry (cap at max)
 		const repoUrl = `https://github.com/${owner}/${repo}`;
-		const fileEntries = paths.slice(0, max);
-		for (const p of fileEntries) {
-			allUrls.push(`${repoUrl}/blob/${defaultBranch}/${p}`);
+		// One URL per entry. Directories are part of this list when the count
+		// came from the API tree (the clone walk yields files only), which is why
+		// the shape is decided per entry by `repoTreeEntryUrl` and the variable is
+		// not called `files` — that name is what made the #176 `/blob/`-for-every-
+		// entry bug look correct.
+		const urlEntries = paths.slice(0, max);
+		for (const p of urlEntries) {
+			allUrls.push(repoTreeEntryUrl(repoUrl, defaultBranch, p));
 		}
 		sources[clonedOk ? "repo-clone" : "github-api:tree"] = [...allUrls];
 	}
