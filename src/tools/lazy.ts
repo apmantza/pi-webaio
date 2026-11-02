@@ -196,7 +196,9 @@ export const lazyTools: LazyTool[] = [
 				"Opt-in cache TTL in seconds. Omit for fresh fetches.",
 			),
 			compile: boolean("Compile batch results into a single markdown package."),
-			prune: number("Prune markdown to token budget (e.g. 3000)."),
+			prune: number(
+				"Prune the markdown BODY to a token budget (e.g. 3000). Applies to format: markdown (the default); html/text/json/raw are returned untrimmed, since truncating a raw document mid-structure yields an unusable artifact. This bounds the page content only — the status label, title/URL/format header and any footer are added on top, so the whole returned answer can exceed this number. Use `budgetTokens` when you need a hard ceiling on everything handed back. The saved file and the content cache always keep the full unpruned body.",
+			),
 			query: string(
 				"Relevance query for answer mode or query-aware pruning. When set without `prune`, activates answer mode: the page is chunked and only the top-k most relevant chunks (scored by BM25) are returned — ordered by document position with heading breadcrumbs. The full content is still cached so aio-webcontent can retrieve it by URL. When used with `prune`, keeps sections most relevant to this query during pruning.",
 			),
@@ -240,7 +242,7 @@ export const lazyTools: LazyTool[] = [
 				},
 			),
 			budgetTokens: number(
-				"Hard token budget for the content returned to the agent. Applies to format: markdown (the default); html/text/json/raw return the body untrimmed by design, since truncating a raw document mid-structure yields an unusable artifact. When set, the output is guaranteed to fit within this many tokens — heading structure is preserved, lowest-value sections drop first, and a footer notes omitted sections. If the identifying header alone cannot fit, the body keeps its share and the answer states the overflow rather than returning a header with none of the page. Full content is always cached before trimming. Min 100.",
+				"Hard token budget for the content returned to the agent. Applies to format: markdown (the default); html/text/json/raw return the body untrimmed by design, since truncating a raw document mid-structure yields an unusable artifact. When set, the output is guaranteed to fit within this many tokens — heading structure is preserved, lowest-value sections drop first, and a footer notes omitted sections. If the identifying header alone cannot fit, the body keeps its share and the answer states the overflow rather than returning a header with none of the page. With `chunks: true` the chunk surface is capped to the same budget; chunk overlap is re-added after splitting, so bounding the source alone is not enough. A fully accounted allocation across every returned surface is not yet implemented - see issue #170. Full content is always cached before trimming. Min 100.",
 				{
 					minimum: 100,
 				},

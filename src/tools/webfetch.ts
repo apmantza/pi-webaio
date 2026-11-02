@@ -434,20 +434,129 @@ export function buildCompactJsonPreview(
  */
 export function maybeChunkMarkdown(
 	body: string | undefined,
-	params: { chunks?: boolean; maxTokens?: number; overlapTokens?: number },
+	params: {
+		chunks?: boolean;
+		maxTokens?: number;
+		overlapTokens?: number;
+		prune?: number;
+		budgetTokens?: number;
+		query?: string;
+	},
 	errors: string[],
 ): Chunk[] | undefined {
 	if (!params.chunks || !body) return undefined;
 	try {
-		const result = chunkMarkdown(body, {
+		// Issue #171 follow-up (CodeRabbit on #172): the three call sites all pass
+		// the FULL result body, so with `prune` + `chunks` set together the returned
+		// chunk list was generated from the unpruned page and the requested output
+		// reduction was bypassed by the largest part of the output. Chunks are
+		// returned, so `prune` bounds them — same display-only seam as the preview,
+		// so the two cannot disagree about what "bounded" means.
+		const display = splitPrunedDisplay(
+			body,
+			params.prune,
+			params.query,
+		).returned;
+		// `budgetTokens` is documented as a hard ceiling on what the agent is
+		// handed, and `details.chunks` is handed back too — bounding only `prune`
+		// left the larger returned surface unbudgeted (review round 4).
+		const source = splitPrunedDisplay(
+			display,
+			params.budgetTokens,
+			params.query,
+		).returned;
+		const result = chunkMarkdown(source, {
 			maxTokens: params.maxTokens,
 			overlapTokens: params.overlapTokens,
 		});
+		// Bounding the SOURCE is not sufficient: `chunkMarkdown` re-adds up to
+		// `overlapTokens` to every chunk AFTER the split, so a small `maxTokens`
+		// re-inflates the total (measured: 436 tokens against budgetTokens=300 at
+		// maxTokens=10). Cap the produced surface, keeping at least one chunk so a
+		// tiny budget still returns the head of the page rather than nothing.
+		if (params.budgetTokens && params.budgetTokens > 0 && result.length > 0) {
+			let used = 0;
+			let keep = 0;
+			for (const chunk of result) {
+				used += estimateTokens(chunk.text);
+				if (used > params.budgetTokens) break;
+				keep++;
+			}
+			if (keep === 0) keep = 1;
+			return result.slice(0, keep);
+		}
 		return result.length > 0 ? result : undefined;
 	} catch {
 		errors.push("chunking failed for this result");
 		return undefined;
 	}
+}
+
+/**
+ * Issue #171 follow-up (CodeRabbit on #172): bound the bodies the multi-URL path
+ * hands back.
+ *
+ * `details: { results }` carries every worker result, and each result carries
+ * `body: formatted.body` — the FULL markdown. Nothing in that path consulted
+ * `prune`, so a batch fetch ignored the knob entirely.
+ *
+ * CLONE, never mutate: the original result objects are what the file write, the
+ * content cache and chunking read, so mutating them in place would reintroduce
+ * the #171 defect from the opposite side.
+ *
+ * Exported for unit testing.
+ */
+/**
+ * Bound a body for DISPLAY, honouring the format contract.
+ *
+ * `pruneMarkdown` is a MARKDOWN pruner: trimming serialized JSON or raw HTML
+ * mid-structure yields an unusable artifact, which is the same reason
+ * `budgetTokens` is documented as markdown-only. An absent format is the default
+ * markdown path.
+ *
+ * This is the single seam for that rule. The batch projection and the single-URL
+ * preview previously each had their own copy of the check, which is exactly how
+ * the batch path ended up guarding non-markdown while the single path kept
+ * corrupting it (issue #172 review, P1).
+ */
+export function displayBodyForFormat(
+	body: string,
+	format: string | undefined,
+	pruneTokens: number | undefined,
+	query?: string,
+): { pruned: boolean; returned: string } {
+	if (format !== undefined && format !== "markdown") {
+		return { pruned: false, returned: body };
+	}
+	return splitPrunedDisplay(body, pruneTokens, query);
+}
+
+export function projectResultsForPrune<
+	T extends {
+		ok?: boolean;
+		body?: string;
+		format?: string;
+		diffResult?: string;
+	},
+>(results: readonly T[], pruneTokens: number | undefined, query?: string): T[] {
+	if (!pruneTokens || pruneTokens <= 0) return results as T[];
+	return results.map((r) => {
+		if (!r.ok || typeof r.body !== "string") return r;
+		const split = displayBodyForFormat(r.body, r.format, pruneTokens, query);
+		if (!split.pruned) return r;
+		const projected: T = { ...r, body: split.returned };
+		// The worker populates BOTH `body` and `diffResult` from the same diff
+		// text, so bounding only `body` left the structured result still exposing
+		// the text `prune` removed.
+		if (typeof r.diffResult === "string") {
+			projected.diffResult = splitPrunedDisplay(
+				r.diffResult,
+				pruneTokens,
+				query,
+			).returned;
+		}
+		return projected;
+	});
 }
 
 /** Default number of top chunks returned in answer mode. */
@@ -536,11 +645,33 @@ export function applyQueryAnswerMode(
 		headingByIndex.set(c.index, currentHeadingCtx);
 	}
 
-	const parts = selected.map(({ chunk }) => {
+	// Issue #131: overlap is a SCORING aid. When two adjacent chunks are both
+	// selected, the span the chunker prepended to the later one is the earlier
+	// one's tail, so it would render twice. Trim only that recorded span, and only
+	// when the previously displayed chunk actually ends with it — a legitimate
+	// repeat (table headers, an intentional code-block repeat) is left intact.
+	//
+	// CodeRabbit (#172, thread 1) proposed ALSO requiring index adjacency. Rejected
+	// after building the fixture it needed (three identical paragraphs, so
+	// tail(N-1) === tail(N-2)) and failing to make the guard fail on any input.
+	// `endsWith` is the load-bearing condition: when it matches, that span is
+	// already on screen, so a coincidental match cannot hide anything from the
+	// reader. An adjacency check would be mechanism with no reachable failure.
+	const parts: string[] = [];
+	let lastDisplayedBody = "";
+	for (const { chunk } of selected) {
+		let text = chunk.text;
+		const prefix = chunk.overlapPrefix;
+		if (prefix && lastDisplayedBody.endsWith(prefix)) {
+			// `overlapPrefix` is the span itself; the chunker joined it with a blank
+			// line, so the display copy drops the span plus that separator.
+			text = text.slice(prefix.length).replace(/^\s+/, "");
+		}
 		const heading = headingByIndex.get(chunk.index) ?? "";
 		const breadcrumb = heading ? `> **${heading}**\n\n` : "";
-		return `${breadcrumb}${chunk.text}`;
-	});
+		parts.push(`${breadcrumb}${text}`);
+		lastDisplayedBody = text;
+	}
 
 	const footer =
 		omitted > 0
@@ -754,6 +885,37 @@ function elideToTokenBudget(text: string, maxTokens: number): string {
  * `fitHeaderToBudget` settled on after two wrong ratios were measured. Title is shortened
  * first (it is descriptive only), then the save-path line is elided in the middle.
  */
+/**
+ * Issue #171: `prune` is an OUTPUT knob. It bounds what the agent is handed and
+ * must never touch the durable copy.
+ *
+ * The defect this exists to prevent: `prune` reassigned the one variable that fed
+ * both `writeFile()`/`storeContent()` and the returned preview, so the saved file
+ * and the content cache kept the excerpt while the agent still got the whole
+ * page — the exact inverse of the documented contract ("Full content is ALWAYS
+ * saved to disk + cached; these controls only change what is RETURNED"). Measured
+ * on the installed extension: `prune: 300` on a 13,160-char Express page left
+ * 1,134 chars in the cache, and the truncation footer tells the agent to read
+ * that record back via `aio-webcontent`.
+ *
+ * Returning both values from one call is the point: the bug was two consumers of
+ * a single variable, so the split is named rather than implied by ordering.
+ */
+export function splitPrunedDisplay(
+	body: string,
+	pruneTokens: number | undefined,
+	query?: string,
+): { stored: string; returned: string; pruned: boolean } {
+	if (!pruneTokens || pruneTokens <= 0) {
+		return { stored: body, returned: body, pruned: false };
+	}
+	if (estimateTokens(body) <= pruneTokens) {
+		return { stored: body, returned: body, pruned: false };
+	}
+	const pruned = pruneMarkdown(body, { maxTokens: pruneTokens, query });
+	return { stored: body, returned: pruned.content, pruned: true };
+}
+
 export function composeBudgetedFetchText(opts: {
 	parts: FetchTextParts;
 	body: string;
@@ -1195,8 +1357,6 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 
 							const mode = (params.mode as ScrapeMode) ?? "auto";
 							const interactive = params.interactive === true;
-							const pruneTokens = params.prune as number | undefined;
-							const pruneQuery = params.query as string | undefined;
 							const startIndex = params.start_index as number | undefined;
 							const maxLength = params.max_length as number | undefined;
 							const bypass = params.bypass === true;
@@ -1543,15 +1703,11 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 								}
 							}
 
-							const tokenCount = estimateTokens(contentBody);
-
-							if (pruneTokens && pruneTokens > 0 && tokenCount > pruneTokens) {
-								const pruned = pruneMarkdown(contentBody, {
-									maxTokens: pruneTokens,
-									query: pruneQuery,
-								});
-								contentBody = pruned.content;
-							}
+							// Issue #171: `prune` used to rewrite `contentBody` here, which
+							// is the value that feeds the file write and `storeContent()`
+							// below. Bounding it belongs on the returned text instead, so
+							// it is applied at the preview site. Nothing may reassign
+							// `contentBody` for display reasons from here on.
 
 							const markdown =
 								frontmatter(result.title || url.pathname, result.url!, {
@@ -1800,11 +1956,23 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 					// so this works regardless of whether the result was saved
 					// to disk. For non-markdown (html/text/json/raw), `outPath`
 					// is undefined and a readFile would throw.
-					const preview = r.body ?? "";
-
+					//
 					// Resolved output format + opt-in outline mode (UX1). Defined
-					// early so the AI-summary step can be skipped in outline mode.
+					// before the prune step: `pruneMarkdown` is a MARKDOWN pruner, and
+					// trimming serialized JSON or raw HTML mid-structure returns an
+					// unusable artifact (the truncated JSON no longer parses).
 					const itemFormat = (r as any).format ?? "markdown";
+					// Issue #171: `prune` is applied HERE, to the returned preview only.
+					// The saved file and the content cache were written from the
+					// unpruned body above, so the durable record stays complete while
+					// every display branch below sees bounded text.
+					const pruneSplit = displayBodyForFormat(
+						r.body ?? "",
+						itemFormat,
+						params.prune as number | undefined,
+						params.query as string | undefined,
+					);
+					const preview = pruneSplit.returned;
 					const outlineMode = params.outline === true && itemFormat === "markdown";
 
 					let summary: string | null = null;
@@ -2324,7 +2492,11 @@ export function registerWebfetchTool(pi: ExtensionAPI): void {
 				return {
 					content: [{ type: "text", text: lines.join("\n") + localKnowledgeNote }],
 					details: {
-						results,
+						results: projectResultsForPrune(
+							results,
+							params.prune as number | undefined,
+							params.query as string | undefined,
+						),
 						...(localKnowledge ? { localKnowledge } : {}),
 						browser,
 						os,
