@@ -15,9 +15,16 @@
 // Recurrence prevented: dead URLs handed to an agent as discovery output, and a
 // feature bucket silently duplicating another.
 import assert from "node:assert";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { blankCommentsAndStrings } from "./helpers.mjs";
+
+const HERE = fileURLToPath(new URL(".", import.meta.url));
 import test from "node:test";
 import {
+	buildTree,
 	contentEntryPaths,
+	normalizeContentEntryType,
 	mapFeatureItems,
 	repoTreeEntryUrl,
 } from "../src/github-map.ts";
@@ -233,8 +240,17 @@ test("#176: non-ASCII and space-bearing paths stay escapable", () => {
 // the production call path, not assumed: the issue's own premise that the API
 // emits directories turned out to be false, so a fix aimed only at the URL
 // builder would have left the live bug in place — a dir from this source has no
-// trailing slash, so no slash-based rule can recognise it.
-test("#176: the contents fallback keeps files only", () => {
+// trailing slash, so no slash-based rule can recognise it. `contentEntryPaths`
+// therefore normalises the slash on the way in: the representation every
+// consumer already reads is established at the boundary instead of being
+// re-derived downstream.
+// #176 as filed asks for the directory-INCLUSIVE count and names the emitted
+// URLs as the defect. A first revision of this fix dropped directories instead,
+// which fixed the URL shape by deleting the entries the issue asked to keep —
+// and for a repo whose root listing is mostly directories it produced an EMPTY
+// tree: no markdown, no URLs, no children. Sourcery caught it on the diff.
+// Directories are therefore kept, slash-terminated.
+test("#176: the contents fallback keeps directories, slash-terminated", () => {
 	assert.deepEqual(
 		contentEntryPaths([
 			{ path: "README.md", type: "file" },
@@ -242,8 +258,34 @@ test("#176: the contents fallback keeps files only", () => {
 			{ path: "docs/guide", type: "dir" },
 			{ path: "package.json", type: "file" },
 		]),
-		["README.md", "package.json"],
+		["README.md", "src/", "docs/guide/", "package.json"],
 	);
+});
+
+test("#176: a directory-only root listing still yields a tree", () => {
+	// The regression the dropped-directories version caused: entries existed, the
+	// map came back empty, and nothing downstream could tell the two apart.
+	const entries = [
+		{ path: "packages", type: "dir" },
+		{ path: "apps", type: "dir" },
+	];
+	const paths = contentEntryPaths(entries);
+	assert.equal(paths.length, 2, "a directory-only root must not map to nothing");
+	assert.ok(
+		repoTreeEntryUrl(`https://github.com/${O}/${R}`, "main", paths[0]).includes("/tree/main/packages"),
+		"and the directory must link as /tree/, never /blob/",
+	);
+});
+
+test("#176: the slash is the one representation every consumer reads", () => {
+	// countDirs/countFiles, buildTree and repoTreeEntryUrl all key on the trailing
+	// slash. If buildTree stops honouring it, a directory renders as a file leaf
+	// while the counters and the URLs say directory.
+	const tree = buildTree(["README.md", "src/", "src/index.ts"]);
+	const src = tree.children.find((c) => c.name === "src");
+	assert.equal(src?.type, "dir", "a slash-terminated entry is a directory node");
+	const readme = tree.children.find((c) => c.name === "README.md");
+	assert.equal(readme?.type, "file");
 });
 
 test("#176: a symlink/submodule entry is not passed through as a file", () => {
@@ -259,12 +301,92 @@ test("#176: a symlink/submodule entry is not passed through as a file", () => {
 	);
 });
 
-test("#176: an all-directory listing yields no URLs rather than directory URLs", () => {
-	assert.deepEqual(
-		contentEntryPaths([
-			{ path: "a", type: "dir" },
-			{ path: "b", type: "dir" },
-		]),
-		[],
+// This test used to assert `[]` — i.e. that a directory-only listing maps to
+// nothing. That was not in #176 and not in GitHub's semantics; it was the
+// over-narrowing this round exists to undo, and it passed because it restated
+// the implementation instead of the requirement. The requirement is that a
+// directory yields a `/tree/` link, so that is what is asserted now.
+test("#176: an all-directory listing yields /tree/ URLs, not an empty map", () => {
+	const paths = contentEntryPaths([
+		{ path: "a", type: "dir" },
+		{ path: "b", type: "dir" },
+	]);
+	assert.deepEqual(paths, ["a/", "b/"]);
+	const urls = paths.map((p) => repoTreeEntryUrl(`https://github.com/${O}/${R}`, "main", p));
+	assert.deepEqual(urls, [
+		`https://github.com/${O}/${R}/tree/main/a`,
+		`https://github.com/${O}/${R}/tree/main/b`,
+	]);
+	assert.ok(
+		!urls.some((u) => u.includes("/blob/")),
+		`no directory may link as /blob/: ${urls.join(" ")}`,
+	);
+});
+
+// #176, the door the first fix opened. `listContents` used to write
+// `type === "dir" ? "dir" : "file"`, and `ApiEntry.type` was declared
+// `"file" | "dir"` — the type asserted no other entry could exist, which is what
+// made inventing a `file` for a `submodule` type-check. Tested here as a pure
+// leaf because `listContents` itself is a network call; without this seam the
+// collapse had no offline detector at all.
+test("#176: contents types are preserved, and unrecognised ones are not files", () => {
+	assert.equal(normalizeContentEntryType("file"), "file");
+	assert.equal(normalizeContentEntryType("dir"), "dir");
+	assert.equal(normalizeContentEntryType("symlink"), "symlink");
+	assert.equal(normalizeContentEntryType("submodule"), "submodule");
+	// Fail closed: a GitHub entry type nobody has seen must not default to the
+	// shape that produces a `/blob/` link.
+	for (const weird of [undefined, null, "", "blob", "tree", "Directory"]) {
+		assert.equal(
+			normalizeContentEntryType(weird),
+			"unknown",
+			`${JSON.stringify(weird)} must not be trusted as a file`,
+		);
+	}
+});
+
+test("#176: end to end, a raw contents listing yields no fabricated blob links", () => {
+	const raw = [
+		{ path: "README.md", type: "file" },
+		{ path: "src", type: "dir" },
+		{ path: "link", type: "symlink" },
+		{ path: "vendor/lib", type: "submodule" },
+		{ path: "mystery", type: "who-knows" },
+	];
+	const paths = contentEntryPaths(raw.map((e) => ({ ...e, type: normalizeContentEntryType(e.type) })));
+	assert.deepEqual(paths, ["README.md", "src/"]);
+	const urls = paths.map((p) => repoTreeEntryUrl(`https://github.com/${O}/${R}`, "main", p));
+	// Nothing whose type is not `file` may appear in the URL list at all, and the
+	// one directory entry must be `/tree/`. (Asserting "no /blob/ anywhere" here
+	// would be wrong: README.md is a real file and its blob link is correct.)
+	assert.ok(
+		!urls.some((u) => /\/link$|vendor|mystery/.test(u)),
+		`a non-file entry leaked a URL: ${urls.join(" ")}`,
+	);
+	assert.ok(urls.some((u) => u.includes("/tree/main/src")), "the directory must still be mapped");
+	assert.ok(
+		urls.some((u) => u === `https://github.com/${O}/${R}/blob/main/README.md`),
+		"the real file must keep its blob link",
+	);
+});
+
+// The leaf above is pure, but the defect lived in how `listContents` WIRES the
+// API response to it — and that function is a network call with no offline
+// path. Reverting the wiring to `type === "dir" ? "dir" : "file"` would leave
+// every leaf test green while shipping the bug, so the wiring itself is pinned by
+// shape over blanked source (comments and strings cannot satisfy it).
+test("#176: the contents wiring may not collapse entry types back to file", async () => {
+	const src = await blankCommentsAndStrings(
+		join(HERE, "..", "src", "github-map.ts"),
+	);
+	const fn = src.match(/async function listContents[\s\S]*?\n}/)?.[0];
+	assert.ok(fn, "listContents must exist in src/github-map.ts");
+	assert.ok(
+		fn.includes("normalizeContentEntryType("),
+		"listContents must map entry types through the tested leaf",
+	);
+	assert.ok(
+		!/["']dir["']\s*\?\s*["']dir["']\s*:\s*["']file["']/.test(fn),
+		"the `dir ? dir : file` collapse is the #176 fabrication and must not return",
 	);
 });
