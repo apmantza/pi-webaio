@@ -59,26 +59,41 @@ export type SitemapEntry = { loc: string; lastmod?: string };
 
 export function parseLocs(xml: string): SitemapEntry[] {
 	const out: SitemapEntry[] = [];
-	// Pair each <loc> with the <lastmod> that belongs to the SAME <url>/<sitemap>
-	// element. Matching the two independently would let an entry with no lastmod
-	// inherit its neighbour's date, which would silently invent recency.
+	// Spans covered by a <url>/<sitemap> block. Anything matched outside them is a
+	// bare <loc>, which the pre-#132 parser tolerated and still must.
+	const wrapped: Array<[number, number]> = [];
 	for (const item of xml.matchAll(/<(?:url|sitemap)\b[^>]*>([\s\S]*?)<\/(?:url|sitemap)>/gi)) {
 		const block = item[1] ?? "";
-		const loc = /<loc>([^<]*)<\/loc>/i.exec(block)?.[1]?.trim();
-		if (!loc) continue;
+		wrapped.push([item.index, item.index + item[0].length]);
+		// One <lastmod> per block, applied to every <loc> inside it. Pairing must
+		// stay inside the block: zipping a global loc list against a global
+		// lastmod list would hand an undated entry its neighbour's date and
+		// silently invent recency.
 		const lastmod = /<lastmod>([^<]*)<\/lastmod>/i.exec(block)?.[1]?.trim();
-		out.push(lastmod ? { loc, lastmod } : { loc });
+		// Every <loc> in the block, not just the first. The old global regex
+		// returned all of them, so keeping only the first turned malformed
+		// multi-<loc> input into a silent discovery loss.
+		for (const locMatch of block.matchAll(/<loc>([^<]*)<\/loc>/gi)) {
+			const loc = locMatch[1]?.trim();
+			if (!loc) continue;
+			out.push(lastmod ? { loc, lastmod } : { loc });
+		}
 	}
-	if (out.length > 0) return out;
-	// Malformed-loose fallback. The pre-#132 parser matched bare <loc> tags with
-	// no wrapper, and real-world sitemaps that are not strictly valid still get
-	// served today; dropping them would turn a ranking improvement into a
-	// discovery regression. No wrapper means no reliable pairing, so these come
-	// back undated and rank below dated entries instead of guessing.
-	return [...xml.matchAll(/<loc>([^<]*)<\/loc>/gi)]
-		.map((m) => m[1]!.trim())
-		.filter((loc) => loc.length > 0)
-		.map((loc) => ({ loc }));
+	// Bare <loc> entries that sit outside every block. The fallback used to be
+	// `if (out.length > 0) return out`, so it only ran when NOTHING wrapped
+	// parsed and a sitemap mixing both shapes silently dropped every bare entry.
+	// Real malformed sitemaps mix, so collection is additive rather than exclusive.
+	const isWrapped = (index: number) =>
+		wrapped.some(([start, end]) => index >= start && index < end);
+	for (const locMatch of xml.matchAll(/<loc>([^<]*)<\/loc>/gi)) {
+		if (isWrapped(locMatch.index)) continue;
+		const loc = locMatch[1]?.trim();
+		if (!loc) continue;
+		// No enclosing block means no reliable pairing: emit undated so it ranks
+		// after dated entries instead of guessing at a date.
+		out.push({ loc });
+	}
+	return out;
 }
 
 /**
@@ -89,8 +104,16 @@ export function parseLocs(xml: string): SitemapEntry[] {
  * The non-goal is equally load-bearing: no content-based recency guessing, because
  * a wrong "recency" guess is worse than serving an old page.
  *
- * Entries with no usable date sort AFTER dated ones and keep their relative
- * order (a stable partition, not an alphabetical or random tiebreak).
+ * Reordering is gated on the sitemap actually being date-structured. A docs site
+ * mixes a few dated changelog entries with undated evergreen reference pages; if
+ * those few dated entries were floated to the top, a budget-limited pull would
+ * spend everything on the changelog and drop the pages the caller wanted — worse
+ * than the document order master used. So reordering happens only when a STRICT
+ * MAJORITY of entries carry a usable date (a blog is ~100% dated; a docs sitemap
+ * is not), and otherwise the site's own order is preserved untouched.
+ *
+ * Within the reordered case, undated entries sort after dated ones and keep their
+ * relative order (a stable partition, not an alphabetical or random tiebreak).
  */
 export function rankByRecency(entries: SitemapEntry[]): SitemapEntry[] {
 	const dated: Array<{ entry: SitemapEntry; time: number; i: number }> = [];
@@ -100,6 +123,10 @@ export function rankByRecency(entries: SitemapEntry[]): SitemapEntry[] {
 		if (time === undefined) undated.push(entry);
 		else dated.push({ entry, time, i });
 	});
+	if (dated.length === 0 || dated.length * 2 <= entries.length) {
+		// Not a date-structured sitemap: leave the site's order alone.
+		return entries;
+	}
 	dated.sort((a, b) => b.time - a.time || a.i - b.i);
 	return [...dated.map((d) => d.entry), ...undated];
 }
@@ -123,7 +150,19 @@ function recencyTime(entry: SitemapEntry): number | undefined {
 			const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
 			if (y >= 1970 && mo >= 1 && mo <= 12 && d >= 1 && d <= 31) {
 				const t = Date.UTC(y, mo - 1, d);
-				if (Number.isFinite(t) && t > 0) return t;
+				// Date.UTC NORMALIZES an impossible date into a real one, so
+				// 2024-02-31 silently becomes a March date and can outrank a genuine
+				// 2024-03-01. Re-read the components and require them to round-trip:
+				// a stamp that does not exist on a calendar is treated as absent.
+				const dt = new Date(t);
+				if (
+					dt.getUTCFullYear() === y &&
+					dt.getUTCMonth() === mo - 1 &&
+					dt.getUTCDate() === d &&
+					Number.isFinite(t) &&
+					t > 0
+				)
+					return t;
 			}
 		}
 	}
