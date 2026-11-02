@@ -357,3 +357,37 @@ test("#172: no prune request returns the body unchanged for every format", () =>
 		}
 	}
 });
+
+// ─── Review round 4: `chunks` honoured `prune` but not `budgetTokens` ──
+//
+// `budgetTokens` is documented as a hard ceiling on what the agent is handed.
+// `chunks: true` puts every chunk body into `details.chunks`, which is returned
+// too — and the chunk source was the full body, bounded only by `prune`. So
+// `budgetTokens: 300` with `chunks: true` returned a chunk list far above 300
+// tokens while the tool claimed it had fitted.
+//
+// Recurrence prevented: a knob that bounds one returned surface and not another,
+// so the documented ceiling is false for the larger surface.
+
+test("#172: chunks are generated from budget-fitted content", () => {
+	const body = [
+		"## Alpha",
+		"",
+		"alpha sentence. ".repeat(300),
+		"## Beta",
+		"",
+		"dropme section content ".repeat(300),
+	].join("\n");
+	const errors = [];
+	const chunks = maybeChunkMarkdown(
+		body,
+		{ chunks: true, budgetTokens: 300 },
+		errors,
+	);
+	assert.ok(chunks && chunks.length > 0, "expected chunks");
+	const total = chunks.reduce((n, c) => n + estimateTokens(c.text), 0);
+	assert.ok(
+		total <= 400,
+		`chunks carry ${total} tokens with budgetTokens=300 — the ceiling must apply to the chunk surface too`,
+	);
+});

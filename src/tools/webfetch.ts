@@ -439,6 +439,7 @@ export function maybeChunkMarkdown(
 		maxTokens?: number;
 		overlapTokens?: number;
 		prune?: number;
+		budgetTokens?: number;
 		query?: string;
 	},
 	errors: string[],
@@ -456,7 +457,15 @@ export function maybeChunkMarkdown(
 			params.prune,
 			params.query,
 		).returned;
-		const result = chunkMarkdown(display, {
+		// `budgetTokens` is documented as a hard ceiling on what the agent is
+		// handed, and `details.chunks` is handed back too — bounding only `prune`
+		// left the larger returned surface unbudgeted (review round 4).
+		const source = splitPrunedDisplay(
+			display,
+			params.budgetTokens,
+			params.query,
+		).returned;
+		const result = chunkMarkdown(source, {
 			maxTokens: params.maxTokens,
 			overlapTokens: params.overlapTokens,
 		});
