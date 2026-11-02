@@ -525,13 +525,14 @@ export function pruneByRelevance(
  * |---|-----------------|------------------------------------------------------------|------------|
  * | 0 | (no-op)         | content already fits                                    | nothing is spent; the input is returned verbatim |
  * | 1 | caller's budget | `effectiveBudget = max(1, floor(budget))`                  | the number handed in is the contract; no hidden 100-token floor |
- * | 2 | **content floor** | `MIN_CONTENT_SHARE × effectiveBudget`                    | I2 — reserves the space prose is cut from; it is a reservation, not a promise that prose survives (see invariant 2 for the domain where it holds) |
+ * | 2 | **content floor** | `MIN_CONTENT_SHARE × effectiveBudget`                    | I2 — reserves the space prose is cut from, and if the notice still displaces it completely the floor pass below takes the room back |
  * | 3 | frontmatter     | kept only if it fits in `effectiveBudget − content floor`  | metadata never crowds out content; dropped whole otherwise |
  * | 4 | truncation notice | `min(MAX_NOTICE_RESERVE, effectiveBudget − frontmatter − content floor)` | I1 — the notice may only spend what the floor does not need. This sizes `contentBudget` only; the footer actually emitted is rebuilt as `footerBase + omittedToc` and re-measured at step 8, so it is not the notice's final size |
  * | 5 | outline (skeleton) | `outlineShare(contentBudget)`, and `prependOutlineShare` on the assembled-result path | structure survives heavy pruning, but never at the prose's expense |
  * | 6 | prose           | `contentBudget − outline − selected heading`               | whatever is left, which is what the floor protected it for |
  * | 7 | omitted-sections TOC | `effectiveBudget − frontmatter − estimateTokens(footerBase) − content floor` | lowest priority; the first thing to go, and step 8 may still drop it |
  * | 8 | (backstop)      | re-measure the whole result; shrink the notice, then hard-trim the body | I1 — the ceiling is enforced here, not by the reservations above |
+ * | 9 | (floor pass)    | if the portion carries none of the document's own words, drop the notice and refill with prose | I2 — runs whether or not the result overflows, because at tiny budgets nothing overflows |
  *
  * Three invariants, and the guard that enforces each:
  *
@@ -540,19 +541,26 @@ export function pruneByRelevance(
  *    (`shrinkNoticeToRoom`) and the body hard-trimmed with a closed fence.
  *    Reserving in the order above is what makes the re-measure a backstop rather
  *    than the mechanism.
- * 2. **Content floor** — a non-empty body yields page prose **for any budget
- *    large enough to contain prose**. This is a real limit, not a hedge, and it
- *    is the model's first finding: writing the invariant down exposed that the
- *    step-8 backstop can reclaim the whole content allocation when even the
- *    shortest notice will not fit beside it. Measured on a plain headed body:
- *    budgets 1–27 return framing with no page prose at all (budget 1 returns
- *    `"\n\n--"` — a stray rule and nothing else), and the boundary is
- *    **non-monotonic** (budget 20 yields prose, budget 27 does not). The
- *    invariant is stated as a domain rather than patched around, because issue
- *    #170 is explicit that this seam needs a sixth round not at all, and a
- *    boundary nobody can assert is a bug that reads as a policy. See
- *    `#170: the content floor holds above its measured domain` for the test that
- *    pins where the domain starts.
+ * 2. **Content floor** — a non-empty body yields page prose **at every budget
+ *    ≥ 1**. This was stated as a domain until issue #182 closed it. Writing the
+ *    invariant down (#170) exposed that the step-8 backstop could reclaim the
+ *    whole content allocation: budgets 1, 2, 3, 6–11, 18, 19, 22, 23, 26, 27
+ *    returned framing with no page prose, non-monotonically, because which rung
+ *    of the `shrinkNoticeToRoom` ladder fit depended on the notice's token
+ *    count. Two decisions closed it rather than a threshold: **a `---` with
+ *    nothing after it is not a separator**, so the rule belongs to the notice
+ *    and steps down with it (it may never survive as the whole answer); and the
+ *    **floor wins outright**, so a notice that cannot coexist with one token of
+ *    prose costs zero and prose takes the room. `budgetTokens: 1` now returns
+ *    one token of the document, which is what "the caller's number is the
+ *    contract" always meant. The domain is then derived rather than measured:
+ *    the notice's cost is 0 or ≥ 1 token, frontmatter already yields when it
+ *    cannot coexist with content, so at least one token of prose survives at
+ *    every budget — and dropping framing can only lower the total, so the
+ *    ceiling is untouched by construction. "Prose" is decided by membership in
+ *    the document (`carriesPageProse`), not by a blacklist of notice wording:
+ *    a notice trimmed mid-word is not any known notice, yet it is still not the
+ *    document. See `#182: the content floor holds at EVERY budget`.
  * 3. **Attribution** — prose is never preceded by a heading it did not come
  *    from. Enforced by putting heading-less prose FIRST, and by the rule that a
  *    heading the outline refused to carry is not re-emitted for the prose that
@@ -608,6 +616,71 @@ function outlineBudget(denominator: number, share: number): number {
  *                  the full content.
  * @returns Pruned string that measures ≤ budget tokens.
  */
+/**
+ * The document's own prose, with frontmatter-adjacent whitespace and any
+ * leading heading run removed.
+ *
+ * Both prose fallbacks need this: the section-level one (when pruning kept
+ * nothing) and the step-8 one (when the notice displaced the floor). Headings
+ * come from the skeleton, so a prefix built from the raw body can return a
+ * heading twice with no prose at all (issue #169); the leading blank strip is
+ * not cosmetic, because after a frontmatter block the body starts with "\n" and
+ * a `^`-anchored regex never matched, which returned the heading fragment
+ * verbatim. One implementation so the two fallbacks cannot drift.
+ */
+function prosePrefixSource(body: string): string {
+	return body
+		.replace(/^\s+/, "")
+		.replace(/^(?:[ \t]*#{1,6}[ \t].*(?:\n|$))+/, "");
+}
+
+/**
+ * Does this portion contain any of the DOCUMENT's own text?
+ *
+ * Framing is not content: skeleton headings are generated, horizontal rules are
+ * separators, and the truncation notice is boilerplate. The test is SUBSTRING
+ * membership in the document, which is both non-enumerative and script-agnostic.
+ *
+ * Two earlier versions failed in structurally different ways, and both are the
+ * reason this formulation is here:
+ *  - filtering known framing shapes (headings, rules, notice wording) passed a
+ *    notice trimmed mid-word (`*Trunc`) as prose — a fragment is not any known
+ *    notice, so the blacklist could not name it;
+ *  - a `[a-z0-9]{4,}` word set was an implicit SCRIPT whitelist. CJK and
+ *    Cyrillic documents produced an empty word set, the detector answered
+ *    "nothing to carry", the floor pass never ran, and CJK budgets 1–45 still
+ *    returned `"\n\n--"`. A word set also fails for scripts without spaces,
+ *    where a one-character answer (`内`) is a PREFIX of the document's only
+ *    token rather than equal to it.
+ *
+ * A notice fragment cannot be a substring of the document unless the document
+ * genuinely contains that text — in which case counting it as content is
+ * correct. Query-ranked answers from a later section pass on their own text
+ * because the whole body is the haystack.
+ */
+function carriesPageProse(portion: string, body: string): boolean {
+	if (prosePrefixSource(body).trim() === "") return true; // nothing to carry
+	const footerIdx = portion.lastIndexOf("\n\n---\n");
+	const withoutFooter = footerIdx >= 0 ? portion.slice(0, footerIdx) : portion;
+	for (const line of withoutFooter.split("\n")) {
+		const t = line.trim();
+		if (t === "") continue;
+		if (/^#{1,6}\s/.test(line)) continue; // skeleton heading = framing
+		if (/^[-=*_~]{2,}$/.test(t)) continue; // rule / fence leftover
+		// A line with no letter or number in it is markdown punctuation, not text:
+		// a heading truncated to a bare `#` was passing as prose because "#" is
+		// literally a substring of the document. This is a property of the line, not
+		// an enumeration of framing shapes, so it holds for every script.
+		if (!/[\p{L}\p{N}]/u.test(t)) continue;
+		if (body.includes(t)) return true;
+		// A trimmed tail can end mid-token, so the head of the line is still the
+		// document's text even when the whole line no longer matches.
+		const head = t.slice(0, 8);
+		if (head.length > 0 && body.includes(head)) return true;
+	}
+	return false;
+}
+
 export function applyTokenBudget(
 	content: string,
 	budget: number,
@@ -703,9 +776,7 @@ export function applyTokenBudget(
 		// CodeRabbit thread src/prune-markdown.ts:666). The leading blank is not
 		// cosmetic: after a frontmatter block the body starts with "\n", so a regex
 		// anchored at ^ never matched and the heading fragment came straight back.
-		let source = body
-			.replace(/^\s+/, "")
-			.replace(/^(?:[ \t]*#{1,6}[ \t].*(?:\n|$))+/, "");
+		let source = prosePrefixSource(body);
 		let selectedHeading = "";
 		// A preamble has no heading of its own; emitting it after the skeleton would
 		// make Markdown attribute it to the first real section, inventing a claim about
@@ -903,27 +974,79 @@ export function applyTokenBudget(
 	if (estimateTokens(assemble(result)) > effectiveBudget) {
 		// Trim content portion only, keep footer.
 		const footerIdx = result.lastIndexOf("\n\n---\n");
-		const contentBody = footerIdx > 0 ? result.slice(0, footerIdx) : result;
+		// `>= 0`, not `> 0`. A footer starting at index 0 means there is NO content
+		// above it — which is exactly the starved case — and `> 0` classified that
+		// footer as page content, trimmed it to `bodyBudget` and emitted it. That is
+		// the reported `"\n\n--"` at budget 1: the notice's own separator, cut to one
+		// token (#182). `0` is a found index.
+		const hasFooter = footerIdx >= 0;
+		const contentBody = hasFooter ? result.slice(0, footerIdx) : result;
 		// The footer is information, not the contract. A budget smaller than the
 		// footer itself could not be satisfied by trimming content: the body went to
 		// zero and the notice alone still overran (measured: budgets 1–31 returned
 		// 33–34 tokens). Step the notice down until it fits and let content take what
 		// is left, so the ceiling holds at every budget rather than only above the
 		// footer's size.
-		const ft = shrinkNoticeToRoom(
-			footerIdx > 0 ? result.slice(footerIdx) : "",
+		let ft = shrinkNoticeToRoom(
+			hasFooter ? result.slice(footerIdx) : "",
 			// Not the whole budget: the notice may use whatever is left AFTER the
 			// content floor, or it reclaims the space the floor exists to protect.
 			// Measured at budget 40, a ~35-token notice "fit" the 40-token room it was
 			// offered and left the content 5 tokens — a literal "#".
 			Math.max(0, effectiveBudget - frontmatterTokens - MIN_CONTENT_TOKENS),
 		);
-		const footerTokens = estimateTokens(ft);
-		const bodyBudget = Math.max(
+		let footerTokens = estimateTokens(ft);
+		let bodyBudget = Math.max(
 			0,
 			effectiveBudget - footerTokens - frontmatterTokens,
 		);
-		result = trimToTokenBudgetWithClosedFence(contentBody, bodyBudget) + ft;
+		let bodyPart = trimToTokenBudgetWithClosedFence(contentBody, bodyBudget);
+		// D2 (#182): the floor wins outright. The notice is the lowest-priority
+		// framing in the spend order, so if it displaced the floor completely — the
+		// content part came out empty while the document is non-empty — the notice
+		// costs zero and prose takes the whole room. "The caller's number is the
+		// contract" means a 1-token answer is one token of the document, not one
+		// token of boilerplate. Dropping framing can only lower the total, so the
+		// ceiling is unaffected by construction.
+		if (footerTokens > 0 && bodyPart.trim() === "" && body.trim() !== "") {
+			ft = "";
+			footerTokens = 0;
+			bodyBudget = Math.max(0, effectiveBudget - frontmatterTokens);
+			// contentBody is "" when the footer was the whole result, so fall back to
+			// the document's own prose rather than returning nothing.
+			bodyPart = trimToTokenBudgetWithClosedFence(
+				contentBody || prosePrefixSource(body),
+				bodyBudget,
+			);
+		}
+		result = bodyPart + ft;
+		// No separate "suppress a lone `---`" guard here. One was written for D1 and
+		// then deleted: mutation testing showed the floor pass below already covers
+		// it, because a result consisting only of a rule carries none of the
+		// document's words and is therefore replaced by prose. A guard that cannot
+		// be made to red does not get to stay in the file.
+	}
+
+	// #182 D2: the floor pass, deliberately OUTSIDE the overflow backstop above.
+	// That block only runs when the assembled text EXCEEDS the budget, and at tiny
+	// budgets nothing overflows — the notice alone fit inside 2 tokens and the
+	// document contributed nothing, so an overflow-only guard could never see it.
+	// Here the notice is the lowest-priority framing in the spend order: if the
+	// portion carries none of the document's own words while the document is
+	// non-empty, the notice costs zero and prose takes the room.
+	//
+	// This is also the single enforcement point for D1 (a lone `---` is not a
+	// separator): a rule-only result carries no document words, so it is replaced
+	// here rather than by a second guard.
+	if (body.trim() !== "" && !carriesPageProse(result, body)) {
+		const room = Math.max(0, effectiveBudget - frontmatterTokens);
+		const prose = trimToTokenBudgetWithClosedFence(
+			prosePrefixSource(body),
+			room,
+		);
+		// The swap candidate is produced FROM the document by the trimmer, so it
+		// needs no detector — only that the ceiling actually left room.
+		if (prose.trim() !== "") result = prose;
 	}
 
 	return assemble(result);
