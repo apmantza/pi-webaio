@@ -493,11 +493,18 @@ export function newestRecencyForUrls(
 		}
 	}
 	const surviving: SitemapEntry[] = [];
+	// Keep the FIRST entry per normalized URL, which is the variant
+	// `selectRankedEntries` actually keeps: it dedupes by pathname BEFORE ranking,
+	// so a newer twin later in the document is discarded and must not set the score.
+	const counted = new Set<string>();
 	for (const entry of entries) {
 		try {
 			const u = new URL(entry.loc);
 			u.hash = u.search = "";
-			if (want.has(u.href)) surviving.push(entry);
+			const href = u.href;
+			if (!want.has(href) || counted.has(href)) continue;
+			counted.add(href);
+			surviving.push(entry);
 		} catch {
 			/* ignore */
 		}

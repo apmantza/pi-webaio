@@ -401,3 +401,28 @@ test("#132 cr3: the tie-break scores only pages that survive seed insertion", as
 	assert.equal(scored, Date.UTC(2020, 0, 1));
 	assert.notEqual(scored, newestRecency(entries), "score must come from surviving pages");
 });
+
+test("strategy score is the survivor's date, not a discarded duplicate twin's", async () => {
+	// Recurrence this guards: two entries normalize to the same page. selectRankedEntries
+	// dedupes by pathname BEFORE ranking, so the document-order-first variant is what the
+	// pull actually fetches; the tie-break score collected EVERY entry for that page, so a
+	// discarded newer twin set it and a strategy won on a date it would never serve.
+	const { selectRankedEntries, newestRecencyForUrls } = await import("../src/discovery.ts");
+	const entries = [
+		{ loc: "https://d.example/docs/a?old=1", lastmod: "2020-01-01" },
+		{ loc: "https://d.example/docs/a?new=1", lastmod: "2026-01-01" },
+		{ loc: "https://d.example/docs/b", lastmod: "2019-01-01" },
+	];
+	const picked = selectRankedEntries(entries, new Set(["d.example"]), "/docs/", 5);
+	// Pins the dedupe rule the score must mirror: first variant wins, twins dropped.
+	assert.deepEqual(picked.map((e) => e.loc), [
+		"https://d.example/docs/a?old=1",
+		"https://d.example/docs/b",
+	]);
+	const scored = newestRecencyForUrls(picked.map((e) => e.loc), entries);
+	assert.equal(
+		scored,
+		Date.UTC(2020, 0, 1),
+		"score must be the newest of the pages that survive, not of every entry that normalizes to them",
+	);
+});
