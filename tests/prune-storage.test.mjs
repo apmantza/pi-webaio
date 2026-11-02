@@ -391,3 +391,24 @@ test("#172: chunks are generated from budget-fitted content", () => {
 		`chunks carry ${total} tokens with budgetTokens=300 — the ceiling must apply to the chunk surface too`,
 	);
 });
+
+// Bounding the chunk SOURCE was not enough: `chunkMarkdown` re-adds up to
+// `overlapTokens` to every chunk after the split, so a small `maxTokens`
+// re-inflates the total. Measured on the fix above, before this one:
+//
+//   { maxTokens: 10, chunks: 45, chunkTokens: 436 }   // budgetTokens was 300
+//
+// Recurrence prevented: a ceiling enforced on the input to a transform that adds
+// output afterwards.
+test("#172: the chunk SURFACE stays inside budgetTokens despite overlap", () => {
+	const body = `## S\n\n${"word ".repeat(3000)}`;
+	for (const maxTokens of [10, 64, 512]) {
+		const errors = [];
+		const chunks = maybeChunkMarkdown(body, { chunks: true, budgetTokens: 300, maxTokens }, errors);
+		const total = chunks.reduce((n, c) => n + estimateTokens(c.text), 0);
+		assert.ok(
+			total <= 300,
+			`maxTokens=${maxTokens}: chunks carry ${total} tokens against budgetTokens=300`,
+		);
+	}
+});

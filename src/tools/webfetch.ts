@@ -469,6 +469,22 @@ export function maybeChunkMarkdown(
 			maxTokens: params.maxTokens,
 			overlapTokens: params.overlapTokens,
 		});
+		// Bounding the SOURCE is not sufficient: `chunkMarkdown` re-adds up to
+		// `overlapTokens` to every chunk AFTER the split, so a small `maxTokens`
+		// re-inflates the total (measured: 436 tokens against budgetTokens=300 at
+		// maxTokens=10). Cap the produced surface, keeping at least one chunk so a
+		// tiny budget still returns the head of the page rather than nothing.
+		if (params.budgetTokens && params.budgetTokens > 0 && result.length > 0) {
+			let used = 0;
+			let keep = 0;
+			for (const chunk of result) {
+				used += estimateTokens(chunk.text);
+				if (used > params.budgetTokens) break;
+				keep++;
+			}
+			if (keep === 0) keep = 1;
+			return result.slice(0, keep);
+		}
 		return result.length > 0 ? result : undefined;
 	} catch {
 		errors.push("chunking failed for this result");

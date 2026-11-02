@@ -242,7 +242,7 @@ export const lazyTools: LazyTool[] = [
 				},
 			),
 			budgetTokens: number(
-				"Hard token budget for the content returned to the agent. Applies to format: markdown (the default); html/text/json/raw return the body untrimmed by design, since truncating a raw document mid-structure yields an unusable artifact. When set, the output is guaranteed to fit within this many tokens — heading structure is preserved, lowest-value sections drop first, and a footer notes omitted sections. If the identifying header alone cannot fit, the body keeps its share and the answer states the overflow rather than returning a header with none of the page. Full content is always cached before trimming. Min 100.",
+				"Hard token budget for the content returned to the agent. Applies to format: markdown (the default); html/text/json/raw return the body untrimmed by design, since truncating a raw document mid-structure yields an unusable artifact. When set, the output is guaranteed to fit within this many tokens — heading structure is preserved, lowest-value sections drop first, and a footer notes omitted sections. If the identifying header alone cannot fit, the body keeps its share and the answer states the overflow rather than returning a header with none of the page. With `chunks: true` the chunk surface is capped to the same budget; chunk overlap is re-added after splitting, so bounding the source alone is not enough. A fully accounted allocation across every returned surface is not yet implemented - see issue #170. Full content is always cached before trimming. Min 100.",
 				{
 					minimum: 100,
 				},
