@@ -3,7 +3,9 @@
 // Does NOT hit the network — uses synthetic fake run data.
 
 import assert from "node:assert";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile, rm } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
@@ -366,8 +368,78 @@ test("formatScorecard: shows no regressions message when empty", () => {
 // `|| true`, so the scheduled job could report but never fail. It also cost time
 // during #162: the one artefact that looked like a drift gate was not one.
 
-const BENCH_SCRIPT = join(__dirname, "..", "scripts", "bench-extraction.mjs");
-const BENCH_WF = join(__dirname, "..", ".github", "workflows", "bench.yml");
+const BENCH_SCRIPT = join(__dirname, "..", "scripts", "bench-extraction.mjs");const BENCH_WF = join(__dirname, "..", ".github", "workflows", "bench.yml");
+
+test("#177: a missing baseline and a broken baseline get different guidance", async () => {
+	// The old path printed one message for both, so a caller whose baseline file
+	// existed but did not parse was told "no baseline is committed" and told to
+	// regenerate — over the one record they were comparing against. Asserted by
+	// running the script, not by grepping for a sentence: the previous version of
+	// this test matched a string, and would have passed for any wording that kept
+	// the substring while still giving the wrong advice.
+	const missing = join(tmpdir(), `no-such-baseline-${process.pid}.json`);
+	const broken = join(tmpdir(), `broken-baseline-${process.pid}.json`);
+	await writeFile(broken, "{ this is not json");
+	const run = (p) =>
+		spawnSync(
+			process.execPath,
+			["--experimental-strip-types", BENCH_SCRIPT, "--baseline", p],
+			{ encoding: "utf8", timeout: 60_000 },
+		);
+	try {
+		const a = run(missing);
+		assert.notEqual(a.status, 0, "a missing baseline must fail, not silently proceed");
+		assert.match(a.stderr, /No baseline at /, "missing must read as missing");
+		assert.match(a.stderr, /--update-baseline/, "missing must name the generator");
+
+		const b = run(broken);
+		assert.notEqual(b.status, 0, "an unparseable baseline must fail too");
+		assert.match(
+			b.stderr,
+		/could not be read/,
+			"a broken baseline must report the real problem",
+		);
+		assert.doesNotMatch(
+			b.stderr,
+		/No baseline at |None is committed/,
+			"a file that exists must never be reported as absent — the advice would send the caller to regenerate over it",
+		);
+	} finally {
+		await rm(broken, { force: true });
+	}
+});
+
+test("#177: --help says which check blocks a PR and which one is only a report", () => {
+	// Someone reading the help to find out what gates their merge could not tell
+	// the live benchmark from the offline suite.
+	const h = spawnSync(
+		process.execPath,
+		["--experimental-strip-types", BENCH_SCRIPT, "--help"],
+		{ encoding: "utf8", timeout: 60_000 },
+	).stdout;
+	assert.match(h, /markdown-shape\.test\.mjs/, "help must name the offline gate");
+	assert.match(h, /test:all/, "and say where it runs");
+	assert.match(h, /not\s+the gate/, "and say the benchmark itself is not it");
+});
+
+test("#177: the scorecard artifact survives a failing second invocation", async () => {
+	// #177 removed `|| true`, so the second invocation can now fail — and by
+	// default GitHub skips later steps, meaning the run that most needs the
+	// artifact is the one that loses it.
+	const wf = await readFile(BENCH_WF, "utf8");
+	const upload = wf.slice(wf.indexOf("Upload scorecard artifact"));
+	assert.ok(upload.length > 0, "the upload step must exist");
+	assert.match(
+		upload.slice(0, 900),
+		/if: always\(\)/,
+		"the upload must run after a failed bench step, or the scorecard is lost exactly when it matters",
+	);
+	assert.match(
+		upload.slice(0, 1200),
+		/if-no-files-found: ignore/,
+		"a failed FIRST invocation must not replace the real red with an upload error",
+	);
+});
 
 test("#177: a documented baseline path either exists or the docs name the generator", async () => {
 	const src = await readFile(BENCH_SCRIPT, "utf8");
@@ -392,17 +464,10 @@ test("#177: a documented baseline path either exists or the docs name the genera
 	);
 });
 
-test("#177: a missing baseline error names the generator", async () => {
-	const src = await readFile(BENCH_SCRIPT, "utf8");
-	const loadBlock = src.slice(
-		src.indexOf("Failed to load baseline"),
-		src.indexOf("Failed to load baseline") + 900,
-	);
-	assert.ok(
-		loadBlock.includes("--update-baseline"),
-		"the failure path must tell the caller how to create a baseline",
-	);
-});
+// The grep version of "a missing baseline error names the generator" is gone,
+// superseded by the behavioural test above: it sliced 900 characters around a
+// literal string, so it verified wording rather than advice, and it broke the
+// moment the message was legitimately re-split into missing vs broken.
 
 test("#177: the scheduled bench cannot swallow its own exit status", async () => {
 	const wf = await readFile(BENCH_WF, "utf8");

@@ -71,9 +71,19 @@ jobs:
             "${ARGS[@]}"
 
       - name: Upload scorecard artifact
+        # The scorecard is written by the FIRST invocation, before the human
+        # scorecard runs. Without `always()` a nonzero second exit (which #177
+        # made possible by removing `|| true`) fails the step and GitHub skips
+        # this upload — so the run that most needs the artifact is the one that
+        # loses it (#177 review).
+        if: always()
         # yamllint disable-line rule:line-length
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: bench-scorecard-${{ github.run_number }}
           path: bench-results.json
+          # If the first invocation itself failed there is no file; that failure
+          # is already red on the previous step and must not be replaced by a
+          # second, unrelated upload error.
+          if-no-files-found: ignore
           retention-days: 90

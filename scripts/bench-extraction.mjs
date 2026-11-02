@@ -96,6 +96,17 @@ function printHelp() {
 		`  --timeout <ms>          Per-URL timeout in ms (default: 30000)\n`,
 	);
 	process.stdout.write(`  --corpus <path>         Path to corpus JSON file\n`);
+	// #177 review: someone reading `--help` to find out what blocks their PR
+	// could not tell the two apart. The live benchmark is a report; the offline
+	// gate is a test suite, and it is the one CI actually runs.
+	process.stdout.write(
+		`\nWhat blocks a PR:\n` +
+		`  tests/markdown-shape.test.mjs   offline, in \`npm run test:all\`, fails CI on\n` +
+		`                                  HTML->markdown shape drift. This is the gate.\n` +
+		`  this benchmark                 live-network report; no baseline is committed,\n` +
+		`                                  so it compares nothing by default and is not\n` +
+		`                                  the gate.\n`,
+	);
 }
 
 // ─── Corpus validation ─────────────────────────────────────────────
@@ -534,13 +545,27 @@ async function main() {
 			// A missing baseline is the #177 trap: the flag looked available
 			// because the usage block named a path that was never committed.
 			// Name the generator instead of letting the caller hunt for it.
-			process.stderr.write(
-				`Failed to load baseline from ${args.baseline}: ${err.message}\n` +
-					`No baseline is committed to this repository. Create one with:\n` +
-					`  npm run bench -- --update-baseline\n` +
-					`It performs a live-network run, so its absolute numbers depend on the\n` +
-					`hour; only quality columns (success, markers, token swing) are compared.\n`,
-			);
+			// But only for ENOENT: a baseline that EXISTS and fails to parse is a
+			// different problem, and telling that caller to generate a fresh one
+			// sends them past the actual error (#177 review).
+			if (err.code === "ENOENT") {
+				process.stderr.write(
+					`No baseline at ${args.baseline}.\n` +
+						`None is committed to this repository. Create one with:\n` +
+						`  npm run bench -- --update-baseline\n` +
+						`It performs a live-network run, so its absolute numbers depend on the\n` +
+						`hour; only quality columns (success, markers, token swing) are compared.\n`,
+				);
+			} else {
+				// The file is there; something is wrong with it or with our access.
+				// Report that, and do not suggest regenerating over it.
+				process.stderr.write(
+					`Baseline ${args.baseline} exists but could not be read: ${err.message}\n` +
+						`This is not a missing baseline — inspect or repair the file rather than\n` +
+						`regenerating it, which would overwrite the one record you are comparing\n` +
+						`against. If it is genuinely corrupt, rebuild with --update-baseline.\n`,
+				);
+			}
 			process.exit(1);
 		}
 	}
