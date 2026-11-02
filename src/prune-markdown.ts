@@ -643,7 +643,11 @@ function prosePrefixSource(body: string): string {
 	let i = 0;
 	while (i < lines.length) {
 		const line = lines[i];
-		if (/^[ \t]*$/.test(line)) {
+		// A CRLF document reaches the budget path without LF normalisation, so a blank
+		// line between two headings is "   \r". Without the \r this test answered "not
+		// blank", the heading run stopped there, and the prose behind it was never
+		// reached (CodeRabbit on this PR).
+		if (/^[ \t\r]*$/.test(line)) {
 			i++;
 			continue;
 		}
@@ -1094,7 +1098,12 @@ export function applyTokenBudget(
 			trimToTokenBudget(
 				source.replace(/^(?:[ \t]*(?:`{3,}|~{3,})[^\n]*\n|[ \t]*\n)+/, ""),
 				room,
-			).replace(/^[ \t]*(?:`{3,}|~{3,})[^\n]*$/gm, ""),
+			// Only an ORPHAN closer comes off: a marker line that is the last thing in
+			// the candidate, left behind because its opener was removed from the source.
+			// Stripping every marker line would also delete a ``` line that is the
+			// document's own content — a page documenting fences — which is the same
+			// content-loss class this seam has produced three times already.
+			).replace(/\n+[ \t]*(?:`{3,}|~{3,})[^\n]*\s*$/, ""),
 		];
 		// Prefer a candidate that actually carries the document's words. Order alone was
 		// not enough: on a fence-led document at budget 1 the closed-fence trim yields a

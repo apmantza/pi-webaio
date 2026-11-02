@@ -1498,3 +1498,43 @@ test("#182 regression: an indented fence-like opening line is not left unclosed"
 		);
 	}
 });
+
+// CodeRabbit on this PR. Both are the content-loss class again, reached through
+// the fallback rather than through a fence parser.
+test("#182 regression: only the ORPHAN closer is dropped, not marker lines that are data", () => {
+	// The fallback removes the leading opener from the source, so the trimmed result
+	// can keep a trailing closer with nothing to close it. Removing EVERY marker line
+	// also deletes a ``` line that is the document's own content — a page documenting
+	// fences. Only a marker line that is the last thing in the candidate is an orphan.
+	const doc =
+		F3 + "\n" + "jxqv kzpw ".repeat(4) + "\n" + F3 + "\n" + "zqvk wpmx data line\n".repeat(40);
+	for (const budget of [10, 14, 20, 30]) {
+		const out = applyTokenBudget(doc, budget, "a");
+		const runs = (out.match(/`{3,}/g) || []).length;
+		assert.equal(runs % 2, 0, `budget ${budget} left an unbalanced fence: ${JSON.stringify(out)}`);
+	}
+	// A marker line can carry text: a caption, a language, a reference. Stripping every
+	// marker line deletes that line wholesale, which is document content. This is the
+	// differential that pins the orphan-only rule — with the strip widened to every
+	// marker line the answer at budget 10 is "intro\n\ntai" and the caption is gone.
+	const captioned =
+		"```\nintro\n" + "``` caption: the fence example\n" + "tail body text\n".repeat(40);
+	assert.ok(
+		applyTokenBudget(captioned, 10, "a").includes("caption"),
+		"a marker line carrying text was deleted instead of kept",
+	);
+});
+
+// A CRLF document reaches the budget path without LF normalisation, and a blank
+// line between two headings is "   \r" — not blank under /^[ \t]*$/, so the heading
+// run stopped there and the prose behind it was never reached.
+test("#182 regression: CRLF blank lines do not stop the heading run", () => {
+	const doc = "# A\r\n\r\n## B\r\n\r\n" + "leaftext more ".repeat(60);
+	for (let budget = 1; budget <= 60; budget++) {
+		const out = applyTokenBudget(doc, budget, "a");
+		assert.ok(
+			/leaftext|leaftex|leaft|leaf|lea|le|l/.test(out),
+			`budget ${budget} returned no document text: ${JSON.stringify(out.slice(0, 40))}`,
+		);
+	}
+});
