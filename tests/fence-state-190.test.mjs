@@ -24,9 +24,8 @@ import assert from "node:assert";
 import test from "node:test";
 
 const { estimateTokens } = await import("../src/token-count.ts");
-const { applyTokenBudget, findUnclosedFence, unwrapLeadingFences } = await import(
-	"../src/prune-markdown.ts"
-);
+const { applyTokenBudget, findUnclosedFence, unwrapLeadingFences, trimToTokenBudgetWithClosedFence } =
+	await import("../src/prune-markdown.ts");
 
 /** Documents that are well-balanced on input, so any openness is created by trimming. */
 const CLOSED_INPUTS = [
@@ -281,4 +280,66 @@ test("#190: a unicode-whitespace body line is content, not padding", () => {
 			`budget ${b} swallowed the NBSP-only body line: ${JSON.stringify(answer)}`,
 		);
 	}
+});
+
+// The reviewer's P1 probe, kept as a permanent pin. It is the shape where a
+// marker-looking line is CONTENT inside the outer fence ("``` caption") and becomes
+// an opener once the outer fence is unwrapped — the input class that refuted the
+// claim that unwapping alone removes every newly-created open-fence answer.
+test("#190: a captioned marker inside the unwrapped fence cannot reopen the answer", () => {
+	const src = "```\ntext\n``` caption\nimportant words\n```\n";
+	assert.equal(findUnclosedFence(src), null, "fixture must start balanced");
+	for (let b = 6; b <= 14; b++) {
+		const answer = applyTokenBudget(src, b, "a");
+		assert.equal(
+			findUnclosedFence(answer),
+			null,
+			`budget ${b} came back open: ${JSON.stringify(answer)}`,
+		);
+	}
+});
+
+// Reviewer P2: a CRLF document is split on "\n", so every closer line still carries
+// its "\r". Without admitting "\r" in the closer and blank patterns, a CRLF
+// document's closer is never recognised: the run reads as unclosed and the closer is
+// left in the body — the original defect, arriving by a different door.
+test("#190: CRLF fences close", () => {
+	const src = "```\r\nbody words here\r\n```\r\nafter prose\r\n";
+	assert.equal(findUnclosedFence(src), null, "CRLF model must see a closed document");
+	assert.equal(
+		unwrapLeadingFences(src),
+		"body words here\r\nafter prose\r\n",
+		"delimiters not removed from a CRLF document",
+	);
+	for (const b of [6, 9, 12]) {
+		const answer = applyTokenBudget(src, b, "a");
+		assert.equal(findUnclosedFence(answer), null, `budget ${b} came back open`);
+	}
+});
+
+// Blast radius of admitting "\r" to the closer pattern, measured rather than
+// assumed. The shared closer consults the same model, so at the previous head a
+// BALANCED CRLF document was read as unclosed and a spurious "```" was appended to
+// it — the tool added a line the author never wrote, to a document that needed no
+// repair. This is the defect the reviewer's CRLF finding uncovered, pinned so the
+// two sides cannot be fixed independently.
+test("#190: a balanced CRLF document is not given a closer it does not need", () => {
+	for (const src of ["```\r\nbody\r\n```\r\nafter\r\n", "# H\r\n```\r\nx\r\n```\r\n"]) {
+		assert.equal(findUnclosedFence(src), null, "fixture must start balanced");
+		const closed = trimToTokenBudgetWithClosedFence(src, 20);
+		assert.equal(closed, src, `a closer was appended to a balanced document: ${JSON.stringify(closed)}`);
+	}
+});
+
+// The blank-line half of the same CRLF story. A blank line in a CRLF document is
+// "\r", so BLANK_LINE has to admit the carriage return or the scan treats padding as
+// content and stops unwrapping one line early.
+test("#190: CRLF blank lines are padding, not content", () => {
+	const src = "```\r\n\r\n```\r\nreal prose here\r\n";
+	assert.equal(findUnclosedFence(src), null, "fixture must start balanced");
+	assert.equal(
+		unwrapLeadingFences(src),
+		"real prose here\r\n",
+		"the empty CRLF fence was not unwrapped",
+	);
 });

@@ -1097,13 +1097,12 @@ export function applyTokenBudget(
 			// parsing context for everything rendered after it.
 			// At one or two tokens a fence-led document yields only its marker: the opener
 			// alone consumes the whole room (at room 10 the trim returned "```\n" and
-			// nothing else). So ask for the text inside the fence — and the whole OPENING
-			// RUN comes off, not just the marker line. Removing only the opener left its
-			// paired closer behind, and a lone marker line is an OPENER in Markdown, so the
-			// answer ended inside a fence that never closed (#190). Run-wise removal is what
-			// retires both the leading-marker regex and the orphan-closer strip that used to
-			// sit here: the model already knows where a run ends, so neither string rule is
-			// needed, and a marker line that is the document's own content stays body.
+			// nothing else). So ask for the text inside the fence — but UNWRAP it, do not
+			// merely lift the lid: removing only the opener left its paired closer behind,
+			// and a lone marker line is an OPENER in Markdown, so the answer ended inside a
+			// fence that never closed (#190). This replaces the leading-marker regex and the
+			// orphan-closer strip that used to sit here; see `unwrapLeadingFences` for why a
+			// marker line that is the document's own content stays body.
 			trimToTokenBudget(unwrapLeadingFences(source), room),
 			// Last resort, and only reachable when NEITHER model-built candidate carries
 			// the document's words: the aggressive strip that drops every leading marker
@@ -1197,8 +1196,11 @@ function shrinkNoticeToRoom(footer: string, room: number): string {
  * fits, so callers can state a hard token contract.
  */
 /**
- * The line that OPENS a fence: up to three spaces/tabs of indentation, then three or
- * more backticks or tildes. One spelling for the whole file — the state model and the
+ * The line that OPENS a fence: any run of leading spaces/tabs, then three or more
+ * backticks or tildes. Deliberately LOOSER than CommonMark, which allows at most three
+ * spaces: this model treats a four-space-indented marker as a fence too, because the
+ * alternative is to let an indented marker open a run the model cannot see and then
+ * hand back prose inside it. Pre-existing behaviour, stated here rather than implied. One spelling for the whole file — the state model and the
  * unwrapper below must not drift into disagreeing about what a fence IS, and the two
  * ad-hoc marker regexes this replaced each disagreed with the model in its own way.
  * Non-global, so `.match`/`.test` carry no lastIndex state.
@@ -1253,7 +1255,14 @@ function bodyHoldsLiteralText(runBody: string[]): boolean {
  */
 function fenceClosePattern(marker: string): RegExp {
 	const ch = marker[0] === "~" ? "~" : "`";
-	return new RegExp(`^[ \\t]*${ch === "`" ? "`" : "~"}{${marker.length},}[ \\t]*$`);
+	// The trailing class admits \r as well as space and tab. A CRLF document is split on
+	// \n, so every closer line still carries its carriage return; without it a CRLF
+	// document's closer is never recognised, the run reads as unclosed, and the closer is
+	// left in the body — and the shared closer then appends a marker to a document that
+	// was already balanced. Same reason BLANK_LINE admits \r.
+	return new RegExp(
+		`^[ \\t]*${ch === "`" ? "`" : "~"}{${marker.length},}[ \\t\\r]*$`,
+	);
 }
 
 /**
