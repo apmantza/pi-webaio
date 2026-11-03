@@ -377,6 +377,17 @@ interface WalkResult {
 	 * tree — the fail-open direction for a coverage claim.
 	 */
 	readFailed: boolean;
+	/**
+	 * How many counted entries are symlinks.
+	 *
+	 * A symlink is a blob in git (mode 120000) — there is no directory-symlink type — so
+	 * the recursive trees API counts every one of them and the clone walk must too, or the
+	 * same repository reports two totals depending on which source answered (#197). The
+	 * count is surfaced rather than folded silently into `files` because the clone summary
+	 * has to say what its number included: an unqualified total labelled `exact` is what
+	 * made the old undercount arrive with a guarantee attached.
+	 */
+	symlinks: number;
 }
 
 /**
@@ -410,6 +421,7 @@ export async function walkRepo(
 	const paths: string[] = [];
 	let files = 0;
 	let dirs = 0;
+	let symlinks = 0;
 	// Set only when a RETAINABLE entry was actually refused. `paths.length >=
 	// maxEntries` alone is not that test: a repository with exactly `maxEntries`
 	// entries fills the budget and then trips the same comparison, so an exact count
@@ -471,7 +483,14 @@ export async function walkRepo(
 				paths.push(relDirPath);
 				dirs++;
 				await walk(join(dir, e.name), relDir);
-			} else if (e.isFile()) {
+			} else if (e.isFile() || e.isSymbolicLink()) {
+				// A symlink is admitted through the SAME door as a file, on purpose. git
+				// stores it as a blob (mode 120000) even when it points at a directory, so
+				// `git ls-tree -r -t` — the view the recursive trees API serves — lists it as
+				// a blob, and counting it anywhere else would split the census again (#197).
+				// It is also NOT recursed: `isDirectory()` is false for a symlink, which is what
+				// keeps a cycle and ELOOP out of the walk, and git lists the target's children
+				// once, under the real directory, not again under the link.
 				const relPath = rel ? `${rel}/${e.name}` : e.name;
 				if (isExcludedPath(relPath)) continue;
 				if (paths.length >= maxEntries) {
@@ -480,11 +499,41 @@ export async function walkRepo(
 				}
 				paths.push(relPath);
 				files++;
+				if (e.isSymbolicLink()) symlinks++;
 			}
 		}
 	}
 	await walk(root, "");
-	return { paths, files, dirs, hitCap: dropped, readFailed };
+	return { paths, files, dirs, symlinks, hitCap: dropped, readFailed };
+}
+
+/**
+ * The clone walk's counts line, in one named place so the wording cannot drift from the
+ * thing it describes.
+ *
+ * `symlinks` is stated because `files` silently includes them: a reader comparing this
+ * against an API census needs to know the 3 counted two links as blobs, which is the
+ * only reason the two numbers are comparable at all (#197). Repositories with no
+ * symlinks get no sentence about them — a label that always mentions a category reads
+ * as if the category were the exception.
+ *
+ * `entries` is the already-rendered "Total entries…" sentence and is folded in HERE rather
+ * than at the call site: the caller used to concatenate it with a hand-placed comma and a
+ * `replace(/^\n/, "")`, which meant the line a reader actually sees existed nowhere and
+ * nothing tested it (adversarial review P3).
+ */
+export function walkSummaryLine(walk: WalkResult, entries = ""): string {
+	// Two flat statements rather than a ternary inside a ternary: this is user-facing
+	// text and the plural is easier to read than to nest.
+	const noun = walk.symlinks > 1 ? "symlinks" : "symlink";
+	const symlinkNote =
+		walk.symlinks > 0 ? ` (incl. ${walk.symlinks} ${noun}; counted as files)` : "";
+	const tail = entries.replace(/^\n/, "");
+	// The space after the comma is deliberate: the old call site concatenated
+	// `"…Dirs: N," + entries.replace(/^\n/, "")`, which rendered `Dirs: 1,Total entries`
+	// with no separator. Nothing pinned it because the composed line existed in no function
+	// until now, and this is the line a reader actually reads.
+	return `\nFiles: ${walk.files}${symlinkNote}, Dirs: ${walk.dirs}${tail === "" ? "" : `, ${tail}`}`;
 }
 
 // ─── Cloning ─────────────────────────────────────────────────────────
@@ -643,7 +692,10 @@ async function listContents(
  * zero counter survived precisely because nothing could be run over this mapping.
  */
 export function recursiveTreePaths(tree: Array<{ path?: unknown; type?: unknown }>): string[] {
-	return entryPaths(tree, { dir: "tree", file: "blob" });
+	// No `symlink` spelling to admit here: the recursive trees API reports a symlink as
+	// `blob` with mode 120000, so it already arrives as the file kind. `commit` (a gitlink)
+	// stays excluded because its derived /blob/ URL 404s.
+	return entryPaths(tree, { dir: ["tree"], file: ["blob"] });
 }
 
 /**
@@ -764,7 +816,16 @@ const REPO_PATH_EXCLUSIONS = [
 export function contentEntryPaths(
 	entries: Array<{ path: string; type?: string }>,
 ): string[] {
-	return entryPaths(entries, { dir: "dir", file: "file" });
+	// `symlink` is admitted as a file. It used to be excluded alongside `submodule` on
+	// the reasoning that a `/blob/` link cannot render the entry — true of a gitlink, which
+	// is not cloned into the web tree and 404s at both derivable URLs, and FALSE of a
+	// symlink, measured live on the entries the API reports for git/git:
+	//   200  /blob/master/RelNotes             (file symlink)
+	//   200  /blob/master/subprojects/git-gui  (DIRECTORY symlink)
+	// Leaving it dropped made this third source disagree with the other two about the same
+	// repository, which is the #197 defect surviving the #197 fix in the one place the
+	// first version did not look.
+	return entryPaths(entries, { dir: ["dir"], file: ["file", "symlink"] });
 }
 
 /**
@@ -817,7 +878,7 @@ export type AdmittedEntry<T = unknown> = { path: string; isDir: boolean; entry: 
 
 function admitEntries<T extends { path?: unknown; type?: unknown }>(
 	entries: readonly T[],
-	kinds: { dir: string; file: string },
+	kinds: { dir: string[]; file: string[] },
 ): Array<AdmittedEntry<T>> {
 	const out: Array<AdmittedEntry<T>> = [];
 	for (const item of entries) {
@@ -826,9 +887,14 @@ function admitEntries<T extends { path?: unknown; type?: unknown }>(
 		// empty path would render as the bare repo URL, presenting the repository itself
 		// as one of its own entries).
 		if (typeof item.path !== "string" || item.path === "") continue;
-		if (item.type === kinds.file) {
+		// A LIST of accepted spellings per kind, because one endpoint can report the same
+		// kind under two words. The contents API says `file` for a regular file and
+		// `symlink` for a symlink, and both have a reachable `/blob/` URL, so both are the
+		// file kind; the trees API needs no such widening because it reports a symlink as
+		// `blob` with mode 120000 in the first place.
+		if (typeof item.type === "string" && kinds.file.includes(item.type)) {
 			out.push({ path: item.path, isDir: false, entry: item });
-		} else if (item.type === kinds.dir) {
+		} else if (typeof item.type === "string" && kinds.dir.includes(item.type)) {
 			// Neither endpoint ever returns a trailing slash of its own, so there is no
 			// "already terminated" branch here: a mutation of it is untestable, and an
 			// untestable branch is not allowed to sit inside the one writer of a convention.
@@ -848,7 +914,7 @@ function admitEntries<T extends { path?: unknown; type?: unknown }>(
  */
 function entryPaths(
 	entries: Array<{ path?: unknown; type?: unknown }>,
-	kinds: { dir: string; file: string },
+	kinds: { dir: string[]; file: string[] },
 ): string[] {
 	return admitEntries(entries, kinds).map((e) => e.path);
 }
@@ -1604,9 +1670,7 @@ async function mapGitHubRepoFull(
 		summaryParts.push(`  • ${src}: ${urls.length} URLs`);
 	}
 	if (walk) {
-		summaryParts.push(
-			`\nFiles: ${walk.files}, Dirs: ${walk.dirs},` + counts.entries.replace(/^\n/, ""),
-		);
+		summaryParts.push(walkSummaryLine(walk, counts.entries));
 	} else if (counts.entries) {
 		summaryParts.push(counts.entries);
 	}
@@ -1698,7 +1762,10 @@ async function mapGitHubTree(
 	// so a listing of 4 entries holding 2 reachable ones could render 0 after the
 	// discard — the same "the bound counts what we keep neither" mistake as the walk
 	// cap, reached through a third door.
-	const reachable = admitEntries(contents, { dir: "dir", file: "file" });
+	// Same contents vocabulary as `contentEntryPaths`, so `symlink` is admitted here too:
+	// a symlink's derived `/blob/` URL resolves (measured on git/git), while a gitlink's
+	// does not and stays out.
+	const reachable = admitEntries(contents, { dir: ["dir"], file: ["file", "symlink"] });
 	const admitted = reachable.slice(0, max);
 	const entryUrl = (e: AdmittedEntry) => {
 		// A gitlink is reachable only in its own repository, and GitHub already says
