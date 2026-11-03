@@ -97,7 +97,7 @@ function apiCensus(root) {
 	}
 	const eligible = dropExcludedPaths(entries);
 	const c = repoEntryCensus(eligible);
-	return { ...c, total: c.files + c.dirs, symlinks };
+	return { ...c, total: c.files + c.dirs, symlinks, paths: eligible };
 }
 
 // ─── the reported defect ──────────────────────────────────────────────────────
@@ -244,4 +244,43 @@ syms("a repository with no symlinks does not claim any", async (t) => {
 	const walk = await walkRepo(root);
 	assert.equal(walk.symlinks, 0);
 	assert.doesNotMatch(walkSummaryLine(walk), /symlink/, "no symlinks, no sentence about them");
+});
+
+syms("a repository whose entire content is symlinks says so", async (t) => {
+	// The shape where a bare `Files: 2` misleads most: there are no regular files at
+	// all, and git still calls both entries blobs.
+	const root = fixtureRepo(t, { links: [["a", "b"], ["b", "a"]] });
+	const walk = await walkRepo(root);
+	assert.equal(walk.files, 2);
+	assert.equal(walk.symlinks, 2);
+	const line = walkSummaryLine(walk);
+	assert.match(line, /Files: 2 \(incl\. 2 symlinks; counted as files\)/, line);
+});
+
+syms("the symlink note reads correctly for one symlink", async () => {
+	const line = walkSummaryLine({ paths: ["l"], files: 1, dirs: 0, symlinks: 1, hitCap: false, readFailed: false });
+	// "1 symlink as files" was the first draft and is not English.
+	assert.match(line, /incl\. 1 symlink; counted as files/, line);
+	assert.doesNotMatch(line, /1 symlinks/, line);
+});
+
+// ─── named residual: #200 ─────────────────────────────────────────────────────
+// The #197 sweep found a sibling divergence at a different seam and it is NOT fixed
+// here, because it needs a policy decision rather than a patch. This test pins the
+// divergence as it stands so that fixing #200 must deliberately invert an assertion
+// that says "this is currently wrong", instead of a green suite quietly agreeing.
+syms("RESIDUAL #200: a hidden directory is pruned by the walk but counted by the API", async (t) => {
+	const root = fixtureRepo(t, { dirs: [".config"], files: [".config/c", "a.ts"] });
+	const walk = await walkRepo(root);
+	const api = apiCensus(root);
+	// The walk's blanket dot-rule prunes .config/; dropExcludedPaths does not exclude it.
+	assert.ok(!walk.paths.some((p) => p.startsWith(".config")), "walk prunes it");
+	assert.ok(
+		api.paths.some((p) => p.startsWith(".config/")),
+		"API filter keeps it — the two sources disagree, and neither bound fires",
+	);
+	assert.equal(walk.hitCap, false);
+	assert.equal(walk.readFailed, false);
+	assert.notEqual(walk.paths.length, api.total, "#200: exact-labelled totals differ");
+	// Flip this line to `assert.equal(...)` when #200 lands; that flip IS the decision.
 });

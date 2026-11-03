@@ -520,9 +520,9 @@ export async function walkRepo(
 export function walkSummaryLine(walk: WalkResult): string {
 	// Two flat statements rather than a ternary inside a ternary: this is user-facing
 	// text and the plural is easier to read than to nest.
-	const plural = walk.symlinks > 1 ? "s" : "";
+	const noun = walk.symlinks > 1 ? "symlinks" : "symlink";
 	const symlinkNote =
-		walk.symlinks > 0 ? ` (incl. ${walk.symlinks} symlink${plural} as files)` : "";
+		walk.symlinks > 0 ? ` (incl. ${walk.symlinks} ${noun}; counted as files)` : "";
 	return `\nFiles: ${walk.files}${symlinkNote}, Dirs: ${walk.dirs}`;
 }
 
