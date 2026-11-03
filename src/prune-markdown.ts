@@ -1095,15 +1095,16 @@ export function applyTokenBudget(
 			// before any text appears — and remaining marker lines come off, because the
 			// plain trimmer does not close what it opens and a bare delimiter changes the
 			// parsing context for everything rendered after it.
-			trimToTokenBudget(
-				source.replace(/^(?:[ \t]*(?:`{3,}|~{3,})[^\n]*\n|[ \t]*\n)+/, ""),
-				room,
-			// Only an ORPHAN closer comes off: a marker line that is the last thing in
-			// the candidate, left behind because its opener was removed from the source.
-			// Stripping every marker line would also delete a ``` line that is the
-			// document's own content — a page documenting fences — which is the same
-			// content-loss class this seam has produced three times already.
-			).replace(/\n+[ \t]*(?:`{3,}|~{3,})[^\n]*\s*$/, ""),
+			// At one or two tokens a fence-led document yields only its marker: the opener
+			// alone consumes the whole room (at room 10 the trim returned "```\n" and
+			// nothing else). So ask for the text inside the fence — and the whole OPENING
+			// RUN comes off, not just the marker line. Removing only the opener left its
+			// paired closer behind, and a lone marker line is an OPENER in Markdown, so the
+			// answer ended inside a fence that never closed (#190). Run-wise removal is what
+			// retires both the leading-marker regex and the orphan-closer strip that used to
+			// sit here: the model already knows where a run ends, so neither string rule is
+			// needed, and a marker line that is the document's own content stays body.
+			trimToTokenBudget(unwrapLeadingFences(source), room),
 		];
 		// Prefer a candidate that actually carries the document's words. Order alone was
 		// not enough: on a fence-led document at budget 1 the closed-fence trim yields a
@@ -1117,6 +1118,13 @@ export function applyTokenBudget(
 		// only fire when NO candidate carries prose, i.e. when the document itself has no
 		// letter-or-number content, and then the delimiters are the document's own text.
 		// A guard that no input can require does not stay in the file.
+		// No fence check on the candidates. One was written — prefer a candidate that
+		// does not END inside a fence — and it could not be made red: with it deleted,
+		// `test:all` is byte-for-byte as green, because fixing how candidates are BUILT
+		// (run-wise unwrap, below) removes the open-fence answers at the source rather
+		// than refusing them at selection. A guard no input can require does not stay in
+		// the file; the same reasoning retired `allDelimiters` and the "nothing but fence
+		// delimiters" rejection above.
 		const chosen =
 			candidates.find((c) => carriesPageProse(c, body)) ??
 			candidates.find((c) => c.trim() !== "");
@@ -1166,14 +1174,90 @@ function shrinkNoticeToRoom(footer: string, room: number): string {
  * fits, so callers can state a hard token contract.
  */
 /**
+ * The line that OPENS a fence: up to three spaces/tabs of indentation, then three or
+ * more backticks or tildes. One spelling for the whole file — the state model and the
+ * unwrapper below must not drift into disagreeing about what a fence IS, and the two
+ * ad-hoc marker regexes this replaced each disagreed with the model in its own way.
+ * Non-global, so `.match`/`.test` carry no lastIndex state.
+ */
+const FENCE_OPEN = /^[ \t]*(`{3,}|~{3,})/;
+
+/**
+ * The line that closes a fence opened with `marker`: the same character, at least as
+ * long, and nothing else on the line. An info string makes a line an OPENER, which is
+ * why "``` caption: …" does not close anything.
+ *
+ * Single spelling of the closing rule for the whole file; the dynamic length is the
+ * marker's own length, never a caller-supplied pattern.
+ */
+function fenceClosePattern(marker: string): RegExp {
+	const ch = marker[0] === "~" ? "~" : "`";
+	return new RegExp(`^[ \\t]*${ch === "`" ? "`" : "~"}{${marker.length},}[ \\t]*$`);
+}
+
+/**
+ * Unwrap the fences a document opens with, so the text INSIDE them can reach a tiny
+ * budget. The body stays; the marker lines go.
+ *
+ * Three failure modes this avoids, each of which is a test on this seam:
+ *   - removing only the OPENER leaves the paired closer behind, and a lone marker line
+ *     is an OPENING marker in Markdown, so the answer ends inside a fence that never
+ *     closes (#190);
+ *   - removing the whole RUN deletes the document whenever the run's body IS the
+ *     document — a page of code trimmed to 1 token must still yield code text (#182);
+ *   - removing EVERY marker line destroys a marker line that is the document's own
+ *     content, a caption or a documented fence (#182).
+ * An UNCLOSED leading run loses only its opener: its "closer" may be an opener too
+ * ("``` caption"), and consuming to end of input would eat the whole document. The
+ * openness that remains is the source's own, not openness this function created, and
+ * the candidate preference below is what decides whether such an answer may be
+ * installed.
+ */
+export function unwrapLeadingFences(text: string): string {
+	const lines = text.split("\n");
+	const out: string[] = [];
+	let i = 0;
+	while (i < lines.length) {
+		const m = lines[i].match(FENCE_OPEN);
+		if (!m) break; // not a fence: the rest of the document is plain text
+		const close = fenceClosePattern(m[1]);
+		let j = i + 1;
+		while (j < lines.length && !close.test(lines[j])) j++;
+		// One path covers closed and unclosed: when no closer exists, `j` is already
+		// end-of-input, so the body is the rest of the document and nothing follows it.
+		// An unclosed run therefore loses only its OPENER — its apparent closer may itself
+		// be an opener ("``` caption"), and consuming to end of input would eat the page.
+		const runBody = lines.slice(i + 1, j);
+		// "Content reached" means a line that is neither blank nor itself a marker. A body
+		// of only markers and blanks is another fence waiting behind this one — leaving it
+		// in place lets its opener eat the whole room again, which is the case the old
+		// "strip a stack of leading markers" regex handled.
+		if (runBody.some((l) => l.trim() !== "" && !FENCE_OPEN.test(l))) {
+			// The body is the document, and so is everything after the run. STOP rather
+			// than loop: a marker inside kept body is content ("``` caption" inside a fence
+			// is just a line of code), and re-scanning it as a delimiter is the content-loss
+			// this seam produced three times.
+			return out.concat(runBody, lines.slice(j + 1)).join("\n");
+		}
+		// Nothing but blank lines in the run: drop opener and closer, keep scanning.
+		i = j + 1;
+	}
+	return out.concat(lines.slice(i)).join("\n");
+}
+
+/**
  * Find a fence run that is opened but never closed, returning its marker and the
  * character offset of its opening line.
  *
  * A fence run is three or more backticks or tildes at the start of a line; the
  * opening run may carry an info string (```js), a closing run may not, and it must
  * use the same character and be at least as long as the run it closes.
+ *
+ * Exported because it is the project's single definition of "this document ends
+ * inside a fence" (#190). Candidate selection asks it the same question the closer
+ * asks; a second spelling of the property in a test would be a second model.
  */
-function findUnclosedFence(
+export function findUnclosedFence(
 	text: string,
 ): { marker: string; startIndex: number } | null {
 	const lines = text.split("\n");
@@ -1181,13 +1265,9 @@ function findUnclosedFence(
 	let cursor = 0;
 	for (const line of lines) {
 		if (open) {
-			const ch = open.marker[0];
-			const close = new RegExp(
-				`^[ \\t]*${ch === "`" ? "`" : "~"}{${open.marker.length},}[ \\t]*$`,
-			);
-			if (close.test(line)) open = null;
+			if (fenceClosePattern(open.marker).test(line)) open = null;
 		} else {
-			const m = line.match(/^[ \t]*(`{3,}|~{3,})/);
+			const m = line.match(FENCE_OPEN);
 			if (m) open = { marker: m[1], startIndex: cursor };
 		}
 		cursor += line.length + 1;
