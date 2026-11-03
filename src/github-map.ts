@@ -1052,9 +1052,55 @@ export async function mapGitHubRepo(
  *
  * Exported for unit testing.
  */
+/**
+ * What a repo map actually collected, as one value decided where the collection
+ * happened.
+ *
+ * This replaced three independent booleans (`treeEntries`,
+ * `treeEntriesAreLowerBound`, `retainedBounded`). Three rounds in a row produced a
+ * wrong label from that shape — a retained cap read as a census floor (#191
+ * verify), then an exact census read as a floor, then a root-only listing read as
+ * "the full tree" — because the caller was asked to assert exactness directly and
+ * could assert it about the wrong thing. `exact` is now DERIVED here, so a caller
+ * cannot claim exactness for a partial scope: the question stops being "is this
+ * number a floor?" and becomes "what did you collect?", which is the question the
+ * label actually answers.
+ */
+export type EntryCoverage = {
+	/** Entries collected after exclusion, BEFORE the retention cap. */
+	total: number;
+	/**
+	 * `recursive` — the whole tree was enumerated (Git Trees API, or a clone walk).
+	 * `root` — only the top-level contents listing could be obtained; child
+	 * directories were never listed, so the count is exact about the root and wrong
+	 * about the repository.
+	 */
+	scope: "recursive" | "root";
+	/** Why the count is a floor, when it is one. */
+	bound?: "api-truncated" | "walk-cap";
+	/** Our own `MAX_TREE_PATHS` cap stopped the RENDERED list. Says nothing about the census. */
+	retainedBounded?: boolean;
+};
+
+/**
+ * Coverage as reported by a cloned-tree walk.
+ *
+ * A walk that finished below its own `maxEntries` enumerated the whole tree, so
+ * its count is EXACT even when the API tree that led us here was truncated —
+ * claiming "at least" for it is as wrong as the opposite (#173 round 2). Only the
+ * walk's own cap makes it a floor.
+ */
+export function walkCoverage(walk: WalkResult | null): EntryCoverage {
+	if (!walk) return { total: 0, scope: "recursive", bound: "walk-cap" };
+	return {
+		total: walk.files + walk.dirs,
+		scope: "recursive",
+		bound: walk.hitCap ? "walk-cap" : undefined,
+	};
+}
+
 export function formatRepoMapCounts(opts: {
 	totalUrls: number;
-	treeEntries: number;
 	max: number;
 	/**
 	 * How many tree entries were turned into URLs. NOT "file urls": since #184 the
@@ -1062,37 +1108,38 @@ export function formatRepoMapCounts(opts: {
 	 * links and a label calling it files misstates its denominator (#168's class).
 	 */
 	entriesIncluded: number;
-	/**
-	 * True when `treeEntries` came from a bounded walk (the API tree was
-	 * truncated and the clone fallback stopped at `maxEntries`). The denominator
-	 * is then a floor, and calling it "uncapped" contradicts the
-	 * "(tree truncated by API)" header printed alongside it.
-	 */
-	treeEntriesAreLowerBound?: boolean;
-	/**
-	 * The RETAINED list stopped at `MAX_TREE_PATHS`. Orthogonal to
-	 * `treeEntriesAreLowerBound`, which is about the CENSUS: a complete API
-	 * response with 22 000 eligible entries has an exact total even when only
-	 * 20 000 are retained, and reporting that exact number as "at least 20000"
-	 * conceals a denominator the dispatcher is holding (verify round on PR #191).
-	 */
-	retainedBounded?: boolean;
+	coverage: EntryCoverage;
 }): { discovered: string; entries: string } {
-	const capped = opts.entriesIncluded >= opts.max && opts.treeEntries > opts.max;
+	const { coverage } = opts;
+	const capped = opts.entriesIncluded >= opts.max && coverage.total > opts.max;
 	const discovered = capped
-		? `\nDiscovered ${opts.totalUrls} URLs (entry URLs capped at \`max\`=${opts.max} of ${opts.treeEntries} tree entries)`
+		? `\nDiscovered ${opts.totalUrls} URLs (entry URLs capped at \`max\`=${opts.max} of ${coverage.total} tree entries)`
 		: `\nDiscovered ${opts.totalUrls} URLs`;
-	const entries =
-		opts.treeEntries > 0
-			? opts.treeEntriesAreLowerBound
-				? `\nTotal entries: at least ${opts.treeEntries} (collection stopped at this limit — the repository may hold more; ${opts.entriesIncluded} included as URLs)`
-				: `\nTotal entries: ${opts.treeEntries} in the full tree (uncapped; ${opts.entriesIncluded} included as URLs)${
-						opts.retainedBounded
-							? `; the rendered tree keeps the first ${MAX_TREE_PATHS}`
-							: ""
-					}`
-			: "";
-	return { discovered, entries };
+	if (coverage.total <= 0) return { discovered, entries: "" };
+	const urls = `${opts.entriesIncluded} included as URLs`;
+	if (coverage.scope === "root") {
+		return {
+			discovered,
+			entries:
+				`\nTotal entries: ${coverage.total} collected from the repository ROOT only ` +
+				`(the recursive tree was unavailable — subdirectories were not listed; ${urls})`,
+		};
+	}
+	if (coverage.bound) {
+		const why =
+			coverage.bound === "api-truncated"
+				? "the API truncated the tree — the repository holds more"
+				: "the cloned-tree walk stopped at its limit — the repository may hold more";
+		return { discovered, entries: `\nTotal entries: at least ${coverage.total} (${why}; ${urls})` };
+	}
+	return {
+		discovered,
+		entries:
+			`\nTotal entries: ${coverage.total} in the full tree (uncapped; ${urls})` +
+			(coverage.retainedBounded
+				? `; the rendered tree keeps the first ${MAX_TREE_PATHS}`
+				: ""),
+	};
 }
 
 /**
@@ -1110,23 +1157,23 @@ export function formatRepoMapCounts(opts: {
 export function renderRepoTreeMarkdown(
 	paths: string[],
 	max: number,
-	truncatedByApi: boolean,
-	/**
-	 * The map stopped at OUR OWN retention cap rather than at the API's. Distinct
-	 * from `truncatedByApi`: with directories now sharing the cap's slots, a repo
-	 * whose API tree arrived complete can still be cut here, and labelling that
-	 * "(uncapped)" would be false (review of PR #191).
-	 */
-	boundedByLocalCap = false,
+	coverage: EntryCoverage,
 ): string {
 	const budget = Math.max(1, Math.min(paths.length, max));
 	const shownPaths = paths.length > budget ? paths.slice(0, budget) : paths;
 	const rendered = renderTree(buildTree(shownPaths));
-	const bound = truncatedByApi
-		? ", truncated by API"
-		: boundedByLocalCap
-			? `, bounded by the ${MAX_TREE_PATHS}-entry retention cap`
-			: "";
+	// The heading and the summary line must describe the SAME collection, so both
+	// read it off one coverage value instead of each being handed its own boolean —
+	// three rounds produced a label where one of them was wrong about which
+	// quantity it described.
+	const bound =
+		coverage.bound === "api-truncated"
+			? ", truncated by API"
+			: coverage.scope === "root"
+				? ", repository root only"
+				: coverage.retainedBounded
+					? `, bounded by the ${MAX_TREE_PATHS}-entry retention cap`
+					: "";
 	const label = `## File Tree (${paths.length} entries${bound})`;
 	const note =
 		shownPaths.length < paths.length
@@ -1172,6 +1219,10 @@ async function mapGitHubRepoFull(
 	// repository once directories started consuming cap slots.
 	let census: { files: number; dirs: number } | null = null;
 	let localCapped = false;
+	// Decided in whichever branch actually collected the entries, not reconstructed
+	// afterwards: the three sources differ in what they enumerate, and the last one
+	// enumerates only the repository root.
+	let coverage: EntryCoverage = { total: 0, scope: "recursive" };
 	if (treeResult && !treeResult.truncated) {
 		paths = treeResult.paths;
 		// Re-apply our own exclusion filter on top of the API result
@@ -1182,6 +1233,11 @@ async function mapGitHubRepoFull(
 		const bounded = capRepoPaths(eligible);
 		paths = bounded.kept;
 		localCapped = bounded.capped;
+		coverage = {
+			total: census.files + census.dirs,
+			scope: "recursive",
+			retainedBounded: localCapped,
+		};
 	} else if (treeResult?.truncated) {
 		truncated = true;
 		// Tree too large — fall back to cloning and walking
@@ -1192,6 +1248,10 @@ async function mapGitHubRepoFull(
 			source = "github-api+clone";
 			walk = await walkRepo(clone.path, { maxEntries: maxFiles });
 			paths = walk?.paths ?? [];
+			coverage = walkCoverage(walk);
+		} else {
+			// Nothing was collected: the API truncated and the clone failed.
+			coverage = { total: 0, scope: "recursive", bound: "api-truncated" };
 		}
 	} else {
 		// API tree failed entirely (404, network) — try clone as last resort
@@ -1202,6 +1262,7 @@ async function mapGitHubRepoFull(
 			source = "github-api+clone";
 			walk = await walkRepo(clone.path, { maxEntries: maxFiles });
 			paths = walk?.paths ?? [];
+			coverage = walkCoverage(walk);
 		} else {
 			// Last resort: top-level contents listing. Unlike the recursive tree
 			// API (`type === "blob"`) and the clone walk (`e.isFile()`), this
@@ -1216,6 +1277,11 @@ async function mapGitHubRepoFull(
 			if (contents && contents.length > 0) {
 				paths = contentEntryPaths(contents);
 			}
+			// This endpoint lists ONE directory. The count is exact about the root
+			// and wrong about the repository, so it must never be phrased as a full
+			// tree — the label that used to be produced here claimed "uncapped" for
+			// a repository whose subdirectories were never requested.
+			coverage = { total: paths.length, scope: "root" };
 		}
 	}
 
@@ -1223,7 +1289,7 @@ async function mapGitHubRepoFull(
 	let architecture: string | undefined;
 
 	if (paths.length > 0) {
-		treeMarkdown = renderRepoTreeMarkdown(paths, max, truncated, localCapped);
+		treeMarkdown = renderRepoTreeMarkdown(paths, max, coverage);
 		architecture = detectArchitectureSignals(paths);
 
 		// Generate a blob/tree URL per entry (cap at max)
@@ -1266,27 +1332,11 @@ async function mapGitHubRepoFull(
 	summaryParts.push(
 		`🗺️  Repo map for ${owner}/${repo}${clonedOk ? " (cloned)" : ""}${truncated ? " (tree truncated by API)" : ""}`,
 	);
-	// Which number the summary reports, and whether it is a floor. There are three
-	// sources and three different reasons a count can be incomplete; the label has
-	// to name the one that actually applied, and must not downgrade a number it
-	// knows exactly into a bound that belongs to a different quantity (reviews
-	// #173 round 2 and PR #191 verify round).
-	//   - complete API tree -> the pre-cap census is EXACT; our retention cap may
-	//     still bound the rendered tree, which is `retainedBounded`, not a floor.
-	//   - clone walk -> its own counters, a floor only if ITS cap tripped.
-	//   - truncated API tree -> the retained list is all we got, so it is a floor.
-	const summaryCensus = census
-		? { total: census.files + census.dirs, lowerBound: false }
-		: walk
-			? { total: walk.files + walk.dirs, lowerBound: walk.hitCap }
-			: { total: paths.length, lowerBound: truncated };
 	const counts = formatRepoMapCounts({
 		totalUrls,
-		treeEntries: summaryCensus.total,
 		max,
 		entriesIncluded: Math.min(paths.length, max),
-		treeEntriesAreLowerBound: summaryCensus.lowerBound,
-		retainedBounded: localCapped,
+		coverage,
 	});
 	summaryParts.push(`${counts.discovered} via ${Object.keys(sources).length} sources:`);
 	for (const [src, urls] of Object.entries(sources)) {

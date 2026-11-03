@@ -25,6 +25,8 @@ import {
 	dropExcludedPaths,
 	capRepoPaths,
 	formatRepoMapCounts,
+	renderRepoTreeMarkdown,
+	walkCoverage,
 	repoEntryCensus,
 	recursiveTreePaths,
 	walkRepo,
@@ -153,12 +155,9 @@ test("#184 review: the clone walk emits directories in the same representation",
 // that applies to a different quantity.
 test("#191 verify: a bounded retained list does not turn an exact census into a lower bound", () => {
 	const out = formatRepoMapCounts({
-		totalUrls: 100,
+				coverage: { total: 22000, scope: "recursive", retainedBounded: true },totalUrls: 100,
 		entriesIncluded: 100,
 		max: 100,
-		treeEntries: 22000,
-		treeEntriesAreLowerBound: false,
-		retainedBounded: true,
 	});
 	// The census is exact: say so.
 	assert.doesNotMatch(out.entries, /at least/, `exact census reported as a lower bound: ${out.entries}`);
@@ -171,13 +170,110 @@ test("#191 verify: a bounded retained list does not turn an exact census into a 
 // its lower-bound wording even though nothing else is bounded.
 test("#191 verify: an incomplete collection is still a lower bound", () => {
 	const out = formatRepoMapCounts({
-		totalUrls: 100,
+				coverage: { total: 20000, scope: "recursive", bound: "walk-cap" },totalUrls: 100,
 		entriesIncluded: 100,
 		max: 100,
-		treeEntries: 20000,
-		treeEntriesAreLowerBound: true,
-		retainedBounded: false,
 	});
 	assert.match(out.entries, /at least 20000/);
 	assert.doesNotMatch(out.entries, /uncapped/);
+});
+
+// Third distinct wrong claim on this seam, and the reason the two booleans were
+// replaced by one coverage value. The last-resort source is the TOP-LEVEL
+// contents listing — not the recursive tree — yet with `truncated` false and no
+// walk it fell into the exact branch and printed "in the full tree (uncapped)"
+// for a repository whose subdirectories were never listed at all. A count that is
+// exact ABOUT WHAT WAS COLLECTED and wrong ABOUT WHAT EXISTS is not an exact
+// count; `exact` was not the question the caller should have been asked.
+//
+// Probe (recursive tree stubbed unavailable, root listing of 3 returned):
+//   SOURCE : github-api
+//   SUMMARY: Total entries: 3 in the full tree (uncapped; 3 included as URLs)
+//
+// Recurrence prevented: a partial collection described with the vocabulary of a
+// complete one.
+test("#184: a root-only collection is never called the full tree", () => {
+	const out = formatRepoMapCounts({
+				coverage: { total: 0, scope: "recursive" },totalUrls: 3,
+		entriesIncluded: 3,
+		max: 100,
+		coverage: { total: 3, scope: "root" },
+	});
+	assert.doesNotMatch(out.entries, /full tree|uncapped/, `root listing claimed as a full tree: ${out.entries}`);
+	assert.match(out.entries, /root/i, `the root-only scope is not disclosed: ${out.entries}`);
+	assert.match(out.entries, /3/);
+});
+
+// `exact` is DERIVED from scope+bound, so a caller cannot assert both at once.
+// The old signature let a caller pass `lowerBound: false` for a partial scope —
+// which is precisely how this defect was produced.
+test("#184: coverage derives exactness instead of accepting it as an argument", () => {
+	const recursive = formatRepoMapCounts({
+				coverage: { total: 0, scope: "recursive" },totalUrls: 5,
+		entriesIncluded: 5,
+		max: 100,
+		coverage: { total: 5, scope: "recursive" },
+	});
+	const apiTruncated = formatRepoMapCounts({
+				coverage: { total: 0, scope: "recursive" },totalUrls: 5,
+		entriesIncluded: 5,
+		max: 100,
+		coverage: { total: 5, scope: "recursive", bound: "api-truncated" },
+	});
+	const walkCapped = formatRepoMapCounts({
+				coverage: { total: 0, scope: "recursive" },totalUrls: 5,
+		entriesIncluded: 5,
+		max: 100,
+		coverage: { total: 5, scope: "recursive", bound: "walk-cap" },
+	});
+	assert.match(recursive.entries, /full tree/);
+	assert.doesNotMatch(recursive.entries, /at least/);
+	// Both bounds are floors, and each names the reason that actually applied.
+	assert.match(apiTruncated.entries, /at least 5/);
+	assert.match(apiTruncated.entries, /truncat/i);
+	assert.match(walkCapped.entries, /at least 5/);
+	assert.match(walkCapped.entries, /walk/i);
+	assert.doesNotMatch(walkCapped.entries, /truncat/i, "the walk bound must not borrow the API's reason");
+});
+
+// Coverage restoration, proven by mutation rather than by a pre-fix red run: the
+// mechanical move from three booleans to one coverage value silently dropped the
+// only witness of two properties. Setting `bound: "walk-cap"` unconditionally and
+// deleting the heading's root-only label were BOTH green until these existed.
+//
+// The #173 round-2 property: a clone walk that finished below its own `maxEntries`
+// enumerated the whole tree, so its count is exact even when the API tree that led
+// us to the walk was truncated. Asserting the composition (walkCoverage -> the
+// label) rather than walkCoverage's fields, so the test pins what a reader sees.
+test("#173: a completed walk is exact; only the walk's own cap makes it a floor", () => {
+	const completed = { paths: [], files: 10, dirs: 4, hitCap: false };
+	const capped = { paths: [], files: 5, dirs: 2, hitCap: true };
+	const exactOut = formatRepoMapCounts({
+		totalUrls: 14,
+		entriesIncluded: 14,
+		max: 100,
+		coverage: walkCoverage(completed),
+	});
+	assert.match(exactOut.entries, /full tree/, `completed walk not exact: ${exactOut.entries}`);
+	assert.doesNotMatch(exactOut.entries, /at least/);
+	const floorOut = formatRepoMapCounts({
+		totalUrls: 7,
+		entriesIncluded: 7,
+		max: 100,
+		coverage: walkCoverage(capped),
+	});
+	assert.match(floorOut.entries, /at least 7/);
+});
+
+// The heading and the summary must describe the same collection; a summary that
+// says "root only" under a heading that says "File Tree (3 entries)" is the same
+// contradiction #173 was about.
+test("#184: the tree heading carries the root-only scope too", () => {
+	const md = renderRepoTreeMarkdown(["a.md", "src/"], 100, { total: 2, scope: "root" });
+	assert.match(md, /repository root only/, `heading hides the scope: ${md.split("\n")[0]}`);
+	const recursive = renderRepoTreeMarkdown(["a.md", "src/"], 100, {
+		total: 2,
+		scope: "recursive",
+	});
+	assert.doesNotMatch(recursive, /root only/, "a recursive map claims root-only scope");
 });

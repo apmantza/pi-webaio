@@ -573,7 +573,7 @@ test("dropExcludedPaths keeps README and source files", () => {
 test("renderRepoTreeMarkdown bounds the rendered tree to max entries", () => {
 	const paths = [];
 	for (let i = 0; i < 2000; i++) paths.push(`src/file${i}.ts`);
-	const md = renderRepoTreeMarkdown(paths, 12, false);
+	const md = renderRepoTreeMarkdown(paths, 12, { total: paths.length, scope: "recursive" });
 	const renderedLines = md
 		.split("\n")
 		.slice(md.indexOf("```") + 1)
@@ -588,7 +588,7 @@ test("renderRepoTreeMarkdown bounds the rendered tree to max entries", () => {
 
 test("renderRepoTreeMarkdown renders the whole tree when it fits in max", () => {
 	const paths = ["src/a.ts", "src/b.ts", "README.md"];
-	const md = renderRepoTreeMarkdown(paths, 100, false);
+	const md = renderRepoTreeMarkdown(paths, 100, { total: paths.length, scope: "recursive" });
 	assert.ok(md.includes("## File Tree (3 entries)"));
 	assert.ok(md.includes("a.ts"));
 	assert.ok(md.includes("b.ts"));
@@ -599,7 +599,7 @@ test("renderRepoTreeMarkdown renders the whole tree when it fits in max", () => 
 test("renderRepoTreeMarkdown keeps the API-truncated label and can both truncate", () => {
 	const paths = [];
 	for (let i = 0; i < 50; i++) paths.push(`pkg/f${i}.ts`);
-	const md = renderRepoTreeMarkdown(paths, 5, true);
+	const md = renderRepoTreeMarkdown(paths, 5, { total: paths.length, scope: "recursive", bound: "api-truncated" });
 	assert.ok(md.includes("truncated by API"));
 	assert.match(md, /first 5 of 50 entries/);
 });

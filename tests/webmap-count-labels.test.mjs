@@ -25,8 +25,7 @@ import { formatRepoMapCounts } from "../src/github-map.ts";
 
 test("#168: a max-capped URL count says it is capped and names the cap", () => {
 	const { discovered } = formatRepoMapCounts({
-		totalUrls: 108,
-		treeEntries: 269,
+				coverage: { total: 269, scope: "recursive" },totalUrls: 108,
 		max: 100,
 		entriesIncluded: 100,
 	});
@@ -40,8 +39,7 @@ test("#168: a max-capped URL count says it is capped and names the cap", () => {
 
 test("#168: the tree count names the full tree as its denominator", () => {
 	const { entries } = formatRepoMapCounts({
-		totalUrls: 108,
-		treeEntries: 269,
+				coverage: { total: 269, scope: "recursive" },totalUrls: 108,
 		max: 100,
 		entriesIncluded: 100,
 	});
@@ -55,8 +53,7 @@ test("#168: the tree count names the full tree as its denominator", () => {
 
 test("#168: the two lines cannot be mistaken for the same number", () => {
 	const out = formatRepoMapCounts({
-		totalUrls: 108,
-		treeEntries: 269,
+				coverage: { total: 269, scope: "recursive" },totalUrls: 108,
 		max: 100,
 		entriesIncluded: 100,
 	});
@@ -68,8 +65,7 @@ test("#168: the two lines cannot be mistaken for the same number", () => {
 
 test("#168: nothing is claimed as capped when the cap never bound", () => {
 	const out = formatRepoMapCounts({
-		totalUrls: 12,
-		treeEntries: 10,
+				coverage: { total: 10, scope: "recursive" },totalUrls: 12,
 		max: 100,
 		entriesIncluded: 10,
 	});
@@ -83,8 +79,7 @@ test("#168: nothing is claimed as capped when the cap never bound", () => {
 
 test("#168: a repo with no tree still reports the URL count", () => {
 	const out = formatRepoMapCounts({
-		totalUrls: 5,
-		treeEntries: 0,
+				coverage: { total: 0, scope: "recursive" },totalUrls: 5,
 		max: 100,
 		entriesIncluded: 0,
 	});
@@ -155,11 +150,9 @@ test("#168: the repo-map summary builds its counts through formatRepoMapCounts",
 
 test("#173: a bounded walk is labelled as a lower bound, never as uncapped", () => {
 	const out = formatRepoMapCounts({
-		totalUrls: 300,
-		treeEntries: 2000,
+				coverage: { total: 2000, scope: "recursive", bound: "walk-cap" },totalUrls: 300,
 		max: 100,
 		entriesIncluded: 100,
-		treeEntriesAreLowerBound: true,
 	});
 	assert.doesNotMatch(
 		out.entries,
@@ -172,11 +165,9 @@ test("#173: a bounded walk is labelled as a lower bound, never as uncapped", () 
 
 test("#173: an exact full tree keeps the uncapped wording", () => {
 	const out = formatRepoMapCounts({
-		totalUrls: 269,
-		treeEntries: 269,
+				coverage: { total: 269, scope: "recursive" },totalUrls: 269,
 		max: 100,
 		entriesIncluded: 100,
-		treeEntriesAreLowerBound: false,
 	});
 	assert.match(out.entries, /uncapped/i, "a genuinely complete walk should still say so");
 	assert.doesNotMatch(out.entries, /at least/i);
@@ -209,8 +200,7 @@ test("#173: walkRepo reports when it stopped at maxEntries", async () => {
 // denominator-mismatch class #168 was about.
 test("#184: the included-URL count no longer claims to be files only", () => {
 	const out = formatRepoMapCounts({
-		totalUrls: 120,
-		treeEntries: 301,
+				coverage: { total: 301, scope: "recursive" },totalUrls: 120,
 		max: 100,
 		entriesIncluded: 100,
 	});
