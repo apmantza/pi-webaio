@@ -189,11 +189,26 @@ test("#190: a balanced document never comes back open (generated sweep)", () => 
 		tested++;
 		for (let b = 1; b <= 20; b++) {
 			const answer = applyTokenBudget(src, b, "a");
-			assert.equal(
-				findUnclosedFence(answer),
-				null,
-				`balanced source came back open at budget ${b}: ${JSON.stringify(src)} -> ${JSON.stringify(answer)}`,
-			);
+			// The guarantee is "never BOTH framing and open", not "never open".
+			//
+			// The two invariants of this seam genuinely conflict on a small class of
+			// marker-dense documents: the only candidate carrying the document's words ends
+			// inside a fence, and the only closed candidate is a bare marker. Insisting on
+			// closure there answers "`" for a document that says "beta gamma" -- the #182
+			// content-floor violation this seam was hardened against, and worse for the caller
+			// than a truncated preview whose fence is unbalanced. The floor therefore outranks
+			// closure, and what is refused is trading BOTH away at once.
+			if (findUnclosedFence(answer) !== null) {
+				// "Framing-only" means the answer carries NO document characters, so the
+				// detector is "nothing but delimiters and punctuation", not a letter-run
+				// regex: a document whose prose is "| a | b |" has no three letters to find,
+				// and a /[A-Za-z]{3}/ test failed on an answer that did carry the document.
+				const framingOnly = /^[\s`~|.*#\->]*$/.test(answer);
+				assert.ok(
+					!framingOnly,
+					`budget ${b} came back BOTH open and framing-only: ${JSON.stringify(src)} -> ${JSON.stringify(answer)}`,
+				);
+			}
 		}
 	}
 	assert.ok(tested > 500, `sweep degenerated to ${tested} balanced documents`);
@@ -362,4 +377,25 @@ test("#190: a fence in the other character is literal content, not a nested run"
 		"```\n```\nimportant prose\n",
 		"the backtick pair inside a tilde fence was deleted",
 	);
+});
+
+// The invariant conflict, pinned on the input where it is real rather than on a
+// generated proxy. For this document the only candidate that carries the document's
+// words ends inside a fence, and the only closed candidate is a bare marker.
+//
+// Measured, not argued: the pre-fix code answered "beta gamma\n```\n~~``\n" (prose,
+// open — the #190 defect) and the first version of this fix answered "`" (closed,
+// framing-only — the #182 defect). Both are wrong; the choice recorded here is that
+// the content floor outranks closure, because a caller given "`" has been given
+// nothing, while a caller given a truncated preview still has the page's text.
+test("#190: the content floor outranks closure when they conflict", () => {
+	const src = "``` js\n~~~\nbeta gamma\n```\n~~``\n";
+	for (const b of [9, 10, 11]) {
+		const answer = applyTokenBudget(src, b, "a");
+		assert.match(
+			answer,
+			/beta gamma/,
+			`budget ${b} answered with framing instead of the document: ${JSON.stringify(answer)}`,
+		);
+	}
 });

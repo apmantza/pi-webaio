@@ -1097,6 +1097,16 @@ export function applyTokenBudget(
 			// orphan-closer strip that used to sit here; see `unwrapLeadingFences` for why a
 			// marker line that is the document's own content stays body.
 			trimToTokenBudget(unwrapLeadingFences(source), room),
+			// The same unwrapped text, but trimmed with the SHARED closed-fence helper so
+			// the candidate can be prose AND closed instead of one or the other. Without it
+			// the two properties fight: the plain-unwrap candidate is often open (the trim
+			// cuts after an opener that survives), the candidate preference then refuses it,
+			// and the answer degrades to framing — a regression this PR introduced and a
+			// generated sweep caught, where master answered "beta gamma" and this branch
+			// answered "`" for the same document at the same budget. The closed-fence trim
+			// costs a marker line of room, which is why it is offered alongside the plain
+			// one rather than replacing it: replacing it lost the `#182` caption case.
+			trimToTokenBudgetWithClosedFence(unwrapLeadingFences(source), room),
 			// Last resort, and only reachable when NEITHER model-built candidate carries
 			// the document's words: the aggressive strip that drops every leading marker
 			// and blank line. It is deliberately kept separate from `unwrapLeadingFences`
@@ -1139,8 +1149,16 @@ export function applyTokenBudget(
 		// tests/fence-state-190.test.mjs.
 		const sourceBalanced = findUnclosedFence(source) === null;
 		const closesCleanly = (c: string) => !sourceBalanced || findUnclosedFence(c) === null;
+		// Ranking: closed-and-prose > prose > closed > anything. Prose sits ABOVE closure
+		// deliberately, and both orders were measured. With closure first, a document whose only
+		// prose-bearing candidate ends inside a fence is answered with a bare marker -- the
+		// framing-only defect #182 exists to prevent, and a worse caller outcome than a
+		// truncated preview with an unbalanced fence. The sweep in
+		// tests/fence-state-190.test.mjs states the property that survives the choice:
+		// never both framing and open.
 		const chosen =
 			candidates.find((c) => closesCleanly(c) && carriesPageProse(c, body)) ??
+			candidates.find((c) => carriesPageProse(c, body)) ??
 			candidates.find((c) => closesCleanly(c) && c.trim() !== "") ??
 			candidates.find((c) => c.trim() !== "");
 		// Nothing in the document fits the room, or the document has no prose to fit.
