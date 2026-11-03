@@ -39,6 +39,28 @@ import {
 	SEARCH_RESPONSE_TARGET_MS,
 } from "../src/tools/websearch.ts";
 
+const USAGE = `usage: node scripts/bench-full-search.mjs [mode] [samples] [spacingMs] [query...]
+
+  mode        legacy | broker | <any label>   default: legacy
+              (broker sets PI_WEBAIO_CDP_BROKER=1; the label is only a column header)
+  samples     number of full-search iterations    default: 10
+  spacingMs   pause between samples, to avoid engine rate limits and the
+              10-minute search cache    default: 0
+  query...    base query (distinct variants are rotated per sample)
+              default: "pi coding agent"
+
+This harness performs LIVE network requests on every sample. Nothing here is
+offline-safe, so --help is handled before any sampling starts: an operator
+reading the flags must not have to spend live samples to do it (#97).
+
+Environment: PI_WEBAIO_CDP_BROKER=1 selects the broker Google lane.
+`;
+
+if (process.argv.slice(2).some((a) => a === "--help" || a === "-h")) {
+	console.log(USAGE);
+	process.exit(0);
+}
+
 const mode = process.argv[2] ?? "legacy";
 const samples = Number.parseInt(process.argv[3] ?? "10", 10);
 // Optional spacing (ms) between samples. Real aio-websearch calls are spaced
@@ -98,6 +120,22 @@ function systemSnapshot() {
 }
 
 function nodeProcessCount() {
+	// The pipeline below is Windows-only, and on POSIX it is not merely useless:
+	// `2>nul` is not a redirect there, so the shell CREATES A FILE named `nul` and
+	// `find`'s errors reach the operator (`find: '/c': No such file or directory`)
+	// while the figure prints as "?". #97 requires a process count, so POSIX gets a
+	// real one rather than a silent blank, and only an unmeasurable platform is
+	// reported as unavailable.
+	if (platform() !== "win32") {
+		try {
+			const out = execSync("pgrep -x node | wc -l", { encoding: "utf8", timeout: 5000 });
+			const n = Number.parseInt(out.trim(), 10);
+			return Number.isFinite(n) ? String(n) : "?";
+		} catch {
+			// pgrep is absent (minimal containers) — say which, do not print "?".
+				return "n/a (no pgrep on this platform)";
+		}
+	}
 	try {
 		return execSync(
 			'wmic process where "name=\'node.exe\'" get ProcessId 2>nul | find /c /v ""',
@@ -314,8 +352,8 @@ console.log(
 console.log(`  deadline cuts: ${deadlineCut}/${samples}`);
 console.log(`  node processes at end: ${nodeProcessCount()}`);
 console.log(
-	`  system: processes ${before?.processes ?? "?"} -> ${after?.processes ?? "?"}  ` +
-		`working set ${before?.workingSetGb ?? "?"}GB -> ${after?.workingSetGb ?? "?"}GB`,
+	`  system: processes ${before?.processes ?? "n/a (Windows-only commit-charge probe)"} -> ${after?.processes ?? "n/a"}  ` +
+		`working set ${before?.workingSetGb ?? "n/a"}GB -> ${after?.workingSetGb ?? "n/a"}GB`,
 );
 
 // This is a one-shot live benchmark harness, not the long-lived pi host. Some
