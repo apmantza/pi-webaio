@@ -20,8 +20,13 @@ All notable changes to pi-webaio will be documented in this file.
   rules has no letters to ask for, so its rules count as content, while a document that does
   have text must show some — without that, a bare `#` passes as the document's content
   because `#` is literally a substring of it, the same trap the prose branch already
-  documents. Swept rather than sampled: **0 ceiling violations in 840 cases** (7 shapes ×
-  budgets 1–120), and every text-bearing document yields document text at every budget ≥ 2.
+  Documents are swept rather than sampled, over one shared shape set so both claims are
+  provable rather than approximate: **0 ceiling violations in 840 cases** (7 shapes ×
+  budgets 1–120), and **every text-bearing shape yields a letter or digit at every budget
+  2–120** — the same 7 shapes minus `rules`, which has no letters to find (6 × 119 cases).
+  CodeRabbit caught the first version asserting the second claim over seven shapes when the
+  loop covered five; the fix was to widen the loop to the set the sentence names, after
+  measuring that all six hold, rather than to shrink the sentence to what was convenient.
   Budget 1 is an honest limit, not a lowered bar: `estimateTokens("# A") === 2`, so one
   token cannot hold a heading line.
   **Items 2 and 3 stay open and are pinned as wrong, not quietly dropped.** Item 3 (CJK

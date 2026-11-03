@@ -128,15 +128,20 @@ test("#189: the ceiling holds across shapes and 120 budgets", () => {
 // "no text" is the correct answer for it and asserting otherwise would be a tautology
 // about the fixture.
 test("#189: a document with text answers with text at every budget >= 2", () => {
+	// The SAME shape set as the ceiling sweep above, minus `rules` (no letters to find).
+	// Keeping the two sweeps over one set is what makes the sentence in the CHANGELOG
+	// provable rather than approximate — CodeRabbit caught the first version asserting a
+	// guarantee over seven shapes that this loop only covered five.
 	const docs = {
 		headings: HEADINGS,
 		cjk: CJK,
-		latin: "The core of machine learning is data. ".repeat(20),
+		latin: "The core of machine learning is data, and data is messy. ".repeat(20),
+		fence: "```js\nconst a = 1;\n```\n\nProse after the fence block here.\n",
 		mixed: "# Title\n\nintro text\n\n| a | b |\n",
 		mixedCjk: "# 标题\n\n本文介绍机器学习的核心概念。\n",
 	};
 	for (const [name, doc] of Object.entries(docs)) {
-		for (let budget = 2; budget <= 60; budget++) {
+		for (let budget = 2; budget <= 120; budget++) {
 			const out = applyTokenBudget(doc, budget, "q");
 			assert.ok(
 				/[\p{L}\p{N}]/u.test(out),
