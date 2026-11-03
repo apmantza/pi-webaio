@@ -25,10 +25,9 @@ import { formatRepoMapCounts } from "../src/github-map.ts";
 
 test("#168: a max-capped URL count says it is capped and names the cap", () => {
 	const { discovered } = formatRepoMapCounts({
-		totalUrls: 108,
-		treeEntries: 269,
+				coverage: { total: 269, scope: "recursive" },totalUrls: 108,
 		max: 100,
-		fileUrlsIncluded: 100,
+		entriesIncluded: 100,
 	});
 	assert.match(discovered, /Discovered 108 URLs/);
 	assert.match(
@@ -40,10 +39,9 @@ test("#168: a max-capped URL count says it is capped and names the cap", () => {
 
 test("#168: the tree count names the full tree as its denominator", () => {
 	const { entries } = formatRepoMapCounts({
-		totalUrls: 108,
-		treeEntries: 269,
+				coverage: { total: 269, scope: "recursive" },totalUrls: 108,
 		max: 100,
-		fileUrlsIncluded: 100,
+		entriesIncluded: 100,
 	});
 	assert.match(entries, /Total entries: 269/);
 	assert.match(
@@ -55,10 +53,9 @@ test("#168: the tree count names the full tree as its denominator", () => {
 
 test("#168: the two lines cannot be mistaken for the same number", () => {
 	const out = formatRepoMapCounts({
-		totalUrls: 108,
-		treeEntries: 269,
+				coverage: { total: 269, scope: "recursive" },totalUrls: 108,
 		max: 100,
-		fileUrlsIncluded: 100,
+		entriesIncluded: 100,
 	});
 	// The reported defect is 108 and 269 sitting side by side unlabelled.
 	assert.doesNotMatch(out.discovered, /^Discovered 108 URLs$/);
@@ -68,10 +65,9 @@ test("#168: the two lines cannot be mistaken for the same number", () => {
 
 test("#168: nothing is claimed as capped when the cap never bound", () => {
 	const out = formatRepoMapCounts({
-		totalUrls: 12,
-		treeEntries: 10,
+				coverage: { total: 10, scope: "recursive" },totalUrls: 12,
 		max: 100,
-		fileUrlsIncluded: 10,
+		entriesIncluded: 10,
 	});
 	assert.doesNotMatch(
 		out.discovered,
@@ -83,10 +79,9 @@ test("#168: nothing is claimed as capped when the cap never bound", () => {
 
 test("#168: a repo with no tree still reports the URL count", () => {
 	const out = formatRepoMapCounts({
-		totalUrls: 5,
-		treeEntries: 0,
+				coverage: { total: 0, scope: "recursive" },totalUrls: 5,
 		max: 100,
-		fileUrlsIncluded: 0,
+		entriesIncluded: 0,
 	});
 	assert.match(out.discovered, /Discovered 5 URLs/);
 	assert.equal(out.entries, "", "no tree means no entries line");
@@ -155,11 +150,9 @@ test("#168: the repo-map summary builds its counts through formatRepoMapCounts",
 
 test("#173: a bounded walk is labelled as a lower bound, never as uncapped", () => {
 	const out = formatRepoMapCounts({
-		totalUrls: 300,
-		treeEntries: 2000,
+				coverage: { total: 2000, scope: "recursive", bound: "walk-cap" },totalUrls: 300,
 		max: 100,
-		fileUrlsIncluded: 100,
-		treeEntriesAreLowerBound: true,
+		entriesIncluded: 100,
 	});
 	assert.doesNotMatch(
 		out.entries,
@@ -172,11 +165,9 @@ test("#173: a bounded walk is labelled as a lower bound, never as uncapped", () 
 
 test("#173: an exact full tree keeps the uncapped wording", () => {
 	const out = formatRepoMapCounts({
-		totalUrls: 269,
-		treeEntries: 269,
+				coverage: { total: 269, scope: "recursive" },totalUrls: 269,
 		max: 100,
-		fileUrlsIncluded: 100,
-		treeEntriesAreLowerBound: false,
+		entriesIncluded: 100,
 	});
 	assert.match(out.entries, /uncapped/i, "a genuinely complete walk should still say so");
 	assert.doesNotMatch(out.entries, /at least/i);
@@ -200,4 +191,20 @@ test("#173: walkRepo reports when it stopped at maxEntries", async () => {
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
+});
+
+// #184 followed through to the label. Now that directories are first-class in
+// `paths`, the URL list `paths.slice(0, max)` contains /tree/ links as well as
+// /blob/ links, so a count of that slice is not a count of FILE urls. The field
+// and the sentence it feeds both claimed "file URLs", which is exactly the
+// denominator-mismatch class #168 was about.
+test("#184: the included-URL count no longer claims to be files only", () => {
+	const out = formatRepoMapCounts({
+				coverage: { total: 301, scope: "recursive" },totalUrls: 120,
+		max: 100,
+		entriesIncluded: 100,
+	});
+	assert.ok(!/file URLs/i.test(out.discovered), `label still claims files only: ${out.discovered}`);
+	assert.ok(!/file URLs/i.test(out.entries), `label still claims files only: ${out.entries}`);
+	assert.ok(/100/.test(out.entries), "the included count disappeared from the label");
 });

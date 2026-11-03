@@ -18,7 +18,7 @@ import { test } from "node:test";
 import {
 	buildTree,
 	detectArchitectureSignals,
-	filterRepoPaths,
+	dropExcludedPaths,
 	isGitHubUrl,
 	mapGitHubRepo,
 	parseGitHubMapUrl,
@@ -487,41 +487,41 @@ test("mapGitHubRepo on repo URL returns a usable map structure", async () => {
 	}
 });
 
-// ─── filterRepoPaths ──────────────────────────────────────────────
+// ─── dropExcludedPaths ─────────────────────────────────────────────
 
-test("filterRepoPaths drops node_modules entries", () => {
+test("dropExcludedPaths drops node_modules entries", () => {
 	const paths = [
 		"src/index.ts",
 		"node_modules/lib/foo.js",
 		"node_modules/@types/node/index.d.ts",
 	];
-	const out = filterRepoPaths(paths);
+	const out = dropExcludedPaths(paths);
 	assert.deepStrictEqual(out, ["src/index.ts"]);
 });
 
-test("filterRepoPaths drops asset files", () => {
+test("dropExcludedPaths drops asset files", () => {
 	const paths = [
 		"src/index.ts",
 		"docs/logo.png",
 		"docs/banner.svg",
 		"docs/screenshot.jpeg",
 	];
-	const out = filterRepoPaths(paths);
+	const out = dropExcludedPaths(paths);
 	assert.deepStrictEqual(out, ["src/index.ts"]);
 });
 
-test("filterRepoPaths drops lockfiles (huge)", () => {
+test("dropExcludedPaths drops lockfiles (huge)", () => {
 	const paths = [
 		"src/index.ts",
 		"yarn.lock",
 		"package-lock.json",
 		"Cargo.lock",
 	];
-	const out = filterRepoPaths(paths);
+	const out = dropExcludedPaths(paths);
 	assert.deepStrictEqual(out, ["src/index.ts"]);
 });
 
-test("filterRepoPaths drops build outputs", () => {
+test("dropExcludedPaths drops build outputs", () => {
 	const paths = [
 		"src/index.ts",
 		"dist/bundle.js",
@@ -529,31 +529,27 @@ test("filterRepoPaths drops build outputs", () => {
 		"target/release/app",
 		"app.min.js",
 	];
-	const out = filterRepoPaths(paths);
+	const out = dropExcludedPaths(paths);
 	assert.deepStrictEqual(out, ["src/index.ts"]);
 });
 
-test("filterRepoPaths drops vendored / venv dirs", () => {
+test("dropExcludedPaths drops vendored / venv dirs", () => {
 	const paths = [
 		"src/index.ts",
 		"vendor/lib/foo.php",
 		"venv/bin/python",
 		".venv/lib/python3/site-packages/foo.py",
 	];
-	const out = filterRepoPaths(paths);
+	const out = dropExcludedPaths(paths);
 	assert.deepStrictEqual(out, ["src/index.ts"]);
 });
 
-test("filterRepoPaths respects max cap", () => {
-	// Build more than MAX_TREE_PATHS — verify it caps (we don't generate
-	// the full list, just enough to confirm the cap is honored).
-	const paths = [];
-	for (let i = 0; i < 25; i++) paths.push(`src/file${i}.ts`);
-	const out = filterRepoPaths(paths);
-	assert.strictEqual(out.length, 25);
-});
+// The old version of this test fed 25 entries to a 20 000-entry cap and asserted
+// the length came back 25 — it could not fail. The real bound is pinned in
+// tests/webmap-dir-entries.test.mjs, which crosses MAX_TREE_PATHS and asserts both
+// that the retained list stops and that `capped` reports it.
 
-test("filterRepoPaths keeps README and source files", () => {
+test("dropExcludedPaths keeps README and source files", () => {
 	const paths = [
 		"README.md",
 		"src/index.ts",
@@ -561,7 +557,7 @@ test("filterRepoPaths keeps README and source files", () => {
 		"tests/auth.test.ts",
 		"package.json",
 	];
-	const out = filterRepoPaths(paths);
+	const out = dropExcludedPaths(paths);
 	assert.strictEqual(out.length, 5);
 	assert.ok(out.includes("README.md"));
 	assert.ok(out.includes("package.json"));
@@ -577,14 +573,35 @@ test("filterRepoPaths keeps README and source files", () => {
 test("renderRepoTreeMarkdown bounds the rendered tree to max entries", () => {
 	const paths = [];
 	for (let i = 0; i < 2000; i++) paths.push(`src/file${i}.ts`);
-	const md = renderRepoTreeMarkdown(paths, 12, false);
-	const renderedLines = md
-		.split("\n")
-		.slice(md.indexOf("```") + 1)
+	const md = renderRepoTreeMarkdown(paths, 12, { total: paths.length, scope: "recursive" });
+	const lines = md.split("\n");
+	// `md.indexOf("```")` is a CHARACTER offset; `slice` wants a LINE index. Used
+	// as-is it skipped the first ~88 lines, so `renderedLines` was empty for every
+	// render and `<= 12` passed unconditionally — a bound test that could not fail.
+	// Find the fence as a line, and require the selection to be non-empty so the
+	// bound assertion has something to bound.
+	const fenceLine = lines.findIndex((l) => l.includes("```"));
+	assert.ok(fenceLine >= 0, "no fenced tree body found");
+	const renderedLines = lines
+		.slice(fenceLine + 1)
 		.filter((l) => l.includes("└── ") || l.includes("├── "));
 	assert.ok(
-		renderedLines.length <= 12,
-		`expected <=12 rendered entries, got ${renderedLines.length}`,
+		renderedLines.length > 0,
+		"the selection is empty — the bound assertion would pass vacuously",
+	);
+	// The tree prints the CONTAINING DIRECTORY as its own row (`└── src/`) above the
+	// 12 entries, so the row count is one more than the bound. Counting rows against
+	// `max` is what the original assertion did and, since it always selected zero
+	// rows, it never found out.
+	const leafRows = renderedLines.filter((l) => l.includes(".ts"));
+	assert.equal(
+		leafRows.length,
+		12,
+		`expected exactly max (12) rendered entries, got ${leafRows.length}`,
+	);
+	assert.ok(
+		renderedLines.length - leafRows.length <= 1,
+		"more than one container row is unexpected for a single-directory fixture",
 	);
 	assert.ok(md.includes("## File Tree (2000 entries)"));
 	assert.match(md, /first 12 of 2000 entries/);
@@ -592,7 +609,7 @@ test("renderRepoTreeMarkdown bounds the rendered tree to max entries", () => {
 
 test("renderRepoTreeMarkdown renders the whole tree when it fits in max", () => {
 	const paths = ["src/a.ts", "src/b.ts", "README.md"];
-	const md = renderRepoTreeMarkdown(paths, 100, false);
+	const md = renderRepoTreeMarkdown(paths, 100, { total: paths.length, scope: "recursive" });
 	assert.ok(md.includes("## File Tree (3 entries)"));
 	assert.ok(md.includes("a.ts"));
 	assert.ok(md.includes("b.ts"));
@@ -603,24 +620,24 @@ test("renderRepoTreeMarkdown renders the whole tree when it fits in max", () => 
 test("renderRepoTreeMarkdown keeps the API-truncated label and can both truncate", () => {
 	const paths = [];
 	for (let i = 0; i < 50; i++) paths.push(`pkg/f${i}.ts`);
-	const md = renderRepoTreeMarkdown(paths, 5, true);
+	const md = renderRepoTreeMarkdown(paths, 5, { total: paths.length, scope: "recursive", bound: "api-truncated" });
 	assert.ok(md.includes("truncated by API"));
 	assert.match(md, /first 5 of 50 entries/);
 });
 
-test("filterRepoPaths is case-insensitive", () => {
+test("dropExcludedPaths is case-insensitive", () => {
 	const paths = ["src/index.ts", "docs/Logo.PNG", "docs/banner.SVG"];
-	const out = filterRepoPaths(paths);
+	const out = dropExcludedPaths(paths);
 	assert.deepStrictEqual(out, ["src/index.ts"]);
 });
 
-test("filterRepoPaths returns empty for noisy trees", () => {
+test("dropExcludedPaths returns empty for noisy trees", () => {
 	const paths = [
 		"node_modules/lib/foo.js",
 		"vendor/lib/foo.php",
 		"docs/logo.png",
 	];
-	const out = filterRepoPaths(paths);
+	const out = dropExcludedPaths(paths);
 	assert.deepStrictEqual(out, []);
 });
 

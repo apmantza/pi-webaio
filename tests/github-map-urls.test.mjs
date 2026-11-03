@@ -27,6 +27,8 @@ import {
 	normalizeContentEntryType,
 	mapFeatureItems,
 	repoTreeEntryUrl,
+	repoEntryCensus,
+	recursiveTreePaths,
 } from "../src/github-map.ts";
 
 const O = "apmantza";
@@ -389,4 +391,107 @@ test("#176: the contents wiring may not collapse entry types back to file", asyn
 		!/["']dir["']\s*\?\s*["']dir["']\s*:\s*["']file["']/.test(fn),
 		"the `dir ? dir : file` collapse is the #176 fabrication and must not return",
 	);
+});
+
+// ─── #184: the recursive Git Trees API is the NORMAL source, and it emitted no
+// directories at all, so repo.totalDirs was a constant 0 for every repo mapped
+// through it while the last-resort contents listing counted dirs correctly. The
+// count read a representation its own source never produced.
+//
+// Fixture below is the shape GET /repos/{o}/{r}/git/trees/{ref}?recursive=1
+// actually returns (verified against apmantza/pi-webaio), including the entry
+// kinds the endpoint mixes in: symlink, submodule and the "commit" entry a
+// gitlink becomes.
+
+const RECURSIVE_FIXTURE = [
+	{ path: "README.md", mode: "100644", type: "blob" },
+	{ path: "src", mode: "040000", type: "tree" },
+	{ path: "src/github-map.ts", mode: "100644", type: "blob" },
+	{ path: "src/tools", mode: "040000", type: "tree" },
+	{ path: "src/tools/webmap.ts", mode: "100644", type: "blob" },
+	{ path: "docs", mode: "040000", type: "tree" },
+	// A symlink is a BLOB with mode 120000 (verified on git/git and torvalds/linux);
+	// `type: "symlink"` is a contents-API word and never appears in this response.
+	{ path: "legacy", mode: "120000", type: "blob" },
+	// A gitlink is type "commit" and its /blob/ URL 404s.
+	{ path: "vendor/lib", mode: "160000", type: "commit" },
+];
+
+test("#184: the recursive tree source keeps directories, slash-terminated", () => {
+	const paths = recursiveTreePaths(RECURSIVE_FIXTURE);
+	const dirs = paths.filter((p) => p.endsWith("/"));
+	assert.deepEqual(dirs, ["src/", "src/tools/", "docs/"], `dirs from the API source: ${dirs}`);
+	// The defect: this count was 0 for every repo on the normal path.
+	assert.ok(dirs.length > 0, "the API source produced no directory entries");
+});
+
+test("#184: the gitlink is excluded, the symlink blob is kept", () => {
+	const paths = recursiveTreePaths(RECURSIVE_FIXTURE);
+	// Verified: a gitlink's /blob/ URL 404s (git/git/blob/master/sha1collisiondetection),
+	// a symlink's resolves (torvalds/linux/blob/master/AGENTS.md -> 200). Only the first
+	// is therefore excluded.
+	for (const bad of ["vendor/lib", "vendor/lib/"]) {
+		assert.ok(!paths.includes(bad), `a gitlink leaked into the URL list: ${bad}`);
+	}
+	assert.ok(paths.includes("legacy"), "a reachable symlink blob was dropped");
+	// Files are unchanged, and never carry the slash.
+	assert.ok(paths.includes("src/github-map.ts") && paths.includes("src/tools/webmap.ts"));
+});
+
+test("#184: the API-sourced paths satisfy every consumer the contents source does", () => {
+	const paths = recursiveTreePaths(RECURSIVE_FIXTURE).filter((p) => !p.startsWith("vendor/"));
+	// The dispatcher's own census, not a re-implementation of its rule in the test:
+	// copying the rule is what let `countDirs` return 0 with every test green.
+	// 4 files because the symlink blob is reachable and therefore kept.
+	assert.deepEqual(repoEntryCensus(paths), { files: 4, dirs: 3 });
+	// buildTree must not render a directory as a file leaf.
+	const tree = buildTree(paths);
+	const src = tree.children.find((c) => c.name === "src");
+	assert.equal(src.type, "dir", "src rendered as a file leaf");
+	const docs = tree.children.find((c) => c.name === "docs");
+	assert.equal(docs.type, "dir", "a directory with no files inside rendered as a file leaf");
+	// repoTreeEntryUrl must route directories to /tree/.
+	assert.equal(
+		repoTreeEntryUrl("https://github.com/o/r", "main", "docs/"),
+		"https://github.com/o/r/tree/main/docs",
+	);
+});
+
+test("#184: the recursive source and the contents source spell entries identically", () => {
+	// Same entries, two sources. The two listings cover different depths (the
+	// contents endpoint is per-directory), so what must match is the SPELLING of a
+	// given entry and which entries are admitted at all — that is the single
+	// representation #176 and #184 are about.
+	const fromTree = recursiveTreePaths([
+		{ path: "README.md", type: "blob" },
+		{ path: "src", type: "tree" },
+		{ path: "docs", type: "tree" },
+	]);
+	const fromContents = contentEntryPaths([
+		{ path: "README.md", type: "file" },
+		{ path: "src", type: "dir" },
+		{ path: "docs", type: "dir" },
+	]);
+	assert.deepEqual([...fromTree].sort(), [...fromContents].sort());
+	assert.ok(fromTree.includes("src/") && fromTree.includes("docs/"));
+	// The endpoints still differ on symlinks: the contents API excludes them (#176's
+	// settled decision) while a trees symlink is a reachable blob. That divergence is
+	// out of #184's scope and is recorded as a named remainder rather than papered
+	// over by claiming the sources are identical for every entry kind.
+});
+
+// The path field comes off the network and is typed `unknown` on purpose. A gate at
+// that boundary admits the shapes it recognises and refuses everything else, so a
+// malformed entry must vanish rather than reach the URL builder as "undefined".
+test("#184: an entry without a usable path is dropped, not stringified", () => {
+	const paths = recursiveTreePaths([
+		{ path: null, type: "blob" },
+		{ path: 42, type: "tree" },
+		{ path: { nested: true }, type: "blob" },
+		{ type: "blob" },
+		{ path: "", type: "blob" },
+		{ path: "real/file.ts", type: "blob" },
+	]);
+	assert.deepEqual(paths, ["real/file.ts"], `malformed entries leaked: ${JSON.stringify(paths)}`);
+	assert.ok(!paths.some((p) => String(p).includes("undefined")), "undefined reached the path list");
 });
