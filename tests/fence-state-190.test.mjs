@@ -85,10 +85,20 @@ test("#190: balance is never bought with an empty answer or a broken ceiling", (
 // content cannot survive and the assertion would be measuring something else.
 test("#190: a fence documenting fences keeps its inner marker", () => {
 	const src = "````\nthis page documents ``` fences in prose\n````\n";
-	assert.ok(estimateTokens(src) <= 22, "fixture no longer fits the budget this test uses");
-	const answer = applyTokenBudget(src, 22, "a");
-	assert.ok(answer.includes("```"), `inner marker deleted: ${JSON.stringify(answer)}`);
-	assert.equal(findUnclosedFence(answer), null);
+	// Budget 22 on a 19-token document returned it VERBATIM, so the candidate path never
+	// ran and the assertion proved nothing about trimming. Measured trimming range for
+	// this fixture is 12..16: at 12 the answer is the unwrapped prose, at 13-16 the fence
+	// is kept around it. Either way the inner marker must survive.
+	assert.ok(estimateTokens(src) === 19, `fixture drifted: ${estimateTokens(src)} tokens`);
+	for (const b of [12, 13, 14, 15, 16]) {
+		const answer = applyTokenBudget(src, b, "a");
+		assert.ok(answer.length > 0, `budget ${b} returned blank`);
+		assert.ok(
+			answer.includes("```"),
+			`budget ${b} deleted the inner marker: ${JSON.stringify(answer)}`,
+		);
+		assert.equal(findUnclosedFence(answer), null, `budget ${b} left an open fence`);
+	}
 });
 
 // Property (3), likewise at a budget where prose and framing can coexist.
