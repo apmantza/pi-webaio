@@ -25,8 +25,12 @@ test("#97: the lane mapping gives a null result its own axis, not budgetMiss", (
 	assert.equal(o.unavailable, true, "null must set the unavailable axis");
 	assert.equal(o.budgetMiss, false, "a lane that never ran has no measured timeout");
 	assert.deepEqual(o.results, []);
-	// And end to end through the classifier, which is what the table prints.
-	assert.doesNotMatch(classifyBenchRedditStatus({ source: "reddit", ...o }), /^timeout/);
+	// And end to end through the classifier, which is what the table prints. Exact label for
+	// the same reason as above.
+	assert.equal(
+		classifyBenchRedditStatus({ source: "reddit", ...o }),
+		"unavailable (CDP unreachable; never requested)",
+	);
 });
 
 test("#97: the lane mapping still reports a real budget miss as a miss", () => {
@@ -44,12 +48,19 @@ test("#97: a Reddit lane that returned null is not reported as a timeout", () =>
 	// `budgetMiss: true` is what the harness currently sets for null; the classifier must
 	// not let that alone decide, because null means "never requested".
 	const neverRan = { source: "reddit", results: [], ok: false, budgetMiss: true, unavailable: true };
+	// Exact label, not "anything but timeout": a weaker assertion also passes when the
+	// lane is mislabelled `error`, which sends a reader to look for a provider bug instead
+	// of a missing browser.
+	assert.equal(
+		classifyBenchRedditStatus(neverRan),
+		"unavailable (CDP unreachable; never requested)",
+		`got ${classifyBenchRedditStatus(neverRan)}`,
+	);
 	assert.doesNotMatch(
 		classifyBenchRedditStatus(neverRan),
 		/^timeout/,
 		`a lane that made zero requests is labelled ${classifyBenchRedditStatus(neverRan)}`,
 	);
-	assert.match(classifyBenchRedditStatus(neverRan), /unavailable/, "status must name the real cause");
 });
 
 test("#97: a genuine Reddit deadline miss STILL reports timeout", () => {

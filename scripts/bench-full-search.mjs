@@ -22,6 +22,16 @@
 import { execSync } from "node:child_process";
 import { platform } from "node:os";
 import { pathToFileURL } from "node:url";
+import { realpathSync } from "node:fs";
+
+/** realpath without the failure mode: an unresolvable argv[1] falls back to itself. */
+function safeRealpath(p) {
+	try {
+		return realpathSync(p);
+	} catch {
+		return p;
+	}
+}
 import {
 	closeGoogleBroker,
 	ensureChrome,
@@ -86,10 +96,13 @@ export function redditLaneOutcome(r) {
 	return {
 		results: r?.results ?? [],
 		ok: r?.ok ?? false,
-		// null is NOT a budget miss: `searchReddit` returns null when there is no
-		// DevToolsActivePort for the profile dir, i.e. it made zero requests. Kept as its own
-		// axis so no downstream consumer can infer "timeout" from an absence of results
-		// (#97, the same shape #201 fixed in the tool).
+		// null is NOT a budget miss. `searchReddit` returns null on three paths, all of them
+		// "no browser was talked to": no DevToolsActivePort for the profile dir, a port file
+		// whose Chrome does not answer the liveness probe, or a throw while probing. It made
+		// zero requests on every one of them. Kept as its own axis so no downstream consumer
+		// can infer "timeout" from an absence of results (#97, the shape #201 fixed in the
+		// tool). Wording must cover all three: an earlier draft said "no CDP port", which is
+		// false for the stale-port and probe-throw paths.
 		unavailable: r === null,
 		// searchReddit's own deadline miss is a timeout, not a provider error.
 		budgetMiss: r ? r.ok === false && r.error?.includes("response budget") === true : false,
@@ -99,15 +112,16 @@ export function redditLaneOutcome(r) {
 export function classifyBenchRedditStatus(reddit) {
 	if (!reddit) return "not-settled";
 	if (reddit.ok) return "ok";
-	// A null from `searchReddit` means it never made a request: it returns null when
-	// `DevToolsActivePort` is absent for the profile dir, so there was no browser to talk
-	// to. Folding that into `budgetMiss` labelled a zero-request lane as `timeout`, which is
-	// the #201 defect shape and it poisoned this harness's own evidence: the n=10 baseline
-	// read `reddit=0/10 (0%) reddit=timeout`, pointing a reader at Reddit's deadline when the
-	// real cause was "no CDP port here". The TOOL already distinguishes these
-	// (`src/tools/websearch.ts`: "unavailable (CDP search returned null)"); the harness must
-	// not be the surface that gets it wrong, because #97's acceptance data is harness output.
-	if (reddit.unavailable) return "unavailable (no CDP port; never requested)";
+	// A null from `searchReddit` means it never made a request. Three paths produce it
+	// (`src/verticals/reddit_search.ts`): no DevToolsActivePort for the profile dir, a port
+	// file whose Chrome fails the liveness probe, or a throw while probing. Folding that into
+	// `budgetMiss` labelled a zero-request lane as `timeout`, which is the #201 defect shape
+	// and it poisoned this harness's own evidence: the n=10 baseline read `reddit=0/10 (0%)
+	// reddit=timeout`, pointing a reader at Reddit's deadline when no request had been made.
+	// The TOOL already distinguishes these (`src/tools/websearch.ts`: "unavailable (CDP
+	// search returned null)"); the harness must not be the surface that gets it wrong,
+	// because #97's acceptance data is harness output.
+	if (reddit.unavailable) return "unavailable (CDP unreachable; never requested)";
 	// searchReddit's own deadline miss is a timeout, not a provider error.
 	return reddit.budgetMiss ? "timeout" : "error";
 }
@@ -117,8 +131,14 @@ export function classifyBenchRedditStatus(reddit) {
 // process.exit(0), killing the test process — which is one reason this harness shipped
 // with its status taxonomy untested, and that taxonomy is what #97's evidence tables are
 // built from.
+//
+// realpath before comparing: a path reached through a symlink resolves to the module URL
+// Node actually loaded, so direct execution via a linked path is still recognised as main.
+// Falls back to the raw path if realpath itself fails, so a weird argv[1] degrades to the
+// previous comparison rather than throwing at import time.
 const IS_MAIN = !process.argv[1] ||
-	import.meta.url === pathToFileURL(process.argv[1]).href;
+	import.meta.url ===
+	pathToFileURL(safeRealpath(process.argv[1])).href;
 if (IS_MAIN) {
 	const rawArgs = process.argv.slice(2);
 	const sepAt = rawArgs.indexOf("--");
