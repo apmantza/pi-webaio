@@ -1105,6 +1105,18 @@ export function applyTokenBudget(
 			// sit here: the model already knows where a run ends, so neither string rule is
 			// needed, and a marker line that is the document's own content stays body.
 			trimToTokenBudget(unwrapLeadingFences(source), room),
+			// Last resort, and only reachable when NEITHER model-built candidate carries
+			// the document's words: the aggressive strip that drops every leading marker
+			// and blank line. It is deliberately kept separate from `unwrapLeadingFences`
+			// rather than folded into it, because the two answer different questions and
+			// the document cannot satisfy both at one token: `unwrapLeadingFences` is
+			// literal-aware and preserves a documented fence ("```" inside a ```` fence is
+			// the page's content), which at a tiny budget leaves that marker to eat the
+			// whole room and answer with "`". This one reaches the text. Selection prefers
+			// prose, so it wins only where the faithful candidate would have answered with
+			// framing — and on a balanced document it can still never install an open
+			// fence, because the candidate preference below refuses that.
+			trimToTokenBudget(stripLeadingMarkers(source), room),
 		];
 		// Prefer a candidate that actually carries the document's words. Order alone was
 		// not enough: on a fence-led document at budget 1 the closed-fence trim yields a
@@ -1118,15 +1130,26 @@ export function applyTokenBudget(
 		// only fire when NO candidate carries prose, i.e. when the document itself has no
 		// letter-or-number content, and then the delimiters are the document's own text.
 		// A guard that no input can require does not stay in the file.
-		// No fence check on the candidates. One was written — prefer a candidate that
-		// does not END inside a fence — and it could not be made red: with it deleted,
-		// `test:all` is byte-for-byte as green, because fixing how candidates are BUILT
-		// (run-wise unwrap, below) removes the open-fence answers at the source rather
-		// than refusing them at selection. A guard no input can require does not stay in
-		// the file; the same reasoning retired `allDelimiters` and the "nothing but fence
-		// delimiters" rejection above.
+		// Never install a candidate that ENDS inside a fence when one that does not is
+		// available. Guarded on the source being balanced: a document that is unbalanced
+		// on input keeps its own openness rather than being repaired with a line the
+		// author never wrote (the policy pinned by "unbalanced input that fits is passed
+		// through"). The final fallback keeps the old behaviour when every candidate is
+		// open — a framing answer beats a blank one.
+		//
+		// This guard was deleted once in this PR's development on the reasoning that it
+		// could not be made red, because removing it left `test:all` byte-for-byte as
+		// green. That was a mistake of method: the suite is an existence proof for the
+		// cases it contains, not for a universal claim. A randomised sweep over balanced
+		// generated documents found 80 inputs where the answer came back open with the
+		// guard absent (e.g. "```\n``` js\n| a | b |\nalpha text\n- list item\n# head\n```\n"
+		// at budget 12 answered "``` js"), and those inputs are now pinned in
+		// tests/fence-state-190.test.mjs.
+		const sourceBalanced = findUnclosedFence(source) === null;
+		const closesCleanly = (c: string) => !sourceBalanced || findUnclosedFence(c) === null;
 		const chosen =
-			candidates.find((c) => carriesPageProse(c, body)) ??
+			candidates.find((c) => closesCleanly(c) && carriesPageProse(c, body)) ??
+			candidates.find((c) => closesCleanly(c) && c.trim() !== "") ??
 			candidates.find((c) => c.trim() !== "");
 		// Nothing in the document fits the room, or the document has no prose to fit.
 		// Leave the framing rather than install a blank candidate.
@@ -1183,6 +1206,44 @@ function shrinkNoticeToRoom(footer: string, room: number): string {
 const FENCE_OPEN = /^[ \t]*(`{3,}|~{3,})/;
 
 /**
+ * Blankness for fence bookkeeping: ASCII space, tab and carriage return only.
+ * `String.trim()` also strips NBSP and other Unicode spaces, which would let a line
+ * the author actually wrote be swallowed as padding — the same reason the CRLF fix in
+ * this file stopped using a trim-based blank test.
+ */
+const BLANK_LINE = /^[ \t\r]*$/;
+
+/**
+ * Drop every leading marker and blank line, without asking what they mean.
+ *
+ * A faithful model cannot do this: a marker line may be content. That is why it lives
+ * beside `unwrapLeadingFences` as a last-resort candidate rather than inside it — see
+ * the candidate list in `applyTokenBudget` for when each is allowed to win.
+ */
+export function stripLeadingMarkers(text: string): string {
+	const lines = text.split("\n");
+	let i = 0;
+	while (i < lines.length && (BLANK_LINE.test(lines[i]) || FENCE_OPEN.test(lines[i]))) i++;
+	return lines.slice(i).join("\n");
+}
+
+/**
+ * Does a fence run's body carry text, or is it just another fence waiting behind
+ * this one?
+ *
+ * Asked of the model rather than answered with a marker-counting rule. A body of
+ * "```\n\n```" is an empty nested pair and contributes nothing, so the scan keeps
+ * going — otherwise the nested opener eats the whole room again. A body of "```"
+ * inside a longer fence (````) is a documented fence and IS the content: run the
+ * model over the body and an UNCLOSED marker proves that marker cannot be a
+ * delimiter, because nothing in the body closes it.
+ */
+function bodyHoldsLiteralText(runBody: string[]): boolean {
+	if (runBody.some((l) => !BLANK_LINE.test(l) && !FENCE_OPEN.test(l))) return true;
+	return findUnclosedFence(runBody.join("\n")) !== null;
+}
+
+/**
  * The line that closes a fence opened with `marker`: the same character, at least as
  * long, and nothing else on the line. An info string makes a line an OPENER, which is
  * why "``` caption: …" does not close anything.
@@ -1228,11 +1289,7 @@ export function unwrapLeadingFences(text: string): string {
 		// An unclosed run therefore loses only its OPENER — its apparent closer may itself
 		// be an opener ("``` caption"), and consuming to end of input would eat the page.
 		const runBody = lines.slice(i + 1, j);
-		// "Content reached" means a line that is neither blank nor itself a marker. A body
-		// of only markers and blanks is another fence waiting behind this one — leaving it
-		// in place lets its opener eat the whole room again, which is the case the old
-		// "strip a stack of leading markers" regex handled.
-		if (runBody.some((l) => l.trim() !== "" && !FENCE_OPEN.test(l))) {
+		if (bodyHoldsLiteralText(runBody)) {
 			// The body is the document, and so is everything after the run. STOP rather
 			// than loop: a marker inside kept body is content ("``` caption" inside a fence
 			// is just a line of code), and re-scanning it as a delimiter is the content-loss

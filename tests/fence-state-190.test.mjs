@@ -159,3 +159,126 @@ test("#190: an unclosed leading fence loses only its opener", () => {
 	assert.match(out, /caption/, `caption lost: ${JSON.stringify(out)}`);
 	assert.match(out, /tail/, `tail lost: ${JSON.stringify(out)}`);
 });
+
+// The finding that the suite could not see. A randomised sweep over generated
+// documents found 80 balanced inputs whose answer came back OPEN while the
+// candidate-level fence preference was absent — and `test:all` was byte-for-byte
+// green without it. The suite is an existence proof for the cases it contains, not
+// for a universal claim, so the sweep itself is the test.
+test("#190: a balanced document never comes back open (generated sweep)", () => {
+	const MARKERS = ["```", "~~~", "````", "~~``", "    ```", "``` js", "``` cap: x"];
+	const TEXT = ["alpha text", "beta", "gamma delta epsilon", "- list item", "# head", "| a | b |", "---", ""];
+	// Deterministic LCG: the same corpus on every run, so a regression is reproducible.
+	let seed = 12345;
+	const rnd = () => {
+		seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+		return seed / 0x7fffffff;
+	};
+	const pick = (a) => a[Math.floor(rnd() * a.length)];
+	let tested = 0;
+	for (let t = 0; t < 4000; t++) {
+		const lines = [];
+		const n = 1 + Math.floor(rnd() * 7);
+		for (let i = 0; i < n; i++) lines.push(rnd() < 0.45 ? pick(MARKERS) : pick(TEXT));
+		const src = lines.join("\n") + "\n";
+		// Only balanced documents: the tool does not repair input that was already
+		// unbalanced, so those are not this property.
+		if (findUnclosedFence(src)) continue;
+		// A leading "---" is FRONTMATTER, which is kept whole by design; the fence it can
+		// contain is the named residual pinned by the next test, not this property.
+		if (lines[0] === "---") continue;
+		tested++;
+		for (let b = 1; b <= 20; b++) {
+			const answer = applyTokenBudget(src, b, "a");
+			assert.equal(
+				findUnclosedFence(answer),
+				null,
+				`balanced source came back open at budget ${b}: ${JSON.stringify(src)} -> ${JSON.stringify(answer)}`,
+			);
+		}
+	}
+	assert.ok(tested > 500, `sweep degenerated to ${tested} balanced documents`);
+});
+
+// The one shape the sweep still finds, recorded rather than patched. A leading
+// "---" is FRONTMATTER, and frontmatter is kept whole by design; when a fence is
+// opened inside it and its closer sits in the body, truncating the body necessarily
+// separates the pair. Repairing it would mean either dropping the metadata the
+// caller asked to keep or appending a marker the author never wrote — the policy
+// "unbalanced input is passed through, not repaired" already refuses the second.
+// Pinning the behaviour so a future change to either side of this seam is visible.
+test("#190: a fence opened inside kept frontmatter is a named residual, not a silent one", () => {
+	const src = "---\n```\nalpha text\n---\n| a | b |\n````\n| a | b |\n";
+	assert.equal(findUnclosedFence(src), null, "fixture must start balanced");
+	const answer = applyTokenBudget(src, 13, "a");
+	assert.match(answer, /^---\n```\nalpha text\n---/, "frontmatter was not kept whole");
+	// The answer still carries document text and stays inside the ceiling; only the
+	// fence pairing is inherited-broken.
+	assert.ok(answer.trim().length > 0, "answer blank");
+});
+
+// CodeRabbit / Sourcery finding, confirmed by probe: a documented fence inside a
+// LONGER fence is the document's content, and the earlier marker-counting content
+// test swallowed it. At budget 8 the documented "```" used to vanish.
+test("#190: a documented fence inside a longer fence survives", () => {
+	const doc = "````\n```\n````\n" + "tail body text here\n".repeat(30);
+	// Where the answer has room for the document, the documented fence must be there.
+	for (const b of [16, 20, 24]) {
+		const answer = applyTokenBudget(doc, b, "a");
+		assert.ok(
+			answer.includes("```"),
+			`budget ${b} deleted the documented fence: ${JSON.stringify(answer)}`,
+		);
+	}
+	// Where it does not, the content floor wins instead: the answer is the page's text,
+	// never a marker. Measured: 8 and 12 yield the body prose. Asserting the fence here
+	// too would demand the impossible — one token is either the delimiter or the text.
+	for (const b of [8, 12]) {
+		const answer = applyTokenBudget(doc, b, "a");
+		assert.match(
+			answer,
+			/tail body/,
+			`budget ${b} answered with framing instead of the document: ${JSON.stringify(answer)}`,
+		);
+	}
+	// The literal-text branch of `bodyHoldsLiteralText` pinned by the two inputs a
+	// generated differential found load-bearing (105 differing pairs). Without it the
+	// scan treats a documented fence as an empty run, skips it, and the marker that
+	// follows eats the whole room: the answer is a LONE BACKTICK where the document
+	// had text. These are the content-floor cases, so the assertion is the floor, not
+	// fence closure — both sources are unbalanced to begin with and keep that openness.
+	for (const [src, expect] of [
+		["````\n~~~\n``` js\n", /~~~/],
+		["    ```\n````\n````\n``` cap: x\n", /cap: x/],
+	]) {
+		for (const b of [8, 12]) {
+			const answer = applyTokenBudget(src, b, "a");
+			assert.match(
+				answer,
+				expect,
+				`budget ${b} answered with framing instead of the document: ${JSON.stringify(answer)}`,
+			);
+		}
+	}
+});
+
+// CodeRabbit finding, confirmed by probe: String.trim() strips NBSP, so a body line
+// of only U+00A0 counted as padding and was swallowed. Blankness for fence
+// bookkeeping is ASCII space/tab/CR only — the same reason the CRLF fix in this file
+// stopped using a trim-based blank test.
+test("#190: a unicode-whitespace body line is content, not padding", () => {
+	const doc = "```\n\u00a0\n```\n" + "tail body text here\n".repeat(30);
+	for (const b of [8, 12]) {
+		const answer = applyTokenBudget(doc, b, "a");
+		// The NBSP-only line is the leading fence's whole body. Treating it as padding
+		// unwraps the run and the line is gone; treating it as content stops the scan
+		// there and the line is still in the answer. That is the whole difference this
+		// assertion is drawn to distinguish — an `|| reached the prose` fallback here
+		// made the test pass under either rule and was the reason a trim()-based blank
+		// test survived mutation.
+		assert.ok(
+			/\u00a0/.test(answer),
+			`budget ${b} swallowed the NBSP-only body line: ${JSON.stringify(answer)}`,
+		);
+	}
+});
