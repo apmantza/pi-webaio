@@ -4,6 +4,41 @@ All notable changes to pi-webaio will be documented in this file.
 
 ## [Unreleased]
 
+- **A CJK document no longer answers one character** (#189 item 3). `trimToTokenBudget`
+  returned the FIRST candidate that fitted, and both of its shape constants are Latin-only:
+  the seed is `maxTokens * 4` and the shrink margin is an absolute `- 16`. Measured, Latin
+  runs **4.75 char/token and CJK 1.00**, so for CJK the seed overshoots ~4x and the margin
+  then computes `20 - 16 = 4` at budget 20 — a 66-token document answered with `机` (1 token)
+  while 19 tokens of the budget sat unused. The leaf's own terminal fallback
+  (`text.slice(0, maxTokens)`) was already the better answer; the loop simply returned too
+  early to reach it. The fix treats that fallback as a **candidate** and keeps whichever of
+  the two carries more of the document, refusing the challenger when it would end inside a
+  fence. This is a quality comparison between two fitting answers, not a search for the
+  largest fitting slice: two such searches were tried and refused on evidence (binary search
+  over slice length, and a proportional shrink margin), both of which broke four #190/#182
+  guards because **a longer slice can be a worse answer** — `"```\ncode \n```\n"` drops the
+  prose a shorter slice keeps. Kept 10/16/12/16 tokens at budgets 10/16/20/29 against 1/1/1/1,
+  ceiling intact. The claim about Latin text was measured rather than assumed: a first draft
+  said Latin output was "unchanged by construction", and the differential against the
+  pre-change code disagreed — **58 of 1680 cases differ** (7 Latin/fence/table shapes ×
+  budgets 1–120, both `applyTokenBudget` and `trimToTokenBudget`), because a different leaf
+  answer changes which candidate the floor pass selects downstream. What was verified is
+  narrower and true: **0 ceiling violations, 0 newly unclosed fences, 0 cases that lost all
+  document prose** — the 19 that carry fewer tokens shed notice framing, not words. Mutation:
+  comparison removed (3), closure requirement dropped (3), tie-break flipped (3), always
+  prefer the challenger (3), challenger measured by character length instead of tokens (3).
+  The #197-style residual pin was inverted deliberately, as it instructed.
+- **The #201 Reddit-gate test no longer depends on the scheduler being idle.** It failed its
+  own premise (`premise broken: Reddit ran`) inside `test:all` while passing in isolation and
+  under CPU load. The harness set `responseTargetMs: 60` with `googleLaneMaxMs: 50`, putting
+  the Google lane's own cap 10ms **inside** the response target, so the lane could settle
+  just before the gate asked `Date.now() >= responseDeadlineAt` and Reddit started. The
+  deadlines are now non-adjacent (`responseTargetMs: 40`, `googleLaneMaxMs: 5000`) so the
+  gated path is structural and the only deadline in play is the one the gate reads; verified
+  three consecutive runs under load. A timing test that only holds when the machine is idle
+  is not a detector.
+
+
 - **A headings-only document no longer answers blank** (#189 item 1). `carriesPageProse`
   began with `if (prosePrefixSource(body).trim() === "") return true; // nothing to carry`,
   which read as "there is no prose, so the floor cannot be violated" and was satisfied

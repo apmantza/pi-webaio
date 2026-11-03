@@ -1531,17 +1531,54 @@ export function trimToTokenBudget(text: string, maxTokens: number): string {
 	if (maxTokens <= 0) return "";
 	if (estimateTokens(text) <= maxTokens) return text;
 	let chars = Math.min(text.length, Math.max(1, maxTokens * 4));
+	let loop: string | null = null;
 	for (let attempt = 0; attempt < 12; attempt++) {
 		const candidate = truncateToBudget(text.slice(0, chars), maxTokens);
 		const used = estimateTokens(candidate);
-		if (used <= maxTokens) return candidate;
+		if (used <= maxTokens) {
+			loop = candidate;
+			break;
+		}
 		// Shrink proportionally to the measured overshoot, minus a small margin
 		// so progress cannot stall when the boundary search rounds back up.
 		chars = Math.max(1, Math.floor((chars * maxTokens) / used) - 16);
 	}
 	// Terminal fallback: a slice no longer than the token budget can never
 	// exceed it, since every remaining character is at least a fraction of a token.
-	return text.slice(0, maxTokens).replace(/\s+$/, "");
+	const plain = text.slice(0, maxTokens).replace(/\s+$/, "");
+	if (loop === null) return plain;
+	// The fallback is also a CANDIDATE, and comparing the two by the document's own
+	// measure is what fixes #189 item 3 without touching the shape that four #190/#182
+	// guards pin. The seed above (`maxTokens * 4`) and the absolute `- 16` shrink margin
+	// are both Latin-shaped: measured, Latin runs 4.75 char/token and CJK 1.00, so for a
+	// CJK document the seed overshoots ~4x and the margin then computes `20 - 16 = 4` at
+	// budget 20 — the loop's first fitting answer was ONE character (1 token) while 19
+	// tokens of the budget sat unused, and the function returned it immediately.
+	//
+	// This is a quality comparison between two candidates that both fit, NOT a search for
+	// the largest fitting slice. Two earlier designs were refused on evidence and are
+	// recorded at the floor pass above: a binary search over slice length, and a
+	// proportional shrink margin. Both broke four guards, because a longer slice can be a
+	// WORSE answer — `"```\ncode \n```\n"` drops the prose a shorter slice keeps — so
+	// length is not the objective and monotonicity in length cannot be assumed.
+	//
+	// What this does to Latin text was MEASURED, not assumed. A first draft of this comment
+	// claimed Latin output was "unchanged by construction"; the differential against the
+	// pre-change code said otherwise — 58 of 1680 cases (7 Latin/fence/table shapes x
+	// budgets 1..120, both `applyTokenBudget` and `trimToTokenBudget`) do differ, because a
+	// different leaf answer changes which candidate the floor pass selects downstream. So
+	// the honest claim is the one that was checked: **0 ceiling violations, 0 newly unclosed
+	// fences, and 0 cases that lost all document prose** — the 19 cases that carry fewer
+	// tokens shed notice framing, not document words. That is the bar this comparison has
+	// to clear, and it is a narrower claim than "unchanged", which is why it is the one
+	// pinned by the sweep rather than the one asserted here.
+	// Closure is required, not assumed: a raw character slice can stop inside a fence, and
+	// an unclosed answer is the #190 defect, so a fallback that would open a fence is
+	// refused even when it carries more text.
+	if (findUnclosedFence(plain) === null && estimateTokens(plain) > estimateTokens(loop)) {
+		return plain;
+	}
+	return loop;
 }
 
 /**

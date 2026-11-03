@@ -31,10 +31,18 @@ function harness({ googleSettles = false }) {
 			},
 			cdpAvailable: () => true,
 			providerAvailable: () => true,
+			// The deadlines are chosen so the gated path is STRUCTURAL, not timing-lucky.
+			// The first version used `responseTargetMs: 60` with `googleLaneMaxMs: 50`, which
+			// put the Google lane's own cap 10ms INSIDE the response target: the lane could
+			// settle just before the gate asked `Date.now() >= responseDeadlineAt`, Reddit
+			// started, and the test failed its own premise under `test:all` load while passing
+			// in isolation. A gate that only holds when the scheduler is idle is not a
+			// detector, so the lane cap now sits far outside the response target and the only
+			// deadline in play is the one the gate reads.
 			searchDeadlineMs: 600,
-			responseTargetMs: 60,
-			httpEngineDeadlineMs: 40,
-			googleLaneMaxMs: 50,
+			responseTargetMs: 40,
+			httpEngineDeadlineMs: 20,
+			googleLaneMaxMs: 5000,
 		},
 	);
 	return { registered, calls };
