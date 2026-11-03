@@ -298,25 +298,31 @@ syms("the symlink note reads correctly for one symlink", async () => {
 	assert.doesNotMatch(line, /1 symlinks/, line);
 });
 
-// ─── named residual: #200 ─────────────────────────────────────────────────────
-// The #197 sweep found a sibling divergence at a different seam and it is NOT fixed
-// here, because it needs a policy decision rather than a patch. This test pins the
-// divergence as it stands so that fixing #200 must deliberately invert an assertion
-// that says "this is currently wrong", instead of a green suite quietly agreeing.
-syms("RESIDUAL #200: a hidden directory is pruned by the walk but counted by the API", async (t) => {
+// ─── #200: was a named residual, now fixed ────────────────────────────────────
+// This test was written in #197 to pin the divergence AS WRONG, with the instruction
+// "flip this line when #200 lands; that flip IS the decision". The decision recorded on
+// the issue was that the WALK stops pruning what the FILTER does not prune, so the
+// blanket dot rule is gone and the shared list gained the Python tool caches.
+// Asserting equality here is therefore not a loosened expectation — it is the recorded
+// decision, and the same property is asserted over the full candidate set in
+// tests/webmap-exclusion-parity-200.test.mjs.
+syms("#200: a hidden directory is counted by BOTH sources", async (t) => {
 	const root = fixtureRepo(t, { dirs: [".config"], files: [".config/c", "a.ts"] });
 	const walk = await walkRepo(root);
 	const api = apiCensus(root);
-	// The walk's blanket dot-rule prunes .config/; dropExcludedPaths does not exclude it.
-	assert.ok(!walk.paths.some((p) => p.startsWith(".config")), "walk prunes it");
+	// GitHub shows `.config/`, the API counts it, so the map must show it too.
+	assert.ok(
+		walk.paths.some((p) => p.startsWith(".config")),
+		`the walk still hides a dot-directory: ${JSON.stringify(walk.paths)}`,
+	);
 	assert.ok(
 		api.paths.some((p) => p.startsWith(".config/")),
-		"API filter keeps it — the two sources disagree, and neither bound fires",
+		"API filter keeps it — the walk must now agree",
 	);
 	assert.equal(walk.hitCap, false);
 	assert.equal(walk.readFailed, false);
-	assert.notEqual(walk.paths.length, api.total, "#200: exact-labelled totals differ");
-	// Flip this line to `assert.equal(...)` when #200 lands; that flip IS the decision.
+	// The flip itself: exact-labelled totals must now be equal, not merely different.
+	assert.equal(walk.paths.length, api.total, "#200: the two sources now agree");
 });
 
 syms("the composed counts line reads as one sentence", async (t) => {

@@ -4,6 +4,32 @@ All notable changes to pi-webaio will be documented in this file.
 
 ## [Unreleased]
 
+- **The webmap clone walk and the API tree now use ONE exclusion list** (#200). `walkRepo`
+  pruned with its own `skipDirs` set plus a blanket "starts with `.`" rule, while the API
+  path filtered with `REPO_PATH_EXCLUSIONS`. Two overlapping-but-unequal lists meant the
+  same repository reported different totals depending on which source answered, and the
+  clone total arrived labelled **exact** because no bound tripped. Measured on
+  `actions/checkout`: the walk reported **80 of 108 entries — 26% hidden, every one of them
+  under `.licenses/`** — the per-dependency license metadata an agent needs to answer "what
+  does this ship under" — while the summary said "in the full tree". After: 108 vs 108, zero
+  symmetric difference.
+  The blanket dot rule was a filesystem instinct (hide dotfiles) applied to a source
+  repository, where it is wrong: it pruned every dot-prefixed directory except `.github`, so
+  what survived depended on whether a tool happened to name its cache with a leading dot. The
+  tell was that `.github` was already special-cased out of it — a rule needing an exception
+  for the one directory whose contents you want was never about relevance. Recorded because
+  the first draft of this entry claimed the rule also hid `.github/workflows/`: it did not.
+  The rule tested the entry NAME and `.github` was exempt, so `workflows` never matched; the
+  probe printed the same workflow count before and after and was misread as a delta. `REPO_PATH_EXCLUSIONS` is now the
+  single pruning rule; the walk's name-based set is gone entirely (a `.git`-only set was
+  written first and deleted after probing showed `".git/"` is already in the shared list,
+  so no mutation of it could fail a test). `.pytest_cache/`, `.mypy_cache/` and `.tox/`
+  joined the shared list, where they had only ever been on the walk side. The
+  `skipHidden` option is removed — no production caller ever passed it, and one test was
+  passing a `skipDirs` option that was never in the signature and silently ignored.
+  The `#197` residual pin was inverted deliberately, as it instructed.
+
+
 - **A Reddit lane that never started no longer reports `timeout`** (#201, found while
   measuring #97). When the Google lane consumes the response budget, the Reddit lane is
   gated behind it and makes **no request at all** — yet the provider row reported

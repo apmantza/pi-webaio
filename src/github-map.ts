@@ -397,27 +397,18 @@ interface WalkResult {
  */
 export async function walkRepo(
 	root: string,
-	opts: { maxEntries?: number; skipHidden?: boolean } = {},
+	opts: { maxEntries?: number } = {},
 ): Promise<WalkResult> {
-	const skipHidden = opts.skipHidden !== false;
+	// No second exclusion list, and no name-based prune set at all. `isExcludedPath` below
+	// is the only pruning rule, and it is the same list the API path filters with.
+	//
+	// A `.git` name-based set was written here first, on the reasoning that `git ls-tree`
+	// never lists `.git/` so it could legitimately differ from the shared list. Probing
+	// showed the reasoning was wrong and the set was dead: `REPO_PATH_EXCLUSIONS` already
+	// carries `".git/"`, and `isExcludedPath(".git/")` is true — so removing the set changed
+	// nothing and no mutation of it could fail a test. A guard that cannot be made red does
+	// not stay in the file (#200).
 	const maxEntries = opts.maxEntries ?? 100_000;
-	const skipDirs = new Set([
-		".git",
-		"node_modules",
-		".venv",
-		"venv",
-		"target",
-		"dist",
-		"build",
-		".next",
-		".nuxt",
-		".cache",
-		"__pycache__",
-		".pytest_cache",
-		".mypy_cache",
-		".tox",
-		"vendor",
-	]);
 	const paths: string[] = [];
 	let files = 0;
 	let dirs = 0;
@@ -454,12 +445,17 @@ export async function walkRepo(
 			return a.name.localeCompare(b.name);
 		});
 		for (const e of entries) {
-			if (skipHidden && e.name.startsWith(".") && e.name !== ".github") {
-				// Keep .github/ but skip other hidden dirs/files
-				if (e.isDirectory()) continue;
-			}
+			// No blanket "starts with `.`" rule. It was a FILESYSTEM instinct (hide dotfiles)
+			// applied to a SOURCE repository, where it is wrong: it pruned every dot-prefixed
+			// directory except `.github`, so what survived depended on whether a tool happened
+			// to name its cache with a leading dot. Measured on `actions/checkout`, it hid exactly
+			// 28 of the API's 108 entries — all of them under `.licenses/`, the per-dependency
+			// license metadata an agent needs to answer "what does this ship under" — and the
+			// total was still labelled exact. `.circleci/` goes the same way in any repository
+			// using it. `.github` was already special-cased out of the rule, which is the tell: a
+			// rule that needs an exception for the one directory whose contents you want was never
+			// about source relevance (#200).
 			if (e.isDirectory()) {
-				if (skipDirs.has(e.name)) continue;
 				// Directories are entries here exactly as they are in the other two
 				// sources (#184 asks that all three obey one convention): slash-terminated,
 				// so `repoEntryCensus`, `buildTree` and `repoTreeEntryUrl` read them the same
@@ -736,6 +732,12 @@ const REPO_PATH_EXCLUSIONS = [
 	".venv/",
 	"__pycache__/",
 	"pycache/",
+	// Tool caches, the same bucket as `__pycache__`. They were pruned by the clone walk's
+	// own `skipDirs` and by nothing on the API side, so the two sources disagreed on every
+	// Python repository (`#200`).
+	".pytest_cache/",
+	".mypy_cache/",
+	".tox/",
 	".cache/",
 	".tmp/",
 	".tmp",
