@@ -21,7 +21,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { formatRepoMapCounts } from "../src/github-map.ts";
+import { formatRepoMapCounts, renderRepoTreeMarkdown } from "../src/github-map.ts";
 
 test("#168: a max-capped URL count says it is capped and names the cap", () => {
 	const { discovered } = formatRepoMapCounts({
@@ -207,4 +207,43 @@ test("#184: the included-URL count no longer claims to be files only", () => {
 	assert.ok(!/file URLs/i.test(out.discovered), `label still claims files only: ${out.discovered}`);
 	assert.ok(!/file URLs/i.test(out.entries), `label still claims files only: ${out.entries}`);
 	assert.ok(/100/.test(out.entries), "the included count disappeared from the label");
+});
+
+// CodeRabbit on #196: `read-error` was a coverage bound with no wording of its own,
+// so it inherited the walk-limit sentence — which tells the reader to raise `maxFiles`
+// (cannot help) and claims "the repository may hold more" (unproven: the unreadable
+// directory is itself counted and its contents might be empty).
+test("#184: a read failure is described as unknown contents, not as a cap", () => {
+	const out = formatRepoMapCounts({
+		totalUrls: 1,
+		entriesIncluded: 1,
+		max: 100,
+		coverage: { total: 1, scope: "recursive", bound: "read-error" },
+	});
+	assert.match(out.entries, /could not be read/, `reason missing: ${out.entries}`);
+	assert.match(out.entries, /contents are unknown/);
+	// The two claims a read failure is NOT allowed to make.
+	assert.doesNotMatch(out.entries, /may hold more/, `claimed more entries than it counted: ${out.entries}`);
+	assert.doesNotMatch(out.entries, /maxFiles/, `sent the reader to the wrong knob: ${out.entries}`);
+	assert.doesNotMatch(out.entries, /walk limit|walk stopped at its limit/);
+});
+
+test("#184: the tree heading carries the read failure too", () => {
+	const md = renderRepoTreeMarkdown(["assets/"], 100, {
+		total: 1,
+		scope: "recursive",
+		bound: "read-error",
+	});
+	const heading = md.split("\n").find((l) => l.startsWith("## "));
+	assert.match(heading, /incomplete — a directory could not be read/, `heading: ${heading}`);
+	assert.doesNotMatch(heading, /walk limit/);
+	// A cap must still be labelled as a cap, or the new branch swallowed it.
+	const capped = renderRepoTreeMarkdown(["assets/"], 100, {
+		total: 1,
+		scope: "recursive",
+		bound: "walk-cap",
+	})
+		.split("\n")
+		.find((l) => l.startsWith("## "));
+	assert.match(capped, /walk limit/, `the cap label regressed: ${capped}`);
 });

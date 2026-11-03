@@ -1274,6 +1274,29 @@ export function mapWalkToCoverage(walk: WalkResult | null): {
 	};
 }
 
+/**
+ * Why a count is a floor, in the reader's terms. Each reason names the thing that
+ * would actually help, and none of them may claim more than the producer knows.
+ *
+ * `read-error` is the delicate one: an unreadable directory is itself counted while
+ * its contents are unknown, so "the repository may hold more" would be an
+ * over-claim in the opposite direction — those contents might be empty. It says what
+ * is unknown, not what exists. Naming `maxFiles` here would also be wrong, which is
+ * why the cap and the read failure do not share a sentence.
+ */
+function boundReason(bound: EntryCoverage["bound"]): string {
+	switch (bound) {
+		case "api-truncated":
+			return "the API truncated the tree — the repository holds more";
+		case "read-error":
+			return "one or more directories could not be read — their contents are unknown";
+		case "walk-cap":
+			return "the cloned-tree walk stopped at its limit — the repository may hold more";
+		default:
+			return "the count is a lower bound";
+	}
+}
+
 export function formatRepoMapCounts(opts: {
 	totalUrls: number;
 	max: number;
@@ -1312,11 +1335,11 @@ export function formatRepoMapCounts(opts: {
 		};
 	}
 	if (coverage.bound) {
-		const why =
-			coverage.bound === "api-truncated"
-				? "the API truncated the tree — the repository holds more"
-				: "the cloned-tree walk stopped at its limit — the repository may hold more";
-		return { discovered, entries: `\nTotal entries: at least ${coverage.total} (${why}; ${urls})` };
+		return {
+			discovered,
+			entries:
+				`\nTotal entries: at least ${coverage.total} (${boundReason(coverage.bound)}; ${urls})`,
+		};
 	}
 	return {
 		discovered,
@@ -1340,6 +1363,21 @@ export function formatRepoMapCounts(opts: {
  *
  * Exported for unit testing.
  */
+/**
+ * The qualifier a tree heading carries, or "" when the count is exact. Kept beside
+ * `boundReason` so the two renderings of the same coverage value cannot drift —
+ * three rounds of #184 produced a label that was wrong about which quantity it
+ * described.
+ */
+function treeBoundLabel(coverage: EntryCoverage): string {
+	if (coverage.bound === "api-truncated") return ", truncated by API";
+	if (coverage.scope === "root") return ", repository root only";
+	if (coverage.bound === "read-error") return ", incomplete — a directory could not be read";
+	if (coverage.bound === "walk-cap") return ", bounded by the cloned-tree walk limit";
+	if (coverage.retainedBounded) return `, bounded by the ${MAX_TREE_PATHS}-entry retention cap`;
+	return "";
+}
+
 export function renderRepoTreeMarkdown(
 	paths: string[],
 	max: number,
@@ -1347,21 +1385,15 @@ export function renderRepoTreeMarkdown(
 ): string {
 	const budget = Math.max(1, Math.min(paths.length, max));
 	const shownPaths = paths.length > budget ? paths.slice(0, budget) : paths;
-	const rendered = renderTree(buildTree(shownPaths));
+const rendered = renderTree(buildTree(shownPaths));
 	// The heading and the summary line must describe the SAME collection, so both
 	// read it off one coverage value instead of each being handed its own boolean —
 	// three rounds produced a label where one of them was wrong about which
 	// quantity it described.
-	const bound =
-		coverage.bound === "api-truncated"
-			? ", truncated by API"
-		: coverage.scope === "root"
-			? ", repository root only"
-			: coverage.bound === "walk-cap"
-				? ", bounded by the cloned-tree walk limit"
-				: coverage.retainedBounded
-					? `, bounded by the ${MAX_TREE_PATHS}-entry retention cap`
-					: "";
+	// Each bound names the thing that would actually help; see `boundReason` for why
+	// they must not share wording — a read failure must not tell the reader to raise
+	// `maxFiles`, and must not claim the repository holds more than was counted.
+	const bound = treeBoundLabel(coverage);
 	const label = `## File Tree (${paths.length} entries${bound})`;
 	const note =
 		shownPaths.length < paths.length
