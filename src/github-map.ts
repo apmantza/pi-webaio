@@ -692,7 +692,10 @@ async function listContents(
  * zero counter survived precisely because nothing could be run over this mapping.
  */
 export function recursiveTreePaths(tree: Array<{ path?: unknown; type?: unknown }>): string[] {
-	return entryPaths(tree, { dir: "tree", file: "blob" });
+	// No `symlink` spelling to admit here: the recursive trees API reports a symlink as
+	// `blob` with mode 120000, so it already arrives as the file kind. `commit` (a gitlink)
+	// stays excluded because its derived /blob/ URL 404s.
+	return entryPaths(tree, { dir: ["tree"], file: ["blob"] });
 }
 
 /**
@@ -813,7 +816,16 @@ const REPO_PATH_EXCLUSIONS = [
 export function contentEntryPaths(
 	entries: Array<{ path: string; type?: string }>,
 ): string[] {
-	return entryPaths(entries, { dir: "dir", file: "file" });
+	// `symlink` is admitted as a file. It used to be excluded alongside `submodule` on
+	// the reasoning that a `/blob/` link cannot render the entry — true of a gitlink, which
+	// is not cloned into the web tree and 404s at both derivable URLs, and FALSE of a
+	// symlink, measured live on the entries the API reports for git/git:
+	//   200  /blob/master/RelNotes             (file symlink)
+	//   200  /blob/master/subprojects/git-gui  (DIRECTORY symlink)
+	// Leaving it dropped made this third source disagree with the other two about the same
+	// repository, which is the #197 defect surviving the #197 fix in the one place the
+	// first version did not look.
+	return entryPaths(entries, { dir: ["dir"], file: ["file", "symlink"] });
 }
 
 /**
@@ -866,7 +878,7 @@ export type AdmittedEntry<T = unknown> = { path: string; isDir: boolean; entry: 
 
 function admitEntries<T extends { path?: unknown; type?: unknown }>(
 	entries: readonly T[],
-	kinds: { dir: string; file: string },
+	kinds: { dir: string[]; file: string[] },
 ): Array<AdmittedEntry<T>> {
 	const out: Array<AdmittedEntry<T>> = [];
 	for (const item of entries) {
@@ -875,9 +887,14 @@ function admitEntries<T extends { path?: unknown; type?: unknown }>(
 		// empty path would render as the bare repo URL, presenting the repository itself
 		// as one of its own entries).
 		if (typeof item.path !== "string" || item.path === "") continue;
-		if (item.type === kinds.file) {
+		// A LIST of accepted spellings per kind, because one endpoint can report the same
+		// kind under two words. The contents API says `file` for a regular file and
+		// `symlink` for a symlink, and both have a reachable `/blob/` URL, so both are the
+		// file kind; the trees API needs no such widening because it reports a symlink as
+		// `blob` with mode 120000 in the first place.
+		if (typeof item.type === "string" && kinds.file.includes(item.type)) {
 			out.push({ path: item.path, isDir: false, entry: item });
-		} else if (item.type === kinds.dir) {
+		} else if (typeof item.type === "string" && kinds.dir.includes(item.type)) {
 			// Neither endpoint ever returns a trailing slash of its own, so there is no
 			// "already terminated" branch here: a mutation of it is untestable, and an
 			// untestable branch is not allowed to sit inside the one writer of a convention.
@@ -897,7 +914,7 @@ function admitEntries<T extends { path?: unknown; type?: unknown }>(
  */
 function entryPaths(
 	entries: Array<{ path?: unknown; type?: unknown }>,
-	kinds: { dir: string; file: string },
+	kinds: { dir: string[]; file: string[] },
 ): string[] {
 	return admitEntries(entries, kinds).map((e) => e.path);
 }
@@ -1745,7 +1762,10 @@ async function mapGitHubTree(
 	// so a listing of 4 entries holding 2 reachable ones could render 0 after the
 	// discard — the same "the bound counts what we keep neither" mistake as the walk
 	// cap, reached through a third door.
-	const reachable = admitEntries(contents, { dir: "dir", file: "file" });
+	// Same contents vocabulary as `contentEntryPaths`, so `symlink` is admitted here too:
+	// a symlink's derived `/blob/` URL resolves (measured on git/git), while a gitlink's
+	// does not and stays out.
+	const reachable = admitEntries(contents, { dir: ["dir"], file: ["file", "symlink"] });
 	const admitted = reachable.slice(0, max);
 	const entryUrl = (e: AdmittedEntry) => {
 		// A gitlink is reachable only in its own repository, and GitHub already says

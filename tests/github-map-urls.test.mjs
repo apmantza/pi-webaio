@@ -290,16 +290,23 @@ test("#176: the slash is the one representation every consumer reads", () => {
 	assert.equal(readme?.type, "file");
 });
 
-test("#176: a symlink/submodule entry is not passed through as a file", () => {
-	// GitHub also reports `type: "symlink"` and `type: "submodule"`. Neither is
-	// a blob whose contents `/blob/` can render, so neither may become a URL.
+test("#176: a submodule is not passed through as a file; a symlink is admitted as one", () => {
+	// GitHub also reports `type: "symlink"` and `type: "submodule"`. They were lumped
+	// together here on the reasoning that neither is "a blob whose contents /blob/ can
+	// render", which is TRUE of a gitlink (not cloned into the web tree; both derivable
+	// URLs 404) and FALSE of a symlink. Measured live on the entries the API reports for
+	// git/git:
+	//   200  https://github.com/git/git/blob/master/RelNotes              (file symlink)
+	//   200  https://github.com/git/git/blob/master/subprojects/git-gui   (DIRECTORY symlink)
+	// Dropping symlinks here also made this source disagree with the recursive trees API
+	// and the clone walk about the same repository — #197 surviving its own fix (#199).
 	assert.deepEqual(
 		contentEntryPaths([
 			{ path: "link", type: "symlink" },
 			{ path: "vendor/lib", type: "submodule" },
 			{ path: "keep.ts", type: "file" },
 		]),
-		["keep.ts"],
+		["link", "keep.ts"],
 	);
 });
 
@@ -347,7 +354,7 @@ test("#176: contents types are preserved, and unrecognised ones are not files", 
 	}
 });
 
-test("#176: end to end, a raw contents listing yields no fabricated blob links", () => {
+test("#176: end to end, a raw contents listing fabricates no links for unreachable kinds", () => {
 	const raw = [
 		{ path: "README.md", type: "file" },
 		{ path: "src", type: "dir" },
@@ -356,14 +363,25 @@ test("#176: end to end, a raw contents listing yields no fabricated blob links",
 		{ path: "mystery", type: "who-knows" },
 	];
 	const paths = contentEntryPaths(raw.map((e) => ({ ...e, type: normalizeContentEntryType(e.type) })));
-	assert.deepEqual(paths, ["README.md", "src/"]);
+	// `link` is IN. The original version of this test excluded it with the gitlink on the
+	// shared assumption that a `/blob/` link cannot render either kind; that assumption is
+	// false for a symlink, measured live on git/git (200 for /blob/master/RelNotes and 200
+	// for the DIRECTORY symlink /blob/master/subprojects/git-gui), and keeping it excluded
+	// left this source disagreeing with the trees API and the clone walk (#197 via #199).
+	// The fail-closed rule still governs the two kinds that genuinely 404: a gitlink and
+	// any entry type GitHub has not told us about.
+	assert.deepEqual(paths, ["README.md", "src/", "link"]);
 	const urls = paths.map((p) => repoTreeEntryUrl(`https://github.com/${O}/${R}`, "main", p));
-	// Nothing whose type is not `file` may appear in the URL list at all, and the
-	// one directory entry must be `/tree/`. (Asserting "no /blob/ anywhere" here
-	// would be wrong: README.md is a real file and its blob link is correct.)
+	// Nothing whose type is unrenderable may appear in the URL list at all, and the one
+	// directory entry must be `/tree/`. (Asserting "no /blob/ anywhere" here would be
+	// wrong: README.md is a real file and its blob link is correct.)
 	assert.ok(
-		!urls.some((u) => /\/link$|vendor|mystery/.test(u)),
-		`a non-file entry leaked a URL: ${urls.join(" ")}`,
+		!urls.some((u) => /vendor|mystery/.test(u)),
+		`an unreachable entry leaked a URL: ${urls.join(" ")}`,
+	);
+	assert.ok(
+		urls.some((u) => u === `https://github.com/${O}/${R}/blob/main/link`),
+		`the symlink must get its reachable blob link: ${urls.join(" ")}`,
 	);
 	assert.ok(urls.some((u) => u.includes("/tree/main/src")), "the directory must still be mapped");
 	assert.ok(

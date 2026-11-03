@@ -33,7 +33,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-const { walkRepo, repoEntryCensus, isExcludedPath, dropExcludedPaths, recursiveTreePaths, walkSummaryLine } =
+const { walkRepo, repoEntryCensus, isExcludedPath, dropExcludedPaths, recursiveTreePaths, contentEntryPaths, walkSummaryLine } =
 	await import("../src/github-map.ts");
 
 // Windows needs SeCreateSymbolicLink privilege; a CI runner without it must not read
@@ -333,4 +333,44 @@ syms("the composed counts line reads as one sentence", async (t) => {
 	// No doubled comma, and no dangling comma when there is no entries sentence.
 	assert.doesNotMatch(line, /,,/);
 	assert.doesNotMatch(walkSummaryLine(walk), /,$/);
+});
+
+// ─── the third source ─────────────────────────────────────────────────────────
+// The repo map has THREE sources, and #197 as first filed covered two of them. The
+// contents-listing fallback (used when the API tree fails entirely and the clone also
+// failed) spells a symlink `type: "symlink"`, and `contentEntryPaths` dropped it along
+// with submodules. Fixing only the clone walk left that source still undercounting —
+// found by CodeRabbit on this PR, not by me, which is the value of the second pair of
+// eyes. The two kinds were lumped together on the reasoning "a /blob/ link 404s", which
+// is true of a gitlink and FALSE of a symlink, measured live on the entries the API
+// itself reports:
+//   200  https://github.com/git/git/blob/master/RelNotes              (file symlink)
+//   200  https://github.com/git/git/blob/master/subprojects/git-gui   (DIRECTORY symlink)
+test("the contents-listing source counts symlinks too (three-way parity)", () => {
+	const entries = [
+		{ path: "keep.ts", type: "file" },
+		{ path: "src", type: "dir" },
+		{ path: "link", type: "symlink" },
+		{ path: "vendor/lib", type: "submodule" },
+	];
+	const paths = contentEntryPaths(entries);
+	// A symlink is a blob with a reachable /blob/ URL, so it is admitted as a file.
+	assert.ok(paths.includes("link"), JSON.stringify(paths));
+	// A gitlink is NOT: it is not cloned into the web tree and both derivable URLs 404.
+	assert.ok(!paths.includes("vendor/lib"), JSON.stringify(paths));
+	assert.deepEqual(paths, ["keep.ts", "src/", "link"]);
+});
+
+test("the trees-API source is unchanged by admitting contents symlinks", () => {
+	// The two callers share one admission rule but keep their own vocabulary. Widening
+	// the CONTENTS spelling must not silently widen the trees one.
+	assert.deepEqual(
+		recursiveTreePaths([
+			{ path: "a.ts", type: "blob" },
+			{ path: "src", type: "tree" },
+			{ path: "link", type: "blob" },
+			{ path: "lib", type: "commit" },
+		]),
+		["a.ts", "src/", "link"],
+	);
 });
