@@ -39,8 +39,8 @@ import {
 	SEARCH_RESPONSE_TARGET_MS,
 } from "../src/tools/websearch.ts";
 
-const USAGE = `usage: npm run bench:search:full -- [mode] [samples] [spacingMs] [query...]
-       (or: node scripts/bench-full-search.mjs [mode] [samples] [spacingMs] [query...])
+const USAGE = `usage: npm run bench:search:full -- [mode] [samples] [spacingMs] -- [query...]
+       (or: node scripts/bench-full-search.mjs [mode] [samples] [spacingMs] -- [query...])
 
   mode        legacy | broker | <any label>   default: legacy
               (broker sets PI_WEBAIO_CDP_BROKER=1; the label is only a column header)
@@ -50,6 +50,13 @@ const USAGE = `usage: npm run bench:search:full -- [mode] [samples] [spacingMs] 
   query...    base query (distinct variants are rotated per sample)
               default: "pi coding agent"
 
+Put the query after -- whenever it could look like a flag, e.g.
+
+  npm run bench:search:full -- legacy 10 0 -- ls -h
+
+Without the separator a query word that reads as a flag is indistinguishable from
+one. Positional queries still work for anything that cannot be confused.
+
 This harness performs LIVE network requests on every sample. Nothing here is
 offline-safe, so --help is handled before any sampling starts: an operator
 reading the flags must not have to spend live samples to do it (#97).
@@ -57,19 +64,35 @@ reading the flags must not have to spend live samples to do it (#97).
 Environment: PI_WEBAIO_CDP_BROKER=1 selects the broker Google lane.
 `;
 
-if (process.argv.slice(2).some((a) => a === "--help" || a === "-h")) {
+// The help scan must stop at `--`: everything after it is the QUERY, and a query
+// containing `-h` ("ls -h", "git diff --help") must run rather than print usage and
+// exit 0 — scanning every argument silently turned a measured query into a no-op
+// that looked like it had completed. Note Node passes the `--` separator through to
+// `process.argv`, so it has to be removed here or the query starts with a literal
+// `--` and measures a different search than the operator typed.
+const rawArgs = process.argv.slice(2);
+const sepAt = rawArgs.indexOf("--");
+const flagArgs = sepAt === -1 ? rawArgs : rawArgs.slice(0, sepAt);
+const queryArgs = sepAt === -1 ? null : rawArgs.slice(sepAt + 1);
+
+if (flagArgs.some((a) => a === "--help" || a === "-h")) {
 	console.log(USAGE);
 	process.exit(0);
 }
 
-const mode = process.argv[2] ?? "legacy";
-const samples = Number.parseInt(process.argv[3] ?? "10", 10);
+const mode = flagArgs[0] ?? "legacy";
+const samples = Number.parseInt(flagArgs[1] ?? "10", 10);
 // Optional spacing (ms) between samples. Real aio-websearch calls are spaced
 // by user thinking time; zero-spacing bursts trigger engine rate-limiting
 // (Brave 429, reddit cooldown) and the 10-min search cache, which distorts
 // the numbers. Pass e.g. 4000 to simulate steady-state usage.
-const spacingMs = Number.parseInt(process.argv[4] ?? "0", 10);
-const baseQuery = process.argv.slice(5).join(" ") || "pi coding agent";
+const spacingMs = Number.parseInt(flagArgs[2] ?? "0", 10);
+// Positional queries (args 4+) still work so no existing invocation breaks; `--`
+// takes precedence and is the documented form because it cannot be confused with a
+// flag.
+const baseQuery =
+	(queryArgs && queryArgs.length ? queryArgs.join(" ") : flagArgs.slice(3).join(" ")) ||
+	"pi coding agent";
 // Rotate distinct queries so consecutive samples don't hit the 10-min
 // search cache (which would attribute cached results to DDG and measure
 // cache hits instead of fresh searches). Mirrors real usage where each
@@ -129,12 +152,20 @@ function nodeProcessCount() {
 	// reported as unavailable.
 	if (platform() !== "win32") {
 		try {
-			const out = execSync("pgrep -x node | wc -l", { encoding: "utf8", timeout: 5000 });
+			// `pgrep -x node | wc -l` exits with WC's status, so on a host without
+			// pgrep the pipeline still prints `0` and still exits 0: the catch below
+			// never ran, the summary printed a confident `0` node processes beside a
+			// shell error on stderr, and `n/a (no pgrep)` was unreachable text.
+			// Resolve availability first so a missing tool throws into the honest branch.
+			const out = execSync("command -v pgrep >/dev/null && pgrep -x node | wc -l", {
+				encoding: "utf8",
+				timeout: 5000,
+			});
 			const n = Number.parseInt(out.trim(), 10);
 			return Number.isFinite(n) ? String(n) : "?";
 		} catch {
 			// pgrep is absent (minimal containers) — say which, do not print "?".
-				return "n/a (no pgrep on this platform)";
+			return "n/a (no pgrep on this platform)";
 		}
 	}
 	try {
