@@ -43,6 +43,30 @@ function mapTree() {
 	return mod.mapGitHubRepo(url, mod.parseGitHubMapUrl(url), { max: 10 });
 }
 
+/**
+ * Exact-membership helpers.
+ *
+ * CodeQL flagged `urls.includes(EXACT_URL)` as "incomplete URL substring
+ * sanitization" (2 high). It cannot prove `urls` is an array, so that instance is a
+ * false positive — but the CLASS is exactly what this PR exists to remove: deciding
+ * anything about a URL by substring is the prefix trap that makes a submodule look
+ * local. Asserting `===` is the fix and is strictly stronger: a substring check
+ * would also accept the same URL with a host glued in front, or with a query string
+ * appended. Converted everywhere, not just on the two flagged lines.
+ */
+const hasUrl = (urls, want) => urls.some((u) => u === want);
+
+/**
+ * A URL is a blob link when the fourth path segment says so — not because the
+ * string contains "/blob/". Segment-shaped reasoning is what `isForeignEntryUrl`
+ * had to adopt for the same reason, and a test that models the rule as a substring
+ * would keep passing if the builder ever emitted `/blob/` inside a path segment.
+ */
+const isBlobUrl = (u) => {
+	const parts = new URL(u).pathname.split("/").filter(Boolean);
+	return parts[2] === "blob";
+};
+
 test("#193: a submodule in a contents listing never becomes a /blob/ URL", async () => {
 	contents = [
 		{ name: "lib", path: "src/lib", type: "submodule" },
@@ -52,19 +76,19 @@ test("#193: a submodule in a contents listing never becomes a /blob/ URL", async
 	];
 	const r = await mapTree();
 	assert.ok(r.ok, r.summary);
-	const blobbed = r.urls.filter((u) => u.includes("/blob/"));
+	const blobbed = r.urls.filter(isBlobUrl);
 	assert.ok(
-		!blobbed.some((u) => u.endsWith("/src/lib")),
+		!hasUrl(blobbed, `${REPO_URL}/blob/main/src/lib`),
 		`submodule emitted a /blob/ URL (the #176 404 shape): ${JSON.stringify(blobbed)}`,
 	);
 	// The directory must still be reachable, as a /tree/ URL with no trailing slash.
 	assert.ok(
-		r.urls.includes(`${REPO_URL}/tree/main/src/nested`),
+		hasUrl(r.urls, `${REPO_URL}/tree/main/src/nested`),
 		`directory missing its /tree/ URL: ${JSON.stringify(r.urls)}`,
 	);
 	// And real files must survive — the fix must not become "drop everything".
 	assert.ok(
-		r.urls.includes(`${REPO_URL}/blob/main/src/a.ts`),
+		hasUrl(r.urls, `${REPO_URL}/blob/main/src/a.ts`),
 		`a plain file was dropped: ${JSON.stringify(r.urls)}`,
 	);
 });
@@ -87,8 +111,8 @@ test("#193: max bounds admitted entries, not raw ones", async () => {
 		`max=10 with 2 reachable entries should render both, got ${JSON.stringify(r.urls)}`,
 	);
 	assert.ok(
-		r.urls.includes(`${REPO_URL}/blob/main/src/f1.ts`) &&
-			r.urls.includes(`${REPO_URL}/blob/main/src/f2.ts`),
+		hasUrl(r.urls, `${REPO_URL}/blob/main/src/f1.ts`) &&
+			hasUrl(r.urls, `${REPO_URL}/blob/main/src/f2.ts`),
 		`reachable files were starved by unreachable ones: ${JSON.stringify(r.urls)}`,
 	);
 });
@@ -170,18 +194,17 @@ test("#193: a gitlink reported as a file gets its authoritative URL, not a 404",
 	const r = await mapTree();
 	assert.ok(r.ok, r.summary);
 	assert.ok(
-		r.urls.includes(gitlinkHtml),
+		hasUrl(r.urls, gitlinkHtml),
 		`the gitlink was not given the URL GitHub says is canonical: ${JSON.stringify(r.urls)}`,
 	);
 	assert.ok(
-		!r.urls.some((u) => u.includes("/blob/main/control/kern/headers")),
+		!hasUrl(r.urls, `${REPO_URL}/blob/main/control/kern/headers`),
 		`a derived URL was emitted for a gitlink, which 404s: ${JSON.stringify(r.urls)}`,
 	);
 	// A local file must keep the derived branch form — the fix must not become
 	// "trust html_url everywhere", which would silently change every other URL.
 	assert.ok(
-		r.urls.includes(`${REPO_URL}/blob/main/src/control/kern/tproxy.c`) ||
-			r.urls.includes(`${REPO_URL}/blob/main/control/kern/tproxy.c`),
+		hasUrl(r.urls, `${REPO_URL}/blob/main/control/kern/tproxy.c`),
 		`the local file lost its derived URL: ${JSON.stringify(r.urls)}`,
 	);
 });
@@ -208,17 +231,17 @@ test("#193: a submodule whose repo name extends the parent's is still foreign", 
 	const r = await mod.mapGitHubRepo(url, mod.parseGitHubMapUrl(url), { max: 10 });
 	assert.ok(r.ok, r.summary);
 	assert.ok(
-		r.urls.includes(gitlinkHtml),
+		hasUrl(r.urls, gitlinkHtml),
 		`owner is shared, so a prefix/owner test called the gitlink local and derived a ` +
 			`404 URL: ${JSON.stringify(r.urls)}`,
 	);
 	assert.ok(
-		!r.urls.some((u) => u.startsWith("https://github.com/daeuniverse/dae/blob/") && u.endsWith("/headers")),
+		!hasUrl(r.urls, "https://github.com/daeuniverse/dae/blob/main/control/kern/headers"),
 		`derived blob URL emitted for a gitlink: ${JSON.stringify(r.urls)}`,
 	);
 	// The genuinely-local sibling must NOT be dragged out of the repository.
 	assert.ok(
-		r.urls.some((u) => u === "https://github.com/daeuniverse/dae/blob/main/control/kern/tproxy.c"),
+		hasUrl(r.urls, "https://github.com/daeuniverse/dae/blob/main/control/kern/tproxy.c"),
 		`the local sibling was treated as foreign: ${JSON.stringify(r.urls)}`,
 	);
 });
