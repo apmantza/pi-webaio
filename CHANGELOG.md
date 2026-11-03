@@ -4,6 +4,20 @@ All notable changes to pi-webaio will be documented in this file.
 
 ## [Unreleased]
 
+- **A Reddit lane that never started no longer reports `timeout`** (#201, found while
+  measuring #97). When the Google lane consumes the response budget, the Reddit lane is
+  gated behind it and makes **no request at all** — yet the provider row reported
+  `status: "timeout"` with `latencyMs` set to the full response budget, i.e. a fabricated
+  60 ms of Reddit latency for zero requests, on the majority of runs where Google used the
+  budget. It now reports `skipped` with a `detail` naming the gate and `latencyMs: 0`. The
+  same classification bug also mapped the user-disabled case to `empty` ("Reddit answered
+  with nothing"); `classifyRedditStatus` now routes `disabled` to the token whose rendered
+  meaning is already *"not attempted"* (`describeEngineStatus`), so no new status value and
+  no change to the public result shape were needed. The genuine budget miss — Reddit
+  actually ran and missed its deadline — still reports `timeout`, pinned both ways so a
+  future widening cannot erase a real provider failure.
+
+
 ### Added
 - **`npm run bench:search` — a reproducible, offline, full-`aio-websearch` benchmark.** #97 asked for a full-tool baseline because every existing figure was a Google-*lane* sample being read as evidence about the tool. This drives the **real registered `execute`** through the tool's own dependency seam with faked providers, so it needs no network, no Chrome and no API key and is stable enough to assert on. Measured on the dev box (15 samples/row): pure **orchestration** cost — fan-out wiring, aggregation, dedup, ranking, status mapping, result shape — is **p50 0.2ms / p95 0.5ms**, so the aggregation and TUI costs the issue asked about are *not* what keeps the tool off a 2–3s p50. What sets the floor is the slowest **default provider lane**: a 2500ms Google lane moves the whole tool to p50 2501.6ms even though HTTP results were ready at ~0ms, because the tool waits for a default provider rather than shipping HTTP-only. Abandoned lanes are contained: a 20s Google lane is cut at **p50 3500.8ms** (the hard cap) and a 20s Reddit lane at **p50 2901.0ms** (the response budget), each still returning the usable HTTP results with the late lane reported as a status rather than a hang. Wired into `test:all` as `tests/search-orchestration-perf.test.mjs`, which shrinks the deadlines through the same seam so containment is checked deterministically in well under a second. Cites #97; the 2–3s target itself remains a lane-latency problem (broker path) and is not claimed here.
 

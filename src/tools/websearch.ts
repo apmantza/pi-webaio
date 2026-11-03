@@ -116,6 +116,11 @@ function shortError(err: unknown): string {
 function classifyRedditStatus(status: string, count: number): EngineStatus {
 	if (count > 0 || status === "ok") return "ok";
 	if (status.startsWith("timeout")) return "timeout";
+	// `disabled` is the one token whose rendered meaning is already exactly right here:
+	// `describeEngineStatus("disabled")` says "not attempted". Without this branch both the
+	// user-disabled case and the google-gated case fell through to `empty`, i.e. "Reddit
+	// returned nothing" — a second mislabel of the same kind (#201).
+	if (status.startsWith("disabled")) return "disabled";
 	if (status.startsWith("error") || status.startsWith("unavailable"))
 		return "error";
 	return "empty";
@@ -594,22 +599,30 @@ export function registerWebsearchTool(
 							await waitForPromiseOrDeadline(googlePromise, responseDeadlineAt);
 						}
 						if (Date.now() >= responseDeadlineAt) {
-							redditStatus = `timeout (response budget ${responseTargetMs}ms; hard deadline ${searchDeadlineMs}ms)`;
+							// Not a Reddit timeout: NO request has been made at this point. The
+							// budget went while waiting for the google lane above, which is a
+							// scheduling decision this tool made. `latencyMs: 0` because there was no
+							// Reddit latency to report — the previous value of `responseTargetMs` put
+							// 60ms of measured Reddit work on a lane that made zero requests (#201).
+							redditStatus =
+								"disabled (not attempted: google lane took the budget)";
 							return {
 								source: "reddit" as const,
 								results: [],
-								latencyMs: responseTargetMs,
+								latencyMs: 0,
 							};
 						}
 						if (chromeReady) {
 							await waitForPromiseOrDeadline(chromeReady, responseDeadlineAt);
 						}
 						if (Date.now() >= responseDeadlineAt) {
-							redditStatus = `timeout (response budget ${responseTargetMs}ms; hard deadline ${searchDeadlineMs}ms)`;
+							// Same reasoning: still before the first `searchRedditImpl()` call.
+							redditStatus =
+								"disabled (not attempted: Chrome not ready in budget)";
 							return {
 								source: "reddit" as const,
 								results: [],
-								latencyMs: responseTargetMs,
+								latencyMs: 0,
 							};
 						}
 						const r = await searchRedditImpl(query, {
@@ -670,15 +683,21 @@ export function registerWebsearchTool(
 						redditStatus,
 						res.results.length,
 					);
-					setProvider("reddit", {
-						status:
-							engineStatus === "timeout"
-								? "timeout"
-								: engineStatus === "error"
-									? "error"
-									: engineStatus === "ok"
-										? "ok"
-										: "empty",
+						setProvider("reddit", {
+							status:
+								engineStatus === "timeout"
+									? "timeout"
+									: engineStatus === "error"
+										? "error"
+										: engineStatus === "ok"
+											? "ok"
+											: // The provider surface already has a word for a lane that did not run
+													// (`skipped`, used for "no data" / "no API key"); routing the
+													// not-attempted case to `empty` would claim Reddit answered with
+													// nothing (#201).
+													engineStatus === "disabled"
+														? "skipped"
+														: "empty",
 						count: res.results.length,
 						latencyMs: res.latencyMs,
 						detail: res.results.length > 0 ? undefined : redditStatus.slice(0, 60),
