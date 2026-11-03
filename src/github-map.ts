@@ -67,6 +67,13 @@ export interface GitHubMapResult {
 		ref: string;
 		totalFiles: number;
 		totalDirs: number;
+		/**
+		 * What those two totals mean: they count what was COLLECTED, not what the
+		 * repository holds. Without this a structured consumer sees a bare number where
+		 * the human summary carries a qualifier, so a root-only listing, a capped clone
+		 * and a failed collection all read as repository totals (#184 verify round).
+		 */
+		coverage?: { scope: "recursive" | "root"; bound?: "api-truncated" | "walk-cap" | "read-error" };
 		description?: string;
 		topics?: string[];
 		language?: string;
@@ -362,6 +369,14 @@ interface WalkResult {
 	 * the full tree (issue #173).
 	 */
 	hitCap: boolean;
+	/**
+	 * True when a directory could not be read (EACCES, ELOOP, a disappearing path).
+	 * The children of that directory were never seen, so `paths` is NOT a complete
+	 * enumeration even though the cap was never reached. Until the verify round on
+	 * master this was swallowed and the result was still presented as the exact full
+	 * tree — the fail-open direction for a coverage claim.
+	 */
+	readFailed: boolean;
 }
 
 /**
@@ -400,19 +415,24 @@ export async function walkRepo(
 	// entries fills the budget and then trips the same comparison, so an exact count
 	// was reported as "at least N".
 	let dropped = false;
+	// Set when a directory could not be read; see `WalkResult.readFailed`.
+	let readFailed = false;
 
 	async function walk(dir: string, rel: string): Promise<void> {
-		if (paths.length >= maxEntries) {
-			// A git checkout never contains an EMPTY directory, so every directory we
-			// still had to visit holds at least one tracked entry: something is
-			// definitely being left behind.
-			dropped = true;
-			return;
-		}
+		// No early return on `paths.length >= maxEntries` here. The version added in
+		// 652e5bd reasoned that a git checkout has no empty directory, so an unvisited
+		// directory must hold something that was dropped — true about TRACKED entries,
+		// false about RETAINABLE ones. A directory containing only excluded files (e.g.
+		// `assets/logo.png`) is non-empty and contributes nothing, so an exact census of
+		// one was reported as "at least 1". The per-entry check below is the only place
+		// that knows an entry was retainable; reading the directory is the honest cost of
+		// not over-claiming.
 		let entries;
 		try {
 			entries = await readdir(dir, { withFileTypes: true });
 		} catch {
+			// Swallowing this made a partial enumeration look exact (#184 verify round).
+			readFailed = true;
 			return;
 		}
 		// Stable order: dirs first, then alpha
@@ -464,7 +484,7 @@ export async function walkRepo(
 		}
 	}
 	await walk(root, "");
-	return { paths, files, dirs, hitCap: dropped };
+	return { paths, files, dirs, hitCap: dropped, readFailed };
 }
 
 // ─── Cloning ─────────────────────────────────────────────────────────
@@ -1202,7 +1222,7 @@ export type EntryCoverage = {
 	 */
 	scope: "recursive" | "root";
 	/** Why the count is a floor, when it is one. */
-	bound?: "api-truncated" | "walk-cap";
+	bound?: "api-truncated" | "walk-cap" | "read-error";
 	/** Our own `MAX_TREE_PATHS` cap stopped the RENDERED list. Says nothing about the census. */
 	retainedBounded?: boolean;
 };
@@ -1222,6 +1242,18 @@ export type EntryCoverage = {
  * single place the two clone branches become one representation, so the parity
  * cannot drift again.
  */
+/**
+ * Why a clone walk's count is a floor, preferring the reason that invalidates the
+ * most: an unreadable subtree means an entire branch was never seen, which raising
+ * `maxFiles` would not fix, so it outranks the cap.
+ */
+function boundFromWalk(walk: WalkResult | null): EntryCoverage["bound"] {
+	if (!walk) return undefined;
+	if (walk.readFailed) return "read-error";
+	if (walk.hitCap) return "walk-cap";
+	return undefined;
+}
+
 export function mapWalkToCoverage(walk: WalkResult | null): {
 	paths: string[];
 	coverage: EntryCoverage;
@@ -1233,7 +1265,11 @@ export function mapWalkToCoverage(walk: WalkResult | null): {
 		coverage: {
 			total: census.files + census.dirs,
 			scope: "recursive",
-			bound: walk?.hitCap ? "walk-cap" : undefined,
+			// A read failure means an entire subtree was never seen. That is a bound for
+			// a different reason than the cap, and naming the reason matters: "the walk
+			// stopped at its limit" would send a reader to raise `maxFiles`, which would
+			// not help.
+			bound: boundFromWalk(walk),
 		},
 	};
 }
@@ -1545,6 +1581,16 @@ async function mapGitHubRepoFull(
 			ref: defaultBranch,
 			totalFiles: census?.files ?? repoEntryCensus(paths).files,
 			totalDirs: census?.dirs ?? repoEntryCensus(paths).dirs,
+			/**
+			 * What the two totals above mean. They count what was COLLECTED, not what the
+			 * repository holds; without this field a structured consumer sees a bare number
+			 * where the human summary carries a qualifier, so a root-only listing, a capped
+			 * clone and a failed collection all look like repository totals (#184 verify
+			 * round). Additive: no existing consumer has to change.
+			 */
+			coverage: coverage.bound
+				? { scope: coverage.scope, bound: coverage.bound }
+				: { scope: coverage.scope },
 			description: repoMeta?.description,
 			topics: repoMeta?.topics,
 			language: repoMeta?.language,

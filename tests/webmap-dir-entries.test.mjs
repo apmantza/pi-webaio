@@ -16,7 +16,7 @@
 //    is {type:"commit"} and its /blob/ URL returns 404.
 import assert from "node:assert";
 import test from "node:test";
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readdir, writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -445,4 +445,89 @@ test("#193: the API and clone producers emit one convention, not two", async () 
 	} finally {
 		await rm(root, { recursive: true, force: true });
 	}
+});
+
+// Verify round on master (the round that #191 merged without). Three P2s, one of
+// them a regression introduced by the very commit that fixed the mislabeling.
+
+test("#184: a directory holding only excluded files does not make the walk a bound", async () => {
+	// 652e5bd reasoned "a git checkout has no empty directory, so an unvisited
+	// directory must hold something dropped". True about TRACKED entries, false about
+	// RETAINABLE ones: `assets/logo.png` is tracked and excluded, so the directory is
+	// non-empty and contributes nothing, and an exact census of one was reported as
+	// "at least 1".
+	const root = await mkdtemp(join(tmpdir(), "walk-excl-children-"));
+	try {
+		await mkdir(join(root, "assets"), { recursive: true });
+		await writeFile(join(root, "assets", "logo.png"), "x");
+		const full = await walkRepo(root, { maxEntries: 100 });
+		const capped = await walkRepo(root, { maxEntries: 1 });
+		assert.deepEqual(
+			capped.paths,
+			full.paths,
+			"the capped walk retained everything, so nothing was refused",
+		);
+		assert.equal(
+			capped.hitCap,
+			false,
+			`an exact census was labelled a lower bound: ${JSON.stringify(capped)}`,
+		);
+		assert.equal(mapWalkToCoverage(capped).coverage.bound, undefined);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+test("#184: an unreadable directory makes the count a bound, never an exact tree", async (t) => {
+	// The `readdir` catch used to `return` silently, so `hitCap` stayed false and a
+	// partial enumeration was presented as "N in the full tree (uncapped)".
+	//
+	// The first version of this test guarded its assertions with `if (w.readFailed)`
+	// and therefore passed whether or not the flag was ever set — both surviving
+	// mutants proved it. The environment is now PROBED first, and the assertions run
+	// unconditionally or the test is skipped by name.
+	const root = await mkdtemp(join(tmpdir(), "walk-readfail-"));
+	try {
+		const locked = join(root, "locked");
+		await mkdir(locked, { recursive: true });
+		await writeFile(join(locked, "secret.ts"), "s");
+		await writeFile(join(root, "README.md"), "r");
+		await chmod(locked, 0o000);
+		let enforced = false;
+		try {
+			await readdir(locked, { withFileTypes: true });
+		} catch {
+			enforced = true;
+		}
+		if (!enforced) {
+			t.skip("readdir was not denied — cannot model a failed read here (root?)");
+			return;
+		}
+		let w;
+		try {
+			w = await walkRepo(root, { maxEntries: 100 });
+		} finally {
+			await chmod(locked, 0o755);
+		}
+		assert.equal(w.readFailed, true, "a denied readdir must be recorded, not swallowed");
+		assert.equal(w.hitCap, false, "a read failure is not a cap");
+		assert.equal(
+			mapWalkToCoverage(w).coverage.bound,
+			"read-error",
+			"a failed read must be named as the reason the count is a floor",
+		);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+test("#184: read-error outranks walk-cap when both apply", () => {
+	// Naming the wrong reason sends a reader to raise `maxFiles`, which cannot fix an
+	// unreadable subtree.
+	const both = mapWalkToCoverage({ paths: ["a.ts"], files: 1, dirs: 0, hitCap: true, readFailed: true });
+	assert.equal(both.coverage.bound, "read-error");
+	const capOnly = mapWalkToCoverage({ paths: ["a.ts"], files: 1, dirs: 0, hitCap: true, readFailed: false });
+	assert.equal(capOnly.coverage.bound, "walk-cap");
+	const clean = mapWalkToCoverage({ paths: ["a.ts"], files: 1, dirs: 0, hitCap: false, readFailed: false });
+	assert.equal(clean.coverage.bound, undefined);
 });
