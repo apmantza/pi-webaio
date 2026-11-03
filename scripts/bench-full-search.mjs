@@ -39,7 +39,8 @@ import {
 	SEARCH_RESPONSE_TARGET_MS,
 } from "../src/tools/websearch.ts";
 
-const USAGE = `usage: node scripts/bench-full-search.mjs [mode] [samples] [spacingMs] [query...]
+const USAGE = `usage: npm run bench:search:full -- [mode] [samples] [spacingMs] [query...]
+       (or: node scripts/bench-full-search.mjs [mode] [samples] [spacingMs] [query...])
 
   mode        legacy | broker | <any label>   default: legacy
               (broker sets PI_WEBAIO_CDP_BROKER=1; the label is only a column header)

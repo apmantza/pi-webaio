@@ -143,7 +143,8 @@
     "test:models": "node tla/check-queue-model.mjs && node tla/check-pool-model.mjs && node tla/check-strategy-model.mjs && node tla/check-cookie-model.mjs && node tla/check-cdp-model.mjs",
     "test:cli": "node --test tests/cli.test.mjs",
     "test:prunestorage": "node --experimental-strip-types --test tests/prune-storage.test.mjs",
-    "test:overlap": "node --experimental-strip-types --test tests/answer-overlap-dedup.test.mjs"
+    "test:overlap": "node --experimental-strip-types --test tests/answer-overlap-dedup.test.mjs",
+    "bench:search:full": "node --experimental-strip-types scripts/bench-full-search.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",

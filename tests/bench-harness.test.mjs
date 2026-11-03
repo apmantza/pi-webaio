@@ -587,3 +587,23 @@ test("#97: the Windows-only resource probe is gated before it shells out", async
 			"errors reach the operator)",
 	);
 });
+
+// #97 asks to "establish a reproducible full-tool baseline", but the harness that
+// does it was reachable only by typing its path — no npm script referenced it, so
+// there was no documented entry point and no way to discover it from package.json.
+//
+// Recurrence prevented: a measurement harness that exists but is not wired, so the
+// baseline it promises is never actually taken.
+test("#97: the full-search baseline harness is a wired npm script", async () => {
+	const pkg = JSON.parse(await readFile(join(__dirname, "..", "package.json"), "utf8"));
+	const target = "scripts/bench-full-search.mjs";
+	const wired = Object.entries(pkg.scripts).filter(([, v]) => v.includes(target));
+	assert.ok(
+		wired.length > 0,
+		`${target} is not referenced by any npm script; #97's baseline is undiscoverable`,
+	);
+	assert.ok(
+		pkg.scripts["bench:search:full"],
+		`expected bench:search:full, found: ${wired.map(([k]) => k).join(", ")}`,
+	);
+});
