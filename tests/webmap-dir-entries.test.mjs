@@ -326,16 +326,13 @@ test("#184: the tree heading carries the walk bound too", () => {
 //    repository reported different totals, and got different URLs, depending on
 //    which source answered. Pinned on the leaf both branches now share.
 test("#184: clone output is exclusion-filtered like the API output", () => {
-	const walked = ["README.md", "docs/guide.md", "src/logo.png", "app.min.js", "yarn.lock", "src/main.ts"];
-	const mapped = mapWalkToCoverage({ paths: walked, files: 6, dirs: 0, hitCap: false });
-	assert.ok(!mapped.paths.includes("docs/guide.md"), "docs/ survived the clone branch");
-	assert.ok(!mapped.paths.includes("src/logo.png"), "an asset file survived the clone branch");
-	assert.ok(!mapped.paths.includes("yarn.lock"), "a lockfile survived the clone branch");
-	// The coverage total is the FILTERED census, so it agrees with what is rendered.
+	// The leaf's job is the census and the coverage; the exclusion itself is applied
+	// inside walkRepo so discarded entries cannot spend the entry budget. Parity with
+	// the API branch is asserted on walkRepo's own output below.
+	const walked = ["README.md", "src/main.ts"];
+	const mapped = mapWalkToCoverage({ paths: walked, files: 2, dirs: 0, hitCap: false });
 	assert.equal(mapped.coverage.total, 2);
-	// Parity with the API branch on the same input.
-	const eligible = dropExcludedPaths(walked);
-	assert.deepEqual(mapped.paths, eligible);
+	assert.deepEqual(mapped.paths, dropExcludedPaths(walked));
 });
 
 // 3. Architecture detection read the CAPPED list while the census counted the
@@ -355,4 +352,60 @@ test("#184: architecture signals read the uncapped eligible list", () => {
 		!fromCapped.includes("Docker") && fromEligible.includes("Docker"),
 		`signals must come from the list the census counted: capped="${fromCapped}" eligible="${fromEligible}"`,
 	);
+});
+
+// CodeRabbit round 2 on fb17d1f, both reproduced.
+//
+// 1. `hitCap: paths.length >= maxEntries` is not "something was refused" — a
+//    repository with EXACTLY maxEntries entries fills the budget and then trips the
+//    same comparison, so an exact count was reported as "at least N". Directories
+//    now consume slots, so an exact fill is more likely than before, not less.
+test("#184: a walk that fills the budget exactly is not a lower bound", async () => {
+	const root = await mkdtemp(join(tmpdir(), "walk-exact-"));
+	try {
+		await mkdir(join(root, "src"), { recursive: true });
+		// 3 entries total: src/, src/a.ts, README.md — budget equals the content.
+		await writeFile(join(root, "src", "a.ts"), "a");
+		await writeFile(join(root, "README.md"), "r");
+		const exact = await walkRepo(root, { maxEntries: 3 });
+		assert.equal(exact.paths.length, 3, `fixture must fill the budget: ${exact.paths}`);
+		assert.equal(exact.hitCap, false, "an exact fill reported itself as a floor");
+		// And the same tree with a smaller budget MUST be a floor, or the test above
+		// passes because hitCap is simply never set.
+		const tight = await walkRepo(root, { maxEntries: 2 });
+		assert.equal(tight.hitCap, true, "a real truncation must still be a floor");
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+// 2. Excluded entries used to consume maxEntries slots and only then be dropped by
+//    mapWalkToCoverage, so a directory of assets sorting ahead of the sources could
+//    end the walk before any real file was reached.
+test("#184: excluded entries do not consume the walk's entry budget", async () => {
+	const root = await mkdtemp(join(tmpdir(), "walk-noise-"));
+	try {
+		await mkdir(join(root, "assets"), { recursive: true });
+		await mkdir(join(root, "docs"), { recursive: true });
+		await mkdir(join(root, "src"), { recursive: true });
+		for (let i = 0; i < 6; i++) await writeFile(join(root, "assets", `i${i}.png`), "x");
+		// `docs/` is in REPO_PATH_EXCLUSIONS but NOT in walkRepo's skipDirs set, so
+		// it is the case that only the exclusion check catches — and the one the
+		// directory branch of that check exists for.
+		for (let i = 0; i < 6; i++) await writeFile(join(root, "docs", `g${i}.md`), "d");
+		await writeFile(join(root, "src", "main.ts"), "m");
+		await writeFile(join(root, "README.md"), "r");
+		const w = await walkRepo(root, { maxEntries: 3 });
+		assert.ok(
+			w.paths.includes("src/main.ts"),
+			`noise spent the budget and starved the sources: ${w.paths}`,
+		);
+		assert.ok(!w.paths.some((p) => p.endsWith(".png")), `excluded files were retained: ${w.paths}`);
+		assert.ok(
+			!w.paths.some((p) => p.startsWith("docs")),
+			`an excluded DIRECTORY was retained or walked: ${w.paths}`,
+		);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
 });

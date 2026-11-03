@@ -395,9 +395,20 @@ export async function walkRepo(
 	const paths: string[] = [];
 	let files = 0;
 	let dirs = 0;
+	// Set only when a RETAINABLE entry was actually refused. `paths.length >=
+	// maxEntries` alone is not that test: a repository with exactly `maxEntries`
+	// entries fills the budget and then trips the same comparison, so an exact count
+	// was reported as "at least N".
+	let dropped = false;
 
 	async function walk(dir: string, rel: string): Promise<void> {
-		if (paths.length >= maxEntries) return;
+		if (paths.length >= maxEntries) {
+			// A git checkout never contains an EMPTY directory, so every directory we
+			// still had to visit holds at least one tracked entry: something is
+			// definitely being left behind.
+			dropped = true;
+			return;
+		}
 		let entries;
 		try {
 			entries = await readdir(dir, { withFileTypes: true });
@@ -411,7 +422,6 @@ export async function walkRepo(
 			return a.name.localeCompare(b.name);
 		});
 		for (const e of entries) {
-			if (paths.length >= maxEntries) return;
 			if (skipHidden && e.name.startsWith(".") && e.name !== ".github") {
 				// Keep .github/ but skip other hidden dirs/files
 				if (e.isDirectory()) continue;
@@ -422,21 +432,35 @@ export async function walkRepo(
 				// sources (#184 asks that all three obey one convention): slash-terminated,
 				// so `repoEntryCensus`, `buildTree` and `repoTreeEntryUrl` read them the same
 				// way, and a cloned map reports the same denominators as an API map of the
-				// same repository. They consume `maxEntries` slots, which is deliberate — the
-				// bound is on retained entries, and `hitCap` says when it bit.
+				// same repository.
 				const relDir = rel ? `${rel}/${e.name}` : e.name;
-				paths.push(`${relDir}/`);
+				const relDirPath = `${relDir}/`;
+				// Exclusion BEFORE the cap check and before recursing: an asset file that
+				// sorts ahead of the sources used to spend a slot and then be dropped by
+				// `mapWalkToCoverage`, so a large repository could end the walk before its
+				// real files were reached, and the bound counted entries we keep neither.
+				if (isExcludedPath(relDirPath)) continue;
+				if (paths.length >= maxEntries) {
+					dropped = true;
+					continue;
+				}
+				paths.push(relDirPath);
 				dirs++;
 				await walk(join(dir, e.name), relDir);
 			} else if (e.isFile()) {
 				const relPath = rel ? `${rel}/${e.name}` : e.name;
+				if (isExcludedPath(relPath)) continue;
+				if (paths.length >= maxEntries) {
+					dropped = true;
+					continue;
+				}
 				paths.push(relPath);
 				files++;
 			}
 		}
 	}
 	await walk(root, "");
-	return { paths, files, dirs, hitCap: paths.length >= maxEntries };
+	return { paths, files, dirs, hitCap: dropped };
 }
 
 // ─── Cloning ─────────────────────────────────────────────────────────
@@ -796,16 +820,26 @@ export function repoTreeEntryUrl(
  * was a complete map before #184 and became a 10 000-file repository afterwards,
  * because half the cap's slots went to directories (review of PR #191).
  */
+/**
+ * One path against the noise list. Case-insensitive substring match, which is what
+ * `dropExcludedPaths` has always done; split out so `walkRepo` can apply the SAME
+ * rule before an entry consumes a `maxEntries` slot.
+ */
+export function isExcludedPath(path: string): boolean {
+	const lower = path.toLowerCase();
+	return loweredRepoExclusions().some((sub) => lower.includes(sub));
+}
+
+let exclusionsLowered: string[] | null = null;
+function loweredRepoExclusions(): string[] {
+	// Built once: this now runs per filesystem entry during a clone walk, not once
+	// per array, so recomputing the lowercase copy would be O(entries x patterns).
+	if (!exclusionsLowered) exclusionsLowered = REPO_PATH_EXCLUSIONS.map((p) => p.toLowerCase());
+	return exclusionsLowered;
+}
+
 export function dropExcludedPaths(paths: string[]): string[] {
-	// Lowercase all patterns once up front for case-insensitive matching
-	const loweredExclusions = REPO_PATH_EXCLUSIONS.map((p) => p.toLowerCase());
-	const filtered: string[] = [];
-	for (const p of paths) {
-		const lower = p.toLowerCase();
-		if (loweredExclusions.some((sub) => lower.includes(sub))) continue;
-		filtered.push(p);
-	}
-	return filtered;
+	return paths.filter((p) => !isExcludedPath(p));
 }
 
 /**
@@ -1086,17 +1120,22 @@ export type EntryCoverage = {
  * Map a cloned-tree walk onto the same representation the API branch produces.
  *
  * Both clone branches used to assign `walk.paths` straight through, while the API
- * branch ran `dropExcludedPaths` first. `walkRepo` skips a dozen directory NAMES
+ * branch ran `dropExcludedPaths` first. `walkRepo` skipped a dozen directory NAMES
  * but no asset files and no `docs/`, so the same repository reported different
  * totals and emitted different URLs depending on which source answered — a
- * denominator that moves with the code path is the #168 class. One leaf for both
- * branches means the parity cannot drift again.
+ * denominator that moves with the code path is the #168 class.
+ *
+ * The exclusion itself now happens INSIDE `walkRepo`, before an entry consumes a
+ * `maxEntries` slot, because filtering here instead let discarded files spend the
+ * budget and end the walk before the real sources were reached. This leaf is the
+ * single place the two clone branches become one representation, so the parity
+ * cannot drift again.
  */
 export function mapWalkToCoverage(walk: WalkResult | null): {
 	paths: string[];
 	coverage: EntryCoverage;
 } {
-	const eligible = dropExcludedPaths(walk?.paths ?? []);
+	const eligible = walk?.paths ?? [];
 	const census = repoEntryCensus(eligible);
 	return {
 		paths: eligible,
