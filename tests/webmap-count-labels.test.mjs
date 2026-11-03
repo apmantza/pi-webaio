@@ -235,8 +235,12 @@ test("#184: the tree heading carries the read failure too", () => {
 		bound: "read-error",
 	});
 	const heading = md.split("\n").find((l) => l.startsWith("## "));
-	assert.match(heading, /incomplete — a directory could not be read/, `heading: ${heading}`);
-	assert.doesNotMatch(heading, /walk limit/);
+	assert.match(heading, /a directory could not be read/, `heading: ${heading}`);
+	// Reviewer P3 on #196: "incomplete" asserts something IS missing, which is the
+	// same over-claim the summary wording rules out — the unreadable directory is
+	// counted and its contents might be empty or entirely excluded.
+	assert.doesNotMatch(heading, /incomplete/, `heading over-claims: ${heading}`);
+	assert.doesNotMatch(heading, /walk limit|maxFiles/);
 	// A cap must still be labelled as a cap, or the new branch swallowed it.
 	const capped = renderRepoTreeMarkdown(["assets/"], 100, {
 		total: 1,

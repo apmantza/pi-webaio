@@ -1242,18 +1242,6 @@ export type EntryCoverage = {
  * single place the two clone branches become one representation, so the parity
  * cannot drift again.
  */
-/**
- * Why a clone walk's count is a floor, preferring the reason that invalidates the
- * most: an unreadable subtree means an entire branch was never seen, which raising
- * `maxFiles` would not fix, so it outranks the cap.
- */
-function boundFromWalk(walk: WalkResult | null): EntryCoverage["bound"] {
-	if (!walk) return undefined;
-	if (walk.readFailed) return "read-error";
-	if (walk.hitCap) return "walk-cap";
-	return undefined;
-}
-
 export function mapWalkToCoverage(walk: WalkResult | null): {
 	paths: string[];
 	coverage: EntryCoverage;
@@ -1273,6 +1261,26 @@ export function mapWalkToCoverage(walk: WalkResult | null): {
 		},
 	};
 }
+
+/**
+ * Why a clone walk's count is a floor.
+ *
+ * `read-error` outranks `walk-cap` because a read failure is the reason that can
+ * invalidate the whole figure — an entire branch was never seen, and raising
+ * `maxFiles` cannot fix that. When BOTH happen (reviewer probe E on #196) the cap is
+ * also real and raising `maxFiles` would bring back the entries the cap refused, so
+ * this single label understates rather than overstates: it never sends the reader to
+ * a knob that cannot help, at the cost of not naming one that sometimes can. The
+ * count stays marked as a floor either way. A second field would name both; it is
+ * not worth a third axis on a human label.
+ */
+function boundFromWalk(walk: WalkResult | null): EntryCoverage["bound"] {
+	if (!walk) return undefined;
+	if (walk.readFailed) return "read-error";
+	if (walk.hitCap) return "walk-cap";
+	return undefined;
+}
+
 
 /**
  * Why a count is a floor, in the reader's terms. Each reason names the thing that
@@ -1352,6 +1360,21 @@ export function formatRepoMapCounts(opts: {
 }
 
 /**
+ * The qualifier a tree heading carries, or "" when the count is exact. Kept beside
+ * `boundReason` so the two renderings of the same coverage value cannot drift —
+ * three rounds of #184 produced a label that was wrong about which quantity it
+ * described.
+ */
+function treeBoundLabel(coverage: EntryCoverage): string {
+	if (coverage.bound === "api-truncated") return ", truncated by API";
+	if (coverage.scope === "root") return ", repository root only";
+	if (coverage.bound === "read-error") return ", a directory could not be read";
+	if (coverage.bound === "walk-cap") return ", bounded by the cloned-tree walk limit";
+	if (coverage.retainedBounded) return `, bounded by the ${MAX_TREE_PATHS}-entry retention cap`;
+	return "";
+}
+
+/**
  * Render the repo file tree, bounded to `max` entries.
  *
  * The subdirectory path already caps its listing at `max`; the full-repo
@@ -1363,21 +1386,6 @@ export function formatRepoMapCounts(opts: {
  *
  * Exported for unit testing.
  */
-/**
- * The qualifier a tree heading carries, or "" when the count is exact. Kept beside
- * `boundReason` so the two renderings of the same coverage value cannot drift —
- * three rounds of #184 produced a label that was wrong about which quantity it
- * described.
- */
-function treeBoundLabel(coverage: EntryCoverage): string {
-	if (coverage.bound === "api-truncated") return ", truncated by API";
-	if (coverage.scope === "root") return ", repository root only";
-	if (coverage.bound === "read-error") return ", incomplete — a directory could not be read";
-	if (coverage.bound === "walk-cap") return ", bounded by the cloned-tree walk limit";
-	if (coverage.retainedBounded) return `, bounded by the ${MAX_TREE_PATHS}-entry retention cap`;
-	return "";
-}
-
 export function renderRepoTreeMarkdown(
 	paths: string[],
 	max: number,
@@ -1385,7 +1393,7 @@ export function renderRepoTreeMarkdown(
 ): string {
 	const budget = Math.max(1, Math.min(paths.length, max));
 	const shownPaths = paths.length > budget ? paths.slice(0, budget) : paths;
-const rendered = renderTree(buildTree(shownPaths));
+	const rendered = renderTree(buildTree(shownPaths));
 	// The heading and the summary line must describe the SAME collection, so both
 	// read it off one coverage value instead of each being handed its own boolean —
 	// three rounds produced a label where one of them was wrong about which
