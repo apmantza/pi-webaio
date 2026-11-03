@@ -72,17 +72,24 @@ test("#189 item 1: a rules-only document answers with its rules once one fits", 
 //       guards and made LATIN worse (`# A\n\n## B\n\n#` at budget 6).
 // The redesign must optimise candidate QUALITY, not size. Flip the comparison below when
 // it lands; that flip is the decision.
-test("RESIDUAL #189 item 3: a CJK document is answered with one character", () => {
+// The flip itself, made deliberately. This test asserted the defect and said "flip this
+// line when the fix lands; that flip is the decision". The fix that landed is NOT either
+// refused design: it compares two candidates that both fit and keeps the one carrying more
+// of the document, requiring the challenger to close its fences. What the pin bought is the
+// evidence trail — the two refused designs stayed refused because they broke four guards,
+// and this one was accepted only after a differential showed 0 ceiling violations, 0 newly
+// unclosed fences and 0 cases losing document prose over 1680 Latin/fence cases.
+test("#189 item 3: a CJK document keeps its content share of the budget", () => {
 	const MIN_CONTENT_SHARE = 0.5; // the project's own policy constant
-	const budget = 10;
-	const out = applyTokenBudget(CJK, budget, "a");
-	const kept = out.replace(/[\s>*_\u2014-]*truncated[\s\S]*$/, "").trim();
-	assert.ok(estimateTokens(out) <= budget, "the ceiling still holds — this is under-fill, not over-fill");
-	assert.ok(
-		estimateTokens(kept) < Math.floor(budget * MIN_CONTENT_SHARE),
-		`item 3 appears FIXED (${JSON.stringify(kept)} kept of ${budget}); invert this assertion to assert parity`,
-	);
-	assert.equal(kept, "机", `expected the documented one-character answer, got ${JSON.stringify(kept)}`);
+	for (const budget of [10, 16, 20, 29]) {
+		const out = applyTokenBudget(CJK, budget, "a");
+		const kept = out.replace(/[\s>*_\u2014-]*truncated[\s\S]*$/, "").trim();
+		assert.ok(estimateTokens(out) <= budget, `ceiling broken at budget ${budget}`);
+		assert.ok(
+			estimateTokens(kept) >= Math.floor(budget * MIN_CONTENT_SHARE),
+			`budget ${budget} kept only ${JSON.stringify(kept)} (${estimateTokens(kept)} tokens)`,
+		);
+	}
 });
 
 test("#189 item 3: the fix must not overfill for Latin text (ceiling both ways)", () => {
