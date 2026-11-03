@@ -1090,13 +1090,6 @@ export function applyTokenBudget(
 			trimToTokenBudgetWithClosedFence(source, room),
 			// At one or two tokens a fence-led document yields only its marker: the opener
 			// alone consumes the whole room (at room 10 the trim returned "```\n" and
-			// nothing else). So ask for the code text itself — every leading fence-marker and
-			// blank line is dropped first, because a document can open with a stack of them
-			// before any text appears — and remaining marker lines come off, because the
-			// plain trimmer does not close what it opens and a bare delimiter changes the
-			// parsing context for everything rendered after it.
-			// At one or two tokens a fence-led document yields only its marker: the opener
-			// alone consumes the whole room (at room 10 the trim returned "```\n" and
 			// nothing else). So ask for the text inside the fence — but UNWRAP it, do not
 			// merely lift the lid: removing only the opener left its paired closer behind,
 			// and a lone marker line is an OPENER in Markdown, so the answer ended inside a
@@ -1233,16 +1226,21 @@ export function stripLeadingMarkers(text: string): string {
  * Does a fence run's body carry text, or is it just another fence waiting behind
  * this one?
  *
- * Asked of the model rather than answered with a marker-counting rule. A body of
- * "```\n\n```" is an empty nested pair and contributes nothing, so the scan keeps
- * going — otherwise the nested opener eats the whole room again. A body of "```"
- * inside a longer fence (````) is a documented fence and IS the content: run the
- * model over the body and an UNCLOSED marker proves that marker cannot be a
- * delimiter, because nothing in the body closes it.
+ * This one is provable rather than heuristic. `j` is the FIRST line that could close
+ * the run, so no line strictly inside the body can be a delimiter of that run — not a
+ * same-character shorter marker, and not a fence in the other character either (a
+ * "~~~" pair cannot close a backtick fence, it is two lines of code). Every non-blank
+ * body line is therefore the document's text.
+ *
+ * The temptation was to treat a body of "```\n\n```" as an empty nested run and skip
+ * it. That is wrong twice over: it deletes literal code (a tilde pair inside a
+ * backtick fence, which is what a code-heavy README actually contains), and it is
+ * unnecessary, because the last-resort `stripLeadingMarkers` candidate exists exactly
+ * to reach text behind a wall of markers. Semantics live in the faithful candidate;
+ * reachability lives in the last resort.
  */
 function bodyHoldsLiteralText(runBody: string[]): boolean {
-	if (runBody.some((l) => !BLANK_LINE.test(l) && !FENCE_OPEN.test(l))) return true;
-	return findUnclosedFence(runBody.join("\n")) !== null;
+	return runBody.some((l) => !BLANK_LINE.test(l));
 }
 
 /**

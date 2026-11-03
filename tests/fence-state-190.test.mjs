@@ -343,3 +343,23 @@ test("#190: CRLF blank lines are padding, not content", () => {
 		"the empty CRLF fence was not unwrapped",
 	);
 });
+
+// The verify round's finding, kept as a permanent pin. A balanced "~~~" pair inside a
+// backtick fence is two lines of CODE — a tilde line cannot close a backtick fence —
+// and the first attempt at `bodyHoldsLiteralText` asked the model whether the body was
+// balanced, so it read that pair as an empty nested run and deleted it. The rule is
+// now provable instead: `j` is the first line able to close the run, so nothing inside
+// the body is a delimiter at all.
+test("#190: a fence in the other character is literal content, not a nested run", () => {
+	assert.equal(
+		unwrapLeadingFences("```\n~~~\n~~~\n```\nimportant prose\n"),
+		"~~~\n~~~\nimportant prose\n",
+		"the tilde pair inside a backtick fence was deleted",
+	);
+	// Symmetric case: a backtick pair inside a tilde fence.
+	assert.equal(
+		unwrapLeadingFences("~~~\n```\n```\n~~~\nimportant prose\n"),
+		"```\n```\nimportant prose\n",
+		"the backtick pair inside a tilde fence was deleted",
+	);
+});
