@@ -159,6 +159,14 @@ test("#190: an unclosed leading fence loses only its opener", () => {
 	assert.match(out, /tail/, `tail lost: ${JSON.stringify(out)}`);
 });
 
+// Known limitation of the sweep above, stated rather than papered over: its oracle is
+// `findUnclosedFence`, the same model the production path consults, so a regression in
+// that function could leave the sweep green. A marker-line PARITY check was tried here
+// as an independent instrument and rejected: it asserts a false property. "~~~\n```\n~~~\n"
+// has three marker lines and is legitimately closed, because a tilde fence holds a
+// backtick line as content. Parity is only sound for single-character fences, which is
+// why the older #182 tests may use it and this one may not.
+
 // The finding that the suite could not see. A randomised sweep over generated
 // documents found 80 balanced inputs whose answer came back OPEN while the
 // candidate-level fence preference was absent — and `test:all` was byte-for-byte
@@ -396,6 +404,53 @@ test("#190: the content floor outranks closure when they conflict", () => {
 			answer,
 			/beta gamma/,
 			`budget ${b} answered with framing instead of the document: ${JSON.stringify(answer)}`,
+		);
+	}
+});
+
+// Coverage gaps the verify round found by mutation (m5, m11, m12): each of these
+// whitespace classes changes real output and no test caught it. They are pinned
+// together because they are the same defect shape — a character class in a fence
+// pattern that nothing exercises.
+test("#190: whitespace classes in the fence patterns are exercised", () => {
+	// Tab-indented opener.
+	assert.equal(
+		unwrapLeadingFences("\t```\n\t\n\t```\ntext after\n"),
+		"text after\n",
+		"a tab-indented fence was not unwrapped",
+	);
+	// Tab-indented closer.
+	assert.equal(
+		findUnclosedFence("```\nbody\n\t```\n"),
+		null,
+		"a tab-indented closer did not close the run",
+	);
+	// A closer with no leading whitespace at all, after an indented opener.
+	assert.equal(
+		findUnclosedFence("   ```\nbody\n```\n"),
+		null,
+		"an unindented closer did not close an indented opener",
+	);
+});
+
+// The sweep's oracle is `findUnclosedFence`, so a regression in that function would
+// leave the sweep green while the output was broken. This assertion uses a different
+// instrument -- marker-line parity -- so the two cannot fail open together.
+
+// The verify round's P2 input, pinned verbatim. It reported that this document
+// answered "~" (framing) where the base answered "word". That was measured at head
+// d02b5a0; the candidate ranking added in bd8210a restored the word, and this input
+// is kept separate from the beta-gamma case because it reaches the conflict through a
+// different route -- there, the surviving marker is the document's own content; here,
+// it is an orphan left by the last-resort strip.
+test("#190: a tilde fence wrapping a backtick fence still yields the word", () => {
+	const src = "~~~\n```\nword\n~~~\n";
+	for (const b of [4, 6, 9]) {
+		const answer = applyTokenBudget(src, b, "a");
+		assert.match(
+			answer,
+			/word/,
+			`budget ${b} answered with framing: ${JSON.stringify(answer)}`,
 		);
 	}
 });

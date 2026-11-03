@@ -1114,7 +1114,9 @@ export function applyTokenBudget(
 			// the document cannot satisfy both at one token: `unwrapLeadingFences` is
 			// literal-aware and preserves a documented fence ("```" inside a ```` fence is
 			// the page's content), which at a tiny budget leaves that marker to eat the
-			// whole room and answer with "`". This one reaches the text. Selection prefers
+			// whole room and answer with "`". This one reaches the text -- though it strips only
+			// LEADING markers, so a marker further down can survive and its answer may end open. That
+			// is acceptable under the ranking below, where prose outranks closure. Selection prefers
 			// prose, so it wins only where the faithful candidate would have answered with
 			// framing — and on a balanced document it can still never install an open
 			// fence, because the candidate preference below refuses that.
@@ -1255,7 +1257,8 @@ export function stripLeadingMarkers(text: string): string {
  * backtick fence, which is what a code-heavy README actually contains), and it is
  * unnecessary, because the last-resort `stripLeadingMarkers` candidate exists exactly
  * to reach text behind a wall of markers. Semantics live in the faithful candidate;
- * reachability lives in the last resort.
+ * reachability lives in the last resort, which buys the text with an orphan marker and
+ * is allowed to be open precisely because prose outranks closure below.
  */
 function bodyHoldsLiteralText(runBody: string[]): boolean {
 	return runBody.some((l) => !BLANK_LINE.test(l));
