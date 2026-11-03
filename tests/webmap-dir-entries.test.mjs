@@ -277,3 +277,31 @@ test("#184: the tree heading carries the root-only scope too", () => {
 	});
 	assert.doesNotMatch(recursive, /root only/, "a recursive map claims root-only scope");
 });
+
+// The bounded verify round probed all six coverage cases and found this one: when
+// the API truncates the tree AND the clone fallback then fails, nothing was
+// collected, `total` is 0, and the formatter returned an empty string — so the
+// result was `ok: true` with no count line at all. "I could not collect anything"
+// and "this repository has no files" rendered identically. The header's
+// "(tree truncated by API)" hints, but does not say the fallback also failed.
+//
+// Recurrence prevented: a failed collection reported as a successful empty one.
+test("#184: a failed collection says so instead of rendering as an empty repo", () => {
+	const failed = formatRepoMapCounts({
+		totalUrls: 0,
+		entriesIncluded: 0,
+		max: 100,
+		coverage: { total: 0, scope: "recursive", bound: "api-truncated" },
+	});
+	assert.ok(failed.entries.trim(), "a bound collection with zero entries printed no line at all");
+	assert.match(failed.entries, /no entries were collected/i);
+	// A genuinely empty repository is a different statement and must not borrow
+	// the failure wording.
+	const genuinelyEmpty = formatRepoMapCounts({
+		totalUrls: 0,
+		entriesIncluded: 0,
+		max: 100,
+		coverage: { total: 0, scope: "recursive" },
+	});
+	assert.doesNotMatch(genuinelyEmpty.entries, /no entries were collected/i);
+});

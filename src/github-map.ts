@@ -1115,7 +1115,18 @@ export function formatRepoMapCounts(opts: {
 	const discovered = capped
 		? `\nDiscovered ${opts.totalUrls} URLs (entry URLs capped at \`max\`=${opts.max} of ${coverage.total} tree entries)`
 		: `\nDiscovered ${opts.totalUrls} URLs`;
-	if (coverage.total <= 0) return { discovered, entries: "" };
+	if (coverage.total <= 0) {
+		// Zero from a BOUND collection is not an empty repository — it means the
+		// collection itself produced nothing (API truncated, clone fallback failed),
+		// which the caller must be able to tell apart from a repo with no files.
+		// Returning "" here made both render as a successful empty map.
+		const entries = coverage.bound
+			? `\nTotal entries: no entries were collected (${coverage.bound === "api-truncated" ? "the API truncated the tree and the clone fallback produced nothing" : "the cloned-tree walk produced nothing"})`
+			: coverage.scope === "root"
+				? "\nTotal entries: the repository root listing returned nothing"
+				: "";
+		return { discovered, entries };
+	}
 	const urls = `${opts.entriesIncluded} included as URLs`;
 	if (coverage.scope === "root") {
 		return {
