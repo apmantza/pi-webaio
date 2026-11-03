@@ -434,7 +434,11 @@ export async function walkRepo(
 				// way, and a cloned map reports the same denominators as an API map of the
 				// same repository.
 				const relDir = rel ? `${rel}/${e.name}` : e.name;
-				const relDirPath = `${relDir}/`;
+				// The marker comes from the same writer the API admission uses. Written
+				// inline here until PR #195 review caught it: neutering the canonical writer
+				// left the clone producer still emitting slashes, so the convention had two
+				// homes and the census, renderer and URL builder read one of them.
+				const relDirPath = canonicalEntryPath(relDir, true);
 				// Exclusion BEFORE the cap check and before recursing: an asset file that
 				// sorts ahead of the sources used to spend a slot and then be dropped by
 				// `mapWalkToCoverage`, so a large repository could end the walk before its
@@ -758,11 +762,44 @@ export function contentEntryPaths(
  * Entries of any other kind are excluded rather than guessed; see the fail-closed
  * note on `contentEntryPaths`.
  */
-function entryPaths(
-	entries: Array<{ path?: unknown; type?: unknown }>,
+/**
+ * The one admission rule for repo-map entries, and the one place the directory
+ * convention is written: a file is its path, a directory is its path plus a trailing
+ * slash, anything else is dropped.
+ *
+ * Exposed as a shape rather than as a string list because a second caller
+ * (`mapGitHubTree`, #193) needs the same decision but also needs the entry beside it
+ * to render a display name. Having that caller re-implement the decision is exactly
+ * how #193 happened: it folded `submodule` into `file` and emitted `/blob/` links for
+ * paths that are not blobs, which is #176's 404 shape arriving through the door
+ * #176's fix opened.
+ *
+ * Two GitHub endpoints spell the same concept with different words — the contents API
+ * says `dir`/`file`, the recursive trees API says `tree`/`blob` — so the vocabulary
+ * difference stays in the thin callers and the convention stays here.
+ */
+/**
+ * The one place the directory marker is APPENDED. #184 review round 2 established
+ * that a second writer of this convention is the defect class, and PR #195 claimed
+ * to have removed the second writer while leaving one in `walkRepo` — a claim the
+ * reviewer disproved by neutering the canonical one and watching the two producers
+ * diverge. Both now call this.
+ *
+ * Deliberately a function rather than an inline template: the point is that a change
+ * to the marker governs every producer, which is only testable if there is one
+ * address to change.
+ */
+export function canonicalEntryPath(path: string, isDir: boolean): string {
+	return isDir ? `${path}/` : path;
+}
+
+export type AdmittedEntry<T = unknown> = { path: string; isDir: boolean; entry: T };
+
+function admitEntries<T extends { path?: unknown; type?: unknown }>(
+	entries: readonly T[],
 	kinds: { dir: string; file: string },
-): string[] {
-	const out: string[] = [];
+): Array<AdmittedEntry<T>> {
+	const out: Array<AdmittedEntry<T>> = [];
 	for (const item of entries) {
 		// Fail closed on anything that is not a usable path: the field arrives off the
 		// network, and an empty or non-string value must not reach the URL builder (an
@@ -770,15 +807,69 @@ function entryPaths(
 		// as one of its own entries).
 		if (typeof item.path !== "string" || item.path === "") continue;
 		if (item.type === kinds.file) {
-			out.push(item.path);
+			out.push({ path: item.path, isDir: false, entry: item });
 		} else if (item.type === kinds.dir) {
 			// Neither endpoint ever returns a trailing slash of its own, so there is no
 			// "already terminated" branch here: a mutation of it is untestable, and an
 			// untestable branch is not allowed to sit inside the one writer of a convention.
-			out.push(`${item.path}/`);
+			out.push({
+				path: canonicalEntryPath(item.path, true),
+				isDir: true,
+				entry: item,
+			});
 		}
 	}
 	return out;
+}
+
+/**
+ * The repo-map path representation, as strings. Thin projection of `admitEntries`:
+ * the slash is written in one place, not restated here.
+ */
+function entryPaths(
+	entries: Array<{ path?: unknown; type?: unknown }>,
+	kinds: { dir: string; file: string },
+): string[] {
+	return admitEntries(entries, kinds).map((e) => e.path);
+}
+
+/**
+ * True when an entry's authoritative `html_url` points at a DIFFERENT repository
+ * than the one being mapped.
+ *
+ * This exists for gitlinks. Verified live against `daeuniverse/dae`, whose
+ * `.gitmodules` declares `control/kern/headers`: the contents API reports it as
+ * `type: "file"` (so the admission rule cannot see it), and both URLs derivable from
+ * the parent — `/blob/main/control/kern/headers` and `/tree/main/control/kern/headers`
+ * — return 404, because a submodule is not cloned into the web tree. The entry's
+ * `html_url` is the only reachable address, and it points at the submodule's own
+ * repository.
+ *
+ * The comparison is on parsed owner/repo SEGMENTS, not a string prefix: the
+ * submodule above is `daeuniverse/dae_bpf_headers` inside `daeuniverse/dae`, so a
+ * `startsWith(repoUrl)` test calls a foreign object local — the same prefix-shaped
+ * trap that bit hostname handling in #132.
+ *
+ * An entry whose URL cannot be parsed is treated as local, which is the behaviour
+ * before this function existed: the risk of guessing a foreign URL is emitting a
+ * confident 404, and the risk of treating an unparseable one as local is the status
+ * quo, not a new failure.
+ */
+export function isForeignEntryUrl(repoUrl: string, htmlUrl: unknown): boolean {
+	const local = repoUrlSegments(repoUrl);
+	const entry = typeof htmlUrl === "string" ? repoUrlSegments(htmlUrl) : null;
+	if (!local || !entry) return false;
+	return local[0] !== entry[0] || local[1] !== entry[1];
+}
+
+function repoUrlSegments(u: string): [string, string] | null {
+	try {
+		const parts = new URL(u).pathname.split("/").filter(Boolean);
+		if (parts.length < 2) return null;
+		return [parts[0].toLowerCase(), parts[1].toLowerCase()];
+	} catch {
+		return null;
+	}
 }
 
 /**
@@ -1496,21 +1587,30 @@ async function mapGitHubTree(
 		};
 	}
 
-	const truncated = contents.slice(0, max);
-	const rendered = truncated
+	// Admission first, `max` second. Bounding the raw list let unreachable entries
+	// (submodules, anything unrecognised) consume budget slots and then be dropped,
+	// so a listing of 4 entries holding 2 reachable ones could render 0 after the
+	// discard — the same "the bound counts what we keep neither" mistake as the walk
+	// cap, reached through a third door.
+	const reachable = admitEntries(contents, { dir: "dir", file: "file" });
+	const admitted = reachable.slice(0, max);
+	const entryUrl = (e: AdmittedEntry) => {
+		// A gitlink is reachable only in its own repository, and GitHub already says
+		// which one. Deriving a path URL for it produces a confident 404 (#193).
+		const html = (e.entry as { html_url?: unknown }).html_url;
+		if (isForeignEntryUrl(repoUrl, html) && typeof html === "string" && html) return html;
+		return repoTreeEntryUrl(repoUrl, branch, e.path);
+	};
+
+	const rendered = admitted
 		.map((e) => {
-			const target = e.type === "dir" ? "tree" : "blob";
-			return `${e.type === "dir" ? "📁" : "📄"} [${e.name}](${repoUrl}/${target}/${branch}/${e.path})`;
+			const name = (e.entry as { name?: unknown }).name;
+			return `${e.isDir ? "📁" : "📄"} [${typeof name === "string" && name ? name : e.path}](${entryUrl(e)})`;
 		})
 		.join("\n");
 
 	const treeMarkdown = `## Contents of ${path || "/"}\n\n${rendered || "_(empty)_"}\n`;
-	allUrls.push(
-		...truncated.map(
-			(e) =>
-				`${repoUrl}/${e.type === "dir" ? "tree" : "blob"}/${branch}/${e.path}`,
-		),
-	);
+	allUrls.push(...admitted.map(entryUrl));
 	sources["github-api"] = [...allUrls];
 
 	return {
@@ -1520,7 +1620,13 @@ async function mapGitHubTree(
 		urls: allUrls,
 		sources,
 		treeMarkdown,
-		summary: `🗂️  Tree map for ${owner}/${repo}@${branch}/${path || "/"}\n\nFound ${contents.length} entries (${allUrls.length} shown).`,
+		// One denominator: "entries" is what was listed, "reachable" what admission
+		// accepted, "shown" what `max` retained. The old sentence compared `shown`
+		// against the raw listing, so a discard made "shown" drop without anything
+		// explaining the gap — #168's mismatch, in a second caller.
+		summary:
+			`🗂️  Tree map for ${owner}/${repo}@${branch}/${path || "/"}\n\n` +
+			`Found ${contents.length} entries, ${reachable.length} reachable (${allUrls.length} shown).`,
 	};
 }
 
