@@ -24,6 +24,7 @@ import {
 	detectArchitectureSignals,
 	dropExcludedPaths,
 	capRepoPaths,
+	formatRepoMapCounts,
 	repoEntryCensus,
 	recursiveTreePaths,
 	walkRepo,
@@ -135,4 +136,48 @@ test("#184 review: the clone walk emits directories in the same representation",
 	} finally {
 		await rm(root, { recursive: true, force: true });
 	}
+});
+
+// Verify round 2 on PR #191, finding 1: the two bounds are different claims and
+// the summary conflated them. `localCapped` means OUR RETAINED LIST stopped at
+// MAX_TREE_PATHS; it says nothing about whether the CENSUS is complete. Feeding a
+// complete (not truncated) API response with 22 000 eligible entries produced:
+//   Total entries: at least 20000 (the walk stopped at this limit — the repository
+//   may hold more; ...)
+// No walk ran, and the repository does not hold more: the dispatcher had the exact
+// denominator in hand and printed a lower bound instead, concealing a number it
+// knew. #173 pinned the opposite direction (never call a lower bound "uncapped");
+// this is the symmetric error — calling an exact count a lower bound.
+//
+// Recurrence prevented: a summary that hides a known denominator behind a bound
+// that applies to a different quantity.
+test("#191 verify: a bounded retained list does not turn an exact census into a lower bound", () => {
+	const out = formatRepoMapCounts({
+		totalUrls: 100,
+		entriesIncluded: 100,
+		max: 100,
+		treeEntries: 22000,
+		treeEntriesAreLowerBound: false,
+		retainedBounded: true,
+	});
+	// The census is exact: say so.
+	assert.doesNotMatch(out.entries, /at least/, `exact census reported as a lower bound: ${out.entries}`);
+	assert.match(out.entries, /22000/);
+	// And the retained bound is still disclosed, as itself.
+	assert.match(out.entries, /20000/, `the retained bound is not disclosed: ${out.entries}`);
+});
+
+// The direction #173 pinned must survive the fix: an incomplete collection keeps
+// its lower-bound wording even though nothing else is bounded.
+test("#191 verify: an incomplete collection is still a lower bound", () => {
+	const out = formatRepoMapCounts({
+		totalUrls: 100,
+		entriesIncluded: 100,
+		max: 100,
+		treeEntries: 20000,
+		treeEntriesAreLowerBound: true,
+		retainedBounded: false,
+	});
+	assert.match(out.entries, /at least 20000/);
+	assert.doesNotMatch(out.entries, /uncapped/);
 });

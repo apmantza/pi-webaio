@@ -1069,6 +1069,14 @@ export function formatRepoMapCounts(opts: {
 	 * "(tree truncated by API)" header printed alongside it.
 	 */
 	treeEntriesAreLowerBound?: boolean;
+	/**
+	 * The RETAINED list stopped at `MAX_TREE_PATHS`. Orthogonal to
+	 * `treeEntriesAreLowerBound`, which is about the CENSUS: a complete API
+	 * response with 22 000 eligible entries has an exact total even when only
+	 * 20 000 are retained, and reporting that exact number as "at least 20000"
+	 * conceals a denominator the dispatcher is holding (verify round on PR #191).
+	 */
+	retainedBounded?: boolean;
 }): { discovered: string; entries: string } {
 	const capped = opts.entriesIncluded >= opts.max && opts.treeEntries > opts.max;
 	const discovered = capped
@@ -1077,8 +1085,12 @@ export function formatRepoMapCounts(opts: {
 	const entries =
 		opts.treeEntries > 0
 			? opts.treeEntriesAreLowerBound
-				? `\nTotal entries: at least ${opts.treeEntries} (the walk stopped at this limit — the repository may hold more; ${opts.entriesIncluded} included as URLs)`
-				: `\nTotal entries: ${opts.treeEntries} in the full tree (uncapped; ${opts.entriesIncluded} included as URLs)`
+				? `\nTotal entries: at least ${opts.treeEntries} (collection stopped at this limit — the repository may hold more; ${opts.entriesIncluded} included as URLs)`
+				: `\nTotal entries: ${opts.treeEntries} in the full tree (uncapped; ${opts.entriesIncluded} included as URLs)${
+						opts.retainedBounded
+							? `; the rendered tree keeps the first ${MAX_TREE_PATHS}`
+							: ""
+					}`
 			: "";
 	return { discovered, entries };
 }
@@ -1254,23 +1266,27 @@ async function mapGitHubRepoFull(
 	summaryParts.push(
 		`🗺️  Repo map for ${owner}/${repo}${clonedOk ? " (cloned)" : ""}${truncated ? " (tree truncated by API)" : ""}`,
 	);
+	// Which number the summary reports, and whether it is a floor. There are three
+	// sources and three different reasons a count can be incomplete; the label has
+	// to name the one that actually applied, and must not downgrade a number it
+	// knows exactly into a bound that belongs to a different quantity (reviews
+	// #173 round 2 and PR #191 verify round).
+	//   - complete API tree -> the pre-cap census is EXACT; our retention cap may
+	//     still bound the rendered tree, which is `retainedBounded`, not a floor.
+	//   - clone walk -> its own counters, a floor only if ITS cap tripped.
+	//   - truncated API tree -> the retained list is all we got, so it is a floor.
+	const summaryCensus = census
+		? { total: census.files + census.dirs, lowerBound: false }
+		: walk
+			? { total: walk.files + walk.dirs, lowerBound: walk.hitCap }
+			: { total: paths.length, lowerBound: truncated };
 	const counts = formatRepoMapCounts({
 		totalUrls,
-		treeEntries: walk ? walk.paths.length : paths.length,
+		treeEntries: summaryCensus.total,
 		max,
 		entriesIncluded: Math.min(paths.length, max),
-		// Whether the count is a floor is decided by the source that actually
-		// produced it. If the clone walk ran, ITS cap bounds the number: a repo
-		// whose API tree was truncated but whose cloned tree walked to
-		// completion below `maxEntries` has an EXACT count, and labelling that
-		// "at least" is as wrong as the opposite claim (review #173 round 2).
-		// With no walk the count came from the API tree, which is a floor when
-		// the API said it was truncated OR when our own retention cap stopped the
-		// list at MAX_TREE_PATHS - a third way to be incomplete that the
-		// reviewer's thread surfaced (nodejs/node-sized repos).
-		treeEntriesAreLowerBound: walk
-			? walk.hitCap
-			: truncated || localCapped,
+		treeEntriesAreLowerBound: summaryCensus.lowerBound,
+		retainedBounded: localCapped,
 	});
 	summaryParts.push(`${counts.discovered} via ${Object.keys(sources).length} sources:`);
 	for (const [src, urls] of Object.entries(sources)) {
