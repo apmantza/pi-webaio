@@ -377,6 +377,17 @@ interface WalkResult {
 	 * tree — the fail-open direction for a coverage claim.
 	 */
 	readFailed: boolean;
+	/**
+	 * How many counted entries are symlinks.
+	 *
+	 * A symlink is a blob in git (mode 120000) — there is no directory-symlink type — so
+	 * the recursive trees API counts every one of them and the clone walk must too, or the
+	 * same repository reports two totals depending on which source answered (#197). The
+	 * count is surfaced rather than folded silently into `files` because the clone summary
+	 * has to say what its number included: an unqualified total labelled `exact` is what
+	 * made the old undercount arrive with a guarantee attached.
+	 */
+	symlinks: number;
 }
 
 /**
@@ -410,6 +421,7 @@ export async function walkRepo(
 	const paths: string[] = [];
 	let files = 0;
 	let dirs = 0;
+	let symlinks = 0;
 	// Set only when a RETAINABLE entry was actually refused. `paths.length >=
 	// maxEntries` alone is not that test: a repository with exactly `maxEntries`
 	// entries fills the budget and then trips the same comparison, so an exact count
@@ -471,7 +483,14 @@ export async function walkRepo(
 				paths.push(relDirPath);
 				dirs++;
 				await walk(join(dir, e.name), relDir);
-			} else if (e.isFile()) {
+			} else if (e.isFile() || e.isSymbolicLink()) {
+				// A symlink is admitted through the SAME door as a file, on purpose. git
+				// stores it as a blob (mode 120000) even when it points at a directory, so
+				// `git ls-tree -r -t` — the view the recursive trees API serves — lists it as
+				// a blob, and counting it anywhere else would split the census again (#197).
+				// It is also NOT recursed: `isDirectory()` is false for a symlink, which is what
+				// keeps a cycle and ELOOP out of the walk, and git lists the target's children
+				// once, under the real directory, not again under the link.
 				const relPath = rel ? `${rel}/${e.name}` : e.name;
 				if (isExcludedPath(relPath)) continue;
 				if (paths.length >= maxEntries) {
@@ -480,11 +499,31 @@ export async function walkRepo(
 				}
 				paths.push(relPath);
 				files++;
+				if (e.isSymbolicLink()) symlinks++;
 			}
 		}
 	}
 	await walk(root, "");
-	return { paths, files, dirs, hitCap: dropped, readFailed };
+	return { paths, files, dirs, symlinks, hitCap: dropped, readFailed };
+}
+
+/**
+ * The clone walk's counts line, in one named place so the wording cannot drift from the
+ * thing it describes.
+ *
+ * `symlinks` is stated because `files` silently includes them: a reader comparing this
+ * against an API census needs to know the 3 counted two links as blobs, which is the
+ * only reason the two numbers are comparable at all (#197). Repositories with no
+ * symlinks get no sentence about them — a label that always mentions a category reads
+ * as if the category were the exception.
+ */
+export function walkSummaryLine(walk: WalkResult): string {
+	// Two flat statements rather than a ternary inside a ternary: this is user-facing
+	// text and the plural is easier to read than to nest.
+	const plural = walk.symlinks > 1 ? "s" : "";
+	const symlinkNote =
+		walk.symlinks > 0 ? ` (incl. ${walk.symlinks} symlink${plural} as files)` : "";
+	return `\nFiles: ${walk.files}${symlinkNote}, Dirs: ${walk.dirs}`;
 }
 
 // ─── Cloning ─────────────────────────────────────────────────────────
@@ -1604,9 +1643,7 @@ async function mapGitHubRepoFull(
 		summaryParts.push(`  • ${src}: ${urls.length} URLs`);
 	}
 	if (walk) {
-		summaryParts.push(
-			`\nFiles: ${walk.files}, Dirs: ${walk.dirs},` + counts.entries.replace(/^\n/, ""),
-		);
+		summaryParts.push(`${walkSummaryLine(walk)},${counts.entries.replace(/^\n/, "")}`);
 	} else if (counts.entries) {
 		summaryParts.push(counts.entries);
 	}
