@@ -1305,6 +1305,26 @@ function boundReason(bound: EntryCoverage["bound"]): string {
 	}
 }
 
+/**
+ * Why a collection produced NOTHING, keeping the three failure shapes distinct and
+ * sharing `boundReason`'s vocabulary so the zero-entry and non-zero summaries cannot
+ * describe the same bound differently. Zero from a bound collection is not an empty
+ * repository; naming only "produced nothing" hides whether `maxFiles`, a retry, or a
+ * permissions check is the next move.
+ */
+function zeroReason(bound: EntryCoverage["bound"]): string {
+	switch (bound) {
+		case "api-truncated":
+			return "the API truncated the tree and the clone fallback produced nothing";
+		case "read-error":
+			return "the cloned-tree walk produced nothing and one or more directories could not be read — their contents are unknown";
+		case "walk-cap":
+			return "the cloned-tree walk produced nothing before reaching its limit";
+		default:
+			return "the cloned-tree walk produced nothing";
+	}
+}
+
 export function formatRepoMapCounts(opts: {
 	totalUrls: number;
 	max: number;
@@ -1327,7 +1347,7 @@ export function formatRepoMapCounts(opts: {
 		// which the caller must be able to tell apart from a repo with no files.
 		// Returning "" here made both render as a successful empty map.
 		const entries = coverage.bound
-			? `\nTotal entries: no entries were collected (${coverage.bound === "api-truncated" ? "the API truncated the tree and the clone fallback produced nothing" : "the cloned-tree walk produced nothing"})`
+			? `\nTotal entries: no entries were collected (${zeroReason(coverage.bound)})`
 			: coverage.scope === "root"
 				? "\nTotal entries: the repository root listing returned nothing"
 				: "";

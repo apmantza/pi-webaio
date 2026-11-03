@@ -251,3 +251,40 @@ test("#184: the tree heading carries the read failure too", () => {
 		.find((l) => l.startsWith("## "));
 	assert.match(capped, /walk limit/, `the cap label regressed: ${capped}`);
 });
+
+// CodeRabbit on #196: the zero-entry summary had its own inline ternary that knew
+// about api-truncated and the walk, but not the read failure I had just added, so a
+// repository whose root could not be read reported "the cloned-tree walk produced
+// nothing" — no reason, and the wrong next move.
+test("#184: the zero-entry summary names a read failure too", () => {
+	const out = formatRepoMapCounts({
+		totalUrls: 0,
+		entriesIncluded: 0,
+		max: 100,
+		coverage: { total: 0, scope: "recursive", bound: "read-error" },
+	});
+	assert.match(out.entries, /could not be read/, `reason missing: ${out.entries}`);
+	assert.doesNotMatch(out.entries, /maxFiles/);
+	// Same rule as the non-zero branch, and it bit here first: my mutation that made
+	// this line claim "the repository holds more" survived because I only forbade the
+	// wrong knob, not the wrong quantity. Zero entries plus an unreadable directory is
+	// still not evidence that anything exists.
+	assert.doesNotMatch(out.entries, /holds more|may hold more/, `zero count over-claims: ${out.entries}`);
+	// The other two zero-entry shapes must keep their own reasons — the new case
+	// must not swallow them.
+	const api = formatRepoMapCounts({
+		totalUrls: 0,
+		entriesIncluded: 0,
+		max: 100,
+		coverage: { total: 0, scope: "recursive", bound: "api-truncated" },
+	});
+	assert.match(api.entries, /API truncated/, `api reason lost: ${api.entries}`);
+	const cap = formatRepoMapCounts({
+		totalUrls: 0,
+		entriesIncluded: 0,
+		max: 100,
+		coverage: { total: 0, scope: "recursive", bound: "walk-cap" },
+	});
+	assert.match(cap.entries, /walk produced nothing/, `cap reason lost: ${cap.entries}`);
+	assert.doesNotMatch(cap.entries, /could not be read/);
+});
