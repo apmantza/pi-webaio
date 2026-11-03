@@ -245,3 +245,32 @@ test("#193: a submodule whose repo name extends the parent's is still foreign", 
 		`the local sibling was treated as foreign: ${JSON.stringify(r.urls)}`,
 	);
 });
+
+// PR #195 review, finding 2: the cap tests used `max` larger than the fixture, so
+// nothing ever reached the branch where a rejected entry would have spent a slot.
+// `[submodule, file]` at `max=1` is the smallest case where bounding the raw list and
+// bounding the admitted list differ — the reviewer's probe showed the mutant returning
+// zero URLs while the real code returns the file.
+test("#193: a rejected entry at the cap boundary cannot hide the reachable one", async () => {
+	contents = [
+		{ name: "lib", path: "src/lib", type: "submodule" },
+		{ name: "a.ts", path: "src/a.ts", type: "file" },
+	];
+	const url = `${REPO_URL}/tree/main/src`;
+	const r = await mod.mapGitHubRepo(url, mod.parseGitHubMapUrl(url), { max: 1 });
+	assert.ok(r.ok, r.summary);
+	assert.equal(
+		r.urls.length,
+		1,
+		`max=1 must still yield the one reachable entry: ${JSON.stringify(r.urls)}`,
+	);
+	assert.ok(
+		hasUrl(r.urls, `${REPO_URL}/blob/main/src/a.ts`),
+		`the reachable file was starved by a rejected entry ahead of it: ${JSON.stringify(r.urls)}`,
+	);
+	assert.match(
+		r.summary,
+		/2 entries, 1 reachable \(1 shown\)/,
+		`the summary must report the real denominators: ${r.summary}`,
+	);
+});

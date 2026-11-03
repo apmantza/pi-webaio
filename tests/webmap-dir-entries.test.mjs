@@ -29,6 +29,7 @@ import {
 	mapWalkToCoverage,
 	repoEntryCensus,
 	recursiveTreePaths,
+	contentEntryPaths,
 	walkRepo,
 	MAX_TREE_PATHS,
 } from "../src/github-map.ts";
@@ -404,6 +405,42 @@ test("#184: excluded entries do not consume the walk's entry budget", async () =
 		assert.ok(
 			!w.paths.some((p) => p.startsWith("docs")),
 			`an excluded DIRECTORY was retained or walked: ${w.paths}`,
+		);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+// PR #195 review, finding 1: the PR claimed `admitEntries` was the single writer of
+// the directory marker while `walkRepo` appended it inline. The reviewer proved it by
+// neutering the canonical writer and watching the two producers diverge. This test is
+// the version of that probe that stays in the suite: the same logical tree through the
+// API admission path and the filesystem walk path must yield the SAME path set, so a
+// second writer cannot come back.
+test("#193: the API and clone producers emit one convention, not two", async () => {
+	const root = await mkdtemp(join(tmpdir(), "walk-parity-"));
+	try {
+		await mkdir(join(root, "d", "a"), { recursive: true });
+		await writeFile(join(root, "d", "a", "f.ts"), "f");
+		await writeFile(join(root, "README.md"), "r");
+		const walked = await walkRepo(root, { maxEntries: 100 });
+		// The same tree as the contents API would spell it.
+		const listed = contentEntryPaths([
+			{ path: "d", type: "dir" },
+			{ path: "d/a", type: "dir" },
+			{ path: "d/a/f.ts", type: "file" },
+			{ path: "README.md", type: "file" },
+		]);
+		assert.deepEqual(
+			[...walked.paths].sort(),
+			[...listed].sort(),
+			"the two producers disagree on the directory convention",
+		);
+		// And the marker must actually be present, or the assertion above passes by
+		// both producers dropping it.
+		assert.ok(
+			walked.paths.some((p) => p.endsWith("/")),
+			"no producer emitted a directory marker at all",
 		);
 	} finally {
 		await rm(root, { recursive: true, force: true });

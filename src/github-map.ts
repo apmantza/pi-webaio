@@ -434,7 +434,11 @@ export async function walkRepo(
 				// way, and a cloned map reports the same denominators as an API map of the
 				// same repository.
 				const relDir = rel ? `${rel}/${e.name}` : e.name;
-				const relDirPath = `${relDir}/`;
+				// The marker comes from the same writer the API admission uses. Written
+				// inline here until PR #195 review caught it: neutering the canonical writer
+				// left the clone producer still emitting slashes, so the convention had two
+				// homes and the census, renderer and URL builder read one of them.
+				const relDirPath = canonicalEntryPath(relDir, true);
 				// Exclusion BEFORE the cap check and before recursing: an asset file that
 				// sorts ahead of the sources used to spend a slot and then be dropped by
 				// `mapWalkToCoverage`, so a large repository could end the walk before its
@@ -774,6 +778,21 @@ export function contentEntryPaths(
  * says `dir`/`file`, the recursive trees API says `tree`/`blob` — so the vocabulary
  * difference stays in the thin callers and the convention stays here.
  */
+/**
+ * The one place the directory marker is APPENDED. #184 review round 2 established
+ * that a second writer of this convention is the defect class, and PR #195 claimed
+ * to have removed the second writer while leaving one in `walkRepo` — a claim the
+ * reviewer disproved by neutering the canonical one and watching the two producers
+ * diverge. Both now call this.
+ *
+ * Deliberately a function rather than an inline template: the point is that a change
+ * to the marker governs every producer, which is only testable if there is one
+ * address to change.
+ */
+export function canonicalEntryPath(path: string, isDir: boolean): string {
+	return isDir ? `${path}/` : path;
+}
+
 export type AdmittedEntry<T = unknown> = { path: string; isDir: boolean; entry: T };
 
 function admitEntries<T extends { path?: unknown; type?: unknown }>(
@@ -793,7 +812,11 @@ function admitEntries<T extends { path?: unknown; type?: unknown }>(
 			// Neither endpoint ever returns a trailing slash of its own, so there is no
 			// "already terminated" branch here: a mutation of it is untestable, and an
 			// untestable branch is not allowed to sit inside the one writer of a convention.
-			out.push({ path: `${item.path}/`, isDir: true, entry: item });
+			out.push({
+				path: canonicalEntryPath(item.path, true),
+				isDir: true,
+				entry: item,
+			});
 		}
 	}
 	return out;
