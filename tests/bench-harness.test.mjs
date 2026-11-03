@@ -533,3 +533,77 @@ test("#177: baseline diffing compares quality, never latency", async () => {
 		"latency must not become a regression axis (live-network flaps, #162)",
 	);
 });
+
+// ─── bench-full-search: operator surface (#97) ─────────────────────
+// Measured while gathering the n=30 evidence for #97: `--help` is not a mode,
+// so the documented entry point runs a LIVE network benchmark instead of printing
+// usage — an operator cannot read the flags without spending live samples.
+// Quoted pre-fix behaviour:
+//   === FULL aio-websearch benchmark: mode=--help (PI_WEBAIO_CDP_BROKER=0), samples=1 ...
+//
+// Recurrence prevented: a benchmark script whose only "safe" invocation is
+// actually a live-network run.
+const FULL_BENCH = join(__dirname, "..", "scripts", "bench-full-search.mjs");
+
+test("#97: bench-full-search --help prints usage without sampling", async () => {
+	const r = spawnSync(
+		process.execPath,
+		["--experimental-strip-types", FULL_BENCH, "--help"],
+		{ encoding: "utf8", timeout: 60_000 },
+	);
+	assert.equal(r.status, 0, `--help must succeed: ${r.stderr}`);
+	assert.match(r.stdout, /usage:/i, `no usage block: ${r.stdout.slice(0, 200)}`);
+	assert.ok(
+		!r.stdout.includes("FULL aio-websearch benchmark"),
+		"--help ran a live benchmark instead of printing usage",
+	);
+});
+
+// The resource section shells out to a `wmic … | find /c /v ""` pipeline that is
+// Windows-only. Off Windows it still RUNS: `2>nul` is not a redirect there, so the
+// shell creates a file named `nul` and find's errors reach the operator while
+// every figure prints as "?". Quoted pre-fix stderr:
+//   find: '/c': No such file or directory
+//
+// Recurrence prevented: a platform-specific measurement that is not gated, so the
+// harness #97 depends on reports "?" instead of "not available here".
+//
+// The check is ordering on blanked source rather than a string match, because
+// blankCommentsAndStrings erases literals — `"win32"` becomes `""` — so a
+// comparison against the platform name cannot be asserted directly, and a
+// comment mentioning win32 must not satisfy the guard either.
+test("#97: the Windows-only resource probe is gated before it shells out", async () => {
+	const blanked = await blankCommentsAndStrings(FULL_BENCH);
+	const fn = blanked.slice(blanked.indexOf("function nodeProcessCount"));
+	const body = fn.slice(0, fn.indexOf("\n}") + 2);
+	const guard = body.indexOf("platform()");
+	const shellout = body.indexOf("execSync");
+	assert.ok(shellout >= 0, "the probe no longer shells out — update this test");
+	assert.ok(guard >= 0, "nodeProcessCount has no platform() guard");
+	assert.ok(
+		guard < shellout,
+		"the platform guard must precede the first shellout, or the Windows-only " +
+			"pipeline runs on POSIX (where `2>nul` creates a file named `nul` and find's " +
+			"errors reach the operator)",
+	);
+});
+
+// #97 asks to "establish a reproducible full-tool baseline", but the harness that
+// does it was reachable only by typing its path — no npm script referenced it, so
+// there was no documented entry point and no way to discover it from package.json.
+//
+// Recurrence prevented: a measurement harness that exists but is not wired, so the
+// baseline it promises is never actually taken.
+test("#97: the full-search baseline harness is a wired npm script", async () => {
+	const pkg = JSON.parse(await readFile(join(__dirname, "..", "package.json"), "utf8"));
+	const target = "scripts/bench-full-search.mjs";
+	const wired = Object.entries(pkg.scripts).filter(([, v]) => v.includes(target));
+	assert.ok(
+		wired.length > 0,
+		`${target} is not referenced by any npm script; #97's baseline is undiscoverable`,
+	);
+	assert.ok(
+		pkg.scripts["bench:search:full"],
+		`expected bench:search:full, found: ${wired.map(([k]) => k).join(", ")}`,
+	);
+});
