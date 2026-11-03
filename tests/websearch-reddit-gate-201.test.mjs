@@ -31,17 +31,25 @@ function harness({ googleSettles = false }) {
 			},
 			cdpAvailable: () => true,
 			providerAvailable: () => true,
-			// The deadlines are chosen so the gated path is STRUCTURAL, not timing-lucky.
-			// The first version used `responseTargetMs: 60` with `googleLaneMaxMs: 50`, which
-			// put the Google lane's own cap 10ms INSIDE the response target: the lane could
-			// settle just before the gate asked `Date.now() >= responseDeadlineAt`, Reddit
-			// started, and the test failed its own premise under `test:all` load while passing
-			// in isolation. A gate that only holds when the scheduler is idle is not a
-			// detector, so the lane cap now sits far outside the response target and the only
-			// deadline in play is the one the gate reads.
+			// The deadlines are chosen so that LOAD PUSHES TOWARD THE GATED PATH, not away
+			// from it. Two failed attempts before this:
+			//   1. `responseTargetMs: 60` with `googleLaneMaxMs: 50` put the Google lane's own
+			//      cap 10ms INSIDE the response target, so the lane could settle just before
+			//      the gate asked `Date.now() >= responseDeadlineAt` and Reddit started.
+			//   2. Widening that gap to 40/5000 still failed in `test:all` (604ms run time) —
+			//      the race was not between those two numbers, it was between the response
+			//      target and the scheduler, and a starved event loop can hand control back
+			//      before any deadline is noticed.
+			// What actually works is making the target so small that ANY scheduling delay
+			// guarantees the gate has passed by the time the lane checks it: `1`. Load then
+			// makes the premise MORE reliable rather than less, which is the only direction a
+			// timing-dependent premise should ever depend on. Verified 6 consecutive runs
+			// under 12 CPU spinners. The sibling test below keeps a REAL budget miss (its own
+			// inline deps, provider-reported `response budget` error) so the label cannot be
+			// widened until it erases a genuine provider failure.
 			searchDeadlineMs: 600,
-			responseTargetMs: 40,
-			httpEngineDeadlineMs: 20,
+			responseTargetMs: 1,
+			httpEngineDeadlineMs: 1,
 			googleLaneMaxMs: 5000,
 		},
 	);
