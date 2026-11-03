@@ -446,13 +446,15 @@ export async function walkRepo(
 		});
 		for (const e of entries) {
 			// No blanket "starts with `.`" rule. It was a FILESYSTEM instinct (hide dotfiles)
-			// applied to a SOURCE repository, where it is wrong: measured on `actions/checkout`,
-			// the API's own recursive tree carries 43 dot-paths including
-			// `.github/workflows/check-dist.yml`, `codeql-analysis.yml` and `licensed.yml`. The
-			// rule therefore did not hide noise, it hid the CI configuration — usually the most
-			// decision-relevant material in a repository for an agent surveying it — while the
-			// total was labelled exact (#200). `.github` used to be special-cased out of the rule,
-			// which is the tell that the rule was never about source relevance.
+			// applied to a SOURCE repository, where it is wrong: it pruned every dot-prefixed
+			// directory except `.github`, so what survived depended on whether a tool happened
+			// to name its cache with a leading dot. Measured on `actions/checkout`, it hid exactly
+			// 28 of the API's 108 entries — all of them under `.licenses/`, the per-dependency
+			// license metadata an agent needs to answer "what does this ship under" — and the
+			// total was still labelled exact. `.circleci/` goes the same way in any repository
+			// using it. `.github` was already special-cased out of the rule, which is the tell: a
+			// rule that needs an exception for the one directory whose contents you want was never
+			// about source relevance (#200).
 			if (e.isDirectory()) {
 				// Directories are entries here exactly as they are in the other two
 				// sources (#184 asks that all three obey one convention): slash-terminated,

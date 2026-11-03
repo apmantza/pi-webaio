@@ -9,13 +9,18 @@ All notable changes to pi-webaio will be documented in this file.
   path filtered with `REPO_PATH_EXCLUSIONS`. Two overlapping-but-unequal lists meant the
   same repository reported different totals depending on which source answered, and the
   clone total arrived labelled **exact** because no bound tripped. Measured on
-  `actions/checkout`: the walk reported **80 of 108 entries — 26% hidden**, including every
-  `.github/workflows/` file and all of `.licenses/npm/*`, while the summary said "in the
-  full tree". After: 108 vs 108, zero symmetric difference.
+  `actions/checkout`: the walk reported **80 of 108 entries — 26% hidden, every one of them
+  under `.licenses/`** — the per-dependency license metadata an agent needs to answer "what
+  does this ship under" — while the summary said "in the full tree". After: 108 vs 108, zero
+  symmetric difference.
   The blanket dot rule was a filesystem instinct (hide dotfiles) applied to a source
-  repository, where it is wrong — it hid the CI configuration and the license metadata,
-  usually the most decision-relevant material for an agent surveying a repo. The tell was
-  that `.github` was already special-cased out of it. `REPO_PATH_EXCLUSIONS` is now the
+  repository, where it is wrong: it pruned every dot-prefixed directory except `.github`, so
+  what survived depended on whether a tool happened to name its cache with a leading dot. The
+  tell was that `.github` was already special-cased out of it — a rule needing an exception
+  for the one directory whose contents you want was never about relevance. Recorded because
+  the first draft of this entry claimed the rule also hid `.github/workflows/`: it did not.
+  The rule tested the entry NAME and `.github` was exempt, so `workflows` never matched; the
+  probe printed the same workflow count before and after and was misread as a delta. `REPO_PATH_EXCLUSIONS` is now the
   single pruning rule; the walk's name-based set is gone entirely (a `.git`-only set was
   written first and deleted after probing showed `".git/"` is already in the shared list,
   so no mutation of it could fail a test). `.pytest_cache/`, `.mypy_cache/` and `.tox/`

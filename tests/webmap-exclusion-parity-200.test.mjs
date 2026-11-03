@@ -6,11 +6,14 @@
 // The decision recorded on the issue: the WALK stops pruning what the FILTER does not
 // prune, and `REPO_PATH_EXCLUSIONS` becomes the one source. Direction chosen on
 // evidence, not taste — the API is the primary source and the clone walk is the
-// fallback, so the fallback bends to it; and the blanket dot rule does not hide noise:
-//   $ gh api repos/actions/checkout/git/trees/main?recursive=1 → 43 dot-paths
-//   .github/workflows/check-dist.yml, codeql-analysis.yml, licensed.yml …
-// i.e. it hides the CI configuration, usually the most decision-relevant material in a
-// repository for an agent surveying it, while labelling the total exact.
+// fallback, so the fallback bends to it. And the blanket dot rule was not hiding noise:
+// measured on `actions/checkout` it hid exactly 28 of the API's 108 entries, every one of
+// them under `.licenses/` — the per-dependency license metadata an agent needs to answer
+// "what does this ship under" — while the summary still said "in the full tree".
+// (An earlier draft of this comment claimed it also hid `.github/workflows/`. It did not:
+// the rule tested the ENTRY NAME and `.github` was exempt, so `workflows` never matched.
+// The probe printed the same count of workflow files before and after, and I read that as
+// a delta. Measured, not remembered: `any .github hidden? []`.)
 //
 // Parity is asserted against git's own `ls-tree -r -t` through the project's own
 // `recursiveTreePaths` + `dropExcludedPaths`, not hand-shaped API JSON.
@@ -90,9 +93,11 @@ test("#200: the clone walk and the API exclusion filter agree on the same tree",
 test("#200: hidden directories the API shows are not hidden by the map", async (t) => {
 	const root = fixtureRepo(t, SPEC);
 	const walk = await walkRepo(root);
-	// The CI configuration is the concrete reason this is a defect and not a
-	// presentation preference: GitHub shows it, the API counts it, and a map that omits
-	// it is a confidently wrong answer labelled exact.
+	// `.config/` and `.circleci/` are the new coverage: the old rule pruned both, so the map
+	// omitted directories the API counts and GitHub shows — a confidently wrong answer
+	// labelled exact. `.github/workflows/ci.yml` was already kept by the `.github` exemption;
+	// it is asserted here to pin that removing the rule did not swing the other way and start
+	// hiding what the exemption used to protect.
 	assert.ok(walk.paths.includes(".github/workflows/ci.yml"), JSON.stringify(walk.paths));
 	assert.ok(walk.paths.includes(".config/c.ts"), `dot-dir file hidden: ${JSON.stringify(walk.paths)}`);
 	assert.ok(walk.paths.includes(".circleci/config.ts"), JSON.stringify(walk.paths));
