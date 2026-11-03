@@ -1149,8 +1149,15 @@ export function applyTokenBudget(
 		// guard absent (e.g. "```\n``` js\n| a | b |\nalpha text\n- list item\n# head\n```\n"
 		// at budget 12 answered "``` js"), and those inputs are now pinned in
 		// tests/fence-state-190.test.mjs.
-		const sourceBalanced = findUnclosedFence(source) === null;
-		const closesCleanly = (c: string) => !sourceBalanced || findUnclosedFence(c) === null;
+		// Asked of the ASSEMBLED text, not of the body alone, because assembled text is what
+		// the caller receives: frontmatter is prepended by `assemble` after this choice is
+		// made, so a fence straddling the frontmatter boundary is invisible to a body-only
+		// check. On the residual input the assembled document is genuinely unbalanced, which
+		// makes the preference inert for the right reason -- the whole document is open, not
+		// just the part this block can rewrite -- rather than by accident of scope.
+		const sourceBalanced = findUnclosedFence(assemble(source)) === null;
+		const closesCleanly = (c: string) =>
+			!sourceBalanced || findUnclosedFence(assemble(c)) === null;
 		// Ranking: closed-and-prose > prose > closed > anything. Prose sits ABOVE closure
 		// deliberately, and both orders were measured. With closure first, a document whose only
 		// prose-bearing candidate ends inside a fence is answered with a bare marker -- the
