@@ -16,6 +16,12 @@ All notable changes to pi-webaio will be documented in this file.
   no change to the public result shape were needed. The genuine budget miss — Reddit
   actually ran and missed its deadline — still reports `timeout`, pinned both ways so a
   future widening cannot erase a real provider failure.
+  A **third** branch was found by CI, not locally: the post-aggregation stamp
+  (`collected.timedOut && !redditResult`) overwrote the lane's honest status whenever the
+  gated lane lost the race to aggregation, which a Linux dev box does not reproduce. Both
+  stamps now consult a `redditRequested` flag set immediately before the first real call,
+  so the reported status is honest whichever side wins the race — and the test reddens on
+  either stamp independently.
 
 
 ### Added

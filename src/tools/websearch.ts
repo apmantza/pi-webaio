@@ -302,6 +302,11 @@ export function registerWebsearchTool(
 						}).catch(() => null)
 					: null;
 			let redditStatus: string;
+			// Set immediately before the first real Reddit request, and read by the aggregation
+			// stamp far below: a lane that never made a request cannot time out (#201). Hoisted
+			// to the same scope as `redditStatus` because the aggregation block that reads it is
+			// outside the lane's own block.
+			let redditRequested = false;
 			if (!useReddit) redditStatus = "disabled (reddit not requested)";
 			else if (!cdpAvailableImpl())
 				redditStatus = "unavailable (Chrome CDP not present)";
@@ -625,6 +630,7 @@ export function registerWebsearchTool(
 								latencyMs: 0,
 							};
 						}
+						redditRequested = true;
 						const r = await searchRedditImpl(query, {
 							deadlineAt: responseDeadlineAt,
 							signal,
@@ -857,8 +863,14 @@ export function registerWebsearchTool(
 			if (collected.timedOut) {
 				if (googleEnabled && !googleResult)
 					googleStatus = `timeout (response budget ${responseTargetMs}ms; hard deadline ${searchDeadlineMs}ms)`;
-				if (redditEnabled && !redditResult)
-					redditStatus = `timeout (response budget ${responseTargetMs}ms; hard deadline ${searchDeadlineMs}ms)`;
+					if (redditEnabled && !redditResult)
+						// Only a lane that actually made a request can time out. On a loaded CI
+						// runner the gated lane's own return loses the race to this aggregation, so
+						// stamping `timeout` unconditionally re-introduced the #201 mislabel here
+						// even after the lane branches were fixed.
+						redditStatus = redditRequested
+							? `timeout (response budget ${responseTargetMs}ms; hard deadline ${searchDeadlineMs}ms)`
+							: "disabled (not attempted: google lane took the budget)";
 				if (!httpResult) {
 					const httpTimeoutOutcomes: EngineOutcome[] = [
 						"ddg",
@@ -906,9 +918,12 @@ export function registerWebsearchTool(
 					...engineStatus,
 					reddit: {
 						count: redditResults.length,
-						status: redditResult
-							? classifyRedditStatus(redditStatus, redditResults.length)
-							: "timeout",
+							status: redditResult
+								? classifyRedditStatus(redditStatus, redditResults.length)
+								: // Same rule as the string above: no request means no timeout.
+									redditRequested
+										? "timeout"
+										: "disabled",
 						latencyMs: redditResult?.latencyMs ?? responseTargetMs,
 					},
 				};
