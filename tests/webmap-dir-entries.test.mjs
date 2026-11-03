@@ -26,7 +26,7 @@ import {
 	capRepoPaths,
 	formatRepoMapCounts,
 	renderRepoTreeMarkdown,
-	walkCoverage,
+	mapWalkToCoverage,
 	repoEntryCensus,
 	recursiveTreePaths,
 	walkRepo,
@@ -246,23 +246,23 @@ test("#184: coverage derives exactness instead of accepting it as an argument", 
 // us to the walk was truncated. Asserting the composition (walkCoverage -> the
 // label) rather than walkCoverage's fields, so the test pins what a reader sees.
 test("#173: a completed walk is exact; only the walk's own cap makes it a floor", () => {
-	const completed = { paths: [], files: 10, dirs: 4, hitCap: false };
-	const capped = { paths: [], files: 5, dirs: 2, hitCap: true };
+	const completed = { paths: ["a.ts", "src/"], files: 1, dirs: 1, hitCap: false };
+	const capped = { paths: ["a.ts", "src/"], files: 1, dirs: 1, hitCap: true };
 	const exactOut = formatRepoMapCounts({
-		totalUrls: 14,
-		entriesIncluded: 14,
+		totalUrls: 2,
+		entriesIncluded: 2,
 		max: 100,
-		coverage: walkCoverage(completed),
+		coverage: mapWalkToCoverage(completed).coverage,
 	});
 	assert.match(exactOut.entries, /full tree/, `completed walk not exact: ${exactOut.entries}`);
 	assert.doesNotMatch(exactOut.entries, /at least/);
 	const floorOut = formatRepoMapCounts({
-		totalUrls: 7,
-		entriesIncluded: 7,
+		totalUrls: 2,
+		entriesIncluded: 2,
 		max: 100,
-		coverage: walkCoverage(capped),
+		coverage: mapWalkToCoverage(capped).coverage,
 	});
-	assert.match(floorOut.entries, /at least 7/);
+	assert.match(floorOut.entries, /at least 2/);
 });
 
 // The heading and the summary must describe the same collection; a summary that
@@ -304,4 +304,55 @@ test("#184: a failed collection says so instead of rendering as an empty repo", 
 		coverage: { total: 0, scope: "recursive" },
 	});
 	assert.doesNotMatch(genuinelyEmpty.entries, /no entries were collected/i);
+});
+
+// ─── CodeRabbit on 6c38a61: four findings, all reproduced ──────────
+// 1. The heading handled api-truncated, root and the retention cap but NOT
+//    walk-cap, so a capped walk printed "## File Tree (N entries)" with no
+//    qualifier while the summary said "at least N" — the same contradiction
+//    #173 was about, in a branch the refactor forgot to label.
+test("#184: the tree heading carries the walk bound too", () => {
+	const md = renderRepoTreeMarkdown(["a.ts"], 100, {
+		total: 1,
+		scope: "recursive",
+		bound: "walk-cap",
+	});
+	assert.match(md, /walk/i, `walk bound absent from the heading: ${md.split("\n")[0]}`);
+	assert.doesNotMatch(md, /truncated by API/, "the walk bound must not borrow the API's label");
+});
+
+// 2. The API branch ran dropExcludedPaths; the clone branches did not. walkRepo
+//    skips a dozen directory NAMES but no asset files and no `docs/`, so the same
+//    repository reported different totals, and got different URLs, depending on
+//    which source answered. Pinned on the leaf both branches now share.
+test("#184: clone output is exclusion-filtered like the API output", () => {
+	const walked = ["README.md", "docs/guide.md", "src/logo.png", "app.min.js", "yarn.lock", "src/main.ts"];
+	const mapped = mapWalkToCoverage({ paths: walked, files: 6, dirs: 0, hitCap: false });
+	assert.ok(!mapped.paths.includes("docs/guide.md"), "docs/ survived the clone branch");
+	assert.ok(!mapped.paths.includes("src/logo.png"), "an asset file survived the clone branch");
+	assert.ok(!mapped.paths.includes("yarn.lock"), "a lockfile survived the clone branch");
+	// The coverage total is the FILTERED census, so it agrees with what is rendered.
+	assert.equal(mapped.coverage.total, 2);
+	// Parity with the API branch on the same input.
+	const eligible = dropExcludedPaths(walked);
+	assert.deepEqual(mapped.paths, eligible);
+});
+
+// 3. Architecture detection read the CAPPED list while the census counted the
+//    uncapped one, so a Dockerfile past entry 20 000 was invisible to signals but
+//    counted in the total — and directories now consume cap slots, so that
+//    happens sooner than it used to.
+test("#184: architecture signals read the uncapped eligible list", () => {
+	const eligible = [];
+	for (let i = 0; i < MAX_TREE_PATHS; i++) eligible.push(`src/f${i}.ts`);
+	eligible.push("Dockerfile");
+	const capped = capRepoPaths(eligible).kept;
+	assert.equal(capped.length, MAX_TREE_PATHS, "fixture must cross the cap");
+	assert.ok(!capped.includes("Dockerfile"), "fixture guard: Dockerfile must be past the cap");
+	const fromCapped = detectArchitectureSignals(capped);
+	const fromEligible = detectArchitectureSignals(eligible);
+	assert.ok(
+		!fromCapped.includes("Docker") && fromEligible.includes("Docker"),
+		`signals must come from the list the census counted: capped="${fromCapped}" eligible="${fromEligible}"`,
+	);
 });

@@ -1083,19 +1083,28 @@ export type EntryCoverage = {
 };
 
 /**
- * Coverage as reported by a cloned-tree walk.
+ * Map a cloned-tree walk onto the same representation the API branch produces.
  *
- * A walk that finished below its own `maxEntries` enumerated the whole tree, so
- * its count is EXACT even when the API tree that led us here was truncated —
- * claiming "at least" for it is as wrong as the opposite (#173 round 2). Only the
- * walk's own cap makes it a floor.
+ * Both clone branches used to assign `walk.paths` straight through, while the API
+ * branch ran `dropExcludedPaths` first. `walkRepo` skips a dozen directory NAMES
+ * but no asset files and no `docs/`, so the same repository reported different
+ * totals and emitted different URLs depending on which source answered — a
+ * denominator that moves with the code path is the #168 class. One leaf for both
+ * branches means the parity cannot drift again.
  */
-export function walkCoverage(walk: WalkResult | null): EntryCoverage {
-	if (!walk) return { total: 0, scope: "recursive", bound: "walk-cap" };
+export function mapWalkToCoverage(walk: WalkResult | null): {
+	paths: string[];
+	coverage: EntryCoverage;
+} {
+	const eligible = dropExcludedPaths(walk?.paths ?? []);
+	const census = repoEntryCensus(eligible);
 	return {
-		total: walk.files + walk.dirs,
-		scope: "recursive",
-		bound: walk.hitCap ? "walk-cap" : undefined,
+		paths: eligible,
+		coverage: {
+			total: census.files + census.dirs,
+			scope: "recursive",
+			bound: walk?.hitCap ? "walk-cap" : undefined,
+		},
 	};
 }
 
@@ -1180,8 +1189,10 @@ export function renderRepoTreeMarkdown(
 	const bound =
 		coverage.bound === "api-truncated"
 			? ", truncated by API"
-			: coverage.scope === "root"
-				? ", repository root only"
+		: coverage.scope === "root"
+			? ", repository root only"
+			: coverage.bound === "walk-cap"
+				? ", bounded by the cloned-tree walk limit"
 				: coverage.retainedBounded
 					? `, bounded by the ${MAX_TREE_PATHS}-entry retention cap`
 					: "";
@@ -1219,6 +1230,13 @@ async function mapGitHubRepoFull(
 	//    faster than cloning (no blobs downloaded) and doesn't need
 	//    git/SSH credentials.
 	let paths: string[] = [];
+	/**
+	 * What architecture detection reads: the ELIGIBLE list before the retention cap.
+	 * Reading `paths` instead makes a root-level `Dockerfile` past entry 20 000
+	 * invisible to signals while the census still counts it, and directories now
+	 * consume cap slots so that happens sooner than it used to.
+	 */
+	let signalPaths: string[] = [];
 	let truncated = false;
 	let source: "repo-clone" | "github-api" | "github-api+clone" = "github-api";
 	let clonedOk = false;
@@ -1243,6 +1261,7 @@ async function mapGitHubRepoFull(
 		census = repoEntryCensus(eligible);
 		const bounded = capRepoPaths(eligible);
 		paths = bounded.kept;
+		signalPaths = eligible;
 		localCapped = bounded.capped;
 		coverage = {
 			total: census.files + census.dirs,
@@ -1258,8 +1277,10 @@ async function mapGitHubRepoFull(
 			clonedOk = true;
 			source = "github-api+clone";
 			walk = await walkRepo(clone.path, { maxEntries: maxFiles });
-			paths = walk?.paths ?? [];
-			coverage = walkCoverage(walk);
+			const mapped = mapWalkToCoverage(walk);
+			paths = mapped.paths;
+			coverage = mapped.coverage;
+			signalPaths = paths;
 		} else {
 			// Nothing was collected: the API truncated and the clone failed.
 			coverage = { total: 0, scope: "recursive", bound: "api-truncated" };
@@ -1272,8 +1293,10 @@ async function mapGitHubRepoFull(
 			clonedOk = true;
 			source = "github-api+clone";
 			walk = await walkRepo(clone.path, { maxEntries: maxFiles });
-			paths = walk?.paths ?? [];
-			coverage = walkCoverage(walk);
+			const mapped = mapWalkToCoverage(walk);
+			paths = mapped.paths;
+			coverage = mapped.coverage;
+			signalPaths = paths;
 		} else {
 			// Last resort: top-level contents listing. Unlike the recursive tree
 			// API (`type === "blob"`) and the clone walk (`e.isFile()`), this
@@ -1293,6 +1316,7 @@ async function mapGitHubRepoFull(
 			// tree — the label that used to be produced here claimed "uncapped" for
 			// a repository whose subdirectories were never requested.
 			coverage = { total: paths.length, scope: "root" };
+			signalPaths = paths;
 		}
 	}
 
@@ -1301,7 +1325,7 @@ async function mapGitHubRepoFull(
 
 	if (paths.length > 0) {
 		treeMarkdown = renderRepoTreeMarkdown(paths, max, coverage);
-		architecture = detectArchitectureSignals(paths);
+		architecture = detectArchitectureSignals(signalPaths);
 
 		// Generate a blob/tree URL per entry (cap at max)
 		const repoUrl = `https://github.com/${owner}/${repo}`;

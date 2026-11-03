@@ -63,3 +63,4 @@ test("#191 verify: the real dispatcher reports an exact pre-cap census as exact"
 	assert.equal(r.repo.totalFiles, N_FILES);
 	assert.equal(r.repo.totalDirs, N_DIRS);
 });
+

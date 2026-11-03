@@ -574,13 +574,34 @@ test("renderRepoTreeMarkdown bounds the rendered tree to max entries", () => {
 	const paths = [];
 	for (let i = 0; i < 2000; i++) paths.push(`src/file${i}.ts`);
 	const md = renderRepoTreeMarkdown(paths, 12, { total: paths.length, scope: "recursive" });
-	const renderedLines = md
-		.split("\n")
-		.slice(md.indexOf("```") + 1)
+	const lines = md.split("\n");
+	// `md.indexOf("```")` is a CHARACTER offset; `slice` wants a LINE index. Used
+	// as-is it skipped the first ~88 lines, so `renderedLines` was empty for every
+	// render and `<= 12` passed unconditionally — a bound test that could not fail.
+	// Find the fence as a line, and require the selection to be non-empty so the
+	// bound assertion has something to bound.
+	const fenceLine = lines.findIndex((l) => l.includes("```"));
+	assert.ok(fenceLine >= 0, "no fenced tree body found");
+	const renderedLines = lines
+		.slice(fenceLine + 1)
 		.filter((l) => l.includes("└── ") || l.includes("├── "));
 	assert.ok(
-		renderedLines.length <= 12,
-		`expected <=12 rendered entries, got ${renderedLines.length}`,
+		renderedLines.length > 0,
+		"the selection is empty — the bound assertion would pass vacuously",
+	);
+	// The tree prints the CONTAINING DIRECTORY as its own row (`└── src/`) above the
+	// 12 entries, so the row count is one more than the bound. Counting rows against
+	// `max` is what the original assertion did and, since it always selected zero
+	// rows, it never found out.
+	const leafRows = renderedLines.filter((l) => l.includes(".ts"));
+	assert.equal(
+		leafRows.length,
+		12,
+		`expected exactly max (12) rendered entries, got ${leafRows.length}`,
+	);
+	assert.ok(
+		renderedLines.length - leafRows.length <= 1,
+		"more than one container row is unexpected for a single-directory fixture",
 	);
 	assert.ok(md.includes("## File Tree (2000 entries)"));
 	assert.match(md, /first 12 of 2000 entries/);
