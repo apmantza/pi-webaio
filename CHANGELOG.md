@@ -4,6 +4,44 @@ All notable changes to pi-webaio will be documented in this file.
 
 ## [Unreleased]
 
+- **A headings-only document no longer answers blank** (#189 item 1). `carriesPageProse`
+  began with `if (prosePrefixSource(body).trim() === "") return true; // nothing to carry`,
+  which read as "there is no prose, so the floor cannot be violated" and was satisfied
+  VACUOUSLY by exactly the documents that have no prose paragraph: `# A\n\n## B\n\n### C`
+  answered `"\n"` and `---\n\n---` answered `""`, because the floor pass never ran. The
+  floor's own contract is that a non-empty body yields the document's content — and for such
+  a document the heading text IS that content. `carriesPageProse` now asks the same question
+  of the text that is there, and the floor's `source` falls back to the body when stripping
+  the heading run leaves nothing (it previously produced the empty string, so every
+  candidate was empty and there was nothing to install). A whole-line fill is offered as the
+  last candidate, because the slice-based trimmers cannot reach the heading words at all:
+  `# A\n\n## B\n\n### C` now answers `# A` at 3 tokens and `# A\n\n## B` at 6, where it
+  answered `#` and `#`. Two looser/tighter details are deliberate: a document made only of
+  rules has no letters to ask for, so its rules count as content, while a document that does
+  have text must show some — without that, a bare `#` passes as the document's content
+  because `#` is literally a substring of it, the same trap the prose branch already
+  documents. Swept rather than sampled: **0 ceiling violations in 840 cases** (7 shapes ×
+  budgets 1–120), and every text-bearing document yields document text at every budget ≥ 2.
+  Budget 1 is an honest limit, not a lowered bar: `estimateTokens("# A") === 2`, so one
+  token cannot hold a heading line.
+  **Items 2 and 3 stay open and are pinned as wrong, not quietly dropped.** Item 3 (CJK
+  under-fill — a 66-token document answered with one character at budget 20) is asserted as
+  a defect with its measured numbers, in the pattern #197 used for #200, so the eventual fix
+  must invert it deliberately. Two redesigns of the shrink leaf were tried and refused on
+  evidence, both recorded in the code and the test: a token-measured binary search over slice
+  length (fixed CJK and the Latin ceiling, broke four #190/#182 guards because a **longer
+  slice can be a worse candidate** — `"```\ncode \n```\n"` drops prose a shorter slice kept,
+  so quality is not monotone in size and "largest fitting slice" is the wrong objective), and
+  a proportional shrink margin replacing the absolute `- 16` (also broke four guards and made
+  Latin output worse). Item 2 (table column labels) is a judgement call about tabular prose,
+  and the rules-only-at-budget-1 case is recorded as a residual because the truncation
+  notice's own `--` separator is a substring of a dashes-only document, so content and
+  framing are indistinguishable there by substring membership. Mutation-checked: vacuous
+  `return true` restored (3), `source` fallback removed (3), `bodyHasText` guard removed (3),
+  line fill ignoring the budget (4); and each of the two line fills is RED when dropped alone,
+  so neither is redundant.
+
+
 - **The webmap clone walk and the API tree now use ONE exclusion list** (#200). `walkRepo`
   pruned with its own `skipDirs` set plus a blanket "starts with `.`" rule, while the API
   path filtered with `REPO_PATH_EXCLUSIONS`. Two overlapping-but-unequal lists meant the

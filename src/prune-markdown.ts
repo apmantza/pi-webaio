@@ -697,8 +697,53 @@ function prosePrefixSource(body: string): string {
  * correct. Query-ranked answers from a later section pass on their own text
  * because the whole body is the haystack.
  */
+/**
+ * Fill the budget with WHOLE lines, longest prefix that fits.
+ *
+ * The slice-based trimmers cannot do this job: `truncateToBudget` cuts at a character
+ * offset and then at a sentence boundary, so a document of short heading lines answers
+ * with a single `#` marker at 6 tokens when `# A\n\n## B` measured exactly 6 and fitted.
+ * Growing by whole lines is also the one direction in which quality is monotone here —
+ * each step adds a line of the document and never removes one — which is what makes it
+ * safe to offer as a candidate at all (#189).
+ */
+function wholeLinesWithinBudget(text: string, maxTokens: number): string {
+	if (maxTokens <= 0) return "";
+	const lines = text.split("\n");
+	let out = "";
+	for (const line of lines) {
+		const next = out === "" ? line : `${out}\n${line}`;
+		if (estimateTokens(next) > maxTokens) break;
+		out = next;
+	}
+	return out;
+}
+
 function carriesPageProse(portion: string, body: string): boolean {
-	if (prosePrefixSource(body).trim() === "") return true; // nothing to carry
+	if (prosePrefixSource(body).trim() === "") {
+		// A body with no prose PARAGRAPH is not a body with no CONTENT. `# A\n\n## B\n\n### C`
+		// and `---\n\n---` are documents whose entire content is headings or rules, and the
+		// unconditional `return true` this replaces ("there is no prose, so the floor cannot
+		// be violated") let them answer `"\n"` and `""`: the floor was satisfied VACUOUSLY
+		// while every word the document had was discarded (#189 item 1). The question is the
+		// same one, asked of the text that IS there - does the answer carry a line of the body.
+		const head = portion.lastIndexOf("\n\n---\n");
+		const noFooter = head >= 0 ? portion.slice(0, head) : portion;
+		// Deliberately looser than the prose branch below on ONE axis, and tighter on another.
+		// A document made only of rules has no letters to ask for, so its rules are its
+		// content. A document that does have text must show some of it: a bare `#` marker is
+		// literally a substring of the body and would otherwise pass as the document's
+		// content, which is the `"#"`-answers-a-headings-page failure the first version of
+		// this branch produced, and the trap the prose branch below already documents.
+		const bodyHasText = /[\p{L}\p{N}]/u.test(body);
+		for (const line of noFooter.split("\n")) {
+			const t = line.trim();
+			if (t === "") continue;
+			if (bodyHasText && !/[\p{L}\p{N}]/u.test(t)) continue;
+			if (body.includes(t)) return true;
+		}
+		return false;
+	}
 	const footerIdx = portion.lastIndexOf("\n\n---\n");
 	const withoutFooter = footerIdx >= 0 ? portion.slice(0, footerIdx) : portion;
 	for (const line of withoutFooter.split("\n")) {
@@ -1079,7 +1124,15 @@ export function applyTokenBudget(
 	// here rather than by a second guard.
 	if (body.trim() !== "" && !carriesPageProse(result, body)) {
 		const room = Math.max(0, effectiveBudget - frontmatterTokens);
-		const source = prosePrefixSource(body);
+		const stripped = prosePrefixSource(body);
+		// When stripping the leading heading run leaves NOTHING, the document IS its headings
+		// (or its rules) and the strip has removed all of its content, so every candidate
+		// built from `source` was the empty string and the floor had nothing to install.
+		// There is no prose to protect in such a document, so the run being stripped is the
+		// only content there is (#189 item 1). Where prose exists this is byte-for-byte
+		// unchanged - the strip still runs first, which is what stops a heading fragment
+		// standing in for the article.
+		const source = stripped.trim() === "" ? body : stripped;
 		// The candidate is held to the same test as the result it replaces. The
 		// trimmers emit framing at tiny budgets — a balanced pair of empty fence
 		// markers, a lone opener — and installing one would only swap a piece of
@@ -1121,7 +1174,27 @@ export function applyTokenBudget(
 			// framing — and on a balanced document it can still never install an open
 			// fence, because the candidate preference below refuses that.
 			trimToTokenBudget(stripLeadingMarkers(source), room),
+			// Whole lines, offered last so it only wins where every slice-based candidate
+			// failed to carry the document's text. For a headings-only document this is the
+			// difference between `#` and `# A\n\n## B`: the marker-eating trim cannot reach
+			// the heading words at a small budget, and filling by lines can (#189 item 1).
+			wholeLinesWithinBudget(source, room),
+			// The same line fill over the marker-stripped text, so a one-token budget can
+			// reach the heading's WORD (`A`) instead of its `#`. Same ranking position
+			// logic: it only wins where nothing above it carried prose (#189 item 1).
+			wholeLinesWithinBudget(stripLeadingMarkers(source), room),
 		];
+		// Two redesigns of the SHRINK LEAF were tried for item 3 (CJK under-fill) and both
+		// are recorded here so the next attempt does not repeat them. (a) A token-measured
+		// binary search over the slice length: it fixed CJK and the Latin ceiling, and
+		// broke four #190/#182 guards, because a LONGER slice can be a WORSE candidate -
+		// `"```\ncode \n```\n"` drops the prose a shorter slice kept. Quality is not
+		// monotone in slice length, so "largest fitting slice" is the wrong objective.
+		// (b) Replacing the absolute `- 16` margin with a proportional one: it also broke
+		// four guards and made Latin output worse (`# A\n\n## B\n\n#` at budget 6).
+		// The line fill above is the change the evidence supports; the leaf itself needs a
+		// redesign whose objective is candidate QUALITY, not size, and that is left open on
+		// #189 rather than shipped as a partial win over four pinned regressions.
 		// Prefer a candidate that actually carries the document's words. Order alone was
 		// not enough: on a fence-led document at budget 1 the closed-fence trim yields a
 		// lone backtick, which was installed while the second candidate — the real code
