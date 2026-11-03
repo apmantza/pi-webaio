@@ -516,14 +516,24 @@ export async function walkRepo(
  * only reason the two numbers are comparable at all (#197). Repositories with no
  * symlinks get no sentence about them — a label that always mentions a category reads
  * as if the category were the exception.
+ *
+ * `entries` is the already-rendered "Total entries…" sentence and is folded in HERE rather
+ * than at the call site: the caller used to concatenate it with a hand-placed comma and a
+ * `replace(/^\n/, "")`, which meant the line a reader actually sees existed nowhere and
+ * nothing tested it (adversarial review P3).
  */
-export function walkSummaryLine(walk: WalkResult): string {
+export function walkSummaryLine(walk: WalkResult, entries = ""): string {
 	// Two flat statements rather than a ternary inside a ternary: this is user-facing
 	// text and the plural is easier to read than to nest.
 	const noun = walk.symlinks > 1 ? "symlinks" : "symlink";
 	const symlinkNote =
 		walk.symlinks > 0 ? ` (incl. ${walk.symlinks} ${noun}; counted as files)` : "";
-	return `\nFiles: ${walk.files}${symlinkNote}, Dirs: ${walk.dirs}`;
+	const tail = entries.replace(/^\n/, "");
+	// The space after the comma is deliberate: the old call site concatenated
+	// `"…Dirs: N," + entries.replace(/^\n/, "")`, which rendered `Dirs: 1,Total entries`
+	// with no separator. Nothing pinned it because the composed line existed in no function
+	// until now, and this is the line a reader actually reads.
+	return `\nFiles: ${walk.files}${symlinkNote}, Dirs: ${walk.dirs}${tail === "" ? "" : `, ${tail}`}`;
 }
 
 // ─── Cloning ─────────────────────────────────────────────────────────
@@ -1643,7 +1653,7 @@ async function mapGitHubRepoFull(
 		summaryParts.push(`  • ${src}: ${urls.length} URLs`);
 	}
 	if (walk) {
-		summaryParts.push(`${walkSummaryLine(walk)},${counts.entries.replace(/^\n/, "")}`);
+		summaryParts.push(walkSummaryLine(walk, counts.entries));
 	} else if (counts.entries) {
 		summaryParts.push(counts.entries);
 	}

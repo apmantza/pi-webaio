@@ -33,7 +33,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-const { walkRepo, repoEntryCensus, isExcludedPath, dropExcludedPaths, walkSummaryLine } =
+const { walkRepo, repoEntryCensus, isExcludedPath, dropExcludedPaths, recursiveTreePaths, walkSummaryLine } =
 	await import("../src/github-map.ts");
 
 // Windows needs SeCreateSymbolicLink privilege; a CI runner without it must not read
@@ -87,17 +87,18 @@ function apiCensus(root) {
 		encoding: "utf8",
 	});
 	const entries = [];
-	let symlinks = 0;
 	for (const line of raw.trim().split("\n").filter(Boolean)) {
 		const [head, path] = line.split("\t");
-		const [mode, type] = head.split(/\s+/);
-		if (mode === "120000") symlinks++;
-		// Slash-terminated the way this file spells "directory" everywhere else.
-		entries.push(type === "tree" ? `${path}/` : path);
+		const [, type] = head.split(/\s+/);
+		entries.push({ path, type });
 	}
-	const eligible = dropExcludedPaths(entries);
+	// THE API's OWN RULE, not a restatement of it. Hand-classifying `type` here counted a
+	// gitlink (`type: "commit"`) as a file, while `recursiveTreePaths` deliberately drops
+	// gitlinks because their `/blob/` URL 404s — so the helper was the one part of this
+	// test that could drift from the thing it is supposed to mirror (adversarial review P3).
+	const eligible = dropExcludedPaths(recursiveTreePaths(entries));
 	const c = repoEntryCensus(eligible);
-	return { ...c, total: c.files + c.dirs, symlinks, paths: eligible };
+	return { ...c, total: c.files + c.dirs, paths: eligible };
 }
 
 // ─── the reported defect ──────────────────────────────────────────────────────
@@ -126,25 +127,39 @@ syms("a file-mode and a directory-mode symlink are both counted (#197 probe F)",
 syms("the clone census equals the API census over the same repository", async (t) => {
 const root = fixtureRepo(t, {
 dirs: ["src", "docs"],
-		files: ["a.ts", "src/b.ts", "src/deep/c.ts", "docs/read.md"],
-		links: [
-			["link-to-file", "a.ts"],
-			["link-to-dir", "src"],
-			["docs/rel-link", "read.md"],
-		],
-		dangling: ["broken-link"],
-	});
-	const walk = await walkRepo(root);
-	const api = apiCensus(root);
-	const clone = repoEntryCensus(walk.paths);
-	// One assertion on the pair, not two on each side: the defect is that the two
-	// paths disagree, and two independent expectations would both move together.
-	assert.deepStrictEqual(clone, { files: api.files, dirs: api.dirs }, "census parity");
-	assert.equal(
-		walk.paths.filter((p) => !p.endsWith("/")).length,
-		api.files,
-		"symlinks must land on the FILE side — git stores them as blobs",
-	);
+files: ["a.ts", "src/b.ts", "src/deep/c.ts", "docs/read.md"],
+links: [
+["link-to-file", "a.ts"],
+["link-to-dir", "src"],
+// A symlink inside a KEPT subdirectory. Every fixture link was at the repository
+// root, so a mutant that counts only top-level links passed all of them while
+// putting `subprojects/git-gui` — the very evidence this PR cites — back to being
+// skipped (adversarial review P2).
+["src/nested-link", "b.ts"],
+["src/deep/deep-link", "c.ts"],
+],
+dangling: ["broken-link"],
+});
+const walk = await walkRepo(root);
+const api = apiCensus(root);
+// PATHS, not counts. Two sources can hold the same number of entries and still
+// disagree about which ones: a symlink recorded without its folder path (`l` instead
+// of `src/l`) kept the count identical and produced a URL that 404s (review P2).
+assert.deepEqual(
+walk.paths.slice().sort(),
+api.paths.slice().sort(),
+"the two sources must enumerate the same entries, not merely the same number",
+);
+const clone = repoEntryCensus(walk.paths);
+assert.deepStrictEqual(clone, { files: api.files, dirs: api.dirs }, "census parity");
+assert.equal(
+walk.paths.filter((p) => !p.endsWith("/")).length,
+api.files,
+"symlinks must land on the FILE side — git stores them as blobs",
+);
+// Named explicitly so the nested case cannot be satisfied by a root-level lookalike.
+assert.ok(walk.paths.includes("src/nested-link"), JSON.stringify(walk.paths));
+assert.ok(walk.paths.includes("src/deep/deep-link"), JSON.stringify(walk.paths));
 });
 
 // ─── the policy's edges ───────────────────────────────────────────────────────
@@ -177,26 +192,45 @@ syms("a dangling symlink is counted, because git stores it as a blob", async (t)
 	assert.ok(walk.paths.includes("broken-link"), JSON.stringify(walk.paths));
 });
 
-syms("an excluded symlink path is dropped by BOTH sources", async (t) => {
+syms("a symlink with an EXCLUDED NAME is dropped where the walk actually visits it", async (t) => {
 	// Parity cuts both ways: if the walk keeps an excluded symlink the clone count
 	// overshoots the API count, which is the same disagreement in the other direction.
-	// `vendor/` is excluded by the noise list and its children are too, so the entry is
-	// dropped whichever source answers.
-	const root = fixtureRepo(t, { dirs: ["vendor"], files: ["a.ts"], links: [["vendor/logo.png", "a.ts"]] });
-	assert.ok(isExcludedPath("vendor/logo.png"), "fixture assumption: this path is excluded");
+	// The link sits at the ROOT with an excluded NAME, because the earlier version put
+	// it inside `vendor/` — a directory the walk prunes before it ever looks at the link,
+	// so the test passed on master and stayed green when the exclusion check for symlinks
+	// was removed (adversarial review P2).
+	const root = fixtureRepo(t, { files: ["a.ts", "keep.md"], links: [["logo.png", "a.ts"]] });
+	assert.ok(isExcludedPath("logo.png"), "fixture assumption: this NAME is excluded");
 	const walk = await walkRepo(root);
-	assert.ok(!walk.paths.includes("vendor/logo.png"), JSON.stringify(walk.paths));
-	assert.equal(walk.paths.length, apiCensus(root).total, "both sources drop the whole subtree");
+	assert.ok(!walk.paths.includes("logo.png"), JSON.stringify(walk.paths));
+	assert.equal(walk.symlinks, 0, "an excluded symlink must not even be counted");
+	assert.deepEqual(walk.paths.slice().sort(), apiCensus(root).paths.slice().sort());
+});
+
+syms("a symlink inside a pruned directory is dropped by BOTH sources", async (t) => {
+	// Kept as the OTHER direction: the walk prunes `vendor/`, the API filter drops its
+	// entries. Same result, arrived at differently, so it is asserted separately.
+	const root = fixtureRepo(t, { dirs: ["vendor"], files: ["a.ts"], links: [["vendor/l", "a.ts"]] });
+	const walk = await walkRepo(root);
+	assert.ok(!walk.paths.some((p) => p.startsWith("vendor")), JSON.stringify(walk.paths));
+	assert.deepEqual(walk.paths.slice().sort(), apiCensus(root).paths.slice().sort());
 });
 
 // The walk PRUNES an excluded directory (one `continue`, checked on the slash-terminated
-// entry form); the API branch FILTERS each entry. Those give the same set only because
-// exclusion is a substring match, which is monotone under path extension. The entry form
-// matters: `docs` is NOT excluded here while `docs/` is, because the patterns are
-// slash-anchored — asserting on the bare name would test a string the walk never checks.
+// entry form); the API branch FILTERS each entry. For the EXCLUSION LIST those are the
+// same set, and only because exclusion is a substring match, which is monotone under path
+// extension. The entry form matters: `docs` is NOT excluded here while `docs/` is, because
+// the patterns are slash-anchored -- asserting on the bare name would test a string the
+// walk never checks.
+//
+// Scope, stated honestly after review: this guard covers the EXCLUSION LIST only. The walk
+// prunes on a SECOND axis the list does not describe -- its `skipDirs` set and its blanket
+// "starts with a dot" rule -- and on that axis the two sources genuinely diverge. That is
+// #200, pinned by its own test at the bottom of this file; this guard does not cover it and
+// must not be read as if it did.
 // Named recurrence: if exclusion ever became exact-segment matching, `docs/` could stop
 // matching while `docs/read.md` still did, and the two sources would diverge by whole
-// subtrees with no test failing anywhere but here.
+// subtrees with no other test failing.
 const MONOTONE_DIRS = ["docs/", "vendor/", "node_modules/", "assets/", "src/", "dist/", "build/"];
 test("exclusion is monotone under path extension, so prune equals filter", () => {
 	for (const dirEntry of MONOTONE_DIRS) {
@@ -283,4 +317,20 @@ syms("RESIDUAL #200: a hidden directory is pruned by the walk but counted by the
 	assert.equal(walk.readFailed, false);
 	assert.notEqual(walk.paths.length, api.total, "#200: exact-labelled totals differ");
 	// Flip this line to `assert.equal(...)` when #200 lands; that flip IS the decision.
+});
+
+syms("the composed counts line reads as one sentence", async (t) => {
+	// The caller used to splice the "Total entries" sentence in with a hand-placed comma,
+	// so the line a reader actually sees existed in no function and was tested by nothing
+	// (adversarial review P3). It is now built in one place and asserted here.
+	const root = fixtureRepo(t, { dirs: ["src"], files: ["a.ts", "src/b.ts"], links: [["l", "a.ts"]] });
+	const walk = await walkRepo(root);
+	const line = walkSummaryLine(walk, "\nTotal entries: 4 in the full tree (uncapped; 4 as URLs)");
+	assert.equal(
+		line,
+		"\nFiles: 3 (incl. 1 symlink; counted as files), Dirs: 1, Total entries: 4 in the full tree (uncapped; 4 as URLs)",
+	);
+	// No doubled comma, and no dangling comma when there is no entries sentence.
+	assert.doesNotMatch(line, /,,/);
+	assert.doesNotMatch(walkSummaryLine(walk), /,$/);
 });
