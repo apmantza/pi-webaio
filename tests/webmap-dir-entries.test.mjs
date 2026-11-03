@@ -129,7 +129,11 @@ test("#184 review: the clone walk emits directories in the same representation",
 		await mkdir(join(root, "empty-dir"), { recursive: true });
 		await writeFile(join(root, "README.md"), "x");
 		await writeFile(join(root, "src/nested/a.ts"), "y");
-		const walk = await walkRepo(root, { skipHidden: false, skipDirs: new Set() });
+		// `{}` rather than the `{ skipHidden: false, skipDirs: new Set() }` this used to
+		// pass: `skipDirs` was never a member of the options type, so it was silently ignored,
+		// and `skipHidden` has no behaviour to disable since #200 removed the blanket dot rule.
+		// The fixture holds nothing hidden and nothing excluded, so the call is unchanged.
+		const walk = await walkRepo(root, {});
 		assert.ok(walk.paths.includes("src/"), `clone walk has no directory entry: ${walk.paths}`);
 		assert.ok(walk.paths.includes("src/nested/"));
 		assert.ok(walk.paths.includes("src/nested/a.ts"));
