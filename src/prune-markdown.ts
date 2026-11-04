@@ -1504,7 +1504,29 @@ export function trimToTokenBudgetWithClosedFence(
 	// the job of the one closure parser in this module, not of a second opinion
 	// bolted onto its output. The budget path that actually needed a content-bearing
 	// answer now validates its own swap candidate with the detector it already had.
-	return closeFencesWithin(trimToTokenBudget(text, maxTokens), maxTokens, true);
+	const trimmed = closeFencesWithin(trimToTokenBudget(text, maxTokens), maxTokens, true);
+	// A token cut can land immediately after a heading marker, leaving `##` with no heading.
+	// Reproduced on master at `budgetTokens: 15` for a document whose second heading is long:
+	// the answer ended `…keeps going.\n\n##`. That is neither structure nor prose — it carries
+	// no information, costs the caller a token, and renders as an empty heading. This module
+	// already states the rule for the outline path ("Whole lines only: … cut a heading
+	// mid-word (`## Sect`), which is neither structure nor prose"); the budget trim path
+	// simply never got it.
+	//
+	// TRAILING only, on purpose. A bare `#` anywhere else came from the document itself —
+	// inside a code fence it is real content — and stripping that would make this the fourth
+	// second-opinion parser the comment above documents. Only the cut point is provably an
+	// artefact of this trim. A heading cut to `## gam` is likewise left alone: recognising
+	// that needs the source document to know a word was lost, which is inference this seam
+	// has repeatedly turned into content deletion.
+	//
+	// The whole-string case needs its own branch: the trailing pattern is anchored on the
+	// newline BEFORE the marker, so a result that is nothing but `##` — which this leaf does
+	// produce at maxTokens 2 and 3 on a heading-led document — never matches it. An answer
+	// consisting solely of a marker carries no document content by construction, so emptying
+	// it is the same judgement rather than a wider one.
+	if (/^[ \t]*#{1,6}[ \t]*$/.test(trimmed)) return "";
+	return trimmed.replace(/(?:\n[ \t]*#{1,6}[ \t]*)+$/, "");
 }
 
 /**
