@@ -133,3 +133,65 @@ test("#216: chunking still preserves fence CONTENT", () => {
 		assert.ok(all.includes(probe), `code line lost: ${probe}`);
 	}
 });
+
+// ─── #218: the four findings from the Qodo review of PR #218 ───────────────────
+// All four reproduced against the first version of the #216 fix, on real code paths, before
+// any of them were addressed. They survived my own suite because it asserted balance and
+// content but never (a) the shared predicate's closer rule, (b) budget adherence, (c) indent
+// agreement with the shipped opener, or (d) that a piece is not a degenerate empty block.
+
+test("#218 F1: a marker line with trailing text is literal code, not a closer", () => {
+	// findUnclosedFence requires a closer to contain only the marker. The chunker's first version
+	// accepted "```js is how you open" as a closer, which desynchronised it from every consumer.
+	const body = "```js\nconst x = 1;\n```js is how you open\nconst y = 2;\n```\n";
+	const chunks = chunkMarkdown(`# T\n\n${body}\n\nTail.\n`, { maxTokens: 12, overlapTokens: 0 });
+	for (const c of chunks) {
+		assert.ok(balanced(c.text), `unbalanced chunk: ${JSON.stringify(c.text.slice(0, 70))}`);
+	}
+	assert.ok(chunks.some((c) => c.text.includes("```js is how you open")), "the literal line must survive");
+});
+
+test("#218 F2: no chunk exceeds the caller's token budget", () => {
+	// A fenced minified line was emitted whole: 382 tokens under a 40-token budget, and the
+	// caller kept it because it was the first result.
+	const long = `const payload = [${Array.from({ length: 400 }, (_, i) => i).join(",")}];`;
+	for (let b = 12; b <= 80; b += 4) {
+		for (const c of chunkMarkdown(`\`\`\`js\n${long}\n\`\`\`\n`, { maxTokens: b, overlapTokens: 0 })) {
+			assert.ok(c.tokenCount <= b, `budget ${b} produced a ${c.tokenCount}-token chunk`);
+		}
+	}
+});
+
+test("#218 F2b: a token-dense fence is not waved through by the char heuristic", () => {
+	// One word per line with blank lines: short in characters, dense in tokens. Making the
+	// block atomic (this very fix) let a 66-token block pass `length <= maxTokens*4` under a
+	// 47-token budget -- a regression the sweep caught, so it is pinned here.
+	const dense = "```\n" + "x\n\n".repeat(60) + "```\n";
+	for (let b = 12; b <= 80; b += 4) {
+		for (const c of chunkMarkdown(dense, { maxTokens: b, overlapTokens: 0 })) {
+			assert.ok(c.tokenCount <= b, `budget ${b} produced a ${c.tokenCount}-token chunk`);
+		}
+	}
+});
+
+test("#218 F3: the chunker and the shared predicate agree on indented openers", () => {
+	// FENCE_OPEN allows any leading whitespace; the chunker's first version allowed three spaces
+	// and so disagreed about where the block started.
+	const src = "Some prose.\n\n    ~~~\n``` inside the fence\nstill fence\n    ~~~\n\nTail.\n";
+	for (const c of chunkMarkdown(src, { maxTokens: 12, overlapTokens: 0 })) {
+		assert.ok(balanced(c.text), `unbalanced chunk: ${JSON.stringify(c.text.slice(0, 70))}`);
+	}
+});
+
+test("#218 F4: a piece is never an empty code block", () => {
+	// Flush right before the block's own closer used to emit "```js\n```" -- a blank fenced
+	// block handed to the reader and counted as a ranking candidate.
+	const code = Array.from({ length: 12 }, (_, i) => `line${i} = ${i};`).join("\n");
+	for (let b = 6; b <= 40; b++) {
+		for (const c of chunkMarkdown(`\`\`\`js\n${code}\n\`\`\`\n`, { maxTokens: b, overlapTokens: 0 })) {
+			const t = c.text.trim();
+			const inner = t.replace(/^(`{3,}|~{3,})[^\n]*\n?/, "").replace(/\n?\s*(`{3,}|~{3,})\s*$/, "").trim();
+			assert.ok(!/^(`{3,}|~{3,})/.test(t) || inner.length > 0, `budget ${b} produced an empty fenced block: ${JSON.stringify(c.text)}`);
+		}
+	}
+});

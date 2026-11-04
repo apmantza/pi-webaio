@@ -12,7 +12,7 @@ import { stripWrapper } from "./markdown-frontmatter.ts";
 // Reused rather than re-implemented: this is the third place in the chunker that needs fence
 // state, and a fourth inline copy of the same machine is exactly the drift #212 was about.
 // Acyclic -- prune-markdown imports only token-count, markdown-frontmatter and bm25.
-import { findUnclosedFence } from "./prune-markdown.ts";
+import { findUnclosedFence, FENCE_OPEN, fenceClosePattern } from "./prune-markdown.ts";
 
 /** A single chunk of markdown, ready for RAG ingestion. */
 export interface Chunk {
@@ -181,13 +181,16 @@ function splitTopLevelBlocks(text: string): string[] {
 		buf = [];
 	};
 	for (const line of text.split("\n")) {
-		const m = line.match(/^\s{0,3}(`{3,}|~{3,})/);
+		// One grammar for the whole repository: FENCE_OPEN for an opener, fenceClosePattern for
+		// a closer. A closer must be marker-ONLY -- a line like "```js is how you open" inside a
+		// code body is literal text, and treating it as a closer desynchronised the block from
+		// the predicate every consumer uses (Qodo finding on #218).
 		if (fence) {
 			buf.push(line);
-			if (m && m[1][0] === fence[0] && m[1].length >= fence.length) fence = null;
-		} else if (m) {
+			if (fenceClosePattern(fence).test(line)) fence = null;
+		} else if (FENCE_OPEN.test(line)) {
 			flush();
-			fence = m[1];
+			fence = (line.match(FENCE_OPEN) as RegExpMatchArray)[1] as string;
 			buf.push(line);
 		} else if (!line.trim()) {
 			flush();
@@ -206,44 +209,116 @@ function splitTopLevelBlocks(text: string): string[] {
  * issue is about, and the reader of a truncated piece still needs to know they are inside
  * a code block.
  */
+/**
+ * Longest prefix of `text` that fits `maxTokens`, shrinking from the 4-chars-per-token guess
+ * until the estimate actually fits. The char guess is only a starting point: a dense line
+ * tokenises denser than 4 chars/token and would otherwise be emitted over budget.
+ */
+function sliceWithinTokens(text: string, maxTokens: number): string {
+	if (estimateTokens(text) <= maxTokens) return text;
+	let take = Math.max(1, Math.min(text.length, maxTokens * 4));
+	while (take > 1 && estimateTokens(text.slice(0, take)) > maxTokens) {
+		take = Math.max(1, Math.floor(take * 0.75));
+	}
+	// Guarantee forward progress even when a single character cannot fit.
+	return text.slice(0, Math.max(1, take));
+}
+
 function splitFencedAtLines(block: string, maxTokens: number): string[] {
 	const pieces: string[] = [];
 	let cur: string[] = [];
 	let curTokens = 0;
 	let fence: string | null = null;
-	const flush = () => {
-		if (cur.length === 0) return;
+	// The reopened marker is pending rather than pushed: flushing right before the block's own
+	// closing line used to emit a piece containing nothing but an opener and a closer, i.e. an
+	// empty code block handed to the reader and counted as a ranking candidate (#218).
+	let pendingReopen: string | null = null;
+	// A piece made only of fence markers is an EMPTY code block: the reader sees a blank
+	// ```pair and ranking counts it as a candidate. Tracked so emit() can refuse to make one.
+	let hasContent = false;
+
+	const closerCost = () => (fence ? estimateTokens(fence) + 1 : 0);
+	const emit = () => {
+		if (cur.length === 0 || !hasContent) return;
 		let text = cur.join("\n");
 		if (fence) text += "\n" + fence;
-		const reopened = fence ? [fence] : [];
 		pieces.push(text);
-		cur = reopened;
-		curTokens = reopened.length ? estimateTokens(reopened[0] as string) : 0;
+		pendingReopen = fence;
+		cur = [];
+		curTokens = 0;
+		hasContent = false;
 	};
-	for (const line of block.split("\n")) {
-		const lineTokens = estimateTokens(line);
-		if (cur.length > 0 && curTokens + lineTokens + 1 > maxTokens) flush();
+	const begin = (line: string) => {
+		if (pendingReopen) {
+			// The piece just emitted was sealed with a synthetic closer. If this line IS that
+			// closer, reopening and re-closing would produce a piece containing only a fence pair
+			// -- an empty code block (#218). The delimiter is already on the previous piece.
+			if (fence && fenceClosePattern(fence).test(line)) {
+				pendingReopen = null;
+				return;
+			}
+			cur.push(pendingReopen);
+			curTokens += estimateTokens(pendingReopen) + 1;
+			pendingReopen = null;
+		}
 		cur.push(line);
-		curTokens += lineTokens + 1;
-		const m = line.match(/^\s{0,3}(`{3,}|~{3,})/);
-		if (m) {
-			if (!fence) fence = m[1];
-			else if (m[1][0] === fence[0] && m[1].length >= fence.length) fence = null;
+		curTokens += estimateTokens(line) + 1;
+		// A blank line is not content: a piece holding only markers and a blank line is an empty
+		// code block, which is what emit() refuses to produce.
+		if (!FENCE_OPEN.test(line) && line.trim() !== "") hasContent = true;
+	};
+
+	for (const raw of block.split("\n")) {
+		// A line that cannot fit an empty piece at all is split by characters, each fragment
+		// sealed in its own fence: a minified code line used to be emitted whole, producing a
+		// 382-token chunk under a 40-token budget that the caller then kept (#218).
+		if (estimateTokens(raw) > maxTokens) {
+			emit();
+			let rest = raw;
+			while (rest.length > 0) {
+				// Both synthetic markers belong to this piece's budget, or the piece comes back
+				// over the caller's number (46 tokens under a 40-token budget, measured).
+				const overhead =
+					curTokens +
+					(pendingReopen ? estimateTokens(pendingReopen) + 1 : 0) +
+					closerCost();
+				const frag = sliceWithinTokens(rest, Math.max(1, maxTokens - overhead));
+				begin(frag);
+				emit();
+				rest = rest.slice(frag.length);
+			}
+			continue;
+		}
+		// The synthetic closer is part of this piece's cost, so reserving it cannot be skipped.
+		if (cur.length > 0 && curTokens + estimateTokens(raw) + 1 + closerCost() > maxTokens) {
+			emit();
+		}
+		begin(raw);
+		const m = raw.match(FENCE_OPEN);
+		if (fence) {
+			if (fenceClosePattern(fence).test(raw)) fence = null;
+		} else if (m) {
+			fence = m[1] as string;
 		}
 	}
-	flush();
+	emit();
 	return pieces;
 }
 
 /** Split an oversized paragraph at sentence, then word, then hard char limit. */
 function splitOversized(paragraph: string, maxTokens: number): string[] {
+	// Dispatched BEFORE the char heuristic below. Two reasons: a fenced block must never reach
+	// the sentence/word packers (both join with " " and destroy the line structure the fence
+	// exists to preserve, #216), and the char proxy mis-measures token-dense fences -- a block
+	// of one-word lines passed `length <= maxTokens*4` while carrying 66 tokens under a 47-token
+	// budget. That regression came from making the block atomic, and the sweep caught it.
+	if (FENCE_OPEN.test(paragraph)) {
+		return estimateTokens(paragraph) > maxTokens
+			? splitFencedAtLines(paragraph, maxTokens)
+			: [paragraph];
+	}
 	const maxChars = maxTokens * 4;
 	if (paragraph.length <= maxChars) return [paragraph];
-	// A fenced block must never reach the sentence/word packers: both join with " ", which
-	// destroys the line structure the fence exists to preserve (#216).
-	if (/^\s{0,3}(`{3,}|~{3,})/m.test(paragraph)) {
-		return splitFencedAtLines(paragraph, maxTokens);
-	}
 
 	const sentences = paragraph.split(/(?<=[.!?])\s+/).filter(Boolean);
 	if (sentences.length > 1) {

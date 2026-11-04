@@ -1549,7 +1549,12 @@ function shrinkNoticeToRoom(footer: string, room: number, displayBudget?: number
  * ad-hoc marker regexes this replaced each disagreed with the model in its own way.
  * Non-global, so `.match`/`.test` carry no lastIndex state.
  */
-const FENCE_OPEN = /^[ \t]*(`{3,}|~{3,})/;
+/**
+ * The opening-fence rule, shared with the chunker. A second spelling of this regex is how
+ * #218's indented-fence finding happened: the chunker allowed at most 3 leading spaces while
+ * this predicate allows any amount, so the two disagreed about where a block starts.
+ */
+export const FENCE_OPEN = /^[ \t]*(`{3,}|~{3,})/;
 
 /**
  * Blankness for fence bookkeeping: ASCII space, tab and carriage return only.
@@ -1603,7 +1608,7 @@ function bodyHoldsLiteralText(runBody: string[]): boolean {
  * Single spelling of the closing rule for the whole file; the dynamic length is the
  * marker's own length, never a caller-supplied pattern.
  */
-function fenceClosePattern(marker: string): RegExp {
+export function fenceClosePattern(marker: string): RegExp {
 	const ch = marker[0] === "~" ? "~" : "`";
 	// The trailing class admits \r as well as space and tab. A CRLF document is split on
 	// \n, so every closer line still carries its carriage return; without it a CRLF
