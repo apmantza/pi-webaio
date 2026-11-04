@@ -9,6 +9,10 @@
 
 import { estimateTokens } from "./token-count.ts";
 import { stripWrapper } from "./markdown-frontmatter.ts";
+// Reused rather than re-implemented: this is the third place in the chunker that needs fence
+// state, and a fourth inline copy of the same machine is exactly the drift #212 was about.
+// Acyclic -- prune-markdown imports only token-count, markdown-frontmatter and bm25.
+import { findUnclosedFence } from "./prune-markdown.ts";
 
 /** A single chunk of markdown, ready for RAG ingestion. */
 export interface Chunk {
@@ -70,10 +74,14 @@ export function chunkMarkdown(
 	const normalized = stripWrapper(markdown).replace(/\r\n?/g, "\n").trim();
 	if (!normalized) return [];
 
-	const paragraphs = normalized
-		.split(/\n\n+/)
-		.map((p) => p.trim())
-		.filter(Boolean);
+	// Fenced code is a BLOCK, not a paragraph. Splitting blindly on /\n\n+/ made a code
+	// body one oversized "paragraph", which `splitOversized` then word-packed with " " as
+	// the joiner -- replacing every newline inside the fence, so the reader got one long
+	// line whose ``` opener was buried mid-text (#216). Fence state is a chunker property:
+	// the chunker defines the boundaries, so a boundary that may fall inside a fence forces
+	// every consumer to re-derive it (answer mode, `chunks: true`, aio-webquery's corpus
+	// index, research quotes).
+	const paragraphs = splitTopLevelBlocks(normalized);
 	if (paragraphs.length === 0) return [];
 
 	const rawChunks = buildParagraphChunks(paragraphs, maxTokens);
@@ -157,10 +165,85 @@ function buildParagraphChunks(
 	return accumulateChunks(paragraphs, maxTokens, "\n\n", splitOversized);
 }
 
+/**
+ * Split on blank lines, but never inside a fenced code block, and always break before a
+ * fence opener so a block starts its own unit. Fence detection is the same shape the rest
+ * of the codebase uses: up to 3 leading spaces, 3+ backticks or tildes, and a closer must
+ * use the same character and be at least as long as the opener.
+ */
+function splitTopLevelBlocks(text: string): string[] {
+	const blocks: string[] = [];
+	let buf: string[] = [];
+	let fence: string | null = null;
+	const flush = () => {
+		const s = buf.join("\n").trim();
+		if (s) blocks.push(s);
+		buf = [];
+	};
+	for (const line of text.split("\n")) {
+		const m = line.match(/^\s{0,3}(`{3,}|~{3,})/);
+		if (fence) {
+			buf.push(line);
+			if (m && m[1][0] === fence[0] && m[1].length >= fence.length) fence = null;
+		} else if (m) {
+			flush();
+			fence = m[1];
+			buf.push(line);
+		} else if (!line.trim()) {
+			flush();
+		} else {
+			buf.push(line);
+		}
+	}
+	flush();
+	return blocks;
+}
+
+/**
+ * Split an oversized block that contains a fence at LINE boundaries, closing any fence the
+ * split leaves open and re-opening it on the next piece. Closing-and-reopening rather than
+ * dropping the remainder: dropping would silently delete code, which is the failure this
+ * issue is about, and the reader of a truncated piece still needs to know they are inside
+ * a code block.
+ */
+function splitFencedAtLines(block: string, maxTokens: number): string[] {
+	const pieces: string[] = [];
+	let cur: string[] = [];
+	let curTokens = 0;
+	let fence: string | null = null;
+	const flush = () => {
+		if (cur.length === 0) return;
+		let text = cur.join("\n");
+		if (fence) text += "\n" + fence;
+		const reopened = fence ? [fence] : [];
+		pieces.push(text);
+		cur = reopened;
+		curTokens = reopened.length ? estimateTokens(reopened[0] as string) : 0;
+	};
+	for (const line of block.split("\n")) {
+		const lineTokens = estimateTokens(line);
+		if (cur.length > 0 && curTokens + lineTokens + 1 > maxTokens) flush();
+		cur.push(line);
+		curTokens += lineTokens + 1;
+		const m = line.match(/^\s{0,3}(`{3,}|~{3,})/);
+		if (m) {
+			if (!fence) fence = m[1];
+			else if (m[1][0] === fence[0] && m[1].length >= fence.length) fence = null;
+		}
+	}
+	flush();
+	return pieces;
+}
+
 /** Split an oversized paragraph at sentence, then word, then hard char limit. */
 function splitOversized(paragraph: string, maxTokens: number): string[] {
 	const maxChars = maxTokens * 4;
 	if (paragraph.length <= maxChars) return [paragraph];
+	// A fenced block must never reach the sentence/word packers: both join with " ", which
+	// destroys the line structure the fence exists to preserve (#216).
+	if (/^\s{0,3}(`{3,}|~{3,})/m.test(paragraph)) {
+		return splitFencedAtLines(paragraph, maxTokens);
+	}
 
 	const sentences = paragraph.split(/(?<=[.!?])\s+/).filter(Boolean);
 	if (sentences.length > 1) {
@@ -231,10 +314,26 @@ function takeTailForTokens(
 ): string {
 	if (tokenBudget <= 0 || !text) return "";
 	const maxChars = Math.min(text.length, tokenBudget * 4, maxTokens * 4);
-	if (text.length <= maxChars) return text;
-	const slice = text.slice(-maxChars);
-	const boundary = slice.search(/\s/);
-	return boundary > 0 ? slice.slice(boundary + 1) : slice;
+	// One candidate, then ONE fence correction. The early return for a short chunk must not
+	// bypass it: that path hands back the whole previous chunk, and if that chunk ends inside
+	// a fence the next chunk inherits a dangling delimiter (found on the real corpus after the
+	// first version of this fix, where the trimmed-tail path looked correct).
+	let candidate = text;
+	if (text.length > maxChars) {
+		const slice = text.slice(-maxChars);
+		const boundary = slice.search(/\s/);
+		candidate = boundary > 0 ? slice.slice(boundary + 1) : slice;
+	}
+		// A word-boundary cut can start INSIDE a fenced block, in which case the tail carries
+		// that block's closing delimiter without its opener and the chunk it is prepended to
+		// ends inside a fence (#216). The overlap is a SCORING aid that display already strips
+		// (issue #131), so dropping the partial-fence fragment costs the reader nothing.
+		let tail = candidate;
+		while (tail && findUnclosedFence(tail)) {
+			const next = tail.indexOf("\n");
+			tail = next === -1 ? "" : tail.slice(next + 1);
+		}
+		return tail;
 }
 
 /** Max token count across chunks. Loop-based to avoid spread RangeError on huge arrays. */
