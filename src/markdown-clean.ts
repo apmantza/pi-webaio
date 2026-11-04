@@ -27,6 +27,23 @@ const FENCE_LINE = /^[ \t]*(`{3,}|~{3,})/;
 const LIST_ITEM = /^([-*+]|\d{1,9}[.)])(\s|$)/;
 
 /**
+ * A line that is NOTHING BUT one JSX/MDX component tag — opening, closing, or
+ * self-closing, with or without attributes.
+ *
+ * The property is what makes this safe without an allowlist. MDX component tags leak out
+ * of `.mdx` sources as their own lines (`<Note>` … `</Note>`), carrying no prose at all;
+ * a page that DOCUMENTS a component writes it inline in a sentence ("wrap the deferred
+ * subtree in `<Suspense>`"), so that line has other text and can never match. The
+ * attribute part excludes `<` and `>`, which is what keeps `<Note>child</Note>` — a tag
+ * with content — from matching, and that is the difference between dropping scaffolding
+ * and dropping a sentence.
+ *
+ * Uppercase-initial only, by JSX convention. Lowercase HTML (`<p>`, `<abbr>`) is the
+ * HTML-to-markdown stage's business and is deliberately not claimed here.
+ */
+const LONE_COMPONENT_TAG = /^<\/?[A-Z][A-Za-z0-9_.]*(\s[^<>\n]*)?\s*\/?>$/;
+
+/**
  * Normalise whitespace in markdown WITHOUT flattening structure.
  *
  * Inside a fence the text is returned verbatim (apart from `\r` removal, which
@@ -73,6 +90,11 @@ export function cleanMarkdown(value: string): string {
 		const indent = indentMatch ? indentMatch[0] : "";
 		const body = line.slice(indent.length).replace(/[^\S\n]+/g, " ").replace(/\s+$/, "");
 		if (!body) continue; // blank line outside a fence
+		// #212: MDX scaffolding. Reached only OUTSIDE a fence and only for a line that is
+		// a single bare tag, so the JSX inside a code sample and the prose that names a
+		// component are both untouched — the two failure directions measured on the real
+		// react.dev page were 13 fenced JSX lines versus 9 prose leaks.
+		if (LONE_COMPONENT_TAG.test(body)) continue;
 		out.push(LIST_ITEM.test(body) ? indent.replace(/\t/g, "  ") + body : body);
 	}
 
