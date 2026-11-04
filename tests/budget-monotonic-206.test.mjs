@@ -55,16 +55,22 @@ function regressions() {
  * property cannot regress further, and the list must be edited DOWNWARD as the seam is
  * fixed — a third test refuses stale entries so the baseline cannot silently go out of date.
  *
- * Root cause, measured rather than guessed: at budget 28 on `headingLed` the seam ADDS the
- * heading block, which costs room the body needed, so the answer carries 75 document
- * characters where budget 27 — no heading, no notice — carried 116. The whole body still
- * fits at 28. So the defect is framing being installed when installing it forces the body
- * to be cut: the same shape #169 fixed for the leading-heading branch.
+ * Root cause, RECORDED AS SUPERSEDED. This comment originally attributed the regression to
+ * framing being installed when installing it forces the body to be cut. That is a symptom.
+ * The measured cause is one level down: `trimToTokenBudget` returns the FIRST slice that fits
+ * and its absolute `- 16` shrink step overshoots as the budget shrinks, so at room 9 it
+ * answers 2 tokens while room 8 answers 7 — 25 of 400 sweep answers spend under half the room
+ * they were given. Fixing the leaf (largest-fitting prefix, gated to fence-free text because
+ * the #190 guards prove quality is non-monotone in length WITH fences) takes worst-gap 78 ->
+ * 30 chars and under-fill 25 -> 0, yet still regresses 35 of 400 assembled answers per budget
+ * against master, because the leaf's output feeds `contentWasCut`, footer sizing and the
+ * skeleton branch. So no leaf-local patch can fix this; the fix is composition-level. Full
+ * measurements, the counter-example, and the three refused designs: issue #206.
  *
- * Why a baseline rather than the fix in this commit: this seam has had four rounds in which
- * each patch deleted content in a new way (#182, #188, #190, and the two redesigns refused
- * on evidence and recorded on #189). The invariant and its detector are the part that stops
- * the debt growing while the fix is designed; #206 carries the diagnosis.
+ * Why a baseline rather than the fix in this commit: this seam has had five rounds in which
+ * each patch deleted content in a new way (#182, #188, #190, and the designs refused on
+ * evidence and recorded on #189 and #206). The invariant and its detector are the part that
+ * stops the debt growing while the fix is designed.
  */
 const BASELINE = new Set([
 	"headingLed@20", "headingLed@21", "headingLed@24", "headingLed@25", "headingLed@28", "headingLed@29",
