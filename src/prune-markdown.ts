@@ -1297,7 +1297,11 @@ function shrinkNoticeToRoom(footer: string, room: number, displayBudget?: number
 		rungs.push(
 			`_truncated to fit the ${displayBudget}-token budget; full content cached._`,
 			`_truncated to fit the ${displayBudget}-token budget._`,
-			`_truncated to ${displayBudget} tokens._`,
+			// "truncated to N tokens" reads as a statement about where the text ENDS. It is
+			// not: the answer is at most N, usually fewer (measured: the rung fired on answers
+			// well under the number). That is the same misstatement #211 exists to remove, so the
+			// wording states a limit, never an endpoint.
+			`_truncated to fit ${displayBudget} tokens._`,
 		);
 	}
 	rungs.push(
