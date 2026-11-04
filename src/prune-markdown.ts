@@ -821,6 +821,25 @@ function documentCharacters(answer: string, body: string): number {
 }
 
 /**
+ * True when `candidate` keeps every document line the incumbent kept.
+ *
+ * Used only when a query is set, where the incumbent is BM25-selected rather than merely
+ * truncated: adding to it is fine, replacing it is not. The incumbent's own notice is
+ * excluded (it is framing, not a document line), and so are lines the body does not contain,
+ * for the same reason `documentCharacters` ignores them.
+ */
+function supersedesIncumbent(candidate: string, incumbent: string, body: string): boolean {
+	const footerIdx = incumbent.lastIndexOf("\n\n---\n");
+	const noNotice = footerIdx >= 0 ? incumbent.slice(0, footerIdx) : incumbent;
+	for (const line of noNotice.split("\n")) {
+		const t = line.trim();
+		if (t === "" || !body.includes(t)) continue;
+		if (!candidate.includes(t)) return false;
+	}
+	return true;
+}
+
+/**
  * #206 — composition-level candidate selection.
  *
  * The defect: raising the caller's budget could return LESS of the document. Root cause is
@@ -860,6 +879,7 @@ function selectFullestCandidate(
 	effectiveBudget: number,
 	frontmatterTokens: number,
 	assemble: (portion: string) => string,
+	hasQuery: boolean,
 ): string {
 	const footerIdx = incumbent.lastIndexOf("\n\n---\n");
 	const notice = footerIdx >= 0 ? incumbent.slice(footerIdx) : "";
@@ -912,6 +932,15 @@ function selectFullestCandidate(
 		// candidate can win on character count while carrying no line of the page at all —
 		// the framing-only failure #182 exists to prevent, re-opened through the back door.
 		if (!carriesPageProse(c, body)) continue;
+		// With a query, the incumbent is not "some of the document" — it is the BM25-SELECTED
+		// part of it, and document characters is the wrong objective: a document-order prefix
+		// can carry MORE characters while dropping the section the query asked for. Measured on
+		// a three-section page queried for the middle one: master kept the matching section at
+		// 101 budgets, this selection kept it at 32. That is the tool's core purpose traded for
+		// a metric it does not measure. So a candidate may only ADD to a query-ranked answer,
+		// never replace it: every document line the incumbent carried must still be present.
+		// Candidates are prefixes, so this admits strictly longer prefixes and nothing else.
+		if (hasQuery && !supersedesIncumbent(c, incumbent, body)) continue;
 		const chars = documentCharacters(c, body);
 		if (chars > bestChars) {
 			bestChars = chars;
@@ -1425,7 +1454,14 @@ export function applyTokenBudget(
 
 	// #206: composition-level selection. Runs last, over the ASSEMBLED-text contract, so it
 	// sees the same framing the caller will, and never lowers what a budget already achieved.
-	result = selectFullestCandidate(result, body, effectiveBudget, frontmatterTokens, assemble);
+	result = selectFullestCandidate(
+		result,
+		body,
+		effectiveBudget,
+		frontmatterTokens,
+		assemble,
+		(query ?? "").trim() !== "",
+	);
 
 	return assemble(result);
 }
