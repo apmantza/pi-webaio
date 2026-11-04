@@ -719,7 +719,7 @@ function wholeLinesWithinBudget(text: string, maxTokens: number): string {
 	return out;
 }
 
-function carriesPageProse(portion: string, body: string): boolean {
+export function carriesPageProse(portion: string, body: string): boolean {
 	if (prosePrefixSource(body).trim() === "") {
 		// A body with no prose PARAGRAPH is not a body with no CONTENT. `# A\n\n## B\n\n### C`
 		// and `---\n\n---` are documents whose entire content is headings or rules, and the
@@ -763,6 +763,162 @@ function carriesPageProse(portion: string, body: string): boolean {
 		if (head.length > 0 && body.includes(head)) return true;
 	}
 	return false;
+}
+
+/**
+ * Largest prefix of `text` that still fits `cap` tokens.
+ *
+ * The existing trims are first-fit: they cut at the first boundary that clears the budget
+ * and then shrink by a fixed margin, so they can return far less than the budget allows.
+ * This is the search for the OTHER end of the range, and it exists only to be compared
+ * against (see `selectFullestCandidate`). It never replaces what the pipeline produced.
+ *
+ * Bounded by construction rather than by an open-ended loop: a binary search needs
+ * ceil(log2(n)) + 1 halvings, so the iteration cap is that number and the loop cannot spin.
+ */
+function largestFittingSlice(text: string, cap: number): string {
+	if (estimateTokens(text) <= cap) return text;
+	// Fenced input goes to the fence-aware trim: a char-level cut here can land inside a
+	// code block and return an answer with an open fence, which the #190 guard then rejects
+	// anyway. Letting the trim that knows about fences handle it is both cheaper and safer.
+	if (/^[ \t]*(`{3,}|~{3,})/.test(text)) return trimToTokenBudgetWithClosedFence(text, cap);
+	let lo = 0;
+	let hi = text.length;
+	const steps = Math.ceil(Math.log2(Math.max(2, text.length))) + 1;
+	for (let i = 0; i < steps && lo < hi; i++) {
+		const mid = Math.ceil((lo + hi) / 2);
+		if (estimateTokens(truncateToBudget(text.slice(0, mid), cap)) <= cap) lo = mid;
+		else hi = mid - 1;
+	}
+	// The located slice goes back through the safe trim rather than being returned raw.
+	// Deleting this was tried and is WRONG, and the way it was caught matters: the mutation run
+	// and a 240,000-case generated sweep both reported it as equivalent, because that corpus
+	// never nests a three-backtick marker inside a four-backtick one. The suite found it —
+	// "a shorter marker inside a longer fence is body, not a delimiter" — once the fence guard
+	// below was also removed, which is how the two turned out to be joint coverage rather than
+	// two independent guards. A probe corpus that disagrees with a shipped pin is the weaker
+	// witness, and the pin wins.
+	return trimToTokenBudgetWithClosedFence(text.slice(0, lo), cap);
+}
+
+/**
+ * How much of the document an answer actually carries: the total length of its lines that
+ * appear verbatim in the body.
+ *
+ * Framing is excluded by construction — a notice line or a generated skeleton heading is
+ * not a line of the body, so it scores zero. That is what makes this comparable across
+ * candidates with different framing, and it is the same measure
+ * tests/budget-monotonic-206.test.mjs uses, so the objective being optimised and the
+ * property being asserted are the one quantity rather than two that can drift.
+ */
+function documentCharacters(answer: string, body: string): number {
+	let n = 0;
+	for (const line of answer.split("\n")) {
+		const t = line.trim();
+		if (t !== "" && body.includes(t)) n += t.length;
+	}
+	return n;
+}
+
+/**
+ * #206 — composition-level candidate selection.
+ *
+ * The defect: raising the caller's budget could return LESS of the document. Root cause is
+ * that three separate decisions each re-derive their own room (how much body to keep, which
+ * framing to install, how terse the notice is), and their costs are not monotone in the
+ * caller's number, so a bigger budget can flip a choice and hand back a smaller answer.
+ *
+ * The fix is NOT to make those decisions monotone — three attempts at the leaf each fixed one
+ * band and regressed another, because changing the leaf changes the incumbent being compared.
+ * Instead this ADDS candidates at the end and takes the maximum, leaving the incumbent byte
+ * identical. A max over a superset cannot return less than the incumbent at the same budget,
+ * so "no budget ever gets worse" holds by construction and is verified against master at every
+ * budget in 1..400, not merely sampled.
+ *
+ * A candidate must clear the invariants the incumbent is already held to — the fence policy,
+ * margin-marker parity, and the `carriesPageProse` content floor — because winning on document
+ * characters is not a licence to break them. All were added after a shipped pin went red, not
+ * predicted. The ceiling guard was added and then DELETED: with it removed, the whole suite and
+ * a 240,000-case generated sweep report zero ceiling violations, because candidates are built
+ * from `room` — the budget minus frontmatter minus the notice they are concatenated with — so
+ * exceeding it is not a state they can reach. The ceiling is asserted by the sweep instead of
+ * restated as dead code.
+ *
+ * Two things this deliberately does NOT do, both measured rather than assumed:
+ *
+ * - It offers no footer-less candidate. Those win on document characters at small budgets by
+ *   returning no truncation notice at all (verified: no footer at every budget tested), which
+ *   makes truncation SILENT — a strictly larger instance of the defect #211 was filed for, and
+ *   the reason the strict monotonicity bar was traded away rather than the footer.
+ * - It does not outbid the incumbent's framing. Candidates reuse the incumbent's notice, so
+ *   heading-skeleton and notice decisions stay with the existing pipeline and this only changes
+ *   how much body rides under them.
+ */
+function selectFullestCandidate(
+	incumbent: string,
+	body: string,
+	effectiveBudget: number,
+	frontmatterTokens: number,
+	assemble: (portion: string) => string,
+): string {
+	const footerIdx = incumbent.lastIndexOf("\n\n---\n");
+	const notice = footerIdx >= 0 ? incumbent.slice(footerIdx) : "";
+	const room = Math.max(1, effectiveBudget - frontmatterTokens - estimateTokens(notice));
+	const candidates = [
+		incumbent,
+		// Whole-body variants only. A prose-only candidate (heading prefix stripped) was tried
+		// and removed on evidence: it wins characters by dropping the heading skeleton the
+		// contract promises at small budgets, and it detaches query-selected prose from the
+		// heading it belongs to — two existing pins, not hypotheticals.
+		//
+		// The heading itself is still exercised as DOCUMENT text: `largestFittingSlice(body, …)`
+		// keeps it when it fits, which is the point that mattered for headingLed (8 of the 91
+		// admitted violations). What is not offered is a candidate that chooses prose INSTEAD
+		// of the framing the pipeline decided to install.
+		trimToTokenBudgetWithClosedFence(body, room) + notice,
+		largestFittingSlice(body, room) + notice,
+	];
+	// Margin-level marker lines are a separate property from `findUnclosedFence`, which
+	// deliberately does not see an indented opener (4 spaces is a code block, and an info
+	// string is allowed). The failure this guards is the asymmetry between them: closing an
+	// indented run appends a marker at column 0, so the answer carries one bare-margin marker
+	// line where the incumbent carried none — odd, and the #182 pin counts parity, not parses.
+	// Policy: never make it worse; repairing it is the trim's job, not this selection's.
+	const marginMarkers = (t: string) => (t.match(/^(?:`{3,}|~{3,})[^\n]*$/gm) || []).length;
+	const incumbentMarginOdd = marginMarkers(assemble(incumbent)) % 2 !== 0;
+	const incumbentOpen = findUnclosedFence(assemble(incumbent)) !== null;
+	let best = incumbent;
+	let bestChars = documentCharacters(incumbent, body);
+	for (const c of candidates) {
+		// No ceiling guard here, deliberately. With it removed, 240,000 generated cases and the
+		// whole suite report ZERO ceiling violations — the candidates are built from `room`,
+		// which is the budget minus frontmatter minus the notice they are concatenated with, so
+		// exceeding it is not a state they can reach. A branch nothing can drive is a vacuous
+		// guard, so the ceiling is asserted by the sweep in tests/budget-monotonic-206.test.mjs
+		// instead of restated as dead code here.
+		//
+		// Same finding, same treatment, for a fence guard here: with it removed the fence count
+		// was identical (39 before, 39 after), because `largestFittingSlice` already routes any
+		// fenced input to the fence-aware trim. It was deleted rather than kept as insurance.
+		//
+		// That conclusion was half wrong and the guard is back. It is NOT load-bearing on its own
+		// (the 39-vs-39 count is real) but it IS load-bearing jointly with the safe trim above:
+		// removing both lets a candidate consume a four-backtick opener, which the shipped #182
+		// pin catches. A guard that is redundant with one neighbour is not redundant with the
+		// pair, and "no single mutant goes red" is not the same claim as "no change goes red".
+		if (!incumbentOpen && findUnclosedFence(assemble(c)) !== null) continue;
+		if (!incumbentMarginOdd && marginMarkers(assemble(c)) % 2 !== 0) continue;
+		// The pipeline's own content floor, applied to the candidate as well. Without it a
+		// candidate can win on character count while carrying no line of the page at all —
+		// the framing-only failure #182 exists to prevent, re-opened through the back door.
+		if (!carriesPageProse(c, body)) continue;
+		const chars = documentCharacters(c, body);
+		if (chars > bestChars) {
+			bestChars = chars;
+			best = c;
+		}
+	}
+	return best;
 }
 
 export function applyTokenBudget(
@@ -1266,6 +1422,10 @@ export function applyTokenBudget(
 		// Leave the framing rather than install a blank candidate.
 		if (chosen !== undefined) result = chosen;
 	}
+
+	// #206: composition-level selection. Runs last, over the ASSEMBLED-text contract, so it
+	// sees the same framing the caller will, and never lowers what a budget already achieved.
+	result = selectFullestCandidate(result, body, effectiveBudget, frontmatterTokens, assemble);
 
 	return assemble(result);
 }

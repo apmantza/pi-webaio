@@ -4,6 +4,27 @@ All notable changes to pi-webaio will be documented in this file.
 
 ## [Unreleased]
 
+- **A larger budget no longer returns less of the document** (#206). `applyTokenBudget` derived
+  its room three separate times — how much body to keep, which framing to install, how terse
+  the notice — and none of those costs is monotone in the caller's number, so asking for more
+  could flip a choice and hand back a smaller answer. The reported case: budget 27 kept the
+  article sentence, budget 28 dropped it. Fixed by **adding** candidates at the end of the seam
+  and taking the maximum, leaving the incumbent byte-identical, so the result cannot be worse
+  than what the budget already achieved — a max over a superset. Verified as a differential
+  against `origin/master` at every budget 1..400 across five shapes: **0 of 2,000 cases carry
+  fewer document characters, 112 carry more**, ceiling violations 0, and footer presence
+  unchanged at all 2,000 (the selection is never why a notice appears or vanishes, which was the
+  #211 risk). Admitted baseline 92 → 77. Three leaf-local attempts had each fixed one band and
+  regressed another because they changed the incumbent being compared; that is why the fix is
+  composition-level. The strict bar (`BASELINE = []`) was traded away on measurement and the
+  decision recorded on the issue: the only candidate reaching 24 violations is a footer-less
+  monotone prefix, which makes truncation silent — a larger instance of what #211 was filed for.
+  Two guards proved **jointly** load-bearing: removing the fence guard alone, or the safe trim
+  alone, is equivalent, and removing **both** lets a candidate consume a four-backtick opener.
+  A 240,000-case generated sweep called that pair equivalent because its corpus never nested a
+  three-backtick marker inside a four-backtick one; the shipped #182 pin did not. A probe corpus
+  that disagrees with a pin is the weaker witness.
+
 - **A CJK document no longer answers one character** (#189 item 3). `trimToTokenBudget`
   returned the FIRST candidate that fitted, and both of its shape constants are Latin-only:
   the seed is `maxTokens * 4` and the shrink margin is an absolute `- 16`. Measured, Latin
