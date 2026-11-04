@@ -770,6 +770,7 @@ export function applyTokenBudget(
 	budget: number,
 	query?: string,
 	url?: string,
+	opts?: { displayBudgetTokens?: number },
 ): string {
 	// The caller's number is the contract. This used to floor at 100, which
 	// silently overrode any smaller budget: `budgetTokens: 50` was answered with
@@ -777,6 +778,23 @@ export function applyTokenBudget(
 	// `shrinkNoticeToRoom` now handles. A budget of 1 still yields a non-empty
 	// budget rather than collapsing to "no budget".
 	const effectiveBudget = Math.max(1, Math.floor(budget));
+	// The number the CALLER recognises. `webfetch` and `webcontent` deliberately size the
+	// body below the caller's ceiling, because the header (title, URL, save path, note)
+	// spends part of the same budget — so `effectiveBudget` here is an internal share
+	// (measured: `budgetTokens: 150` produced a footer reading "108-token budget", and
+	// `300` produced "267"). The caller sees a number that appears nowhere in their request
+	// and cannot be reconciled with anything they passed (#211).
+	//
+	// DISPLAY ONLY. Every budget computation below still uses `effectiveBudget`; a test
+	// pins that a display of 5000 against a real 108 cannot unlock 5000 tokens. This reuses
+	// the rule `src/multi-answer.ts` already applies (`displayBudgetTokens ?? budget`) so
+	// the count of budget-rendering seams does not go up.
+	// The truthiness test alone is the guard: `0` and `undefined` are both falsy, so an
+	// explicit `> 0` was unreachable difference — mutation proved it (removing it left the
+	// suite byte-for-byte green) and it is deleted rather than kept as decoration.
+	const displayBudget = opts?.displayBudgetTokens
+		? Math.floor(opts.displayBudgetTokens)
+		: effectiveBudget;
 	if (estimateTokens(content) <= effectiveBudget) return content;
 
 	// The frontmatter block is re-emitted verbatim at the top of the result, so
@@ -1002,14 +1020,14 @@ export function applyTokenBudget(
 	// fit. Previously the TOC was bounded only by entry COUNT, so 14 long headings
 	// produced a 241-token footer on a 250-token budget — the guarantee then
 	// trimmed the body to NOTHING and still landed 2 tokens over (issue #165 F20).
-	let footerText = `\n\n---\n_content fits ${effectiveBudget}-token budget; full content cached — ${retrieveHint}._`;
+	let footerText = `\n\n---\n_content fits ${displayBudget}-token budget; full content cached — ${retrieveHint}._`;
 	if (contentWasCut) {
 		// A partial prefix is a cut too, so it must not be described as fitting.
 		const cutNote =
 			omitted > 0
 				? `${omitted} section${omitted === 1 ? "" : "s"} omitted`
 				: "part of the remaining section kept";
-			footerText = `\n\n---\n_truncated to fit ${effectiveBudget}-token budget: ${cutNote}; full content cached — ${retrieveHint}._`;
+			footerText = `\n\n---\n_truncated to fit ${displayBudget}-token budget: ${cutNote}; full content cached — ${retrieveHint}._`;
 	}
 	const footerBase = footerText;
 	// Keep the content floor accounted for when sizing the TOC: the omitted-heading
@@ -1078,6 +1096,7 @@ export function applyTokenBudget(
 			// Measured at budget 40, a ~35-token notice "fit" the 40-token room it was
 			// offered and left the content 5 tokens — a literal "#".
 			Math.max(0, effectiveBudget - frontmatterTokens - MIN_CONTENT_TOKENS),
+			displayBudget,
 		);
 		let footerTokens = estimateTokens(ft);
 		let bodyBudget = Math.max(
@@ -1260,17 +1279,37 @@ export function applyTokenBudget(
  * retrieval hint, then the notice itself. The caller's budget always wins over
  * the explanation of why the content was cut.
  */
-function shrinkNoticeToRoom(footer: string, room: number): string {
+function shrinkNoticeToRoom(footer: string, room: number, displayBudget?: number): string {
 	if (estimateTokens(footer) <= room) return footer;
 	// 1. Drop the omitted-sections TOC, keep the count line.
 	const noToc = footer.replace(/\n\n\*Omitted sections:\*[\s\S]*$/, "");
 	if (estimateTokens(noToc) <= room) return noToc;
-	// 2–4. Fixed notices, longest first.
-	for (const notice of [
+	// 2. Fixed notices, longest first. The number-bearing forms come BEFORE the
+	// numberless ones whenever a caller gave us a number to show: the old list was
+	// hardcoded without one, so a slightly tighter room turned the footer into
+	// "truncated to fit the token budget" — a truncation claim with no budget the caller
+	// can check, which is the #211 confusion wearing a different face rather than a fix
+	// of it. Falling through to the numberless forms stays correct for the rooms where the
+	// number genuinely cannot fit: no notice at all would drop the truncation claim, which
+	// is worse than a claim without a number.
+	const rungs: string[] = [];
+	if (displayBudget !== undefined) {
+		rungs.push(
+			`_truncated to fit the ${displayBudget}-token budget; full content cached._`,
+			`_truncated to fit the ${displayBudget}-token budget._`,
+			// "truncated to N tokens" reads as a statement about where the text ENDS. It is
+			// not: the answer is at most N, usually fewer (measured: the rung fired on answers
+			// well under the number). That is the same misstatement #211 exists to remove, so the
+			// wording states a limit, never an endpoint.
+			`_truncated to fit ${displayBudget} tokens._`,
+		);
+	}
+	rungs.push(
 		"_truncated to fit the token budget; full content cached._",
 		"_truncated; full content cached._",
 		"_truncated._",
-	]) {
+	);
+	for (const notice of rungs) {
 		const candidate = `\n\n---\n${notice}`;
 		if (estimateTokens(candidate) <= room) return candidate;
 	}

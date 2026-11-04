@@ -974,6 +974,9 @@ export function composeBudgetedFetchText(opts: {
 		Math.max(minBody, total - estimateTokens(framing)),
 		opts.query,
 		opts.url,
+		// The body budget above is an internal share of the caller's ceiling; the footer the
+		// caller reads must state `budgetTokens`, not that share (#211).
+		{ displayBudgetTokens: total },
 	);
 	let text = composeFetchText({ ...parts, displayContent: display }) + note;
 	// The overflow is stated only when it actually happened. Keying the notice off

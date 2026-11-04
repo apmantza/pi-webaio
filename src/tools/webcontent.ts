@@ -196,6 +196,10 @@ export function registerWebcontentTool(pi: ExtensionAPI): void {
 						bodyBudget,
 						query,
 						stored.url,
+						// Same rule as `aio-webfetch`: the header took a share of the caller's
+						// `budgetTokens`, so the footer quotes that number and not the body
+						// share derived from it (#211, observed as 300 -> "267-token budget").
+						{ displayBudgetTokens: budgetTokens },
 					);
 					if (_pruneCache.size >= _PRUNE_CACHE_MAX) {
 						const oldest = _pruneCache.keys().next().value as
