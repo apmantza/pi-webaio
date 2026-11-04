@@ -1525,6 +1525,18 @@ export function trimToTokenBudgetWithClosedFence(
 	// produce at maxTokens 2 and 3 on a heading-led document — never matches it. An answer
 	// consisting solely of a marker carries no document content by construction, so emptying
 	// it is the same judgement rather than a wider one.
+	// The rule is about a CUT. If the input already fit, `trimToTokenBudget` returned it
+	// unchanged and any trailing `##` is the AUTHOR'S LINE, not an artefact of this function.
+	// Measured against a real `origin/master` worktree (an earlier comparison of mine was
+	// invalid: the changes were already committed, so `git stash` stashed nothing and both
+	// sides ran the fixed code):
+	//   master "Some authored prose that fits comfortably.\n\n##"   <- preserved
+	//   without this gate
+	//        "Some authored prose that fits comfortably.\n"          <- authored content deleted
+	// That is precisely the content-deletion shape this function's comment above documents
+	// three times, reintroduced by a rule whose own justification was "only the cut point is
+	// provably an artefact". The justification now has a guard instead of only a sentence.
+	if (estimateTokens(text) <= maxTokens) return trimmed;
 	if (/^[ \t]*#{1,6}[ \t]*$/.test(trimmed)) return "";
 	return trimmed.replace(/(?:\n[ \t]*#{1,6}[ \t]*)+$/, "");
 }

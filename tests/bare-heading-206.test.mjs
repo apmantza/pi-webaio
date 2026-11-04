@@ -132,6 +132,24 @@ test("#206: the whole-string branch never empties an answer that carries text", 
 	assert.equal(trimToTokenBudgetWithClosedFence("# Title", 8), "# Title");
 });
 
+test("#206: when NOTHING was cut, an authored trailing marker is preserved", () => {
+	// The rule is about a CUT. If the input already fit the budget, the leaf returned it
+	// unchanged and a trailing `##` is the author's own line. Deleting it is the same
+	// content-deletion shape this seam has produced three times with fences -- and it is what
+	// an unguarded version of this rule did, measured against a real origin/master worktree:
+	//   master "Some authored prose that fits comfortably.\n\n##"
+	//   unguarded fix "Some authored prose that fits comfortably.\n"
+	const doc = "Some authored prose that fits comfortably.\n\n##";
+	const out = trimToTokenBudgetWithClosedFence(doc, 40);
+	assert.ok(out.includes("##"), `deleted an authored trailing marker: ${JSON.stringify(out)}`);
+	// The cut case must still be cleaned, so the gate cannot become a blanket no-op.
+	const cut = trimToTokenBudgetWithClosedFence(
+		`Prose that is long enough to need trimming at this budget.\n\n## ${"tail ".repeat(20)}`,
+		15,
+	);
+	assert.equal(bareMarkers(cut).length, 0, `cut case not cleaned: ${JSON.stringify(cut.slice(-30))}`);
+});
+
 test("#206: a document that IS a bare marker is not silently blanked", () => {
 	// Degenerate input, pinned so the new rule cannot become a blanket heading filter.
 	assert.ok(applyTokenBudget("##\n", 40, "q").length >= 0);
