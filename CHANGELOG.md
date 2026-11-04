@@ -4,6 +4,40 @@ All notable changes to pi-webaio will be documented in this file.
 
 ## [Unreleased]
 
+- **A larger budget can no longer return less than it did before** (#206). The stronger claim —
+  that a bigger budget always returns at least as much as a smaller one — is **still not true**
+  and is admitted as a shrinking baseline; what this fixes is the regression axis. `applyTokenBudget` derived
+  its room three separate times — how much body to keep, which framing to install, how terse
+  the notice — and none of those costs is monotone in the caller's number, so asking for more
+  could flip a choice and hand back a smaller answer. The reported case: budget 27 kept the
+  article sentence, budget 28 dropped it; that specific inversion is now closed at every budget
+  26-32. Fixed by **adding** candidates at the end of the seam
+  and taking the maximum, leaving the incumbent byte-identical, so the result cannot be worse
+  than what the budget already achieved — a max over a superset. Verified as a differential
+  against `origin/master` at every budget 1..400 across five shapes: **0 of 2,000 cases carry
+  fewer document characters, 112 carry more**, ceiling violations 0, and footer presence
+  unchanged at all 2,000 (the selection is never why a notice appears or vanishes, which was the
+  #211 risk). Admitted baseline **92 → 76**, each of the 76 listed by name in
+  `tests/budget-monotonic-206.test.mjs` — the detector fails if one grows, disappears without
+  editing the list, or a new one appears, so the residue is visible rather than smoothed over.
+  Three leaf-local attempts had each fixed one band and
+  regressed another because they changed the incumbent being compared; that is why the fix is
+  composition-level. The strict bar (`BASELINE = []`) was traded away on measurement and the
+  decision recorded on the issue: the only candidate reaching 24 violations is a footer-less
+  monotone prefix, which makes truncation silent — a larger instance of what #211 was filed for.
+  A second finding from review, and the more important of the two: with a **query** set the
+  incumbent is BM25-selected, so total document characters is the wrong objective — a
+  document-order prefix can carry more characters while dropping the section the caller asked
+  about, measured at **69 of 101 budgets** on a three-section page. A candidate may therefore
+  only ADD to a query-ranked answer, never replace it. Relevance monotonicity now matches master
+  exactly: both flip only at budgets 22/23/26/27, where the budget cannot reach the middle
+  section at all, so this change introduces no relevance regression at any budget.
+  Two guards proved **jointly** load-bearing: removing the fence guard alone, or the safe trim
+  alone, is equivalent, and removing **both** lets a candidate consume a four-backtick opener.
+  A 240,000-case generated sweep called that pair equivalent because its corpus never nested a
+  three-backtick marker inside a four-backtick one; the shipped #182 pin did not. A probe corpus
+  that disagrees with a pin is the weaker witness.
+
 - **A CJK document no longer answers one character** (#189 item 3). `trimToTokenBudget`
   returned the FIRST candidate that fitted, and both of its shape constants are Latin-only:
   the seed is `maxTokens * 4` and the shrink margin is an absolute `- 16`. Measured, Latin
