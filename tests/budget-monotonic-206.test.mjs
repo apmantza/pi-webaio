@@ -304,3 +304,22 @@ test("#206 option A: the content floor holds with NO query, where the query guar
 		`${bad.length} no-query answers carry none of the document: ${bad.slice(0, 8).join(", ")}`,
 	);
 });
+
+test("#206 option A: a document's own horizontal rule is never mistaken for the notice", () => {
+	// The candidate's notice must be the string the pipeline actually appended. Deriving it as
+	// `incumbent.slice(lastIndexOf("\n\n---\n"))` looks equivalent and is not: a document that
+	// ends with a rule has a real `---` in its body, so the document's own closing lines were
+	// read as the notice and appended AGAIN. Measured on this fixture: 4 budgets answered with
+	// `---` twice where master answers it once. Passing the pipeline's `footer` constant was
+	// also wrong (it is the unshrunk base; pricing room on it made the selection a no-op and
+	// the sweep returned to master's 91 violations), so the rule here is the notice's own
+	// signature: it is italic, an authored rule is followed by a blank line and prose.
+	const doc =
+		"Real article prose about the topic that should be kept at moderate budgets here.\n\n---\n\nClosing note after the rule that is also part of the document.\n";
+	const bad = [];
+	for (let budget = 1; budget <= 120; budget++) {
+		const out = applyTokenBudget(doc, budget, "q");
+		if ((out.match(/^---$/gm) || []).length > 1) bad.push(budget);
+	}
+	assert.deepEqual(bad, [], `budgets answering with a duplicated rule: ${bad.join(", ")}`);
+});

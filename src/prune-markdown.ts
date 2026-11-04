@@ -881,8 +881,24 @@ function selectFullestCandidate(
 	assemble: (portion: string) => string,
 	hasQuery: boolean,
 ): string {
-	const footerIdx = incumbent.lastIndexOf("\n\n---\n");
-	const notice = footerIdx >= 0 ? incumbent.slice(footerIdx) : "";
+	// The notice is whatever the pipeline ACTUALLY appended, which is the trailing block of the
+	// incumbent -- but only when that block carries the notice's own signature. Two wrong ways
+	// were measured before this one:
+	//
+	//  - `incumbent.slice(lastIndexOf("\n\n---\n"))` alone: a document whose own tail is a
+	//    horizontal rule (`prose\n\n---\n\nClosing note`) has a real `---` in its body, so the
+	//    document's closing lines were treated as the notice and appended a second time.
+	//    Measured: 4 budgets answered with `---` twice where master answers it once.
+	//  - passing the pipeline's `footer` constant: that is the UNshrunk base, while the seam
+	//    shrinks the notice to room (and to zero, when it cannot coexist with one token of
+	//    prose). Pricing `room` on it made every candidate too small to win -- the selection
+	//    silently became a no-op and the sweep returned to master's 91 violations.
+	//
+	// The signature is a property, not a wording list: the notice is always italic, so it opens
+	// with `_`, while an authored rule is followed by a blank line and prose. Requiring `_`
+	// right after the separator separates the two without enumerating notice text.
+	const noticeIdx = incumbent.lastIndexOf("\n\n---\n_");
+	const notice = noticeIdx >= 0 ? incumbent.slice(noticeIdx) : "";
 	const room = Math.max(1, effectiveBudget - frontmatterTokens - estimateTokens(notice));
 	const candidates = [
 		incumbent,
