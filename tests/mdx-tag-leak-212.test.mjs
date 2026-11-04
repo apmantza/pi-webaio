@@ -131,6 +131,35 @@ test("#212: a sentence that merely CONTAINS a tag is never dropped", () => {
 	assert.ok(!cleanMarkdown("Aa.\n\n<Note>\n\nBb.").includes("<Note>"), "lone tag not dropped");
 });
 
+test("#212: multi-attribute and other-site component shapes are covered", () => {
+	// Shapes found by scanning every markdown file on this machine (3,301 files, 37 bare
+	// uppercase-tag lines outside fences, ALL of them MDX scaffold across two independent
+	// docs frameworks, zero instances that were documentation prose). Pinned so the rule is
+	// not fitted to react.dev alone: opencode.ai leaks <Callout> and <PlanTabs …>.
+	const doc = [
+		"A sentence before.",
+		"",
+		"<Callout type=\"warning\">",
+		"",
+		"The caveat text itself.",
+		"",
+		"</Callout>",
+		"",
+		'<PlanTabs id="go-pricing" label="Go plan" syncKey="go-plan">',
+		"",
+		"Tab bodies.",
+		"",
+		"</PlanTabs>",
+	].join("\n");
+	const out = cleanMarkdown(doc);
+	for (const t of ["<Callout", "</Callout>", "<PlanTabs", "</PlanTabs>"]) {
+		assert.ok(!out.includes(t), `${t} survived`);
+	}
+	assert.match(out, /The caveat text itself\./);
+	assert.match(out, /Tab bodies\./);
+	assert.match(out, /A sentence before\./);
+});
+
 test("#212: fence bookkeeping is unchanged by the strip", () => {
 	// A dropped tag line must not be allowed to flip fence state for the lines after it.
 	const doc = ["<Note>", "", "```sh", "echo hi", "```", "", "After the fence."].join("\n");
