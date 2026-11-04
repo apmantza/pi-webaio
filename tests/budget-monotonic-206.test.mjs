@@ -73,7 +73,7 @@ function regressions() {
  * stops the debt growing while the fix is designed.
  */
 const BASELINE = new Set([
-	"headingLed@20", "headingLed@21", "headingLed@24", "headingLed@25", "headingLed@28", "headingLed@29",
+	"headingLed@20", "headingLed@24", "headingLed@25", "headingLed@28", "headingLed@29",
 	"headingLed@30", "headingLed@31", "headingLed@32", "titleBody@4", "titleBody@5", "titleBody@9",
 	"titleBody@10", "titleBody@11", "titleBody@12", "titleBody@13", "titleBody@14", "titleBody@15",
 	"titleBody@16", "titleBody@20", "titleBody@21", "titleBody@24", "titleBody@25", "cjk@4",
