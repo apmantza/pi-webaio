@@ -10,6 +10,37 @@ All notable changes to pi-webaio will be documented in this file.
 
 ### Fixed
 
+## [1.1.1] - 2026-11-05
+
+- **Chunking no longer cuts a code fence in half, and no longer overlaps into one** (#216, #218).
+  `chunkMarkdown` split on blank lines, so a code body with no blank lines was *one oversized
+  paragraph*, and the oversized path fell through to word-packing joined with `" "` — replacing
+  every newline inside the fence. The reader received one long line whose ` ``` ` opener was
+  buried mid-text, and an answer-mode top-k selection could end the reply **inside a code block**
+  (`react.dev/reference/react/Suspense` was unbalanced at `topK` 5 and 8). Three more mechanisms
+  were found behind that one: the default `overlapTokens: 50` window could start inside a fence
+  (**181 unbalanced chunks from balanced sources**), a fence trim sat after an early return a short
+  chunk bypassed, and the char-length heuristic waved a token-dense fence through at 66 tokens under
+  a 47-token budget. Fenced blocks are now atomic units, oversized ones split at **line**
+  boundaries closing and re-opening the fence, and the overlap tail is trimmed until it no longer
+  ends inside one. A review round then found the chunker had invented its own fence grammar —
+  `[ \t]{0,3}` where the shipped `FENCE_OPEN` allows any leading whitespace, and "any same-character
+  marker" where `fenceClosePattern` requires marker-only, so a literal ` ```js is how you open `
+  inside a code body closed the fence early. Both predicates are now exported from `prune-markdown`
+  and the chunker's two private copies **deleted**, so the helper count went down; review also
+  surfaced empty ` ```js\n``` ` blocks being handed to readers and ranked as candidates.
+  Verified: unbalanced composed answers **44 → 0** on balanced sources; sweep over budgets 12..80
+  **0 over-budget, 0 empty, 0 unbalanced**; 14 tests, **9 red on master**; mutation **9/11 RED**
+  with both survivors proven equivalent (one by control flow, one by corpus). Residual: a source
+  whose fence is already unterminated stays unterminated, and below ~6 tokens the two synthetic
+  marker lines alone exceed the budget.
+
+### Added
+
+### Changed
+
+### Fixed
+
 ## [1.1.0] - 2026-11-04
 
 - **A larger budget can no longer return less than it did before** (#206). The stronger claim —
