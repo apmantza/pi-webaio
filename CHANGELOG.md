@@ -4,6 +4,14 @@ All notable changes to pi-webaio will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+### Changed
+
+### Fixed
+
+## [1.1.2] - 2026-11-14
+
 ### Fixed
 
 - **GreedySearch Chrome lifecycle: stale foreign-profile Chrome no longer blocks (or haunts) the Google lane.**
@@ -18,7 +26,10 @@ All notable changes to pi-webaio will be documented in this file.
   (`O_EXCL` + dead-holder steal, in `GREEDYSEARCH_STATE_DIR`, default tmpdir) serializes concurrent
   launchers/repairs so a booting Chrome cannot be ghost-killed; empty/whitespace cmdline output
   normalizes to "unavailable — never kill". Tested in `tests/launch-repair.test.mjs` (13 tests,
-  mutation-checked, state-dir injected so tests never touch the real pid records).
+  mutation-checked, state-dir injected so tests never touch the real pid records). Refs #221 —
+  partial mitigation only: the pid/lock/mode records became injectable, but the content cache,
+  repo clones and Chrome profile still live under `os.tmpdir()` with no sweep (open; minor-release
+  scope: XDG cache dir + age/size cap).
 
 ### Added
 
