@@ -23,8 +23,8 @@ import { spawnSync } from "node:child_process";
 import { resolve as dnsResolve } from "node:dns/promises";
 import { existsSync, readdirSync } from "node:fs";
 import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { homedir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const DEFAULT_TIMEOUT_MS = 3000;
@@ -222,10 +222,26 @@ export function validateProxyUrl(value) {
 	return { ok: true, protocol: u.protocol, hostname: u.hostname };
 }
 
-// The temp base the extension persists results under (mirrors BASE_TEMP in
-// src/storage.ts).
-export function tempBase(osTmpdir) {
-	return join(osTmpdir, "pi-webaio");
+// The cache base the extension persists results under (mirrors BASE_TEMP /
+// cache-dir.ts). Respects PI_WEBAIO_CACHE_DIR and the platform cache dir.
+export function tempBase(opts = {}) {
+	const env = opts.env ?? process.env;
+	const platform = opts.platform ?? process.platform;
+	const home = opts.homedir ?? homedir();
+	const fromEnv = env.PI_WEBAIO_CACHE_DIR ?? env.WEBAIO_CACHE_DIR;
+	if (fromEnv != null) {
+		const t = fromEnv.trim();
+		if (t === "") return join(home, ".cache", "pi-webaio");
+		if (t.startsWith("~/") || t === "~") return join(home, t.slice(2));
+		return resolve(t);
+	}
+	if (platform === "darwin") return join(home, "Library", "Caches", "pi-webaio");
+	if (platform === "win32") {
+		const local = env.LOCALAPPDATA || join(home, "AppData", "Local");
+		return join(local, "pi-webaio");
+	}
+	const xdg = env.XDG_CACHE_HOME;
+	return join(xdg && xdg.trim() ? xdg : join(home, ".cache"), "pi-webaio");
 }
 
 // ─── Command / HTTP runners (injectable for tests) ──────────────────
@@ -683,7 +699,7 @@ function defaultDeps(opts) {
 		timeoutMs: opts.timeoutMs,
 		live: opts.live,
 		packageRoot: resolvePackageRoot(),
-		tempBase: tempBase(tmpdir()),
+		tempBase: tempBase(),
 		runCommand: (cmd, args, timeoutMs) => runCommand(cmd, args, timeoutMs),
 		existsSync: (p) => existsSync(p),
 		listDir: (p) => {

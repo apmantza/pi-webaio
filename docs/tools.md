@@ -111,7 +111,7 @@ Registered pi tools and parameters provided by pi-webaio.
 | Parameter | Type     | Default              | Description                                                                                         |
 | --------- | -------- | -------------------- | --------------------------------------------------------------------------------------------------- |
 | `query`   | `string` | —                    | Search query to run against the local corpus                                                        |
-| `dir`     | `string` | `<os-temp>/pi-webaio`| Directory containing a pulled corpus (output of `aio-webpull`). Defaults to the standard temp base. |
+| `dir`     | `string` | platform cache dir (`$PI_WEBAIO_CACHE_DIR`) | Directory containing a pulled corpus (output of `aio-webpull`). Defaults to the web-aio cache directory. |
 | `topK`    | `number` | `8`                  | Number of top-ranked chunks to return                                                               |
 
 #### `aio-webresearch`

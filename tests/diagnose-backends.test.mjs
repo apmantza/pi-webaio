@@ -443,8 +443,13 @@ test("validateProxyUrl rejects empty, garbage, and bad protocols", () => {
 	assert.match(ftp.reason, /unsupported protocol/);
 });
 
-test("tempBase joins under pi-webaio", () => {
-	assert.match(tempBase("/tmp").replace(/\\/g, "/"), /\/tmp\/pi-webaio$/);
+test("tempBase resolves platform cache dir and env override", () => {
+	const linux = tempBase({ env: {}, platform: "linux", homedir: "/home/u" }).replace(/\\/g, "/");
+	assert.equal(linux, "/home/u/.cache/pi-webaio");
+	const xdg = tempBase({ env: { XDG_CACHE_HOME: "/xdg" }, platform: "linux", homedir: "/home/u" }).replace(/\\/g, "/");
+	assert.equal(xdg, "/xdg/pi-webaio");
+	const over = tempBase({ env: { PI_WEBAIO_CACHE_DIR: "/custom/cache" }, platform: "linux", homedir: "/home/u" }).replace(/\\/g, "/");
+	assert.equal(over, "/custom/cache");
 });
 
 // ─── probeWreq ──────────────────────────────────────────────────────
