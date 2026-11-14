@@ -418,6 +418,14 @@ The bypass flag is **opt-in** — a normal `aio-webfetch(url)` still gets the re
 
 ### Unreleased — static fetch API, shared error taxonomy, shared text leaves
 
+- **GreedySearch Chrome lifecycle hardening** — `bin/launch.mjs` `isRunning()` validates the tracked
+  pid's cmdline against the resolved profile dir (OS-agnostic: `/proc`, `ps`, PowerShell `Get-CimInstance`;
+  unavailable → skip, never kill) and reaps foreign-profile/pid-file-orphaned Chromes;
+  `bin/cdp.mjs` `getWsUrl()` runs one bounded repair (`launch.mjs`, 45s cap) when the profile
+  `DevToolsActivePort` is missing, then still fails closed. Opt-out: `PI_WEBAIO_CDP_REPAIR=0`.
+  Recurrence: a 5-day-old foreign-profile Chrome held port 9222 while the Google lane errored
+  with "DevToolsActivePort not found" (2026-11-14). Tests: `tests/launch-repair.test.mjs`.
+
 - **`pi-webaio/webfetch`** — a supported browser-free fetch + local-extraction API for integrations that must not register tools, start a browser, contact a remote reader, or write a content cache. Follows HTTP and literal client-side redirects manually, validating and DNS-pinning every hop; caps aggregate retry + redirect input at 10 MiB; propagates `AbortSignal` with bounded cleanup.
 - **One error taxonomy** — the static API reports the canonical `FetchErrorCode` / `FetchPhase` / `FetchErrorCategory` from `src/tools/fetch-error.ts` instead of a parallel set. The union grew from 26 to 31 codes (`unsupported_protocol`, `invalid_option`, `too_many_redirects`, `unexpected_content_type`, `response_too_large`), all non-retryable; retryability now defaults from the shared matrix via `isRetryableCode`, and unexpected throws route through `classifyError` rather than degrading to a retryable `network_error`.
 - **Shared pipeline-free leaves** — `src/client-redirect.ts` (zero imports) and `src/http-text.ts` (linkedom only) replace the forked copies of client-side-redirect detection, whitespace cleaning, JSON/content-type predicates, charset decoding, and binary sniffing that `content.ts` and `webfetch-api.ts` each carried. `content.ts` re-exports the moved helpers, so its existing surface is unchanged.

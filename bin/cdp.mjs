@@ -10,7 +10,7 @@
 // daemon (= once per tab). Daemons auto-exit after 20min idle.
 
 import { randomUUID } from "node:crypto";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import {
 	existsSync,
 	mkdirSync,
@@ -25,7 +25,7 @@ import {
 import net from "node:net";
 import { homedir, platform, tmpdir } from "node:os";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const TIMEOUT = 90000;
 const NAVIGATION_TIMEOUT = 30000;
@@ -84,23 +84,67 @@ function getDevToolsActivePortPath() {
 	return join(homedir(), ".config", "google-chrome", "DevToolsActivePort");
 }
 
-function getWsUrl() {
+function readPortFile(p) {
+	const lines = readFileSync(p, "utf8").trim().split("\n");
+	return `ws://localhost:${lines[0]}${lines[1]}`;
+}
+
+// Bounded repair budget: launch.mjs waits up to ~30s for Chrome readiness on
+// a fresh launch, so the child must be allowed at least that long. execFileSync
+// kills the child at the cap, so the repair can never hang the CDP lane.
+const REPAIR_TIMEOUT_MS = 45000;
+
+const _defaultRepairRun = (launchPath) =>
+	execFileSync(process.execPath, [launchPath], {
+		timeout: REPAIR_TIMEOUT_MS,
+		stdio: "ignore",
+	});
+
+/**
+ * Self-heal for the dedicated GreedySearch Chrome: the profile port file can
+ * be missing while a stale Chrome from a DIFFERENT profile dir still holds
+ * port 9222 (env drift in PI_WEBAIO_CHROME_PROFILE_DIR, or a pid file swept
+ * from /tmp while its Chrome kept running — a 5-day-old orphan was found
+ * holding the port on 2026-11-14). Running launch.mjs reaps that ghost (its
+ * isRunning now validates the profile dir) and (re)writes the port file for
+ * the profile THIS environment resolves. One bounded attempt, then the
+ * original fail-closed error — never a fallback to the user's main Chrome.
+ * Opt out with PI_WEBAIO_CDP_REPAIR=0 (consumers that manage their own Chrome
+ * lifecycle); tests pass a fake `run` instead of spawning anything.
+ */
+export function _repairGreedyChrome(
+	run = _defaultRepairRun,
+	launchPath = fileURLToPath(new URL("./launch.mjs", import.meta.url)),
+) {
+	run(launchPath);
+}
+
+export function getWsUrl(opts = {}) {
+	const profileDir = opts.profileDir ?? process.env.CDP_PROFILE_DIR;
 	// If CDP_PROFILE_DIR is set (by search.mjs), prefer that profile's port file
 	// so GreedySearch targets its own Chrome, not the user's main session.
-	const profileDir = process.env.CDP_PROFILE_DIR;
 	if (profileDir) {
 		const p = `${profileDir.replaceAll("\\", "/")}/DevToolsActivePort`;
+		if (
+			!existsSync(p) &&
+			opts.repair !== false &&
+			process.env.PI_WEBAIO_CDP_REPAIR !== "0"
+		) {
+			try {
+				_repairGreedyChrome(opts.run);
+			} catch {
+				// Bounded: fall through to the fail-closed error below.
+			}
+		}
 		if (existsSync(p)) {
-			const lines = readFileSync(p, "utf8").trim().split("\n");
-			return `ws://localhost:${lines[0]}${lines[1]}`;
+			return readPortFile(p);
 		}
 		throw new Error(
 			`GreedySearch DevToolsActivePort not found at ${p}. Refusing to fall back to the main Chrome session.`,
 		);
 	}
 	const portFile = getDevToolsActivePortPath();
-	const lines = readFileSync(portFile, "utf8").trim().split("\n");
-	return `ws://localhost:${lines[0]}${lines[1]}`;
+	return readPortFile(portFile);
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

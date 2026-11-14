@@ -19,6 +19,7 @@
 //   CHROME_PATH              — Path to Chrome executable
 
 import { execFileSync, execSync, spawn } from "node:child_process";
+import { pathToFileURL } from "node:url";
 import {
 	existsSync,
 	mkdirSync,
@@ -245,17 +246,89 @@ async function minimizeViaCDP() {
 // Chrome process management
 // ---------------------------------------------------------------------------
 
-function isRunning() {
+/**
+ * OS-agnostic command line of a pid, or null when unavailable/unreadable.
+ *
+ * Linux reads /proc directly (no child process). macOS uses `ps -p ... -o
+ * command=`. Windows uses PowerShell Get-CimInstance (wmic is deprecated and
+ * being removed from newer Windows builds). `pid` is an integer validated by
+ * the caller, so interpolation into the PowerShell filter is safe. Every
+ * source failing → null: callers skip validation rather than guess (the
+ * profile check is an optimization over the old pid-file semantics, never a
+ * reason to kill a Chrome we cannot identify).
+ */
+export function cmdlineOf(pid) {
+	const p = String(pid);
+	const os = platform();
+	try {
+		if (os === "linux") {
+			return readFileSync(`/proc/${pid}/cmdline`, "utf8").replaceAll("\0", " ");
+		}
+		if (os === "darwin") {
+			return execFileSync("ps", ["-p", p, "-o", "command="], {
+				encoding: "utf8",
+				timeout: 5000,
+			});
+		}
+		if (os === "win32") {
+			return execFileSync(
+				"powershell",
+				[
+					"-NoProfile",
+					"-Command",
+					`(Get-CimInstance Win32_Process -Filter "ProcessId=${p}").CommandLine`,
+				],
+				{ encoding: "utf8", timeout: 8000 },
+			);
+		}
+	} catch {
+		return null;
+	}
+	return null;
+}
+
+export function isRunning() {
 	if (!existsSync(PID_FILE)) return false;
 	const pid = Number.parseInt(readFileSync(PID_FILE, "utf8").trim(), 10);
 	if (!pid) return false;
 	try {
 		process.kill(pid, 0);
-		return pid;
 	} catch {
 		return false;
 	}
+	// Profile validation: the pid file lives in /tmp, is shared across profile
+	// dirs, and can be swept while its Chrome keeps running. So an alive pid is
+	// not enough — a Chrome launched with a DIFFERENT --user-data-dir (env drift
+	// in PI_WEBAIO_CHROME_PROFILE_DIR, or a pid file outlived by /tmp cleaning)
+	// counted as "already running" and pointed the CDP lane at a
+	// DevToolsActivePort that never appears in THIS profile. Both surfaced as
+	// an outage on 2026-11-14: a 5-day-old foreign-profile Chrome held port
+	// 9222 while extractors looked in the default tmpdir profile. Reap it and
+	// drop the stale record so cleanupGhostChrome clears the port and a fresh
+	// Chrome is launched for THIS profile. Non-Linux has no /proc: validation
+	// is skipped there (pid-file semantics unchanged).
+	const cmdline = cmdlineOf(pid);
+	if (cmdline !== null && !cmdline.includes(PROFILE_DIR)) {
+		killProcess(pid);
+		try {
+			unlinkSync(PID_FILE);
+		} catch {}
+		try {
+			unlinkSync(ACTIVE_PORT);
+		} catch {}
+		try {
+			unlinkSync(MODE_FILE);
+		} catch {}
+		return false;
+	}
+	return pid;
 }
+
+// Exported for tests (underscore = not part of the CLI contract).
+export const _pidFile = PID_FILE;
+export const _activePort = ACTIVE_PORT;
+export const _modeFile = MODE_FILE;
+export const _profileDir = PROFILE_DIR;
 
 function getPortPid(port) {
 	try {
@@ -480,4 +553,10 @@ async function main() {
 	}
 }
 
-main();
+// Run only when executed directly (tests import the exported helpers).
+if (
+	Boolean(process.argv[1]) &&
+	import.meta.url === pathToFileURL(process.argv[1]).href
+) {
+	main();
+}
