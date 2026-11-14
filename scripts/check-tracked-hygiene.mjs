@@ -21,6 +21,7 @@ export const ALLOWED_ROOT_FILES = new Set([
 	".gitignore",
 	"AGENTS.md",
 	"CHANGELOG.md",
+	"CHANGELOG-USER.md",
 	"CONTRIBUTING.md",
 	"LICENSE",
 	"README.md",
