@@ -22,18 +22,33 @@ import { test } from "node:test";
 // Pin the cache root BEFORE importing modules: session-store kicks a
 // module-level sweeper (setImmediate) against BASE_TEMP on import, so an
 // unpinned import would scan/sweep the real user cache (#227 review).
-// Importing session-store here (with env pinned) proves the module-load
-// sweeper targets the pinned test root, not the real user cache.
+// Prove it targeted the PINNED root (not a hard-coded/real path) by
+// pre-creating a stale swept artifact under it and asserting the module-load
+// sweep removes it — an observable effect that only this root can produce.
 const _testCacheRoot = mkdtempSync(join(tmpdir(), "webaio-cache-root-"));
 process.env.PI_WEBAIO_CACHE_DIR = _testCacheRoot;
 
+const _probeDir = join(_testCacheRoot, "github", "probe--stale");
+mkdirSync(_probeDir, { recursive: true });
+writeFileSync(join(_probeDir, "f"), "x");
+{
+	const past = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
+	utimesSync(_probeDir, past, past);
+}
+
 const cacheDir = await import("../src/cache-dir.ts");
 const storage = await import("../src/storage.ts");
-const sessionStore = await import("../src/session-store.ts");
+await import("../src/session-store.ts");
 const { resolveCorpusDir } = await import("../src/tools/webquery.ts");
 
-await new Promise((r) => setImmediate(r));
-await sessionStore.startCacheSweeper(); // idempotent; ensures module-load sweep resolved against pinned root
+// The module-load sweep is fire-and-forget; poll for its observable effect.
+for (let i = 0; i < 50 && existsSync(_probeDir); i++) {
+	await new Promise((r) => setTimeout(r, 20));
+}
+assert.ok(
+	!existsSync(_probeDir),
+	"module-load sweeper must remove stale artifacts under the pinned cache root",
+);
 
 test.after(() => {
 	rmSync(_testCacheRoot, { recursive: true, force: true });
