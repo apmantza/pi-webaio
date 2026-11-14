@@ -14,7 +14,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { promoteUnreleased, unreleasedHasEntries } from "./lib/changelog.mjs";
+import { promoteUnreleased, renderUserChangelog, unreleasedHasEntries } from "./lib/changelog.mjs";
 import { parseArgsOrExit } from "./lib/cli.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -85,6 +85,8 @@ function main() {
 		process.exit(1);
 	}
 	writeFileSync(CHANGELOG_PATH, next, "utf8");
+	const userPath = join(__dirname, "..", "CHANGELOG-USER.md");
+	writeFileSync(userPath, renderUserChangelog(next), "utf8");
 	log(`Promoted [Unreleased] -> [${version}] - ${date}.`);
 }
 

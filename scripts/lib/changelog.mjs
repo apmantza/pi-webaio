@@ -179,3 +179,94 @@ export function promoteUnreleased(text, version, date) {
 		throw new Error("Failed to locate the `## [Unreleased]` heading.");
 	return replaced;
 }
+
+
+// ── User changelog (pi-lens style: count-only, recent releases) ────
+
+export const USER_RELEASE_LIMIT = 5;
+
+/**
+ * Count top-level bullet entries per `### Heading` bucket in a release body.
+ * Returns a Map<heading, count>.
+ *
+ * Only column-0 `- ` / `* ` bullets are counted as top-level entries (nested
+ * bullets are ignored). Bullets under a deeper heading (####+) are not counted
+ * as entries of the enclosing ### bucket. Column-0 bullets that appear outside
+ * any ### bucket (e.g. unbucketed entries before the first `###`) are counted
+ * into an implicit "Unbucketed" bucket so they are surfaced as other changes.
+ */
+export function countSectionBuckets(body) {
+	const buckets = new Map();
+	let current = null; // active ### heading, or "Unbucketed", or null when suppressed
+	let inSubheading = false;
+	for (const line of body.split("\n")) {
+		const h = /^(#{1,6})\s+(.*)$/.exec(line);
+		if (h) {
+			const level = h[1].length;
+			if (level === 3) {
+				current = h[2].trim();
+				inSubheading = false;
+				if (!buckets.has(current)) buckets.set(current, 0);
+			} else if (level >= 4) {
+				// deeper heading inside a ### bucket: do not attribute following
+				// column-0 bullets to the enclosing bucket
+				inSubheading = true;
+			} else {
+				// ## or # — section boundary (shouldn't appear inside a release body)
+				current = null;
+				inSubheading = false;
+			}
+			continue;
+		}
+		if (/^[-*]\s+/.test(line)) {
+			if (inSubheading) {
+				// ignore bullets under deeper headings (####+)
+				continue;
+			}
+			if (current) {
+				buckets.set(current, (buckets.get(current) || 0) + 1);
+			} else {
+				// unbucketed top-level bullet before any ### heading
+				current = "Unbucketed";
+				buckets.set(current, (buckets.get(current) || 0) + 1);
+			}
+		}
+	}
+	return buckets;
+}
+
+/**
+ * One count line per release for pi's Extension Updates view.
+ * Added → features, Fixed → fixes, every other bucket (Changed, Removed,
+ * Security, Deprecated, unbucketed, or any other heading) → other changes.
+ */
+export function userCountLine(body) {
+	const buckets = countSectionBuckets(body);
+	let features = 0;
+	let fixes = 0;
+	let other = 0;
+	for (const [heading, count] of buckets) {
+		if (heading === "Added") features += count;
+		else if (heading === "Fixed") fixes += count;
+		else other += count;
+	}
+	const counted = [
+		[features, "feature", "features"],
+		[fixes, "fix", "fixes"],
+		[other, "other change", "other changes"],
+	]
+		.filter(([count]) => count > 0)
+		.map(([count, one, many]) => `${count} ${count === 1 ? one : many}`);
+	return counted.length ? `${counted.join(", ")}.` : "No user-facing changes.";
+}
+
+export function renderUserChangelog(text, { repo = "apmantza/pi-webaio", limit = USER_RELEASE_LIMIT } = {}) {
+	const releases = parseSections(text)
+		.filter((section) => /^\d+\.\d+\.\d+$/.test(section.label))
+		.slice(0, limit)
+		.map(
+			(section) =>
+				`${section.heading}\n\n${userCountLine(section.body)}\n\nFull notes: https://github.com/${repo}/releases/tag/v${section.label}`,
+		);
+	return `# User changelog\n\n${releases.join("\n\n")}\n`;
+}
