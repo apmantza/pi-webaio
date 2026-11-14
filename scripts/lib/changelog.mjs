@@ -219,15 +219,17 @@ export function countSectionBuckets(body) {
 			continue;
 		}
 		if (/^[-*]\s+/.test(line)) {
-			if (current && !inSubheading) {
+			if (inSubheading) {
+				// ignore bullets under deeper headings (####+)
+				continue;
+			}
+			if (current) {
 				buckets.set(current, (buckets.get(current) || 0) + 1);
-			} else if (!current) {
+			} else {
 				// unbucketed top-level bullet before any ### heading
 				current = "Unbucketed";
-				inSubheading = false;
 				buckets.set(current, (buckets.get(current) || 0) + 1);
 			}
-			// bullets while inSubheading are ignored
 		}
 	}
 	return buckets;
