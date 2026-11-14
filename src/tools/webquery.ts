@@ -2,6 +2,8 @@ import { TOOL_METADATA } from "./lazy.ts";
 import { join, isAbsolute, resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { tmpdir } from "node:os";
+import { existsSync } from "node:fs";
+import { BASE_TEMP } from "../cache-dir.ts";
 import { loadIndex, rankChunkEntries } from "../webquery-index.ts";
 
 // Query result cache — same query+dir+topK → same ranked output until index changes
@@ -9,8 +11,11 @@ import { loadIndex, rankChunkEntries } from "../webquery-index.ts";
 const _queryCache = new Map<string, { builtAt: string; result: unknown }>();
 const _QUERY_CACHE_MAX = 32;
 
-/** Default output directory matches webpull's default: <os-temp>/pi-webaio/<hostname> */
-const DEFAULT_BASE = join(tmpdir(), "pi-webaio");
+/** Cache root (cache-dir.ts, issue #221) — matches webpull's default layout. */
+const DEFAULT_BASE = BASE_TEMP;
+/** Pre-#221 corpora were pulled under os.tmpdir()/pi-webaio; kept as a
+ * read-only legacy lookup so old corpora are not silently unreachable. */
+const LEGACY_BASE = join(tmpdir(), "pi-webaio");
 
 /**
  * Resolve the corpus directory for aio-webquery (B5). Relative paths resolve
@@ -22,9 +27,18 @@ const DEFAULT_BASE = join(tmpdir(), "pi-webaio");
 export function resolveCorpusDir(
 	rawDir: string | undefined,
 	base: string = DEFAULT_BASE,
+	legacyBase: string = LEGACY_BASE,
 ): string {
 	const candidate = rawDir ?? base;
-	return isAbsolute(candidate) ? candidate : resolve(base, candidate);
+	if (isAbsolute(candidate)) return candidate;
+	const resolved = resolve(base, candidate);
+	// Legacy fallback: a corpus pulled before the cache moved out of os.tmpdir()
+	// resolves there (read-only compat), so old corpora stay queryable.
+	if (!existsSync(resolved)) {
+		const legacy = resolve(legacyBase, candidate);
+		if (existsSync(legacy)) return legacy;
+	}
+	return resolved;
 }
 
 export function registerWebqueryTool(pi: ExtensionAPI): void {

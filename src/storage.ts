@@ -5,12 +5,22 @@
 import { mkdir, readFile, writeFile, unlink } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { BASE_TEMP } from "./cache-dir.ts";
 import { hashContent as sha256 } from "./content-hash.ts";
 
-const BASE_TEMP = join(tmpdir(), "pi-webaio");
-const STORAGE_DIR = join(BASE_TEMP, "results");
-const INDEX_FILE = join(STORAGE_DIR, "index.json");
+// Shared seam (cache-dir.ts) — this module carried a forked
+// join(tmpdir(), "pi-webaio") literal, now folded (issue #221).
+let STORAGE_DIR = join(BASE_TEMP, "results");
+let INDEX_FILE = join(STORAGE_DIR, "index.json");
+
+/** Test hook (#221 suite): redirect the storage root and reset the index cache.
+ * Underscore = not part of the public contract. */
+export function _setStorageDirForTest(dir: string): void {
+	STORAGE_DIR = dir;
+	INDEX_FILE = join(dir, "index.json");
+	_index = null;
+	_indexLoaded = false;
+}
 const MAX_RESULTS = 500;
 const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
@@ -57,10 +67,20 @@ async function loadIndex(): Promise<Map<string, IndexEntry>> {
 		const raw = await readFile(INDEX_FILE, "utf8");
 		const data = JSON.parse(raw) as Record<string, IndexEntry>;
 		const now = Date.now();
-		const entries = Object.entries(data).filter(
-			([_, entry]) => entry.expiresAt === 0 || entry.expiresAt > now,
+		const all = Object.entries(data);
+		const stale = all.filter(
+			([, entry]) => entry.expiresAt !== 0 && entry.expiresAt <= now,
 		);
-		_index = new Map(entries);
+		_index = new Map(
+			all.filter(([, entry]) => entry.expiresAt === 0 || entry.expiresAt > now),
+		);
+		// Expired blobs must be unlinked, not just filtered from memory —
+		// the filter alone let them accumulate on disk forever (#221).
+		if (stale.length > 0) {
+			void Promise.allSettled(
+				stale.map(([, entry]) => unlink(entry.blobPath).catch(() => {})),
+			); // fire-and-forget; bounded by MAX_RESULTS index size
+		}
 	} catch {
 		_index = new Map();
 	}

@@ -14,7 +14,8 @@ import {
 import { readFileSync } from "node:fs";
 
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { CACHE_DIR, sweepHeavyArtifacts } from "./cache-dir.ts";
+import type { SweepSummary } from "./cache-dir.ts";
 import { scoreRelevance } from "./bm25.ts";
 import { hashContent } from "./content-hash.ts";
 import { extractFrontmatterUrl, splitFrontmatter } from "./markdown-frontmatter.ts";
@@ -23,7 +24,11 @@ import type { StoredContent, SearchResult } from "./types.ts";
 
 // ─── Constants ─────────────────────────────────────────────────────
 
-export const BASE_TEMP = join(tmpdir(), "pi-webaio");
+// On-disk cache root — moved from os.tmpdir() to the platform cache dir
+// (issue #221: /tmp is RAM-backed tmpfs on Linux and the 2.3 GB never-swept
+// cache filled RAM and swap). Re-exported for the ~8 modules that import it;
+// the seam lives in cache-dir.ts.
+export const BASE_TEMP = CACHE_DIR;
 export const SEARCH_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const SEARCH_CACHE_FILE = join(BASE_TEMP, "search-cache.json");
 const SEARCH_CONTEXT_TTL_MS = 5 * 60 * 1000; // 5 minutes
@@ -254,6 +259,24 @@ export function cleanupSessionCache(): void {
 }
 
 // ─── Disk persistence (content cache) ──────────────────────────────
+
+// One heavy-artifact sweep per process (issue #221): github clones/maps,
+// actions logs and downloads age out (7d) under a 500 MB LRU cap. Deliberately
+// NOT applied to content .md / pull corpora — see cache-dir.ts. Fire-and-forget:
+// a slow sweep must never delay tool startup.
+let _sweepStarted = false;
+export function startCacheSweeper(): Promise<SweepSummary> {
+	if (_sweepStarted) return Promise.resolve({ removed: 0, bytes: 0, capped: 0 });
+	_sweepStarted = true;
+	return sweepHeavyArtifacts(BASE_TEMP).catch(() => ({
+		removed: 0,
+		bytes: 0,
+		capped: 0,
+	}));
+}
+setImmediate(() => {
+	void startCacheSweeper();
+});
 
 async function readFrontmatterHead(path: string): Promise<string | null> {
 	let handle: Awaited<ReturnType<typeof open>> | null = null;
