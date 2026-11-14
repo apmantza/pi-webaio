@@ -169,7 +169,7 @@ Set `PI_WEBAIO_DEBUG=1` to log every bypass attempt and confidence score — use
 
 | Format     | Behavior                                                                                          |
 | ---------- | ------------------------------------------------------------------------------------------------- |
-| `markdown` | (default) Save to disk under `os.tmpdir()/pi-webaio/<host>/<path>.md`. Return body inline.        |
+| `markdown` | (default) Save to disk under the web-aio cache directory (`$PI_WEBAIO_CACHE_DIR`, or the platform cache dir) at `<cache>/<host>/<path>.md`. Return body inline. |
 | `html`     | Return raw HTML body inline. No disk write.                                                       |
 | `text`     | Return plain-text rendering of the markdown (strips headers, bold, links, code fences, HTML tags). |
 | `json`     | Return a structured JSON object with `url`, `title`, `author`, `published`, `site`, `language`, `wordCount`, `mimeType`, `content`, `rawHtml`. |

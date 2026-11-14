@@ -267,8 +267,8 @@ export async function runLocalKnowledgePreCheck(
 	const searchText = trimmedQuery ? trimmedQuery : urlDerivedQuery;
 	if (!searchText) return undefined;
 
-	// Corpora live under <temp>/pi-webaio/<hostname> (aio-webpull's default
-	// layout); resolveCorpusDir(hostname) targets exactly that directory.
+	// Corpora live under the web-aio cache dir / <hostname> (aio-webpull's
+	// default layout); resolveCorpusDir(hostname) targets exactly that directory.
 	const corpusDir = resolveCorpusDir(hostname);
 
 	let result;

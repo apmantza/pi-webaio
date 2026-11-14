@@ -1,30 +1,68 @@
 import { TOOL_METADATA } from "./lazy.ts";
-import { join, isAbsolute, resolve } from "node:path";
+import { join, isAbsolute, resolve, relative } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { tmpdir } from "node:os";
-import { loadIndex, rankChunkEntries } from "../webquery-index.ts";
+import { existsSync } from "node:fs";
+import { BASE_TEMP } from "../cache-dir.ts";
+import { loadIndex, rankChunkEntries, INDEX_FILENAME } from "../webquery-index.ts";
 
 // Query result cache — same query+dir+topK → same ranked output until index changes
 // Life-depends: avoids re-scoring 500 chunks via BM25 on repeated queries.
 const _queryCache = new Map<string, { builtAt: string; result: unknown }>();
 const _QUERY_CACHE_MAX = 32;
 
-/** Default output directory matches webpull's default: <os-temp>/pi-webaio/<hostname> */
-const DEFAULT_BASE = join(tmpdir(), "pi-webaio");
+/** Cache root (cache-dir.ts, issue #221) — matches webpull's default layout. */
+const DEFAULT_BASE = BASE_TEMP;
+/** Pre-#221 corpora were pulled under os.tmpdir()/pi-webaio; kept as a
+ * read-only legacy lookup so old corpora are not silently unreachable. */
+const LEGACY_BASE = join(tmpdir(), "pi-webaio");
 
 /**
  * Resolve the corpus directory for aio-webquery (B5). Relative paths resolve
- * against the standard temp base (<temp>/pi-webaio), matching aio-webpull's
- * default output layout (<temp>/pi-webaio/<hostname>), so `dir: "example.com"`
- * targets <temp>/pi-webaio/example.com instead of resolving against the
- * current working directory. Absolute paths pass through unchanged.
+ * against the web-aio cache directory (BASE_TEMP / cache-dir.ts), matching
+ * aio-webpull's default output layout (<cache>/ <hostname>), so
+ * `dir: "example.com"` targets <cache>/example.com instead of resolving
+ * against the current working directory. Absolute paths pass through unchanged.
+ * Pre-#221 legacy corpora under os.tmpdir()/pi-webaio are a read-only fallback.
  */
 export function resolveCorpusDir(
 	rawDir: string | undefined,
 	base: string = DEFAULT_BASE,
+	legacyBase: string = LEGACY_BASE,
 ): string {
 	const candidate = rawDir ?? base;
-	return isAbsolute(candidate) ? candidate : resolve(base, candidate);
+	if (isAbsolute(candidate)) return candidate;
+
+	const isContained = (root: string, target: string): boolean => {
+		const rel = relative(root, target);
+		return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+	};
+	const hasIndex = (dir: string): boolean =>
+		existsSync(join(dir, INDEX_FILENAME));
+
+	const resolved = resolve(base, candidate);
+	const resolvedOk = isContained(base, resolved);
+	const resolvedExists = resolvedOk && existsSync(resolved);
+	const resolvedIndexed = resolvedExists && hasIndex(resolved);
+
+	// Prefer the new location when it is an indexed corpus. If the new dir
+	// exists but has no index (e.g. an empty placeholder), fall through so a
+	// legacy indexed corpus can still be selected (#227 review).
+	if (resolvedIndexed) return resolved;
+
+	// Legacy fallback: a corpus pulled before the cache moved out of os.tmpdir()
+	// resolves there (read-only compat), so old corpora stay queryable.
+	// Containment check prevents a crafted relative path (e.g. ../outside) from
+	// escaping the legacy corpus root (#227 review).
+	const legacy = resolve(legacyBase, candidate);
+	if (isContained(legacyBase, legacy) && existsSync(legacy)) {
+		// If the new dir exists but lacks an index, prefer a legacy indexed
+		// corpus; otherwise keep the existing legacy dir for compat reads.
+		if (!resolvedExists || hasIndex(legacy)) return legacy;
+	}
+
+	if (resolvedExists) return resolved;
+	return resolvedOk ? resolved : resolve(base, ".");
 }
 
 export function registerWebqueryTool(pi: ExtensionAPI): void {

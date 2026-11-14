@@ -4,13 +4,34 @@
 
 import { mkdir, readFile, writeFile, unlink } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { join, relative, isAbsolute, sep } from "node:path";
+import { BASE_TEMP } from "./cache-dir.ts";
 import { hashContent as sha256 } from "./content-hash.ts";
 
-const BASE_TEMP = join(tmpdir(), "pi-webaio");
-const STORAGE_DIR = join(BASE_TEMP, "results");
-const INDEX_FILE = join(STORAGE_DIR, "index.json");
+// Shared seam (cache-dir.ts) — this module carried a forked
+// join(tmpdir(), "pi-webaio") literal, now folded (issue #221).
+let STORAGE_DIR = join(BASE_TEMP, "results");
+let INDEX_FILE = join(STORAGE_DIR, "index.json");
+
+/** Test hook (#221 suite): redirect the storage root and reset the index cache.
+ * Underscore = not part of the public contract. Returns a restore function so
+ * tests cannot leave the process redirected (#227 review). */
+export function _setStorageDirForTest(dir: string): () => void {
+	const prevDir = STORAGE_DIR;
+	const prevIndex = INDEX_FILE;
+	const prevIndexCache = _index;
+	const prevLoaded = _indexLoaded;
+	STORAGE_DIR = dir;
+	INDEX_FILE = join(dir, "index.json");
+	_index = null;
+	_indexLoaded = false;
+	return () => {
+		STORAGE_DIR = prevDir;
+		INDEX_FILE = prevIndex;
+		_index = prevIndexCache;
+		_indexLoaded = prevLoaded;
+	};
+}
 const MAX_RESULTS = 500;
 const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
@@ -51,16 +72,40 @@ async function ensureStorage(): Promise<void> {
 
 async function loadIndex(): Promise<Map<string, IndexEntry>> {
 	if (_index) return _index;
-	if (_indexLoaded) return (_index = new Map());
+	if (_indexLoaded) {
+		_index = new Map();
+		return _index;
+	}
 
 	try {
 		const raw = await readFile(INDEX_FILE, "utf8");
 		const data = JSON.parse(raw) as Record<string, IndexEntry>;
 		const now = Date.now();
-		const entries = Object.entries(data).filter(
-			([_, entry]) => entry.expiresAt === 0 || entry.expiresAt > now,
+		const all = Object.entries(data);
+		const stale = all.filter(
+			([, entry]) => entry.expiresAt !== 0 && entry.expiresAt <= now,
 		);
-		_index = new Map(entries);
+		_index = new Map(
+			all.filter(([, entry]) => entry.expiresAt === 0 || entry.expiresAt > now),
+		);
+		// Expired blobs must be unlinked, not just filtered from memory —
+		// the filter alone let them accumulate on disk forever (#221).
+		// Defense-in-depth: only unlink paths contained in STORAGE_DIR, so a
+		// corrupted/tampered index cannot delete arbitrary files (#227 review).
+		if (stale.length > 0) {
+			const storageRoot = STORAGE_DIR.endsWith(sep) ? STORAGE_DIR : STORAGE_DIR + sep;
+			void Promise.allSettled(
+				stale.map(([, entry]) => {
+					const p = entry.blobPath;
+					if (!p || !isAbsolute(p)) return Promise.resolve();
+					const rel = relative(STORAGE_DIR, p);
+					if (rel.startsWith("..") || rel.includes("..") || !p.startsWith(storageRoot)) {
+						return Promise.resolve();
+					}
+					return unlink(p).catch(() => {});
+				}),
+			); // fire-and-forget; bounded by MAX_RESULTS index size
+		}
 	} catch {
 		_index = new Map();
 	}

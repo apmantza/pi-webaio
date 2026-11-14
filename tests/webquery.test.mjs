@@ -302,16 +302,43 @@ test("topK limits the number of results", async () => {
 	}
 });
 
-// ─── dir resolution (B5) ───────────────────────────────────────────
+// ─── dir resolution (B5 / #221) ────────────────────────────────────
 
-test("resolveCorpusDir: relative paths resolve against the temp base (B5)", () => {
-	const base = join(osTmpdir(), "pi-webaio");
-	// undefined → the base itself
-	assert.equal(resolveCorpusDir(undefined), base);
-	// relative hostname subdir → base/<hostname>, matching aio-webpull's layout
-	assert.equal(resolveCorpusDir("example.com"), join(base, "example.com"));
-	assert.ok(isAbsolute(resolveCorpusDir("example.com")));
-	// absolute paths pass through unchanged
-	const abs = join(osTmpdir(), "somewhere-else");
-	assert.equal(resolveCorpusDir(abs), abs);
+test("resolveCorpusDir: relative paths resolve against the cache base (#221)", async () => {
+	// With isolated bases and no existing corpus, relative paths resolve under
+	// the (new) base and absolute paths pass through unchanged.
+	const base = await mkdtemp(join(osTmpdir(), "wq-base-"));
+	const legacyBase = await mkdtemp(join(osTmpdir(), "wq-legacy-"));
+	try {
+		assert.equal(resolveCorpusDir(undefined, base, legacyBase), base);
+		assert.equal(
+			resolveCorpusDir("example.com", base, legacyBase),
+			join(base, "example.com"),
+		);
+		assert.ok(isAbsolute(resolveCorpusDir("example.com", base, legacyBase)));
+		const abs = join(osTmpdir(), "somewhere-else");
+		assert.equal(resolveCorpusDir(abs, base, legacyBase), abs);
+	} finally {
+		await rm(base, { recursive: true, force: true });
+		await rm(legacyBase, { recursive: true, force: true });
+	}
+});
+
+test("resolveCorpusDir: empty new dir falls back to indexed legacy corpus (#227)", async () => {
+	const base = await mkdtemp(join(osTmpdir(), "wq-base-idx-"));
+	const legacyBase = await mkdtemp(join(osTmpdir(), "wq-legacy-idx-"));
+	try {
+		// New location exists but has no index (empty placeholder); legacy has
+		// an indexed corpus → legacy must be selected.
+		await mkdir(join(base, "site.test"), { recursive: true });
+		await mkdir(join(legacyBase, "site.test"), { recursive: true });
+		await writeFile(join(legacyBase, "site.test", ".webaio-index.json"), "{}", "utf8");
+		assert.equal(
+			resolveCorpusDir("site.test", base, legacyBase),
+			join(legacyBase, "site.test"),
+		);
+	} finally {
+		await rm(base, { recursive: true, force: true });
+		await rm(legacyBase, { recursive: true, force: true });
+	}
 });

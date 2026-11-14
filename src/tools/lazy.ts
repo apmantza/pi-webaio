@@ -424,7 +424,7 @@ export const lazyTools: LazyTool[] = [
 			{
 				query: string("Search query to run against the local corpus."),
 				dir: string(
-					"Directory containing a pulled corpus. Relative paths resolve under <os-temp>/pi-webaio; absolute paths pass through unchanged.",
+					"Directory containing a pulled corpus. Relative paths resolve under the web-aio cache directory ($PI_WEBAIO_CACHE_DIR, or the platform cache dir); absolute paths pass through unchanged.",
 				),
 				topK: number("Number of top chunks to return (default: 8).", {
 					default: 8,
