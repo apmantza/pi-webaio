@@ -323,3 +323,22 @@ test("resolveCorpusDir: relative paths resolve against the cache base (#221)", a
 		await rm(legacyBase, { recursive: true, force: true });
 	}
 });
+
+test("resolveCorpusDir: empty new dir falls back to indexed legacy corpus (#227)", async () => {
+	const base = await mkdtemp(join(osTmpdir(), "wq-base-idx-"));
+	const legacyBase = await mkdtemp(join(osTmpdir(), "wq-legacy-idx-"));
+	try {
+		// New location exists but has no index (empty placeholder); legacy has
+		// an indexed corpus → legacy must be selected.
+		await mkdir(join(base, "site.test"), { recursive: true });
+		await mkdir(join(legacyBase, "site.test"), { recursive: true });
+		await writeFile(join(legacyBase, "site.test", ".webaio-index.json"), "{}", "utf8");
+		assert.equal(
+			resolveCorpusDir("site.test", base, legacyBase),
+			join(legacyBase, "site.test"),
+		);
+	} finally {
+		await rm(base, { recursive: true, force: true });
+		await rm(legacyBase, { recursive: true, force: true });
+	}
+});

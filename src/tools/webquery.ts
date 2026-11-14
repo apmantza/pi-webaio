@@ -4,7 +4,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { tmpdir } from "node:os";
 import { existsSync } from "node:fs";
 import { BASE_TEMP } from "../cache-dir.ts";
-import { loadIndex, rankChunkEntries } from "../webquery-index.ts";
+import { loadIndex, rankChunkEntries, INDEX_FILENAME } from "../webquery-index.ts";
 
 // Query result cache — same query+dir+topK → same ranked output until index changes
 // Life-depends: avoids re-scoring 500 chunks via BM25 on repeated queries.
@@ -36,18 +36,32 @@ export function resolveCorpusDir(
 		const rel = relative(root, target);
 		return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 	};
+	const hasIndex = (dir: string): boolean =>
+		existsSync(join(dir, INDEX_FILENAME));
 
 	const resolved = resolve(base, candidate);
-	if (isContained(base, resolved) && existsSync(resolved)) return resolved;
+	const resolvedOk = isContained(base, resolved);
+	const resolvedExists = resolvedOk && existsSync(resolved);
+	const resolvedIndexed = resolvedExists && hasIndex(resolved);
+
+	// Prefer the new location when it is an indexed corpus. If the new dir
+	// exists but has no index (e.g. an empty placeholder), fall through so a
+	// legacy indexed corpus can still be selected (#227 review).
+	if (resolvedIndexed) return resolved;
 
 	// Legacy fallback: a corpus pulled before the cache moved out of os.tmpdir()
 	// resolves there (read-only compat), so old corpora stay queryable.
 	// Containment check prevents a crafted relative path (e.g. ../outside) from
 	// escaping the legacy corpus root (#227 review).
 	const legacy = resolve(legacyBase, candidate);
-	if (isContained(legacyBase, legacy) && existsSync(legacy)) return legacy;
+	if (isContained(legacyBase, legacy) && existsSync(legacy)) {
+		// If the new dir exists but lacks an index, prefer a legacy indexed
+		// corpus; otherwise keep the existing legacy dir for compat reads.
+		if (!resolvedExists || hasIndex(legacy)) return legacy;
+	}
 
-	return isContained(base, resolved) ? resolved : resolve(base, ".");
+	if (resolvedExists) return resolved;
+	return resolvedOk ? resolved : resolve(base, ".");
 }
 
 export function registerWebqueryTool(pi: ExtensionAPI): void {

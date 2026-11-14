@@ -18,7 +18,7 @@
 //   macOS:   ~/Library/Caches/pi-webaio
 //   Windows: %LOCALAPPDATA%\pi-webaio
 
-import { readdir, rm, stat } from "node:fs/promises";
+import { lstat, readdir, rm } from "node:fs/promises";
 import { debug } from "./debug.ts";
 import { homedir, platform } from "node:os";
 import { isAbsolute, join } from "node:path";
@@ -127,8 +127,13 @@ async function entrySize(path: string): Promise<SizeResult> {
 		const current = stack.pop()!;
 		let st: import("node:fs").Stats;
 		try {
-			st = await stat(current);
+			// lstat: do not follow symlinks — a small cache entry must not be
+			// charged for (or traverse into) an external target (#227 review).
+			st = await lstat(current);
 		} catch {
+			continue;
+		}
+		if (st.isSymbolicLink()) {
 			continue;
 		}
 		if (st.isFile()) {
@@ -196,7 +201,7 @@ export async function sweepHeavyArtifacts(
 			const entryPath = join(dir, entryName);
 			let st: import("node:fs").Stats;
 			try {
-				st = await stat(entryPath);
+				st = await lstat(entryPath);
 			} catch {
 				continue;
 			}
@@ -214,10 +219,11 @@ export async function sweepHeavyArtifacts(
 				continue;
 			}
 			const sized = await entrySize(entryPath);
-			// If the walk was truncated, treat the entry as at least maxBytes so
-			// the cap evicts it conservatively rather than undercounting (#227).
+			// If the walk was truncated, treat the entry as exceeding the cap so
+			// it is evicted conservatively rather than undercounted — even a lone
+			// oversized entry must not survive the `total <= maxBytes` break (#227).
 			const effectiveSize = sized.truncated
-				? Math.max(sized.bytes, maxBytes)
+				? Math.max(sized.bytes, maxBytes + 1)
 				: sized.bytes;
 			survivors.push({ path: entryPath, mtimeMs: st.mtimeMs, size: effectiveSize });
 		}
@@ -238,7 +244,7 @@ export async function sweepHeavyArtifacts(
 			summary.bytes += entry.size;
 			total -= entry.size;
 		} catch {
-			break; // cannot reclaim this entry; stop rather than loop
+			continue; // best-effort: a stuck entry must not block later ones (#227)
 		}
 	}
 

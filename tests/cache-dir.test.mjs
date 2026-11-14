@@ -200,11 +200,12 @@ test("storage loadIndex: expired blobs are UNLINKED, not just filtered", async (
 });
 
 test("webquery resolveCorpusDir: new base first, legacy tmpdir fallback", () => {
-	// Corpus exists under the new base → used.
+	// Indexed corpus exists under the new base → used.
 	const base = mkdtempSync(join(tmpdir(), "webaio-wq-new-"));
 	const legacyBase = mkdtempSync(join(tmpdir(), "webaio-wq-legacy-"));
 	try {
 		mkdirSync(join(base, "fresh.corpus"), { recursive: true });
+		writeFileSync(join(base, "fresh.corpus", ".webaio-index.json"), "{}");
 		assert.equal(
 			resolveCorpusDir("fresh.corpus", base, legacyBase),
 			join(base, "fresh.corpus"),
@@ -224,5 +225,59 @@ test("webquery resolveCorpusDir: new base first, legacy tmpdir fallback", () => 
 	} finally {
 		rmSync(base, { recursive: true, force: true });
 		rmSync(legacyBase, { recursive: true, force: true });
+	}
+});
+
+test("sweep: a lone truncated (walk-capped) entry is evicted by the size cap (#227)", async () => {
+	const base = mkdtempSync(join(tmpdir(), "webaio-sweep-trunc-"));
+	try {
+		// > MAX_FILES_PER_ENTRY files → walk truncates. Measured bytes stay tiny
+		// but effective size must exceed maxBytes so the lone entry cannot
+		// survive the `total <= maxBytes` break.
+		const dir = makeEntry(base, "github", "huge--clone", 0, 0, 0);
+		for (let i = 0; i < 20010; i++) {
+			writeFileSync(join(dir, `f${i}`), "");
+		}
+		const past = new Date(Date.now() - 10 * 60 * 1000); // past grace, within age
+		utimesSync(dir, past, past);
+		const summary = await cacheDir.sweepHeavyArtifacts(base, {
+			maxAgeMs: 7 * 24 * 60 * 60 * 1000,
+			maxBytes: 100,
+			activeGraceMs: 0,
+		});
+		assert.equal(summary.capped, 1, "truncated lone entry evicted by cap");
+		assert.ok(!existsSync(dir), "oversized truncated entry removed");
+	} finally {
+		rmSync(base, { recursive: true, force: true });
+	}
+});
+
+test("sweep: eviction continues after an individual removal failure (#227)", async () => {
+	const base = mkdtempSync(join(tmpdir(), "webaio-sweep-fail-"));
+	try {
+		const a = makeEntry(base, "github", "a--repo", 1, 200, 0);
+		const b = makeEntry(base, "downloads", "b--run", 1, 200, 0);
+		const now = Date.now();
+		const fs = await import("node:fs");
+		fs.utimesSync(a, new Date(now - 3000), new Date(now - 3000));
+		fs.utimesSync(b, new Date(now - 2000), new Date(now - 2000));
+		const doomed = a;
+		const removed = [];
+		const summary = await cacheDir.sweepHeavyArtifacts(base, {
+			maxAgeMs: 7 * 24 * 60 * 60 * 1000,
+			maxBytes: 0, // evict everything by cap
+			activeGraceMs: 0,
+			sweep: async (p) => {
+				if (p === doomed) throw new Error("injected failure");
+				removed.push(p);
+				fs.rmSync(p, { recursive: true, force: true });
+			},
+		});
+		assert.ok(removed.includes(b), "later entry still removed after earlier failure");
+		assert.ok(existsSync(a), "failed entry left in place");
+		assert.ok(!existsSync(b), "reclaimable entry removed");
+		assert.ok(summary.capped >= 1);
+	} finally {
+		rmSync(base, { recursive: true, force: true });
 	}
 });
