@@ -1,5 +1,5 @@
 import { TOOL_METADATA } from "./lazy.ts";
-import { join, isAbsolute, resolve } from "node:path";
+import { join, isAbsolute, resolve, relative } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { tmpdir } from "node:os";
 import { existsSync } from "node:fs";
@@ -31,14 +31,23 @@ export function resolveCorpusDir(
 ): string {
 	const candidate = rawDir ?? base;
 	if (isAbsolute(candidate)) return candidate;
+
+	const isContained = (root: string, target: string): boolean => {
+		const rel = relative(root, target);
+		return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+	};
+
 	const resolved = resolve(base, candidate);
+	if (isContained(base, resolved) && existsSync(resolved)) return resolved;
+
 	// Legacy fallback: a corpus pulled before the cache moved out of os.tmpdir()
 	// resolves there (read-only compat), so old corpora stay queryable.
-	if (!existsSync(resolved)) {
-		const legacy = resolve(legacyBase, candidate);
-		if (existsSync(legacy)) return legacy;
-	}
-	return resolved;
+	// Containment check prevents a crafted relative path (e.g. ../outside) from
+	// escaping the legacy corpus root (#227 review).
+	const legacy = resolve(legacyBase, candidate);
+	if (isContained(legacyBase, legacy) && existsSync(legacy)) return legacy;
+
+	return isContained(base, resolved) ? resolved : resolve(base, ".");
 }
 
 export function registerWebqueryTool(pi: ExtensionAPI): void {

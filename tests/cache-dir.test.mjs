@@ -19,9 +19,20 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
+// Pin the cache root BEFORE importing modules: session-store kicks a
+// module-level sweeper (setImmediate) against BASE_TEMP on import, so an
+// unpinned import would scan/sweep the real user cache (#227 review).
+const _testCacheRoot = mkdtempSync(join(tmpdir(), "webaio-cache-root-"));
+process.env.PI_WEBAIO_CACHE_DIR = _testCacheRoot;
+
 const cacheDir = await import("../src/cache-dir.ts");
 const storage = await import("../src/storage.ts");
 const { resolveCorpusDir } = await import("../src/tools/webquery.ts");
+
+test.after(() => {
+	rmSync(_testCacheRoot, { recursive: true, force: true });
+	delete process.env.PI_WEBAIO_CACHE_DIR;
+});
 
 /** Make a fake cache artifact ENTRY under one of the swept dirs, matching
  * the real layout: <base>/<swept-dir>/<entry> (e.g. github/<owner>--<repo>). */
@@ -74,6 +85,7 @@ test("sweep: age-expired entries removed, fresh entries kept", async () => {
 		const summary = await cacheDir.sweepHeavyArtifacts(base, {
 			maxAgeMs: 7 * 24 * 60 * 60 * 1000,
 			maxBytes: 500 * 1024 * 1024,
+			activeGraceMs: 0,
 		});
 		assert.equal(summary.removed, 1, "exactly the expired entry removed");
 		assert.ok(!existsSync(oldDir), "expired clone dir deleted");
@@ -98,6 +110,7 @@ test("sweep: LRU cap evicts oldest-first until under budget", async () => {
 		const summary = await cacheDir.sweepHeavyArtifacts(base, {
 			maxAgeMs: 7 * 24 * 60 * 60 * 1000,
 			maxBytes: 1000, // keep only the newest artifact under 1000 B total
+			activeGraceMs: 0,
 		});
 		assert.equal(summary.removed, 2, "two oldest evicted by the cap");
 		assert.equal(summary.capped, 2);
@@ -163,13 +176,18 @@ test("storage loadIndex: expired blobs are UNLINKED, not just filtered", async (
 		writeFileSync(join(resultsDir, "index.json"), JSON.stringify(index), "utf8");
 
 		// Redirect the storage root and reset the module's index cache, then
-		// load through the public surface (getStoredResult → loadIndex).
-		storage._setStorageDirForTest(resultsDir);
-		await storage.getResult("dead");
-		// Wait out the fire-and-forget unlink.
-		await new Promise((r) => setTimeout(r, 100));
-		assert.ok(!existsSync(deadBlob), "expired blob unlinked (#221)");
-		assert.ok(existsSync(liveBlob), "live blob kept");
+		// load through the public surface (getResult → loadIndex). Restore in
+		// finally so the process-global redirect never leaks (#227 review).
+		const restore = storage._setStorageDirForTest(resultsDir);
+		try {
+			await storage.getResult("dead");
+			// Wait out the fire-and-forget unlink.
+			await new Promise((r) => setTimeout(r, 100));
+			assert.ok(!existsSync(deadBlob), "expired blob unlinked (#221)");
+			assert.ok(existsSync(liveBlob), "live blob kept");
+		} finally {
+			restore();
+		}
 	} finally {
 		rmSync(base, { recursive: true, force: true });
 	}

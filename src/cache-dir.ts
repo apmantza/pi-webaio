@@ -91,8 +91,13 @@ export const SWEEP_DIR_NAMES = [
 	"downloads",
 ] as const;
 
-/** Per-entry walk bound: a clone with more files than this is counted as-is. */
+/** Per-entry walk bound: a clone with more files than this is treated as
+ * "oversized/unknown" so the size cap evicts it conservatively rather than
+ * undercounting a huge tree (#227 review). */
 const MAX_FILES_PER_ENTRY = 20_000;
+/** Grace period: skip entries modified this recently as potentially active
+ * writers (clone/download in progress), reducing startup-sweep races. */
+const ACTIVE_GRACE_MS = 5 * 60 * 1000;
 
 export interface SweepSummary {
 	/** Entries (files/dirs) removed. */
@@ -103,12 +108,22 @@ export interface SweepSummary {
 	capped: number;
 }
 
-async function entrySize(path: string): Promise<number> {
+interface SizeResult {
+	bytes: number;
+	/** True when the walk hit MAX_FILES_PER_ENTRY before finishing. */
+	truncated: boolean;
+}
+
+async function entrySize(path: string): Promise<SizeResult> {
 	let total = 0;
 	const stack = [path];
 	let visited = 0;
+	let truncated = false;
 	while (stack.length > 0) {
-		if (visited++ >= MAX_FILES_PER_ENTRY) break;
+		if (visited++ >= MAX_FILES_PER_ENTRY) {
+			truncated = true;
+			break;
+		}
 		const current = stack.pop()!;
 		let st: import("node:fs").Stats;
 		try {
@@ -128,7 +143,7 @@ async function entrySize(path: string): Promise<number> {
 			}
 		}
 	}
-	return total;
+	return { bytes: total, truncated };
 }
 
 /**
@@ -144,11 +159,14 @@ export async function sweepHeavyArtifacts(
 		maxBytes?: number;
 		now?: number;
 		sweep?: (path: string) => Promise<void>;
+		/** Skip entries modified within this window as active writers (default 5m). */
+		activeGraceMs?: number;
 	} = {},
 ): Promise<SweepSummary> {
 	const maxAgeMs = opts.maxAgeMs ?? SWEEP_MAX_AGE_MS;
 	const maxBytes = opts.maxBytes ?? SWEEP_MAX_BYTES;
 	const now = opts.now ?? Date.now();
+	const activeGraceMs = opts.activeGraceMs ?? ACTIVE_GRACE_MS;
 	const sweepDir =
 		opts.sweep ??
 		((path: string) =>
@@ -159,11 +177,13 @@ export async function sweepHeavyArtifacts(
 	interface Entry {
 		path: string;
 		mtimeMs: number;
-		size?: number;
+		size: number;
 	}
 	const survivors: Entry[] = [];
 
-	// Pass 1 — age-expire per swept dir, collect survivors.
+	// Pass 1 — age-expire per swept dir, collect survivors. A very recent mtime
+	// (ACTIVE_GRACE_MS) marks a potentially active writer; skip it to reduce the
+	// chance of racing an in-flight clone/download (#227 review).
 	for (const name of SWEEP_DIR_NAMES) {
 		const dir = join(baseTemp, name);
 		let names: string[];
@@ -181,16 +201,25 @@ export async function sweepHeavyArtifacts(
 				continue;
 			}
 			const age = now - st.mtimeMs;
+			if (age < activeGraceMs) continue;
 			if (age > maxAgeMs) {
+				const sized = await entrySize(entryPath);
 				try {
 					await sweepDir(entryPath);
 					summary.removed++;
+					summary.bytes += sized.bytes;
 				} catch {
 					// best-effort sweep; a stuck entry is swept next run
 				}
 				continue;
 			}
-			survivors.push({ path: entryPath, mtimeMs: st.mtimeMs });
+			const sized = await entrySize(entryPath);
+			// If the walk was truncated, treat the entry as at least maxBytes so
+			// the cap evicts it conservatively rather than undercounting (#227).
+			const effectiveSize = sized.truncated
+				? Math.max(sized.bytes, maxBytes)
+				: sized.bytes;
+			survivors.push({ path: entryPath, mtimeMs: st.mtimeMs, size: effectiveSize });
 		}
 	}
 
@@ -198,10 +227,7 @@ export async function sweepHeavyArtifacts(
 	// 2.3 GB was clones in one dir; a per-dir cap would still allow 4 × cap).
 	// LRU-evict oldest-first until under budget.
 	let total = 0;
-	for (const entry of survivors) {
-		entry.size = await entrySize(entry.path);
-		total += entry.size;
-	}
+	for (const entry of survivors) total += entry.size;
 	survivors.sort((a, b) => a.mtimeMs - b.mtimeMs);
 	for (const entry of survivors) {
 		if (total <= maxBytes) break;
@@ -209,13 +235,14 @@ export async function sweepHeavyArtifacts(
 			await sweepDir(entry.path);
 			summary.removed++;
 			summary.capped++;
-			total -= entry.size ?? 0;
+			summary.bytes += entry.size;
+			total -= entry.size;
 		} catch {
 			break; // cannot reclaim this entry; stop rather than loop
 		}
 	}
 
-	const mb = Math.round(summary.bytes / (1024 * 1024));
+	const mb = (summary.bytes / (1024 * 1024)).toFixed(1);
 	debug(`cache sweep: removed ${summary.removed} entries under ${baseTemp}`);
 	if (summary.removed > 0) {
 		debug(
