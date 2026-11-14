@@ -179,3 +179,70 @@ export function promoteUnreleased(text, version, date) {
 		throw new Error("Failed to locate the `## [Unreleased]` heading.");
 	return replaced;
 }
+
+
+// ── User changelog (pi-lens style: count-only, recent releases) ────
+
+export const USER_RELEASE_LIMIT = 5;
+
+/**
+ * Count top-level bullet entries per `### Heading` bucket in a release body.
+ * Returns a Map<heading, count>. Only counts `- ` / `* ` bullets that start
+ * a top-level entry (column 0 under the heading text).
+ */
+export function countSectionBuckets(body) {
+	const buckets = new Map();
+	let current = null;
+	for (const line of body.split("\n")) {
+		const h = /^(#{1,6})\s+(.*)$/.exec(line);
+		if (h && h[1].length === 3) {
+			current = h[2].trim();
+			if (!buckets.has(current)) buckets.set(current, 0);
+			continue;
+		}
+		// a deeper/same-level heading outside ### buckets resets
+		if (h && h[1].length <= 2) {
+			current = null;
+			continue;
+		}
+		if (current && /^\s*[-*]\s+/.test(line)) {
+			buckets.set(current, (buckets.get(current) || 0) + 1);
+		}
+	}
+	return buckets;
+}
+
+/**
+ * One count line per release for pi's Extension Updates view.
+ * Added → features, Fixed → fixes, every other user-facing bucket → other.
+ */
+export function userCountLine(body) {
+	const buckets = countSectionBuckets(body);
+	let features = 0;
+	let fixes = 0;
+	let other = 0;
+	for (const [heading, count] of buckets) {
+		if (heading === "Added") features += count;
+		else if (heading === "Fixed") fixes += count;
+		else other += count;
+	}
+	const counted = [
+		[features, "feature", "features"],
+		[fixes, "fix", "fixes"],
+		[other, "other change", "other changes"],
+	]
+		.filter(([count]) => count > 0)
+		.map(([count, one, many]) => `${count} ${count === 1 ? one : many}`);
+	return counted.length ? `${counted.join(", ")}.` : "No user-facing changes.";
+}
+
+export function renderUserChangelog(text, { repo = "apmantza/pi-webaio", limit = USER_RELEASE_LIMIT } = {}) {
+	const releases = parseSections(text)
+		.filter((section) => /^\d+\.\d+\.\d+$/.test(section.label))
+		.slice(0, limit)
+		.map(
+			(section) =>
+				`${section.heading}\n\n${userCountLine(section.body)}\n\nFull notes: https://github.com/${repo}/releases/tag/v${section.label}`,
+		);
+	return `# User changelog\n\n${releases.join("\n\n")}\n`;
+}

@@ -51,7 +51,8 @@
   "pi": {
     "extensions": [
       "./pi-entry.mjs"
-    ]
+    ],
+    "changelogPath": "CHANGELOG-USER.md"
   },
   "files": [
     "dist/",
@@ -62,6 +63,7 @@
     "package.json",
     "README.md",
     "CHANGELOG.md",
+    "CHANGELOG-USER.md",
     "CONTRIBUTING.md",
     "LICENSE",
     "docs/architecture.md",
@@ -131,6 +133,8 @@
     "changelog:check": "node scripts/changelog-release.mjs --check",
     "changelog:release": "node scripts/changelog-release.mjs",
     "changelog:extract": "node scripts/changelog-extract.mjs",
+    "changelog:user": "node scripts/changelog-user.mjs",
+    "changelog:user:check": "node scripts/changelog-user.mjs --check",
     "release:backfill-notes": "node scripts/backfill-github-releases.mjs",
     "diagnose:fingerprint": "node --experimental-strip-types scripts/fingerprint-diagnostics.mjs",
     "diagnose:backends": "node scripts/diagnose-backends.mjs",
