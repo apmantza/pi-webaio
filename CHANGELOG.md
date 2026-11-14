@@ -14,8 +14,11 @@ All notable changes to pi-webaio will be documented in this file.
   environment resolves (OS-agnostic cmdline: `/proc` on Linux, `ps` on macOS, PowerShell `Get-CimInstance`
   on Windows; unavailable source → skip validation, never kill) and reaps a foreign or pid-file-orphaned
   one; `getWsUrl()` runs ONE bounded repair (`launch.mjs`, 45s cap) when the profile port file is missing,
-  then fails closed as before. Opt out with `PI_WEBAIO_CDP_REPAIR=0`. Tested in
-  `tests/launch-repair.test.mjs` (10 tests, mutation-checked).
+  then fails closed as before. Opt out with `PI_WEBAIO_CDP_REPAIR=0`. A single-flight launch lock
+  (`O_EXCL` + dead-holder steal, in `GREEDYSEARCH_STATE_DIR`, default tmpdir) serializes concurrent
+  launchers/repairs so a booting Chrome cannot be ghost-killed; empty/whitespace cmdline output
+  normalizes to "unavailable — never kill". Tested in `tests/launch-repair.test.mjs` (13 tests,
+  mutation-checked, state-dir injected so tests never touch the real pid records).
 
 ### Added
 

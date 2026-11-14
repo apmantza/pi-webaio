@@ -13,10 +13,18 @@
  *    to the profile dir THIS environment resolves, and reaps a foreign /
  *    stale one (fix 1). OS-agnostic cmdlineOf: /proc on Linux, ps on macOS,
  *    PowerShell Get-CimInstance on Windows — null means "skip validation".
- * 2. cdp.mjs getWsUrl() runs ONE bounded repair via launch.mjs when the
- *    profile port file is missing, then fails closed (fix 2). PI_WEBAIO_CDP_REPAIR=0
- *    opts out; no repair is attempted for the user's main-Chrome path.
+ * 2. Empty/whitespace cmdline output normalizes to null (unavailable →
+ *    never kill) — luna-5.6 review finding #1.
+ * 3. Single-flight launch lock: acquire/steal/release semantics —
+ *    luna-5.6 review finding #2.
+ * 4. cdp.mjs getWsUrl() runs ONE bounded repair via launch.mjs when the
+ *    profile port file is missing, then fails closed (fix 2).
+ *    PI_WEBAIO_CDP_REPAIR=0 opts out.
  *
+ * Probe hygiene: GREEDYSEARCH_STATE_DIR is set BEFORE launch.mjs is
+ * imported, so pid/mode/lock records live in a mkdtemp fixture dir — the
+ * real /tmp/greedysearch-chrome.* records of a concurrently running
+ * GreedySearch Chrome are never touched (luna-5.6 review finding #3).
  * No live Chrome: real child processes are plain `node -e` timers, the
  * repair runs through an injected fake. Linux-only branches are gated on
  * process.platform so the suite stays green on all CI matrices.
@@ -29,10 +37,23 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
+// MUST run before bin/launch.mjs is imported (its STATE_DIR const is
+// computed at import time). No top-level await — node 22 collapses an
+// async-entry file into a single file-level test and stops reporting the
+// individual tests (luna-5.6 review finding #4).
+const STATE_DIR = mkdtempSync(join(tmpdir(), "webaio-lr-state-"));
+process.env.GREEDYSEARCH_STATE_DIR = STATE_DIR;
+
 const isLinux = process.platform === "linux";
 
-const launch = await import("../bin/launch.mjs");
-const cdp = await import("../bin/cdp.mjs");
+let launch, cdp;
+async function loadModules() {
+	if (!launch) {
+		launch = await import("../bin/launch.mjs");
+		cdp = await import("../bin/cdp.mjs");
+	}
+	return { launch, cdp };
+}
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -46,8 +67,15 @@ function spawnDummy(embedProfile) {
 	return spawn(process.execPath, ["-e", script], { stdio: "ignore" });
 }
 
-test("cmdlineOf reads a real pid on Linux and returns null for dead pids", () => {
+function cleanupPidFile() {
+	try {
+		rmSync(join(STATE_DIR, "greedysearch-chrome.pid"), { force: true });
+	} catch {}
+}
+
+test("cmdlineOf reads a real pid on Linux and returns null for dead pids", async () => {
 	if (!isLinux) return; // /proc is the Linux source; others covered by null path
+	const { launch } = await loadModules();
 	const cmdline = launch.cmdlineOf(process.pid);
 	assert.ok(cmdline, "cmdline of the running test process is readable");
 	assert.ok(
@@ -57,19 +85,35 @@ test("cmdlineOf reads a real pid on Linux and returns null for dead pids", () =>
 	assert.equal(launch.cmdlineOf(99999999), null, "dead pid → null (skip)");
 });
 
-test("isRunning returns false for a dead tracked pid", () => {
+test("_normalizeCmdline: empty/whitespace output is UNAVAILABLE (null), never 'foreign'", async () => {
+	const { launch } = await loadModules();
+	// luna-5.6 finding #1: PowerShell/ps can emit blank output for a live
+	// process whose CommandLine is null. "" must not kill it.
+	assert.equal(launch._normalizeCmdline(null), null);
+	assert.equal(launch._normalizeCmdline(undefined), null);
+	assert.equal(launch._normalizeCmdline(""), null);
+	assert.equal(launch._normalizeCmdline("   \n \r\n"), null);
+	assert.equal(launch._normalizeCmdline("chrome --flag"), "chrome --flag");
+	assert.equal(
+		launch._normalizeCmdline("  chrome --flag \n"),
+		"chrome --flag",
+		"valid output is trimmed",
+	);
+});
+
+test("isRunning returns false for a dead tracked pid", async () => {
+	const { launch } = await loadModules();
 	writeFileSync(launch._pidFile, "99999999\n", "utf8");
 	try {
 		assert.equal(launch.isRunning(), false);
 	} finally {
-		try {
-			rmSync(launch._pidFile, { force: true });
-		} catch {}
+		cleanupPidFile();
 	}
 });
 
 test("isRunning reaps an alive pid from a FOREIGN profile dir", async () => {
 	if (!isLinux) return; // reap depends on cmdlineOf; validated on Linux
+	const { launch } = await loadModules();
 	const child = spawnDummy();
 	try {
 		// The dummy's cmdline has no --user-data-dir with our profile: foreign.
@@ -94,14 +138,14 @@ test("isRunning reaps an alive pid from a FOREIGN profile dir", async () => {
 		try {
 			child.kill("SIGKILL");
 		} catch {}
-		try {
-			rmSync(launch._pidFile, { force: true });
-		} catch {}
+		cleanupPidFile();
 	}
 });
 
 test("isRunning accepts an alive pid whose cmdline carries THIS profile dir", async () => {
 	if (!isLinux) return;
+	const { launch } = await loadModules();
+	// Embed the profile dir in the script text so it lands in /proc cmdline.
 	const child = spawnDummy(launch._profileDir);
 	try {
 		await sleep(300);
@@ -114,13 +158,64 @@ test("isRunning accepts an alive pid whose cmdline carries THIS profile dir", as
 		try {
 			child.kill("SIGKILL");
 		} catch {}
-		try {
-			rmSync(launch._pidFile, { force: true });
-		} catch {}
+		cleanupPidFile();
 	}
 });
 
-test("getWsUrl reads the profile port file without repair when present", () => {
+test("launch lock: acquire writes our pid, release removes it", async () => {
+	const { launch } = await loadModules();
+	const { readFileSync } = await import("node:fs");
+	try {
+		assert.equal(await launch.acquireLaunchLock(1000), true, "acquired");
+		assert.equal(
+			readFileSync(launch._lockFile, "utf8").trim(),
+			String(process.pid),
+			"lock records the holder pid",
+		);
+		launch.releaseLaunchLock();
+		assert.throws(
+			() => readFileSync(launch._lockFile, "utf8"),
+			"lock file removed on release",
+		);
+	} finally {
+		launch.releaseLaunchLock();
+	}
+});
+
+test("launch lock: an ALIVE holder blocks; a DEAD holder's lock is stolen", async () => {
+	const { launch } = await loadModules();
+	const { readFileSync } = await import("node:fs");
+	try {
+		// Simulate an alive holder (this test process) — bounded wait expires.
+		writeFileSync(launch._lockFile, String(process.pid), "utf8");
+		const started = Date.now();
+		assert.equal(
+			await launch.acquireLaunchLock(200),
+			false,
+			"alive holder blocks the acquire",
+		);
+		assert.ok(
+			Date.now() - started >= 150,
+			"the acquire actually waited, not busy-failed",
+		);
+		// Dead holder: a pid we know is gone.
+		writeFileSync(launch._lockFile, "99999999", "utf8");
+		assert.equal(
+			await launch.acquireLaunchLock(1000),
+			true,
+			"dead holder's lock is stolen",
+		);
+		assert.equal(
+			readFileSync(launch._lockFile, "utf8").trim(),
+			String(process.pid),
+		);
+	} finally {
+		launch.releaseLaunchLock();
+	}
+});
+
+test("getWsUrl reads the profile port file without repair when present", async () => {
+	const { cdp } = await loadModules();
 	const dir = mkdtempSync(join(tmpdir(), "webaio-lr-port-"));
 	try {
 		writeFileSync(join(dir, "DevToolsActivePort"), "9333\n/devtools/browser/x", "utf8");
@@ -133,7 +228,8 @@ test("getWsUrl reads the profile port file without repair when present", () => {
 	}
 });
 
-test("getWsUrl fails closed with the documented error when repair is off", () => {
+test("getWsUrl fails closed with the documented error when repair is off", async () => {
+	const { cdp } = await loadModules();
 	const dir = mkdtempSync(join(tmpdir(), "webaio-lr-miss-"));
 	try {
 		assert.throws(
@@ -149,7 +245,8 @@ test("getWsUrl fails closed with the documented error when repair is off", () =>
 	}
 });
 
-test("getWsUrl runs the bounded repair once when the port file is missing", () => {
+test("getWsUrl runs the bounded repair once when the port file is missing", async () => {
+	const { cdp } = await loadModules();
 	const dir = mkdtempSync(join(tmpdir(), "webaio-lr-repair-"));
 	const calls = [];
 	try {
@@ -174,7 +271,8 @@ test("getWsUrl runs the bounded repair once when the port file is missing", () =
 	}
 });
 
-test("getWsUrl repairs through to success when the port file appears", () => {
+test("getWsUrl repairs through to success when the port file appears", async () => {
+	const { cdp } = await loadModules();
 	const dir = mkdtempSync(join(tmpdir(), "webaio-lr-heal-"));
 	const portPath = join(dir, "DevToolsActivePort");
 	const calls = [];
@@ -194,7 +292,8 @@ test("getWsUrl repairs through to success when the port file appears", () => {
 	}
 });
 
-test("PI_WEBAIO_CDP_REPAIR=0 disables the repair attempt entirely", () => {
+test("PI_WEBAIO_CDP_REPAIR=0 disables the repair attempt entirely", async () => {
+	const { cdp } = await loadModules();
 	const dir = mkdtempSync(join(tmpdir(), "webaio-lr-optout-"));
 	const prev = process.env.PI_WEBAIO_CDP_REPAIR;
 	const calls = [];
@@ -216,7 +315,8 @@ test("PI_WEBAIO_CDP_REPAIR=0 disables the repair attempt entirely", () => {
 	}
 });
 
-test("repair failure is swallowed — the fail-closed error still surfaces", () => {
+test("repair failure is swallowed — the fail-closed error still surfaces", async () => {
+	const { cdp } = await loadModules();
 	const dir = mkdtempSync(join(tmpdir(), "webaio-lr-fail-"));
 	try {
 		assert.throws(
