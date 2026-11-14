@@ -22,12 +22,18 @@ import { test } from "node:test";
 // Pin the cache root BEFORE importing modules: session-store kicks a
 // module-level sweeper (setImmediate) against BASE_TEMP on import, so an
 // unpinned import would scan/sweep the real user cache (#227 review).
+// Importing session-store here (with env pinned) proves the module-load
+// sweeper targets the pinned test root, not the real user cache.
 const _testCacheRoot = mkdtempSync(join(tmpdir(), "webaio-cache-root-"));
 process.env.PI_WEBAIO_CACHE_DIR = _testCacheRoot;
 
 const cacheDir = await import("../src/cache-dir.ts");
 const storage = await import("../src/storage.ts");
+const sessionStore = await import("../src/session-store.ts");
 const { resolveCorpusDir } = await import("../src/tools/webquery.ts");
+
+await new Promise((r) => setImmediate(r));
+await sessionStore.startCacheSweeper(); // idempotent; ensures module-load sweep resolved against pinned root
 
 test.after(() => {
 	rmSync(_testCacheRoot, { recursive: true, force: true });
