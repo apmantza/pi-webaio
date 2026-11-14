@@ -8,13 +8,13 @@ Full notes: https://github.com/apmantza/pi-webaio/releases/tag/v1.1.2
 
 ## [1.1.1] - 2026-11-05
 
-No user-facing changes.
+1 other change.
 
 Full notes: https://github.com/apmantza/pi-webaio/releases/tag/v1.1.1
 
 ## [1.1.0] - 2026-11-04
 
-1 feature, 26 fixes, 17 other changes.
+1 feature, 26 fixes, 23 other changes.
 
 Full notes: https://github.com/apmantza/pi-webaio/releases/tag/v1.1.0
 

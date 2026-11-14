@@ -41,6 +41,9 @@ jobs:
       - name: Tracked-artifact hygiene
         run: node scripts/check-tracked-hygiene.mjs
 
+      - name: User changelog in sync with CHANGELOG.md
+        run: node scripts/changelog-user.mjs --check
+
       # Lockfile check runs BEFORE npm install (#128): npm install normalizes
       # the workspace lock, which masked committed drift (playwright sat in
       # the lock's root `dependencies` while package.json declared it under
