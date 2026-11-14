@@ -401,7 +401,16 @@ export async function acquireLaunchLock(timeoutMs = 45000) {
 			closeSync(fd);
 			return true;
 		} catch (error) {
-			if (error?.code !== "EEXIST") return false;
+			if (error?.code !== "EEXIST") {
+				// Unwritable/missing STATE_DIR, or post-create write/close failure:
+				// serialization silently degrades. Never silent — say so (luna-5.6
+				// fix-verify finding). Proceeding keeps the old behavior for a
+				// pathological state dir instead of bricking the launch.
+				console.error(
+					`Launch lock could not be acquired (${error?.code ?? error}) — proceeding unserialized.`,
+				);
+				return false;
+			}
 			let holder = null;
 			try {
 				holder =
