@@ -24,7 +24,7 @@ import { resolve as dnsResolve } from "node:dns/promises";
 import { existsSync, readdirSync } from "node:fs";
 import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import path, { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const DEFAULT_TIMEOUT_MS = 3000;
@@ -222,26 +222,43 @@ export function validateProxyUrl(value) {
 	return { ok: true, protocol: u.protocol, hostname: u.hostname };
 }
 
-// The cache base the extension persists results under (mirrors BASE_TEMP /
-// cache-dir.ts). Respects PI_WEBAIO_CACHE_DIR and the platform cache dir.
+// The cache base the extension persists results under (mirrors
+// src/cache-dir.ts resolveCacheDir). Only PI_WEBAIO_CACHE_DIR is honored;
+// relative/invalid overrides throw (fail-closed), relative XDG is ignored,
+// and ~ / ~/ / ~\ are expanded like the extension.
 export function tempBase(opts = {}) {
 	const env = opts.env ?? process.env;
-	const platform = opts.platform ?? process.platform;
+	const os = opts.platform ?? process.platform;
 	const home = opts.homedir ?? homedir();
-	const fromEnv = env.PI_WEBAIO_CACHE_DIR ?? env.WEBAIO_CACHE_DIR;
-	if (fromEnv != null) {
-		const t = fromEnv.trim();
-		if (t === "") return join(home, ".cache", "pi-webaio");
-		if (t.startsWith("~/") || t === "~") return join(home, t.slice(2));
-		return resolve(t);
+	const isAbs = (p) => (os === "win32" ? path.win32.isAbsolute(p) : path.posix.isAbsolute(p));
+	const joinPath = (...parts) => (os === "win32" ? path.win32.join(...parts) : path.posix.join(...parts));
+	const resolvePath = (p) => (os === "win32" ? path.win32.resolve(p) : path.posix.resolve(p));
+
+	const defaultCacheDir = () => {
+		if (os === "darwin") return joinPath(home, "Library", "Caches", "pi-webaio");
+		if (os === "win32") {
+			const local = env.LOCALAPPDATA || joinPath(home, "AppData", "Local");
+			return joinPath(local, "pi-webaio");
+		}
+		const xdg = env.XDG_CACHE_HOME;
+		const base = xdg && xdg.trim() && isAbs(xdg) ? xdg : joinPath(home, ".cache");
+		return joinPath(base, "pi-webaio");
+	};
+
+	const override = env.PI_WEBAIO_CACHE_DIR;
+	if (override === undefined || override.trim() === "") {
+		return defaultCacheDir();
 	}
-	if (platform === "darwin") return join(home, "Library", "Caches", "pi-webaio");
-	if (platform === "win32") {
-		const local = env.LOCALAPPDATA || join(home, "AppData", "Local");
-		return join(local, "pi-webaio");
+	let candidate = override.trim();
+	if (candidate === "~" || candidate.startsWith("~/") || candidate.startsWith("~\\")) {
+		candidate = joinPath(home, candidate.slice(1).replace(/^[/\\]+/, ""));
 	}
-	const xdg = env.XDG_CACHE_HOME;
-	return join(xdg && xdg.trim() ? xdg : join(home, ".cache"), "pi-webaio");
+	if (!isAbs(candidate)) {
+		throw new Error(
+			`PI_WEBAIO_CACHE_DIR must be an absolute path (got: "${override}"); unset it to use the platform cache dir`,
+		);
+	}
+	return resolvePath(candidate);
 }
 
 // ─── Command / HTTP runners (injectable for tests) ──────────────────
@@ -534,11 +551,20 @@ export async function probeWreq(deps) {
 	};
 }
 
-// Write → read → delete a small probe file under the temp base the extension
+// Write → read → delete a small probe file under the cache base the extension
 // persists results under. Injected fs ops keep this offline-testable.
 export async function probeTempDir(deps) {
 	const name = "Temp dir / storage";
 	const base = deps.tempBase;
+	if (base && typeof base === "object" && base.error) {
+		return {
+			name,
+			status: "missing",
+			required: true,
+			message: `invalid cache dir: ${base.error}`,
+			hint: "unset PI_WEBAIO_CACHE_DIR or set it to an absolute path",
+		};
+	}
 	const probeFile = join(base, `.doctor-probe-${process.pid}-${Date.now()}.tmp`);
 	const payload = "pi-webaio-doctor";
 	try {
@@ -699,7 +725,7 @@ function defaultDeps(opts) {
 		timeoutMs: opts.timeoutMs,
 		live: opts.live,
 		packageRoot: resolvePackageRoot(),
-		tempBase: tempBase(),
+		tempBase: (() => { try { return tempBase(); } catch (e) { return { error: String(e?.message || e) }; } })(),
 		runCommand: (cmd, args, timeoutMs) => runCommand(cmd, args, timeoutMs),
 		existsSync: (p) => existsSync(p),
 		listDir: (p) => {

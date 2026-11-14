@@ -443,13 +443,30 @@ test("validateProxyUrl rejects empty, garbage, and bad protocols", () => {
 	assert.match(ftp.reason, /unsupported protocol/);
 });
 
-test("tempBase resolves platform cache dir and env override", () => {
+test("tempBase mirrors cache-dir resolution contract", () => {
 	const linux = tempBase({ env: {}, platform: "linux", homedir: "/home/u" }).replace(/\\/g, "/");
 	assert.equal(linux, "/home/u/.cache/pi-webaio");
 	const xdg = tempBase({ env: { XDG_CACHE_HOME: "/xdg" }, platform: "linux", homedir: "/home/u" }).replace(/\\/g, "/");
 	assert.equal(xdg, "/xdg/pi-webaio");
+	// relative XDG is ignored (extension falls back to ~/.cache)
+	const relXdg = tempBase({ env: { XDG_CACHE_HOME: "rel" }, platform: "linux", homedir: "/home/u" }).replace(/\\/g, "/");
+	assert.equal(relXdg, "/home/u/.cache/pi-webaio");
 	const over = tempBase({ env: { PI_WEBAIO_CACHE_DIR: "/custom/cache" }, platform: "linux", homedir: "/home/u" }).replace(/\\/g, "/");
 	assert.equal(over, "/custom/cache");
+	// ~ and ~/ expansion
+	const tilde = tempBase({ env: { PI_WEBAIO_CACHE_DIR: "~/mycache" }, platform: "linux", homedir: "/home/u" }).replace(/\\/g, "/");
+	assert.equal(tilde, "/home/u/mycache");
+	// invalid relative override: fail-closed
+	assert.throws(
+		() => tempBase({ env: { PI_WEBAIO_CACHE_DIR: "relative/path" }, platform: "linux", homedir: "/home/u" }),
+		/absolute path/,
+	);
+	// unsupported WEBAIO_CACHE_DIR alias is NOT honored
+	const aliasIgnored = tempBase({ env: { WEBAIO_CACHE_DIR: "/wrong" }, platform: "linux", homedir: "/home/u" }).replace(/\\/g, "/");
+	assert.equal(aliasIgnored, "/home/u/.cache/pi-webaio");
+	// windows ~\ expansion
+	const winTilde = tempBase({ env: { PI_WEBAIO_CACHE_DIR: "~\\cache" }, platform: "win32", homedir: "C:\\Users\\u" }).replace(/\\/g, "/");
+	assert.match(winTilde, /Users\/u\/cache$/);
 });
 
 // ─── probeWreq ──────────────────────────────────────────────────────

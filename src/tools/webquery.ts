@@ -19,10 +19,11 @@ const LEGACY_BASE = join(tmpdir(), "pi-webaio");
 
 /**
  * Resolve the corpus directory for aio-webquery (B5). Relative paths resolve
- * against the standard temp base (<temp>/pi-webaio), matching aio-webpull's
- * default output layout (<temp>/pi-webaio/<hostname>), so `dir: "example.com"`
- * targets <temp>/pi-webaio/example.com instead of resolving against the
- * current working directory. Absolute paths pass through unchanged.
+ * against the web-aio cache directory (BASE_TEMP / cache-dir.ts), matching
+ * aio-webpull's default output layout (<cache>/ <hostname>), so
+ * `dir: "example.com"` targets <cache>/example.com instead of resolving
+ * against the current working directory. Absolute paths pass through unchanged.
+ * Pre-#221 legacy corpora under os.tmpdir()/pi-webaio are a read-only fallback.
  */
 export function resolveCorpusDir(
 	rawDir: string | undefined,
