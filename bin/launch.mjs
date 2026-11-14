@@ -19,6 +19,7 @@
 //   CHROME_PATH              — Path to Chrome executable
 
 import { execFileSync, execSync, spawn } from "node:child_process";
+import { pathToFileURL } from "node:url";
 import {
 	existsSync,
 	mkdirSync,
@@ -26,6 +27,9 @@ import {
 	readFileSync,
 	unlinkSync,
 	writeFileSync,
+	closeSync,
+	openSync,
+	writeSync,
 } from "node:fs";
 import http from "node:http";
 import { platform, tmpdir } from "node:os";
@@ -35,8 +39,21 @@ import { chromeProfileDir } from "./chrome-profile.mjs";
 const PORT = 9222;
 const PROFILE_DIR = chromeProfileDir();
 const ACTIVE_PORT = join(PROFILE_DIR, "DevToolsActivePort");
-const PID_FILE = join(tmpdir(), "greedysearch-chrome.pid");
-const MODE_FILE = join(tmpdir(), "greedysearch-chrome-mode");
+
+/**
+ * State dir for pid/mode/lock records. Defaults to tmpdir (keeps Google
+ * cookies and transient state out of persistent storage). GREEDYSEARCH_STATE_DIR
+ * overrides it for tests and probe hygiene so test runs never touch the real
+ * records of a concurrently running GreedySearch Chrome (luna-5.6 review
+ * finding #3, 2026-11-14).
+ */
+const STATE_DIR = (() => {
+	const override = process.env.GREEDYSEARCH_STATE_DIR;
+	return override && override.trim() ? override.trim() : tmpdir();
+})();
+const PID_FILE = join(STATE_DIR, "greedysearch-chrome.pid");
+const MODE_FILE = join(STATE_DIR, "greedysearch-chrome-mode");
+const LOCK_FILE = join(STATE_DIR, "greedysearch-chrome.lock");
 
 function findChrome() {
 	const os = platform();
@@ -245,16 +262,185 @@ async function minimizeViaCDP() {
 // Chrome process management
 // ---------------------------------------------------------------------------
 
-function isRunning() {
+/**
+ * Normalize raw cmdline output: null means "unavailable — skip validation,
+ * never kill". Empty or whitespace-only output (PowerShell emits blank lines
+ * when Win32_Process.CommandLine is null; `ps` can emit blank output for a
+ * zombie/protected process) is UNAVAILABLE, not "foreign" — treating "" as a
+ * mismatch would kill a live process whose command line we simply could not
+ * read (luna-5.6 review finding #1, 2026-11-14).
+ */
+export function _normalizeCmdline(raw) {
+	if (raw === null || raw === undefined) return null;
+	const trimmed = String(raw).trim();
+	return trimmed === "" ? null : trimmed;
+}
+
+/**
+ * OS-agnostic command line of a pid, or null when unavailable/unreadable.
+ *
+ * Linux reads /proc directly (no child process). macOS uses `ps -p ... -o
+ * command=`. Windows uses PowerShell Get-CimInstance (wmic is deprecated and
+ * being removed from newer Windows builds). `pid` is an integer validated by
+ * the caller, so interpolation into the PowerShell filter is safe. Every
+ * source failing → null: callers skip validation rather than guess (the
+ * profile check is an optimization over the old pid-file semantics, never a
+ * reason to kill a Chrome we cannot identify).
+ */
+export function cmdlineOf(pid) {
+	const p = String(pid);
+	const os = platform();
+	try {
+		if (os === "linux") {
+			return _normalizeCmdline(
+				readFileSync(`/proc/${pid}/cmdline`, "utf8").replaceAll("\0", " "),
+			);
+		}
+		if (os === "darwin") {
+			return _normalizeCmdline(
+				execFileSync("ps", ["-p", p, "-o", "command="], {
+					encoding: "utf8",
+					timeout: 5000,
+				}),
+			);
+		}
+		if (os === "win32") {
+			return _normalizeCmdline(
+				execFileSync(
+					"powershell",
+					[
+						"-NoProfile",
+						"-Command",
+						`(Get-CimInstance Win32_Process -Filter "ProcessId=${p}").CommandLine`,
+					],
+					{ encoding: "utf8", timeout: 8000 },
+				),
+			);
+		}
+	} catch {
+		return null;
+	}
+	return null;
+}
+
+export function isRunning() {
 	if (!existsSync(PID_FILE)) return false;
 	const pid = Number.parseInt(readFileSync(PID_FILE, "utf8").trim(), 10);
 	if (!pid) return false;
 	try {
 		process.kill(pid, 0);
-		return pid;
 	} catch {
 		return false;
 	}
+	// Profile validation: the pid file lives in /tmp, is shared across profile
+	// dirs, and can be swept while its Chrome keeps running. So an alive pid is
+	// not enough — a Chrome launched with a DIFFERENT --user-data-dir (env drift
+	// in PI_WEBAIO_CHROME_PROFILE_DIR, or a pid file outlived by /tmp cleaning)
+	// counted as "already running" and pointed the CDP lane at a
+	// DevToolsActivePort that never appears in THIS profile. Both surfaced as
+	// an outage on 2026-11-14: a 5-day-old foreign-profile Chrome held port
+	// 9222 while extractors looked in the default tmpdir profile. Reap it and
+	// drop the stale record so cleanupGhostChrome clears the port and a fresh
+	// Chrome is launched for THIS profile. Non-Linux has no /proc: validation
+	// is skipped there (pid-file semantics unchanged).
+	const cmdline = cmdlineOf(pid);
+	if (cmdline !== null && !cmdline.includes(PROFILE_DIR)) {
+		killProcess(pid);
+		try {
+			unlinkSync(PID_FILE);
+		} catch {}
+		try {
+			unlinkSync(ACTIVE_PORT);
+		} catch {}
+		try {
+			unlinkSync(MODE_FILE);
+		} catch {}
+		return false;
+	}
+	return pid;
+}
+
+// Exported for tests (underscore = not part of the CLI contract).
+export const _pidFile = PID_FILE;
+export const _activePort = ACTIVE_PORT;
+export const _modeFile = MODE_FILE;
+export const _profileDir = PROFILE_DIR;
+export const _lockFile = LOCK_FILE;
+export const _stateDir = STATE_DIR;
+
+// ---------------------------------------------------------------------------
+// Single-flight launch lock
+// ---------------------------------------------------------------------------
+
+const _isPidAlive = (pid) => {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch {
+		return false;
+	}
+};
+
+/**
+ * One launcher at a time. Two concurrent launch.mjs runs (e.g. two cdp
+ * commands whose port file is missing) both passed the old checks and raced
+ * on spawn + pid-file write; a healthy Chrome mid-boot (pid file not yet
+ * written) was also invisible to cleanupGhostChrome in a second launcher.
+ * O_EXCL create gives atomic ownership; a dead holder's lock is stolen;
+ * an alive holder is waited out (bounded — past the deadline we proceed
+ * with the old unserialized behavior and say so). Written into STATE_DIR,
+ * not the profile dir, so it does not confuse Chrome. (luna-5.6 review
+ * finding #2, 2026-11-14.)
+ */
+export async function acquireLaunchLock(timeoutMs = 45000) {
+	const deadline = Date.now() + timeoutMs;
+	for (;;) {
+		try {
+			const fd = openSync(LOCK_FILE, "wx");
+			writeSync(fd, String(process.pid));
+			closeSync(fd);
+			return true;
+		} catch (error) {
+			if (error?.code !== "EEXIST") {
+				// Unwritable/missing STATE_DIR, or post-create write/close failure:
+				// serialization silently degrades. Never silent — say so (luna-5.6
+				// fix-verify finding). Proceeding keeps the old behavior for a
+				// pathological state dir instead of bricking the launch.
+				console.error(
+					`Launch lock could not be acquired (${error?.code ?? error}) — proceeding unserialized.`,
+				);
+				return false;
+			}
+			let holder = null;
+			try {
+				holder =
+					Number.parseInt(readFileSync(LOCK_FILE, "utf8").trim(), 10) || null;
+			} catch {}
+			if (!holder || !_isPidAlive(holder)) {
+				// Dead or unreadable holder — steal the lock.
+				try {
+					unlinkSync(LOCK_FILE);
+				} catch {}
+				continue;
+			}
+			if (Date.now() >= deadline) {
+				console.log(
+					`Launch lock held by pid ${holder} past ${timeoutMs}ms — proceeding unserialized.`,
+				);
+				return false;
+			}
+			await new Promise((r) => setTimeout(r, 300));
+		}
+	}
+}
+
+/** Release the launch lock — only if WE hold it (never steal a successor's). */
+export function releaseLaunchLock() {
+	try {
+		if (readFileSync(LOCK_FILE, "utf8").trim() === String(process.pid)) {
+			unlinkSync(LOCK_FILE);
+		}
+	} catch {}
 }
 
 function getPortPid(port) {
@@ -374,8 +560,6 @@ async function writePortFile(timeoutMs = 15000) {
 async function main() {
 	const arg = process.argv[2];
 
-	cleanupGhostChrome();
-
 	if (arg === "--kill") {
 		const pid = isRunning() || getPortPid(PORT);
 		if (pid) {
@@ -408,76 +592,94 @@ async function main() {
 		return;
 	}
 
-	const existing = isRunning();
-	if (existing) {
-		// Mode check: if caller wants visible but Chrome is headless, kill and relaunch
-		const isWantingVisible =
-			process.env.GREEDY_SEARCH_VISIBLE === "1" &&
-			!process.argv.includes("--headless");
-		if (isWantingVisible && isModeFileHeadless()) {
-			console.log(
-				`Headless Chrome running (pid ${existing}) but visible requested — killing...`,
-			);
-			killProcess(existing);
-			try {
-				unlinkSync(PID_FILE);
-			} catch {}
-			try {
-				unlinkSync(MODE_FILE);
-			} catch {}
-			// Fall through to fresh launch below
-		} else {
-			const ready = await writePortFile(5000);
-			if (ready) {
-				console.log(`GreedySearch Chrome already running (pid ${existing}).`);
-				return;
+	// Single-flight: cleanup + launch under the lock, so a second launcher
+	// cannot ghost-kill a Chrome that is still booting (its pid record is not
+	// written until after spawn), and concurrent repairs serialize on spawn.
+	const locked = await acquireLaunchLock();
+	try {
+		cleanupGhostChrome();
+
+		const existing = isRunning();
+		if (existing) {
+			// Mode check: if caller wants visible but Chrome is headless, kill and relaunch
+			const isWantingVisible =
+				process.env.GREEDY_SEARCH_VISIBLE === "1" &&
+				!process.argv.includes("--headless");
+			if (isWantingVisible && isModeFileHeadless()) {
+				console.log(
+					`Headless Chrome running (pid ${existing}) but visible requested — killing...`,
+				);
+				killProcess(existing);
+				try {
+					unlinkSync(PID_FILE);
+				} catch {}
+				try {
+					unlinkSync(MODE_FILE);
+				} catch {}
+				// Fall through to fresh launch below
+			} else {
+				const ready = await writePortFile(5000);
+				if (ready) {
+					console.log(`GreedySearch Chrome already running (pid ${existing}).`);
+					return;
+				}
+				console.log(`Stale PID ${existing} — launching fresh.`);
+				try {
+					unlinkSync(PID_FILE);
+				} catch {}
 			}
-			console.log(`Stale PID ${existing} — launching fresh.`);
-			try {
-				unlinkSync(PID_FILE);
-			} catch {}
 		}
-	}
 
-	const CHROME_EXE = process.env.CHROME_PATH || findChrome();
-	if (!CHROME_EXE) {
-		console.error("Chrome not found. Set CHROME_PATH env var.");
-		process.exit(1);
-	}
+		const CHROME_EXE = process.env.CHROME_PATH || findChrome();
+		if (!CHROME_EXE) {
+			console.error("Chrome not found. Set CHROME_PATH env var.");
+			releaseLaunchLock();
+			process.exit(1);
+		}
 
-	mkdirSync(PROFILE_DIR, { recursive: true });
+		mkdirSync(PROFILE_DIR, { recursive: true });
 
-	console.log(`Launching GreedySearch Chrome on port ${PORT}...`);
-	if (isHeadless()) {
-		console.log("Headless mode — no window will be shown");
-	} else if (!isVisible()) {
-		console.log("Window will be minimized");
-	}
+		console.log(`Launching GreedySearch Chrome on port ${PORT}...`);
+		if (isHeadless()) {
+			console.log("Headless mode — no window will be shown");
+		} else if (!isVisible()) {
+			console.log("Window will be minimized");
+		}
 
-	const proc = spawn(CHROME_EXE, buildChromeFlags(CHROME_EXE), {
-		detached: true,
-		stdio: "ignore",
-		env: process.env,
-	});
-	proc.unref();
-	writeFileSync(PID_FILE, String(proc.pid));
-	// Write mode marker so ensureChrome() can detect headless vs visible
-	writeFileSync(MODE_FILE, isHeadless() ? "headless" : "visible", "utf8");
+		const proc = spawn(CHROME_EXE, buildChromeFlags(CHROME_EXE), {
+			detached: true,
+			stdio: "ignore",
+			env: process.env,
+		});
+		proc.unref();
+		writeFileSync(PID_FILE, String(proc.pid));
+		// Write mode marker so ensureChrome() can detect headless vs visible
+		writeFileSync(MODE_FILE, isHeadless() ? "headless" : "visible", "utf8");
 
-	const portFileReady = await writePortFile();
-	if (!portFileReady) {
-		console.error("Chrome did not become ready within 30s.");
-		process.exit(1);
-	}
+		const portFileReady = await writePortFile();
+		if (!portFileReady) {
+			console.error("Chrome did not become ready within 30s.");
+			releaseLaunchLock();
+			process.exit(1);
+		}
 
-	if (isHeadless()) {
-		// No window to minimize in headless mode
-		console.log("Ready (headless).");
-	} else {
-		// Minimize window via CDP
-		await minimizeViaCDP();
-		console.log("Ready.");
+		if (isHeadless()) {
+			// No window to minimize in headless mode
+			console.log("Ready (headless).");
+		} else {
+			// Minimize window via CDP
+			await minimizeViaCDP();
+			console.log("Ready.");
+		}
+	} finally {
+		if (locked) releaseLaunchLock();
 	}
 }
 
-main();
+// Run only when executed directly (tests import the exported helpers).
+if (
+	Boolean(process.argv[1]) &&
+	import.meta.url === pathToFileURL(process.argv[1]).href
+) {
+	main();
+}
